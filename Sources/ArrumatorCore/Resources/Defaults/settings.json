@@ -1,0 +1,28 @@
+{
+  "incomingPath": "~/Documents/Incoming",
+  "archivePath": "~/Documents/Archive",
+  "paused": false,
+  "showInDock": true,
+  "renameFiles": true,
+  "transliterate": false,
+  "lowConfidenceAction": "holdForReview",
+  "duplicateAction": "moveToDuplicates",
+  "autoCreateFolders": true,
+  "inducedRulePolicy": "autoEnableAndNotify",
+  "thresholds": {
+    "auto": 0.85,
+    "review": 0.5
+  },
+  "models": {
+    "profile": "standard"
+  },
+  "ollamaManagement": "launchApp",
+  "enableVLM": true,
+  "notifyOnFiled": false,
+  "notifyOnReview": true,
+  "pauseOnBattery": true,
+  "logLevel": "info",
+  "traceRawRetentionDays": 180,
+  "onboardingCompleted": false,
+  "folderNamingLanguage": "English"
+}

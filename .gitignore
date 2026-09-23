@@ -1,0 +1,11 @@
+.build/
+.swiftpm/
+*.xcodeproj/
+xcuserdata/
+DerivedData/
+build/
+dist/
+.DS_Store
+*.dSYM
+Tests/Fixtures/private/
+.build-*/
