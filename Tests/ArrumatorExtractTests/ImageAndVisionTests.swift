@@ -61,6 +61,8 @@ struct ImageAndVisionTests {
         #expect(request.think == false)
         #expect(request.keepAlive == vision.keepAlive)
         #expect(request.options["num_predict"] == .number(Double(vision.numPredict)))
+        #expect(request.options["num_ctx"] == .number(Double(vision.numCtx)),
+                "asked with the context its model is loaded with for decisions, the model is not loaded again for each image")
         #expect(request.options["temperature"] == .number(vision.options.temperature))
         let kinds = request.format?["properties"]?["image_kind"]?["enum"]?.arrayValue?.compactMap(\.stringValue) ?? []
         #expect(kinds == ["photo", "screenshot", "scanned_document", "receipt", "id_card", "whiteboard", "diagram", "other"])

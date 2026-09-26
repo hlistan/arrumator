@@ -331,7 +331,7 @@ public actor IngestCoordinator {
     private func visionOptions(_ settings: AppSettings) throws -> VisionModelOptions {
         let models = try services.config.models(for: settings.models)
         return VisionModelOptions(model: models.vision, keepAlive: models.keepAliveChat,
-                                  numPredict: services.config.classification.vlmNumPredict,
+                                  numPredict: services.config.classification.vlmNumPredict, numCtx: models.visionNumCtx,
                                   options: services.config.classification.llmOptions)
     }
 

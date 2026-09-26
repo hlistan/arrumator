@@ -13,6 +13,21 @@ import Testing
         #expect(!models.chat.isEmpty && !models.embed.isEmpty)
     }
 
+    @Test func imagesAreDescribedWithTheContextTheirModelIsLoadedWithElsewhere() throws {
+        var models = try PipelineConfig.bundledDefaults().models(for: AppSettings.bundledDefaults().models)
+        models.numCtx = 12288
+        models.fastNumCtx = 8192
+        models.chat = "one-model"
+        models.vision = "one-model"
+        models.fast = "one-model"
+        #expect(models.visionNumCtx == 12288,
+                "one model for decisions and images keeps one context, so describing an image does not reload it")
+        models.chat = "a-decision-model"
+        #expect(models.visionNumCtx == 8192, "an image model that also names files keeps the naming context")
+        models.fast = "another-naming-model"
+        #expect(models.visionNumCtx == 12288, "an image model of its own is asked with the decision context")
+    }
+
     @Test func deepMergeOverridesNestedKeysOnly() throws {
         let base: JSONValue = ["a": ["x": 1, "y": 2], "b": "keep"]
         let merged = ConfigLoader.deepMerge(base, ["a": ["y": 3]])

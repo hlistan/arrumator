@@ -77,6 +77,11 @@ public struct ResolvedModels: Sendable, Codable, Hashable {
     public var residentBudgetGB: Double
 
     public var all: [String] { Array(Set([chat, vision, embed, fast])).sorted() }
+
+    /// The context images are described with: that of the role the vision model also plays, so Ollama keeps one
+    /// loaded model instead of reloading it with another context for every image (a request without one gets the
+    /// server's default, which can be far larger).
+    public var visionNumCtx: Int { vision != chat && vision == fast ? fastNumCtx : numCtx }
 }
 
 public struct OllamaConfig: Sendable, Codable, Hashable {

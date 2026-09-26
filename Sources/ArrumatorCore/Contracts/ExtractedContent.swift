@@ -318,12 +318,15 @@ public struct VisionModelOptions: Sendable {
     public var model: String
     public var keepAlive: String
     public var numPredict: Int
+    /// The context the model is asked with (`ResolvedModels.visionNumCtx`).
+    public var numCtx: Int
     public var options: ClassificationConfig.LLMOptions
 
-    public init(model: String, keepAlive: String, numPredict: Int, options: ClassificationConfig.LLMOptions) {
+    public init(model: String, keepAlive: String, numPredict: Int, numCtx: Int, options: ClassificationConfig.LLMOptions) {
         self.model = model
         self.keepAlive = keepAlive
         self.numPredict = numPredict
+        self.numCtx = numCtx
         self.options = options
     }
 }

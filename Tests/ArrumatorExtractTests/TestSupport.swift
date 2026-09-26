@@ -170,7 +170,7 @@ enum TestConfig {
 
     static func visionOptions() throws -> VisionModelOptions {
         let pipeline = try pipeline()
-        return VisionModelOptions(model: "gemma-test", keepAlive: "1m", numPredict: pipeline.classification.vlmNumPredict,
+        return VisionModelOptions(model: "gemma-test", keepAlive: "1m", numPredict: pipeline.classification.vlmNumPredict, numCtx: 12288,
                                   options: pipeline.classification.llmOptions)
     }
 }

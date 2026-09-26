@@ -73,6 +73,7 @@ actor VisionDescriber {
                 "top_p": .number(llm.topP),
                 "seed": .number(Double(llm.seed)),
                 "num_predict": .number(Double(options.numPredict)),
+                "num_ctx": .number(Double(options.numCtx)),
             ],
             keepAlive: options.keepAlive,
             think: disableThinking ? false : nil)

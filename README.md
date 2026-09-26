@@ -181,7 +181,7 @@ xcodegen generate
 xcodebuild -project Arrumator.xcodeproj -scheme Arrumator -configuration Debug -derivedDataPath build/DerivedData build
 open build/DerivedData/Build/Products/Debug/Arrumator.app      # first launch shows onboarding
 
-swift test                                                       # 200 tests: extraction, core, classification, runtime
+swift test                                                       # 201 tests: extraction, core, classification, runtime
 swift run arrumator doctor                                       # environment self-check
 swift run arrumator ingest --dry-run ~/Downloads/some.pdf        # what would happen, without moving anything
 swift run arrumator run                                          # headless: watch Incoming and file

@@ -68,7 +68,7 @@ struct Ingest: AsyncParsableCommand {
 func visionOptions(_ runtime: ArrumatorRuntime, _ settings: AppSettings) throws -> VisionModelOptions {
     let models = try runtime.config.models(for: settings.models)
     return VisionModelOptions(model: models.vision, keepAlive: models.keepAliveChat,
-                              numPredict: runtime.config.classification.vlmNumPredict,
+                              numPredict: runtime.config.classification.vlmNumPredict, numCtx: models.visionNumCtx,
                               options: runtime.config.classification.llmOptions)
 }
 
