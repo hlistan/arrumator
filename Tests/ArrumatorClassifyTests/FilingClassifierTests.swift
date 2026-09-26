@@ -224,6 +224,39 @@ import Testing
         #expect(await h.mock.chatCount == before + 1, "past filings place it; the model only names it")
     }
 
+    @Test func aRecurringDocumentJoinsItsConfidentlyFiledPredecessorWithoutTheModelDeciding() async throws {
+        let text = "EDP fatura eletricidade julho, consumo 215 kWh, total a pagar 48,20 EUR"
+        let h = try await ClassifyHarness.make(handler: Fixtures.answering(path: ["Household", "Power"]))
+        defer { h.env.cleanup() }
+        let folder = try await h.env.folder("Utilities", area: "Home")
+        try await h.fileConfirmed(Fixtures.content("july.pdf", text: text, date: nil), into: folder)
+        for var rule in try await h.store.rules() {
+            rule.enabled = false
+            try await h.store.saveRule(rule)
+        }
+        let august = try await h.classify(Fixtures.content("august.pdf", text: text, date: nil))
+        #expect(august.decision.decidedBy == .knnOnly && august.decision.folderCode == folder.code,
+                "a small model names a recurring document differently each time; its predecessor's folder keeps it with the rest")
+
+        let unsure = try await ClassifyHarness.make(handler: Fixtures.answering(path: ["Household", "Power"]))
+        defer { unsure.env.cleanup() }
+        let guessed = try await unsure.env.folder("Utilities", area: "Home")
+        try await unsure.fileUnconfirmed(Fixtures.content("july.pdf", text: text, date: nil), into: guessed)
+        let next = try await unsure.classify(Fixtures.content("august.pdf", text: text, date: nil))
+        #expect(next.decision.decidedBy == .llm, "an uncertain filing is not repeated for its twin")
+
+        let split = try await ClassifyHarness.make(handler: Fixtures.answering(path: ["Household", "Power"]))
+        defer { split.env.cleanup() }
+        try await split.fileConfirmed(Fixtures.content("july.pdf", text: text, date: nil), into: try await split.env.folder("Utilities", area: "Home"))
+        try await split.fileConfirmed(Fixtures.content("june.pdf", text: text, date: nil), into: try await split.env.folder("Energy", area: "Money"))
+        for var rule in try await split.store.rules() {
+            rule.enabled = false
+            try await split.store.saveRule(rule)
+        }
+        #expect(try await split.classify(Fixtures.content("august.pdf", text: text, date: nil)).decision.decidedBy == .llm,
+                "twins filed in two places decide nothing")
+    }
+
     @Test func aPathThatDoesNotExistIsCreatedWhateverFoldersDo() async throws {
         let h = try await ClassifyHarness.make(handler: { _ in
             Fixtures.answer(path: ["Money and Taxes", "Taxes Portugal"],

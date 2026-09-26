@@ -47,7 +47,10 @@ rules form: `learning.ruleMinSupport` of one document type in one folder make "E
 to a new document only when its sender is recognised there, by an identifier first, then a domain, then a name; a
 reliable rule then files it without the model deciding. Otherwise the model decides by the logic alone; where the
 logic gives senders folders of their own, a known sender's document still joins its sender's folder (see the folder
-tree below), and rules and similar past filings weigh in on how sure the decision is.
+tree below), and rules and similar past filings weigh in on how sure the decision is. A document almost identical to
+one filed with confidence before (`learning.directPlacement.knnMinSimilarity`), such as next month's bill, joins it
+without the model deciding where it goes: a model names a recurring document differently from one month to the
+next, and following its predecessor keeps the two together.
 
 Rules keep learning after they form. Each filing that agrees with a rule raises its support, so it becomes more
 trusted; filing a document somewhere other than where a rule points counts against it, and two disagreements switch it
@@ -178,7 +181,7 @@ xcodegen generate
 xcodebuild -project Arrumator.xcodeproj -scheme Arrumator -configuration Debug -derivedDataPath build/DerivedData build
 open build/DerivedData/Build/Products/Debug/Arrumator.app      # first launch shows onboarding
 
-swift test                                                       # 196 tests: extraction, core, classification, runtime
+swift test                                                       # 200 tests: extraction, core, classification, runtime
 swift run arrumator doctor                                       # environment self-check
 swift run arrumator ingest --dry-run ~/Downloads/some.pdf        # what would happen, without moving anything
 swift run arrumator run                                          # headless: watch Incoming and file

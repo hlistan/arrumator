@@ -54,7 +54,7 @@ public struct OllamaClient: OllamaAPI {
         if config.timeouts.chat > 0 { urlRequest.timeoutInterval = config.timeouts.chat }
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
         urlRequest.httpBody = Data(request.body.serialized().utf8)
-        return try await send(urlRequest, model: request.model)
+        return try await send(urlRequest, model: request.model, timeout: config.timeouts.chat)
     }
 
     public func embed(_ request: OllamaEmbedRequest) async throws -> OllamaEmbedResponse {
@@ -113,19 +113,23 @@ public struct OllamaClient: OllamaAPI {
 
     private func get<T: Decodable>(_ path: String, timeout: Double) async throws -> T {
         let request = try makeRequest(path, method: "GET", body: Optional<String>.none, timeout: timeout)
-        return try await send(request, model: nil)
+        return try await send(request, model: nil, timeout: timeout)
     }
 
     private func post<T: Decodable>(_ path: String, body: some Encodable, timeout: Double, model: String?) async throws -> T {
         let request = try makeRequest(path, method: "POST", body: body, timeout: timeout)
-        return try await send(request, model: model)
+        return try await send(request, model: model, timeout: timeout)
     }
 
-    private func send<T: Decodable>(_ request: URLRequest, model: String?) async throws -> T {
+    /// - timeout: the configured seconds, which bound the whole exchange as well as its idle time; 0 is none.
+    private func send<T: Decodable>(_ request: URLRequest, model: String?, timeout: Double) async throws -> T {
         let started = Date()
         let path = request.url?.path() ?? ""
         do {
-            let (data, response) = try await session.data(for: request)
+            let session = session
+            let (data, response) = try await Deadline.run(timeout, expired: { OllamaError.timeout(path) }) {
+                try await session.data(for: request)
+            }
             let body = String(decoding: data, as: UTF8.self)
             if let http = response as? HTTPURLResponse, http.statusCode == 404, let model, body.contains("not found") {
                 throw OllamaError.modelNotFound(model)

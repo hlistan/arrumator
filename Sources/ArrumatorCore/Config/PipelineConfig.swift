@@ -423,6 +423,9 @@ public struct LearningConfig: Sendable, Codable, Hashable {
         public var ruleMinReliability: Double
         /// Past filings at least this similar, all in one folder, place the document directly.
         public var knnMinSimilarity: Double
+        /// Such trusted filings needed. One is enough: a model, a small one especially, decides a recurring document
+        /// under different names from one month to the next, and its predecessor's folder keeps it with the rest
+        /// (kNN classification over the user's own filings; see docs/organizing-principles-sources.md).
         public var knnMinNeighbors: Int
         /// Near-identical past filings that must agree on a document type before rules may rely on it.
         public var typeEstimateMinNeighbors: Int

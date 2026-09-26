@@ -435,7 +435,7 @@
     "directPlacement": {
       "ruleMinReliability": 0.9,
       "knnMinSimilarity": 0.92,
-      "knnMinNeighbors": 3,
+      "knnMinNeighbors": 1,
       "typeEstimateMinNeighbors": 1
     },
     "trustedMemoryMinWeight": 0.5,
