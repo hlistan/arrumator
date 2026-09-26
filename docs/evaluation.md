@@ -71,8 +71,16 @@ comes from `arrumator eval` runs through the live pipeline in a throw-away archi
 |---|---|---|---|---|
 | gemma4:e2b | 0.35/0.18 → 0.44/0.48 → **0.53/0.60** | 0.67 → 0.70 → 0.82 | 56% → 42% → 81% | 48 → 40 → 30 |
 | gemma4:e4b | 0.19/0.48 → 0.39/0.47 → 0.39/0.48 | 1.00 → 0.64 → 0.70 | 33% → 47% → 86% | 55 → 40 → 29 |
+| ministral-3:8b | 0.46/0.54 → 0.46/0.57 → 0.46/0.46 | 1.00 → 0.89 → 0.86 | 53% → 78% → 97% | 45 → 36 → 31 |
+| ministral-3:14b | 0.52/0.57 → 0.55/0.60 → 0.55/0.57 | 0.89 → 0.82 → 0.89 | 75% → 89% → 97% | 36 → 30 → 29 |
 
 No run filed a document with another sender's documents (sender mix-ups: 0).
+
+Pass 2 files the same documents again. With the recurring-document step, each one joins its pass-1 copy, so pass 2
+now repeats pass 1 (97% stable for the ministral models). Before, the model decided each document again and
+sometimes merged what pass 1 had split. That is why pass-2 F1 falls for `ministral-3:8b` (0.57 → 0.46) while pass 1
+is unchanged. A second look that regroups the archive is what rethinking does, and ordinary filing should not
+reshuffle.
 
 ## Pipeline: what did not help
 
@@ -143,11 +151,18 @@ after it.
 
 The profiles in `pipeline.json` follow this table:
 
-| profile | model | quality | s/doc | memory |
-|---|---|---|---|---|
-| `standard` | ministral-3:14b | best | 25 | ~10 GB |
-| `balanced` | ministral-3:8b | same precision, less grouping | 16 | ~7 GB |
-| `lowMemory` | gemma4:e2b-it-qat | fastest, mixes more | 6 | ~5.5 GB |
+| profile | model | F1 three-instance / standard pass 1 | P three-instance / standard | s/doc three-instance / standard pass 1 | memory |
+|---|---|---|---|---|---|
+| `standard` | ministral-3:14b | **0.71 / 0.55** | 0.90 / **0.89** | 25 / 39 | ~10 GB |
+| `balanced` | ministral-3:8b | 0.65 / 0.46 | **0.92** / 0.86 | 16 / 29 | ~7 GB |
+| `lowMemory` | gemma4:e2b-it-qat | 0.66 / 0.53 | 0.76 / 0.82 | **6 / 8.5** | ~5.5 GB |
+
+- **Time depends on how many documents are new.** On the standard corpus nearly every pass-1 document is new, so
+  the model decides each one. On the three-instance corpora two in three follow a predecessor without a model call.
+- **`balanced` groups no better than `lowMemory`.** It is chosen for precision (fewer kinds mixed in one folder)
+  and sender recognition (85% against about 77%), at three to four times the time.
+- **The previous `standard` profile used `gemma4:latest`,** about 11 GB with `bge-m3`, which is the size of
+  `gemma4:e4b`. On the standard corpus `gemma4:e4b` scored F1 0.39 / 0.48 with P 0.70.
 
 ## Image descriptions and the model's context
 
