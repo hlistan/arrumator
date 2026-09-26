@@ -12,7 +12,7 @@ public struct FilingClassifier: DocumentClassifier {
     public let gate: InferenceGate
     public let models: ModelManager
     public let prompts: PromptBuilder
-    private let names = NameVectors()
+    private let texts = TextVectors()
 
     public init(store: any LearningStore, logic: LogicStore, memories: MemoryIndex, gate: InferenceGate, models: ModelManager,
                 prompts: PromptBuilder) {
@@ -146,6 +146,9 @@ public struct FilingClassifier: DocumentClassifier {
         let sender = Self.sender(reading: a.raw.correspondent, resolver: resolver, matches: matches)
         let judge = ModelFolderJudge(model: LLMClassifier(gate: gate, models: models, config: cc), tiers: tiers, prompts: prompts,
                                      system: try prompts.judgeSystem(folderLanguage: settings.folderNamingLanguage, logic: currentLogic),
+                                     document: PromptBuilder.judgedDocument(title: nonEmpty(a.raw.title) ?? content.source.stem,
+                                                                            type: a.documentType,
+                                                                            sender: sender.known?.canonicalName ?? nonEmpty(a.raw.correspondent)),
                                      trace: trace)
         let senderNames = ([a.raw.correspondent] + (sender.known.map { [$0.canonicalName] + $0.aliases } ?? [])).compactMap(nonEmpty)
         let placement = try await guardPlacement(a.ideal, sender: sender.known?.id, senderNames: senderNames,
@@ -225,8 +228,9 @@ public struct FilingClassifier: DocumentClassifier {
         return (named, nil)
     }
 
-    /// Places the decided path onto the tree with `PlacementGuard`, comparing names by their embeddings when there are
-    /// any; without them, or before the archive has folders, only the same name is the same folder.
+    /// Places the decided path onto the tree with `PlacementGuard`, comparing folders by the embeddings of their names and
+    /// descriptions when there are any; without them, or before the archive has folders, only the same name is the same
+    /// folder.
     /// What each level of the decided path stands for, worked out from what the document is identified as rather than
     /// asked of the model, whose labels proved unreliable: the level named like the document's sender stands for the
     /// sender, the one named like its subject for the subject, the rest for topics. Names are compared as written,
@@ -259,14 +263,21 @@ public struct FilingClassifier: DocumentClassifier {
                                 trace: TraceContext) async throws -> GuardedPlacement {
         let started = Date()
         let parties = senderNames + (subject.map { [$0] } ?? [])
-        let vectors = available
-            ? try await names.vectors(for: PlacementGuard.names(for: ideal, taxonomy: taxonomy) + parties, embedder: embedder) : [:]
+        var vectors: [String: [Float]] = [:]
+        if available {
+            // Names and the tree's descriptions recur, so they are cached; the path's descriptions are new with every
+            // document, so they are embedded as they come rather than kept.
+            vectors = try await texts.vectors(for: PlacementGuard.names(for: ideal, taxonomy: taxonomy) + parties
+                                                  + PlacementGuard.described(taxonomy), embedder: embedder)
+            let levels = PlacementGuard.described(ideal)
+            for (text, vector) in zip(levels, try await embedder.embed(levels)) { vectors[text] = vector }
+        }
         let ideal = Self.marked(ideal, senderNames: senderNames, subject: subject, resolver: resolver, vectors: vectors,
                                 partyAbove: config.placementGuard.partyAbove)
         let result = try await PlacementGuard(config: config.placementGuard).place(ideal, sender: sender, documentType: documentType,
                                                                                    logic: logic,
                                                                                    yearFolder: yearFolder, taxonomy: taxonomy,
-                                                                                   names: vectors, judge: judge)
+                                                                                   vectors: vectors, judge: judge)
         await trace.record(.validate, startedAt: started,
                            input: ["ideal": ideal.map(\.name).joined(separator: TaxonomySnapshot.pathSeparator),
                                    "kinds": ideal.map { $0.kind?.rawValue ?? "—" }.joined(separator: TaxonomySnapshot.pathSeparator),

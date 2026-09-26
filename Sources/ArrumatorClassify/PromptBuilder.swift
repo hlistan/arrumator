@@ -4,8 +4,8 @@ import Foundation
 /// Renders the prompts that place and name a document. The path is decided from the archive's logic and the document
 /// alone: shown folders, any at all, a model copies them whether they fit or not (an older arrangement's, another
 /// sender's that looks alike, one broad area for everything). The app maps the path onto the tree itself, resolving each
-/// level by identity (`PlacementGuard`), and asks the model only narrow questions about folders that may be the same
-/// (`judgeUser`).
+/// level by identity (`PlacementGuard`), and asks the model only narrow questions: which of the few folders beside a
+/// decided one, if any, it is (`judgeUser`).
 public struct PromptBuilder: Sendable {
     public let library: PromptLibrary
     public let config: ClassificationConfig
@@ -73,18 +73,30 @@ public struct PromptBuilder: Sendable {
         try library.render("classify-user", ["document": documentBlock(content, correspondents: correspondents)])
     }
 
-    /// Asking whether a decided folder is one that exists beside it under another name.
+    /// Asking which of the folders beside a decided one, if any, it is.
     public func judgeSystem(folderLanguage: String, logic: LogicRecord?) throws -> String {
         try library.render("judge-system", ["logic": try logicBlock(logic, folderLanguage: folderLanguage)])
     }
 
-    public func judgeUser(level: FolderLevel, folder: TaxonomyFolder, place: String) throws -> String {
-        let recent = folder.recentTitles.prefix(config.promptExamplesPerFolder)
+    /// The document being filed, as the question of which folder it is at home in shows it.
+    public static func judgedDocument(title: String, type: DocumentType, sender: String?) -> String {
+        [("Title", Optional(title)), ("Type", type == .other ? nil : type.rawValue), ("From", sender)]
+            .compactMap { label, value in value.map { "\(label): \($0)" } }.joined(separator: "\n")
+    }
+
+    /// The document, the decided folder and the folders it may be, numbered from 1 in the order given, each with what
+    /// it holds.
+    public func judgeUser(level: FolderLevel, candidates: [TaxonomyFolder], place: String, document: String) throws -> String {
+        let options = candidates.enumerated().map { index, folder in
+            let recent = folder.recentTitles.prefix(config.promptExamplesPerFolder)
+            return "\(index + 1). \(folder.name) — \(folder.description)"
+                + (recent.isEmpty ? "" : "\n   Holds, for example: " + recent.map { "\"\($0)\"" }.joined(separator: "; "))
+        }
         return try library.render("judge-user", [
+            "document": document,
             "place": place.isEmpty ? "(the top of the archive)" : place,
             "decided": "\(level.name) — \(level.description)",
-            "existing": "\(folder.name) — \(folder.description)"
-                + (recent.isEmpty ? "" : "\nHolds, for example: " + recent.map { "\"\($0)\"" }.joined(separator: "; ")),
+            "existing": options.joined(separator: "\n"),
         ])
     }
 

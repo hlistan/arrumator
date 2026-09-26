@@ -100,10 +100,10 @@ import Testing
 
     private func folder(_ id: Int64, _ name: String, in parent: TaxonomyFolder? = nil, origin: FolderOrigin = .learned,
                         role: FolderRole? = nil, kind: LevelKind? = nil, logic: String? = nil, senders: Set<Int64> = [],
-                        types: Set<DocumentType> = [], documents: Int = 0) -> TaxonomyFolder {
+                        types: Set<DocumentType> = [], documents: Int = 0, description: String = "") -> TaxonomyFolder {
         TaxonomyFolder(id: id, code: "F\(id)", name: name, parentCode: parent?.code,
-                       relativePath: (parent.map { $0.relativePath + "/" } ?? "") + name, role: role, origin: origin,
-                       documentCount: documents, kind: kind, logic: logic, senders: senders, documentTypes: types)
+                       relativePath: (parent.map { $0.relativePath + "/" } ?? "") + name, role: role, description: description,
+                       origin: origin, documentCount: documents, kind: kind, logic: logic, senders: senders, documentTypes: types)
     }
 
     private func levels(_ names: String...) -> [FolderLevel] { names.map { FolderLevel(name: $0, description: "\($0) documents.", kind: .topic) } }
@@ -117,10 +117,18 @@ import Testing
     private static let logic = "a1b2c3"
 
     private func place(_ ideal: [FolderLevel], sender: Int64? = nil, type: DocumentType = .invoice, yearFolder: Bool = false,
-                       in taxonomy: TaxonomySnapshot, names: [String: [Float]] = [:], judge: StubJudge = StubJudge()) async throws -> GuardedPlacement {
+                       in taxonomy: TaxonomySnapshot, vectors: [String: [Float]] = [:], judge: StubJudge = StubJudge()) async throws -> GuardedPlacement {
         try await PlacementGuard(config: config.classification.placementGuard)
-            .place(ideal, sender: sender, documentType: type, logic: Self.logic, yearFolder: yearFolder, taxonomy: taxonomy, names: names,
-                   judge: judge)
+            .place(ideal, sender: sender, documentType: type, logic: Self.logic, yearFolder: yearFolder, taxonomy: taxonomy,
+                   vectors: vectors, judge: judge)
+    }
+
+    /// A unit vector whose cosine with the first axis is `cosine`, the rest of it along its own `axis`.
+    private func alike(_ cosine: Float, axis: Int, dimensions: Int = 8) -> [Float] {
+        var v = [Float](repeating: 0, count: dimensions)
+        v[0] = cosine
+        v[axis] = (1 - cosine * cosine).squareRoot()
+        return v
     }
 
     private func level(_ name: String, _ kind: LevelKind) -> FolderLevel { FolderLevel(name: name, description: "\(name).", kind: kind) }
@@ -201,9 +209,9 @@ import Testing
         let tax: [Float] = [1, 0]
         let names: [String: [Float]] = ["Money": [0, 1], "Utilities": [0, 1], "Household Utilities": VectorCodec.normalized([0.1, 1]),
                                         "Taxes (Portugal)": tax, "Taxes (Russia)": tax]
-        let near = try await place(levels("Money", "Household Utilities"), in: taxonomy, names: names)
+        let near = try await place(levels("Money", "Household Utilities"), in: taxonomy, vectors: names)
         #expect(near.folderCode == "F2" && (near.idealSimilarity ?? 0) >= config.classification.placementGuard.duplicateAbove)
-        let russia = try await place(levels("Money", "Taxes (Russia)"), in: taxonomy, names: names)
+        let russia = try await place(levels("Money", "Taxes (Russia)"), in: taxonomy, vectors: names)
         #expect(russia.folderCode == nil && russia.newFolder?.name == "Taxes (Russia)", "another country's taxes are another folder")
         let unembedded = try await place(levels("Money", "Household Utilities"), in: taxonomy)
         #expect(unembedded.newFolder?.name == "Household Utilities", "without embeddings only the same name is the same folder")
@@ -289,7 +297,7 @@ import Testing
         let asTopic = try await place(levels("Portugal", "EDP Comercial"), sender: 8, in: taxonomy)
         #expect(asTopic.conflict != nil, "nor when the model calls that level a topic")
         let names: [String: [Float]] = ["Portugal": [1, 0], "EDP Comercial": [0, 1], "EDP Comercial SA": VectorCodec.normalized([0.05, 1])]
-        let near = try await place(byJurisdiction("Portugal", sender: "EDP Comercial SA"), sender: 8, in: taxonomy, names: names)
+        let near = try await place(byJurisdiction("Portugal", sender: "EDP Comercial SA"), sender: 8, in: taxonomy, vectors: names)
         #expect(near.newFolder?.levels.map(\.name) == ["EDP Comercial SA"], "nor under a near-duplicate name")
         let legacy = TaxonomySnapshot(version: 1, rootPath: "/tmp", folders: [portugal, folder(2, "EDP Comercial", in: portugal, senders: [7])])
         #expect(try await place(byJurisdiction("Portugal", sender: "EDP Comercial"), sender: 7, in: legacy).folderCode == "F2",
@@ -299,35 +307,103 @@ import Testing
                 "an empty folder of that name is free for a sender the app does not know yet")
     }
 
-    @Test func aTopicThatMayBeTheSameIsPutToTheJudgeAFewTimesAtMost() async throws {
+    @Test func aTopicThatMayBeAFolderBesideItIsChosenAmongTheMostAlikeAFewTimesAtMost() async throws {
         let home = folder(1, "Home")
         let utilities = folder(2, "Utilities", in: home)
         let rent = folder(3, "Rent", in: home)
         let taxonomy = TaxonomySnapshot(version: 1, rootPath: "/tmp", folders: [home, utilities, rent])
         let limits = config.classification.placementGuard
-        let between = Float((limits.judgeAbove + limits.duplicateAbove) / 2)
+        let between = Float((limits.offerAbove + limits.duplicateAbove) / 2)
         let names: [String: [Float]] = ["Home": [0, 0, 1], "Utilities": [1, 0, 0], "Rent": [0, 1, 0],
                                         "Utility Bills": VectorCodec.normalized([between, (1 - between * between).squareRoot(), 0]),
                                         "Garden": [0.1, 0.1, 0.99]]
-        let yes = StubJudge(verdict: true)
-        let same = try await place(levels("Home", "Utility Bills"), in: taxonomy, names: names, judge: yes)
-        let asked = await yes.asked
-        #expect(same.folderCode == "F2" && asked == [["Utility Bills", "Utilities", "Home"]])
-        for verdict in [false, nil] as [Bool?] {
-            let judge = StubJudge(verdict: verdict)
-            let apart = try await place(levels("Home", "Utility Bills"), in: taxonomy, names: names, judge: judge)
-            #expect(apart.newFolder?.levels.map(\.name) == ["Utility Bills"], "not the same, or unsure, keeps them apart")
+        let utilitiesPicked = StubJudge(.named("Utilities"))
+        let same = try await place(levels("Home", "Utility Bills"), in: taxonomy, vectors: names, judge: utilitiesPicked)
+        let asked = await utilitiesPicked.asked
+        #expect(same.folderCode == "F2" && asked == [["Utility Bills", "Utilities, Rent", "Home"]],
+                "every folder beside it alike enough is offered in one question, the most alike first")
+        let rentPicked = try await place(levels("Home", "Utility Bills"), in: taxonomy, vectors: names, judge: StubJudge(.named("Rent")))
+        #expect(rentPicked.folderCode == "F3", "the model may pick a folder other than the one most alike by embedding")
+        for answer in [StubJudge.Answer.none, .unsure] {
+            let apart = try await place(levels("Home", "Utility Bills"), in: taxonomy, vectors: names, judge: StubJudge(answer))
+            #expect(apart.folderCode == nil && apart.newFolder?.levels.map(\.name) == ["Utility Bills"],
+                    "none of them, or unsure, keeps it apart: \(answer)")
         }
-        let unasked = StubJudge(verdict: true)
-        _ = try await place(levels("Home", "Garden"), in: taxonomy, names: names, judge: unasked)
+        let unasked = StubJudge(.first)
+        _ = try await place(levels("Home", "Garden"), in: taxonomy, vectors: names, judge: unasked)
         #expect(await unasked.asked.isEmpty, "a name nowhere near an existing one is not put to the judge")
         let deep = TaxonomySnapshot(version: 1, rootPath: "/tmp", folders: [folder(1, "A"), folder(2, "B", in: folder(1, "A")),
                                                                               folder(3, "C", in: folder(2, "B", in: folder(1, "A")))])
         let close = VectorCodec.normalized([between, (1 - between * between).squareRoot()])
         let vectors: [String: [Float]] = ["A": [1, 0], "B": [1, 0], "C": [1, 0], "A2": close, "B2": close, "C2": close]
-        let counted = StubJudge(verdict: true)
-        _ = try await place(levels("A2", "B2", "C2"), in: deep, names: vectors, judge: counted)
+        let counted = StubJudge(.first)
+        let capped = try await place(levels("A2", "B2", "C2"), in: deep, vectors: vectors, judge: counted)
         #expect(await counted.asked.count == limits.maxJudgements, "a document is put to the judge a few times at most")
+        #expect(capped.newFolder?.parentCode == "F2" && capped.newFolder?.levels.map(\.name) == ["C2"],
+                "past the last question, the rest of the path is new inside the folders chosen so far")
+    }
+
+    @Test func onlyTheMostAlikeFoldersAreOfferedAtOnce() async throws {
+        let home = folder(1, "Home")
+        let many = (2...8).map { folder(Int64($0), "Topic \($0)", in: home) }
+        let taxonomy = TaxonomySnapshot(version: 1, rootPath: "/tmp", folders: [home] + many)
+        let limits = config.classification.placementGuard
+        var vectors: [String: [Float]] = ["Home": alike(0, axis: 7, dimensions: 16), "Bills": alike(1, axis: 1, dimensions: 16)]
+        for (index, folder) in many.enumerated() {
+            vectors[folder.name] = alike(Float(limits.offerAbove) + 0.01 * Float(index + 1), axis: index + 2, dimensions: 16)
+        }
+        let judge = StubJudge(.none)
+        _ = try await place(levels("Home", "Bills"), in: taxonomy, vectors: vectors, judge: judge)
+        let offered = try #require(await judge.asked.first)[1].components(separatedBy: ", ")
+        #expect(offered == many.reversed().prefix(limits.choices).map(\.name),
+                "a question offers the few folders most alike, the most alike first, however many are alike enough")
+    }
+
+    @Test func foldersAreOfferedByTheirNamesAndDescriptionsTogether() throws {
+        let level = FolderLevel(name: "Money", description: "Money matters.", kind: .topic)
+        let finance = folder(2, "Finanças", description: "Impostos.")
+        let expenses = folder(3, "Household Expenses", description: "Bills.")
+        let mixed = folder(4, "Finance Misc", description: "Other.")
+        let travel = folder(5, "Travel", description: "Trips.")
+        let described = { (folder: TaxonomyFolder) in PlacementGuard.described(folder.name, folder.description) }
+        let names: [String: [Float]] = ["Money": alike(1, axis: 1), finance.name: alike(0.8, axis: 2), expenses.name: alike(0.3, axis: 3),
+                                        mixed.name: alike(0.65, axis: 4), travel.name: alike(0.2, axis: 5)]
+        let texts: [String: [Float]] = [PlacementGuard.described(level.name, level.description): alike(1, axis: 1),
+                                        described(finance): alike(0.3, axis: 2), described(expenses): alike(0.8, axis: 3),
+                                        described(mixed): alike(0.65, axis: 4), described(travel): alike(0.2, axis: 5)]
+        let guardian = PlacementGuard(config: config.classification.placementGuard)
+        let offered = guardian.offers([finance, expenses, mixed, travel], to: level, vectors: names.merging(texts) { a, _ in a })
+        #expect(offered.map(\.folder.name) == ["Finanças", "Household Expenses", "Finance Misc"],
+                "a folder alike by name (another language) and one alike by what it holds are both offered, first")
+        #expect(!guardian.offers([finance, expenses, mixed, travel], to: level, vectors: names).contains { $0.folder.name == "Household Expenses" },
+                "by names alone, the folder that holds the same things under another name is missed")
+        let portugal = FolderLevel(name: "Taxes (Portugal)", description: "Portuguese taxes.", kind: .topic)
+        let russia = folder(6, "Taxes (Russia)", description: "Russian taxes.")
+        let same: [String: [Float]] = [portugal.name: alike(1, axis: 1), russia.name: alike(1, axis: 1),
+                                       PlacementGuard.described(portugal.name, portugal.description): alike(1, axis: 1),
+                                       described(russia): alike(1, axis: 1)]
+        #expect(guardian.offers([russia], to: portugal, vectors: same).isEmpty, "another country's folder is never offered")
+    }
+
+    @Test func aFolderChoiceIsAnOfferedNumberNoneOrUnsure() throws {
+        #expect(try AnswerValidator.folderChoice(#"{"choice":"2"}"#, options: 3) == .option(1))
+        #expect(try AnswerValidator.folderChoice("<think>hm</think>" + #"{"choice":" None "}"#, options: 3) == .none)
+        #expect(try AnswerValidator.folderChoice(#"{"choice":"unsure"}"#, options: 3) == .unsure)
+        for outside in ["0", "4", "-1", "Utilities", ""] {
+            #expect(throws: AnswerValidationError.self, "a folder that was not offered is never taken: “\(outside)”") {
+                try AnswerValidator.folderChoice(#"{"choice":"\#(outside)"}"#, options: 3)
+            }
+        }
+        #expect(throws: AnswerValidationError.self, "an answer that is not the schema's object is refused") {
+            try AnswerValidator.folderChoice("yes", options: 3)
+        }
+        #expect(ClassificationSchema.folderChoice(options: 2)["properties"]?["choice"]?["enum"]
+                    == .array([.string("1"), .string("2"), .string("none"), .string("unsure")]),
+                "the schema lets the model answer only with a number offered, none or unsure")
+        #expect(PromptBuilder.judgedDocument(title: "Extrato agosto", type: .statement, sender: "Millennium BCP")
+                    == "Title: Extrato agosto\nType: statement\nFrom: Millennium BCP")
+        #expect(PromptBuilder.judgedDocument(title: "Scan 12", type: .other, sender: nil) == "Title: Scan 12",
+                "what the document is not known to be is left out rather than guessed")
     }
 
     @Test func aPathIntoTheAppsOwnFoldersLeadsNowhere() async throws {
@@ -360,15 +436,29 @@ import Testing
     }
 }
 
-/// Answers every question the same way and remembers what it was asked: the level, the folder, and where.
+/// Answers every question the same way and remembers what it was asked: the level, the folders offered, and where.
 actor StubJudge: FolderJudge {
-    let verdict: Bool?
+    enum Answer: Sendable {
+        /// The folder offered under this name, or none of them when it is not offered.
+        case named(String)
+        /// The folder offered first.
+        case first
+        case none
+        case unsure
+    }
+
+    let answer: Answer
     private(set) var asked: [[String]] = []
 
-    init(verdict: Bool? = nil) { self.verdict = verdict }
+    init(_ answer: Answer = .unsure) { self.answer = answer }
 
-    func isSame(_ level: FolderLevel, as folder: TaxonomyFolder, inside place: String) async throws -> Bool? {
-        asked.append([level.name, folder.name, place])
-        return verdict
+    func choose(_ level: FolderLevel, among candidates: [TaxonomyFolder], inside place: String) async throws -> FolderChoice {
+        asked.append([level.name, candidates.map(\.name).joined(separator: ", "), place])
+        switch answer {
+        case let .named(name): return candidates.first { $0.name == name }.map(FolderChoice.folder) ?? .none
+        case .first: return candidates.first.map(FolderChoice.folder) ?? .none
+        case .none: return .none
+        case .unsure: return .unsure
+        }
     }
 }

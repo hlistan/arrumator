@@ -368,7 +368,9 @@
     "repairAttempts": 1,
     "placementGuard": {
       "duplicateAbove": 0.85,
-      "judgeAbove": 0.6,
+      "offerAbove": 0.6,
+      "choices": 4,
+      "rankFusionK": 10,
       "maxJudgements": 2,
       "partyAbove": 0.8
     }

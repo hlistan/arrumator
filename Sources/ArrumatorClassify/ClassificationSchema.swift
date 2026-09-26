@@ -9,6 +9,7 @@ public enum ClassificationSchema {
     static let yes = "yes"
     static let no = "no"
     static let unsure = "unsure"
+    static let none = "none"
 
     static func string(_ enumValues: [String]? = nil) -> JSONValue {
         var e: [JSONEntry] = [JSONEntry("type", "string")]
@@ -51,9 +52,9 @@ public enum ClassificationSchema {
         ])
     }
 
-    /// Whether a decided folder is one that exists: "yes", "no" or "unsure".
-    public static func sameFolder() -> JSONValue {
-        object([JSONEntry("same", string([yes, no, unsure]))])
+    /// Which of `options` folders, numbered from 1, a decided folder is: its number, "none" or "unsure".
+    public static func folderChoice(options: Int) -> JSONValue {
+        object([JSONEntry("choice", string((0..<options).map { String($0 + 1) } + [none, unsure]))])
     }
 
     public static func folderDescription(maxExamples: Int) -> JSONValue {
@@ -112,18 +113,16 @@ public struct ModelFolderLevel: Sendable, Codable, Hashable {
     public var description: String
 }
 
-/// The model's answer to whether a decided folder is one that exists.
-public struct SameFolderAnswer: Sendable, Codable, Hashable {
-    public var same: String
+/// The model's answer to which existing folder a decided one is, keys as in the schema.
+struct FolderChoiceAnswer: Decodable {
+    var choice: String
+}
 
-    /// true, false, or nil when the model could not tell.
-    public var verdict: Bool? {
-        switch same {
-        case ClassificationSchema.yes: true
-        case ClassificationSchema.no: false
-        default: nil
-        }
-    }
+/// Which of the folders offered, numbered from 0, a decided folder is.
+public enum ChosenOption: Sendable, Hashable {
+    case option(Int)
+    case none
+    case unsure
 }
 
 public struct FolderDescriptionAnswer: Sendable, Codable, Hashable {
@@ -274,10 +273,22 @@ public struct AnswerValidator: Sendable {
         text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
     }
 
-    /// The verdict in an answer to whether two folders are the same.
-    public static func sameFolder(_ text: String) throws -> Bool? {
-        do { return try JSONDecoder().decode(SameFolderAnswer.self, from: Data(stripThinking(text).utf8)).verdict } catch {
+    /// The choice in an answer to which of `options` folders, numbered from 1, a decided folder is.
+    public static func folderChoice(_ text: String, options: Int) throws -> ChosenOption {
+        let answer: FolderChoiceAnswer
+        do { answer = try JSONDecoder().decode(FolderChoiceAnswer.self, from: Data(stripThinking(text).utf8)) } catch {
             throw AnswerValidationError.notJSON(String(describing: error))
+        }
+        let choice = answer.choice.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        switch choice {
+        case ClassificationSchema.none: return .none
+        case ClassificationSchema.unsure: return .unsure
+        default:
+            guard let number = Int(choice), number >= 1, number <= options else {
+                throw AnswerValidationError.invalid(["choice must be a folder's number from 1 to \(options), "
+                    + "\"\(ClassificationSchema.none)\" or \"\(ClassificationSchema.unsure)\""])
+            }
+            return .option(number - 1)
         }
     }
 

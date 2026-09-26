@@ -139,10 +139,13 @@ puts the path onto the tree, keeping misfilings down:
 - **When the document and the model disagree about the sender** — an identifier in it belongs to one known sender and
   the model names another that nothing in it shows — the document waits in Needs review. A document that lists other
   parties' identifiers, such as a statement's debits, is no disagreement when the sender the model names shows too.
-- **A topic** is an existing folder of the same name there, or of a name so close it would be a duplicate. A name
-  only somewhat close is put to the model as one narrow question — is this the same folder as that one, both
-  described? — a few times per document at most (`placementGuard.judgeAbove`, `placementGuard.maxJudgements`);
-  "unsure" keeps them apart, since a second folder is easier to put right than a misfiled document. Names whose
+- **A topic** is an existing folder of the same name there, or of a name so close it would be a duplicate. Otherwise
+  the name the model chose freely is mapped onto the folders already there: the few most alike beside it — by name,
+  which finds "Finanças" for "Finance", and by name with description, which finds "Household Expenses" for
+  "Utilities" — are offered to the model in one question, each described with a few of its documents, and it picks
+  the one that already holds what this folder would, or none (`placementGuard.offerAbove`, `placementGuard.choices`,
+  `placementGuard.rankFusionK`). It is asked a few times per document at most (`placementGuard.maxJudgements`);
+  "unsure" keeps it apart, since a second folder is easier to put right than a misfiled document. Names whose
   qualifiers differ ("Taxes (Portugal)", "Taxes (Russia)") are never the same folder.
 
 Each folder the model makes records in its `_about.md` what it stands for and which logic made it. The model also says whether the document goes in
@@ -175,7 +178,7 @@ xcodegen generate
 xcodebuild -project Arrumator.xcodeproj -scheme Arrumator -configuration Debug -derivedDataPath build/DerivedData build
 open build/DerivedData/Build/Products/Debug/Arrumator.app      # first launch shows onboarding
 
-swift test                                                       # 193 tests: extraction, core, classification, runtime
+swift test                                                       # 196 tests: extraction, core, classification, runtime
 swift run arrumator doctor                                       # environment self-check
 swift run arrumator ingest --dry-run ~/Downloads/some.pdf        # what would happen, without moving anything
 swift run arrumator run                                          # headless: watch Incoming and file

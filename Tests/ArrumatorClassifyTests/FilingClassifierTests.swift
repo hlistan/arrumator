@@ -39,24 +39,30 @@ import Testing
                 "shown any folder, broad ones included, a model copies it whether it fits or not; the app resolves the path")
     }
 
-    @Test func aRewordedTopicJoinsTheFolderOnlyWhenTheJudgeSaysItIsTheSame() async throws {
-        for (verdict, joins) in [("yes", true), ("no", false), ("unsure", false)] {
+    @Test func aRewordedTopicJoinsTheFolderOnlyWhenTheModelPicksIt() async throws {
+        for (answer, joins) in [("1", true), ("none", false), ("unsure", false), ("2", false)] {
             let h = try await ClassifyHarness.make(handler: { request in
-                Fixtures.isJudge(request) ? Fixtures.same(verdict) : Fixtures.answer(path: ["Home", "Household Utilities"])
+                Fixtures.isJudge(request) ? Fixtures.choice(answer) : Fixtures.answer(path: ["Home", "Household Utilities"])
             })
             defer { h.env.cleanup() }
             let folder = try await h.env.folder("Utilities", area: "Home", yearly: true, description: "Electricity, gas and water bills.")
-            let outcome = try await h.classify(Fixtures.content("x.pdf", text: Fixtures.edpText))
-            #expect((outcome.decision.folderCode == folder.code) == joins, "\(verdict)")
-            #expect(joins || outcome.decision.proposedNewFolder?.levels.map(\.name) == ["Household Utilities"], "\(verdict)")
+            let sink = MemoryTraceSink()
+            let outcome = try await h.classify(Fixtures.content("x.pdf", text: Fixtures.edpText), trace: TraceContext(traceID: 1, sink: sink))
+            #expect((outcome.decision.folderCode == folder.code) == joins, "\(answer)")
+            #expect(joins || outcome.decision.proposedNewFolder?.levels.map(\.name) == ["Household Utilities"],
+                    "none of them, unsure, or a folder that was not offered keeps it apart: \(answer)")
             let requests = await h.mock.chatRequests
             let decision = try #require(requests.first(where: Fixtures.isDecision))
             #expect(!decision.allText.contains("Utilities —") && !decision.allText.contains(folder.code),
                     "the folders that exist cannot pull the decision away from the logic")
             let judge = try #require(requests.first(where: Fixtures.isJudge))
             #expect(judge.allText.contains("## PLACE\nHome") && judge.allText.contains("## DECIDED FOLDER\nHousehold Utilities — Electricity")
-                    && judge.allText.contains("## EXISTING FOLDER\nUtilities — Electricity, gas and water bills."),
-                    "the judge sees both folders, what each is for, and where")
+                    && judge.allText.contains("## EXISTING FOLDERS\n1. Utilities — Electricity, gas and water bills."),
+                    "the model sees the decided folder and the folders it may be, what each is for, and where")
+            #expect(judge.allText.contains("## DOCUMENT\nTitle: Fatura eletricidade junho\nType: invoice\nFrom: "),
+                    "and the document itself, so it answers where this document is at home, not whether two names match")
+            let asked = try #require(await sink.steps.first { $0.stage == .judge })
+            #expect(asked.status == (answer == "2" ? .error : .ok), "each question and its answer are in the trace: \(answer)")
         }
     }
 

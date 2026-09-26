@@ -106,7 +106,7 @@ import Testing
             ("MEO fatura agosto", ["Portugal", "Santander Totta"], "MEO"),
         ]
         let h = try await ClassifyHarness.make(handler: { request in
-            if Fixtures.isJudge(request) { return Fixtures.same("unsure") }
+            if Fixtures.isJudge(request) { return Fixtures.choice("unsure") }
             guard Fixtures.isDecision(request), let answer = answers.first(where: { request.allText.contains($0.text) }) else {
                 return #"{"file_name":"Named"}"#
             }

@@ -37,17 +37,17 @@ enum Fixtures {
         """
     }
 
-    /// Answers every request as `answer(path:)` does: the model always decides the same home, and cannot tell whether
-    /// two folders are the same.
+    /// Answers every request as `answer(path:)` does: the model always decides the same home, and cannot tell which
+    /// folder beside it a decided one is.
     static func answering(path: [String] = ["Home", "Utilities"]) -> MockOllama.ChatHandler {
-        { request in isJudge(request) ? same("unsure") : answer(path: path) }
+        { request in isJudge(request) ? choice("unsure") : answer(path: path) }
     }
 
-    /// The request asking whether a decided folder is one that exists.
-    static func isJudge(_ request: OllamaChatRequest) -> Bool { request.format?["properties"]?["same"] != nil }
+    /// The request asking which folder beside it, if any, a decided folder is.
+    static func isJudge(_ request: OllamaChatRequest) -> Bool { request.format?["properties"]?["choice"] != nil }
 
-    /// An answer to that request: "yes", "no" or "unsure".
-    static func same(_ verdict: String) -> String { #"{"same":"\#(verdict)"}"# }
+    /// An answer to that request: an offered folder's number, "none" or "unsure".
+    static func choice(_ value: String) -> String { #"{"choice":"\#(value)"}"# }
 
     /// The request that decides a document's path from the logic.
     static func isDecision(_ request: OllamaChatRequest) -> Bool { request.format?["properties"]?["ideal_path"] != nil }

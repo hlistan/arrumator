@@ -290,15 +290,21 @@ public struct CalibrationWeights: Sendable, Codable, Hashable {
 }
 
 public struct ClassificationConfig: Sendable, Codable, Hashable {
-    /// Maps the model's ideal path onto the actual folder tree by comparing folder *names*
-    /// (descriptions share boilerplate and are too similar to separate topics).
+    /// Maps the model's ideal path onto the actual folder tree. A level that may be a folder already there under another
+    /// name is canonicalized: the folders beside it are ranked by embedding and the model picks which one it is, if any.
     public struct PlacementGuard: Sendable, Codable, Hashable {
         /// A level of the model's path whose name is at least this similar to a folder in the same place is that
-        /// folder, rather than a new one beside it.
+        /// folder, rather than a new one beside it, without asking the model.
         public var duplicateAbove: Double
-        /// A name at least this similar, but short of a duplicate, is put to the model: is it the same folder?
-        public var judgeAbove: Double
-        /// Questions of that kind asked for one document at most.
+        /// A folder beside the level is offered to the model as the one it may be only when its name, or its name with
+        /// its description, is at least this similar to the level's.
+        public var offerAbove: Double
+        /// Folders offered to the model in one question, the most alike first.
+        public var choices: Int
+        /// The k of reciprocal rank fusion, 1 / (k + rank), which merges the ranking by names with the ranking by names
+        /// with descriptions.
+        public var rankFusionK: Double
+        /// Questions put to the model for one document at most.
         public var maxJudgements: Int
         /// A level whose name is at least this similar to the document's sender (or subject), when the two are not
         /// written alike, stands for that party: the same name in another language.
