@@ -126,19 +126,31 @@ struct ModelSettingsView: View {
     @State private var downloading: String?
     @State private var progress: Double?
     @State private var message: String?
+    @State private var server = ""
+    @State private var serverError: String?
+
+    private var onThisMac: Bool { model.runtime.map { OllamaEndpoint.isThisMac($0.ollama.baseURL) } ?? true }
 
     var body: some View {
         Form {
             Section("Ollama") {
                 LabeledContent("Status", value: model.ollama.summary)
+                HStack {
+                    TextField("Server", text: $server).onSubmit { connect() }
+                    Button("Use") { connect() }.disabled(server == model.runtime?.ollama.baseURL.absoluteString)
+                }
+                if let serverError { Text(serverError).font(.caption).foregroundStyle(Palette.attention) }
+                Text(Wording.ollamaServerNote).font(.caption).foregroundStyle(.secondary)
                 Picker("Management", selection: setting(model, \.ollamaManagement, default: .launchApp)) {
                     Text("Start the Ollama app when needed").tag(OllamaManagement.launchApp)
                     Text("Run 'ollama serve' myself (managed)").tag(OllamaManagement.spawnServe)
                     Text("Never start it").tag(OllamaManagement.external)
                 }
+                .disabled(!onThisMac)
+                .help(Wording.managementOnThisMacOnly)
                 Button("Start / check Ollama") { Task { _ = await model.runtime?.lifecycle.ensureRunning(); await load() } }
             }
-            Section("Models (all run on this Mac)") {
+            Section(Wording.modelsRun(at: model.runtime?.ollama.baseURL)) {
                 Picker("Profile", selection: setting(model, \.models.profile, default: "standard")) {
                     ForEach(model.runtime?.config.modelProfiles.sorted { $0.key < $1.key } ?? [], id: \.key) { Text($0.value.label).tag($0.key) }
                 }
@@ -161,6 +173,25 @@ struct ModelSettingsView: View {
         }
         .formStyle(.grouped)
         .task(id: "\(model.settings?.models.profile ?? "")|\(model.ollama.isReady)") { await load() }
+        .onAppear { server = model.runtime?.ollama.baseURL.absoluteString ?? "" }
+    }
+
+    /// Points the app at the server typed in, or says why it cannot.
+    private func connect() {
+        let address = server
+        Task {
+            guard let runtime = model.runtime else { return }
+            do {
+                try await runtime.useOllama(at: address)
+                _ = await runtime.lifecycle.ensureRunning()
+                serverError = nil
+                server = runtime.ollama.baseURL.absoluteString
+                model.settings = await runtime.settings.current
+                await load()
+            } catch {
+                serverError = error.localizedDescription
+            }
+        }
     }
 
     private func load() async {

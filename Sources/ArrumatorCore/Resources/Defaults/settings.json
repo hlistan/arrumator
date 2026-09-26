@@ -16,6 +16,7 @@
   "models": {
     "profile": "standard"
   },
+  "ollamaURL": "http://127.0.0.1:11434",
   "ollamaManagement": "launchApp",
   "enableVLM": true,
   "notifyOnFiled": false,

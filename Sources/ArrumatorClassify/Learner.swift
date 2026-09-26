@@ -99,7 +99,7 @@ public actor Learner: LearningSink {
             await trace.record(.learn, startedAt: started, input: ["folder": folder.code, "source": source], output: learned)
             if memoryID != nil, let reason = evidence.reason {
                 try await history.record(.learned, doc: documentID, trace: trace.traceID,
-                                         summary: "Remembered as an example of \(folder.code) \(folder.name) (\(reason))",
+                                         summary: "Remembered as an example of \(snapshot.path(of: folder)) (\(reason))",
                                          payload: LearnedFact.example(documentID: documentID))
             }
             if due { scheduleRefresh(folder: folder, snapshot: snapshot, settings: current) }
@@ -167,7 +167,7 @@ public actor Learner: LearningSink {
     public func taxonomyChanged(_ changes: [TaxonomyChange], taxonomy snapshot: TaxonomySnapshot) async {
         let current = await settings.current
         for change in changes where change.kind == .inferred {
-            guard let folder = snapshot.folder(code: change.code), folder.kind == .category else { continue }
+            guard let folder = snapshot.folder(code: change.code), folder.holdsUserDocuments else { continue }
             enqueueBackground { [absorber, config] in
                 let models = try config.models(for: current.models)
                 try await absorber.propose(folder: folder, taxonomy: snapshot, model: models.chat, keepAlive: models.keepAliveChat,
@@ -187,7 +187,7 @@ public actor Learner: LearningSink {
                                                           source: CorrectionSource.markCorrect.rawValue)
             let snapshot = try await taxonomy.snapshot(root: await settings.current.archiveURL)
             for code in Set(updated.map(\.folderCode)).sorted() {
-                let folder = snapshot.folder(code: code).map { "\($0.code) \($0.name)" } ?? code
+                let folder = snapshot.folder(code: code).map { snapshot.path(of: $0) } ?? code
                 try await history.record(.learned, doc: documentID,
                                          summary: "Remembered as an example of \(folder) (\(FilingEvidence.approved.reason ?? ""))",
                                          payload: LearnedFact.example(documentID: documentID))
@@ -262,9 +262,7 @@ public actor Learner: LearningSink {
             for var rule in try await store.rules() where !rule.forgotten {
                 let from = rule.action.folderID
                 let removed = removedFolderIDs.contains(from)
-                let correspondent = rule.predicates.lazy.compactMap { p -> Int64? in
-                    if case let .correspondent(id) = p { id } else { nil }
-                }.first
+                let correspondent = rule.senderID
                 let type = rule.predicates.lazy.compactMap { p -> DocumentType? in
                     if case let .documentType(t) = p { t } else { nil }
                 }.first
@@ -280,10 +278,10 @@ public actor Learner: LearningSink {
                     rule.action.folderID = folder.id
                     rule.action.folderCode = folder.code
                     if let arrow = rule.name.range(of: " → ", options: .backwards) {
-                        rule.name = rule.name[..<arrow.upperBound] + "\(folder.code) \(folder.name)"
+                        rule.name = rule.name[..<arrow.upperBound] + "\(snapshot.path(of: folder))"
                     }
                     try await store.saveRule(rule)
-                    try await history.record(.ruleChanged, summary: "“\(rule.name)” followed its documents to \(folder.code) \(folder.name)",
+                    try await history.record(.ruleChanged, summary: "“\(rule.name)” followed its documents to \(snapshot.path(of: folder))",
                                              payload: RuleSummary(rule))
                 } else if removed, rule.enabled {
                     rule.enabled = false

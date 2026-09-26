@@ -167,8 +167,8 @@ public struct StatsService: Sendable {
                      AND (c.from_folder_id IS NULL OR c.from_folder_id != f.id)) AS cin,
                   (SELECT COUNT(*) FROM corrections c WHERE c.from_folder_id = f.id AND c.source IN \(Self.correctionSources)
                      AND (c.to_folder_id IS NULL OR c.to_folder_id != f.id)) AS cout
-                FROM folders f WHERE f.kind = 'category' AND f.is_archived = 0 ORDER BY f.code
-                """).map { FolderHealth(code: $0["code"], name: $0["name"], documents: $0["docs"], correctionsIn: $0["cin"],
+                FROM folders f WHERE f.role IS NULL AND f.origin != ? AND f.is_archived = 0 ORDER BY f.rel_path
+                """, arguments: [FolderOrigin.system.rawValue]).map { FolderHealth(code: $0["code"], name: $0["name"], documents: $0["docs"], correctionsIn: $0["cin"],
                                         correctionsOut: $0["cout"], userEdited: $0["user_edited"]) }
             let embeddings = try Row.fetchAll(db, sql: """
                 SELECT f.code, e.vector FROM folder_embeddings e JOIN folders f ON f.id = e.folder_id WHERE f.is_archived = 0

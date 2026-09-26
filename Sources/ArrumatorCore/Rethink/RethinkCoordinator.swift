@@ -235,7 +235,7 @@ public actor RethinkCoordinator {
             Log.info(.classify, "Rethink settled", ["run": String(runID)])
         } else {
             let moves = choices.filter { $0.status == .move }
-            let folders = RethinkStore.folders(run.plannedFolders, neededBy: moves)
+            let folders = RethinkStore.folders(try run.plannedFolders(), neededBy: moves)
             let summary = (stopped ? "Stopped after deciding \(decided) of \(Format.count(items.count, "document")): " : "Rethink ready: ")
                 + "\(Format.count(moves.count, "document")) would move and "
                 + "\(Format.count(folders.count, "folder")) would be created; \(stay), "
@@ -259,7 +259,7 @@ public actor RethinkCoordinator {
             return
         }
         content.source.path = document.path
-        var planned = run.plannedFolders
+        var planned = try run.plannedFolders()
         let trace = try await services.startTrace(docID: item.docId, jobID: nil, attempt: 0, source: .rethink, settings: settings)
         item.traceId = trace.traceID
         do {
@@ -270,8 +270,13 @@ public actor RethinkCoordinator {
             var decision = outcome.decision
             let snapshot = try await planningSnapshot(root: root, planned: planned)
             let unsure = decision.band == .review
-            let code = decision.folderCode ?? decision.proposedNewFolder.flatMap { reserve($0, in: snapshot, planned: &planned) }
+            let used = try await services.taxonomy.allCodes()
+            let code = decision.folderCode ?? decision.proposedNewFolder.flatMap { reserve($0, in: snapshot, used: used, planned: &planned) }
             if let code {
+                if let index = planned.firstIndex(where: { $0.code == code }) {
+                    if let sender = decision.correspondentID { planned[index].senders.insert(sender) }
+                    planned[index].documentTypes.insert(decision.documentType)
+                }
                 decision.folderCode = code
                 decision.proposedNewFolder = nil
                 // Rethinking changes where a document lives, not what it is called: a model phrasing the name
@@ -291,7 +296,7 @@ public actor RethinkCoordinator {
                 item.selected = false
             }
             item.decisionJson = JSON.string(decision)
-            if planned != run.plannedFolders, let runID = run.id {
+            if planned != (try run.plannedFolders()), let runID = run.id {
                 try await store.setPlannedFolders(runID: runID, planned)
             }
             try await store.decide(item)
@@ -316,56 +321,45 @@ public actor RethinkCoordinator {
     private func planningSnapshot(root: URL, planned: [PlannedFolder]) async throws -> TaxonomySnapshot {
         var snapshot = try await services.taxonomy.snapshot(root: root)
         var nextID: Int64 = -1
-        for folder in planned {
-            if let area = folder.newArea, snapshot.folder(code: area.code) == nil {
-                snapshot.folders.append(TaxonomyFolder(id: nextID, code: area.code, name: area.name, parentCode: nil,
-                                                       relativePath: "\(area.code) \(area.name)", kind: .area,
-                                                       description: area.description))
-                nextID -= 1
-            }
-            guard snapshot.folder(code: folder.code) == nil, let area = snapshot.folder(code: folder.areaCode) else { continue }
-            snapshot.folders.append(TaxonomyFolder(id: nextID, code: folder.code, name: folder.name, parentCode: area.code,
-                                                   relativePath: "\(area.relativePath)/\(folder.code) \(folder.name)", kind: .category,
-                                                   description: folder.description, yearSubfolders: folder.yearSubfolders,
-                                                   yearRule: folder.yearRule ?? .documentDate, descriptionHash: "planned-\(folder.code)"))
+        // Planned folders are listed parents first, so each one's parent is already in place.
+        for folder in planned where snapshot.folder(code: folder.code) == nil {
+            let parent = folder.parentCode.flatMap { snapshot.folder(code: $0) }
+            guard folder.parentCode == nil || parent != nil else { continue }
+            snapshot.folders.append(TaxonomyFolder(
+                id: nextID, code: folder.code, name: folder.name, parentCode: folder.parentCode,
+                relativePath: parent.map { "\($0.relativePath)/\(folder.name)" } ?? folder.name, description: folder.description,
+                yearSubfolders: folder.yearSubfolders, yearRule: folder.yearRule ?? .documentDate, descriptionHash: "planned-\(folder.code)",
+                kind: folder.kind, logic: folder.logic, senders: folder.senders, documentTypes: folder.documentTypes))
             nextID -= 1
         }
         return snapshot
     }
 
-    /// Reserves codes for a folder the model proposed (and its area when that is new too), unless a folder of that
-    /// name already exists or is already planned in that area.
-    private func reserve(_ spec: FolderSpec, in snapshot: TaxonomySnapshot, planned: inout [PlannedFolder]) -> String? {
-        let name = TaxonomyStore.displayName(spec.name)
-        let taxonomy = services.config.taxonomy
-        var used = Set(snapshot.folders.map(\.code)).union([taxonomy.systemArea.code])
-        let areaCode: String
-        var newArea: PlannedArea?
-        if let code = spec.areaCode, snapshot.folder(code: code)?.kind == .area {
-            areaCode = code
-        } else if let areaName = spec.newAreaName.map(TaxonomyStore.displayName) {
-            if let same = snapshot.areas.first(where: { TaxonomyStore.sameName($0.name, areaName) }) {
-                areaCode = same.code
-            } else {
-                guard let code = JDCode.nextFreeArea(used: used, first: taxonomy.firstAreaCode, last: taxonomy.lastAreaCode) else {
-                    return nil
-                }
-                newArea = PlannedArea(code: code, name: areaName, description: spec.newAreaDescription ?? "")
-                areaCode = code
-                used.insert(code)
+    /// Reserves codes for the folders the model proposed, level by level, and returns the code of the last. A level
+    /// that already exists, or is already planned, in its parent is reused. Nil when the path would be too deep.
+    private func reserve(_ spec: FolderSpec, in snapshot: TaxonomySnapshot, used: Set<String>,
+                         planned: inout [PlannedFolder]) -> String? {
+        let startDepth = spec.parentCode.flatMap { snapshot.folder(code: $0) }.map(snapshot.depth(of:)) ?? 0
+        guard startDepth + spec.levels.count <= services.config.taxonomy.maxDepth else { return nil }
+        var used = used.union(snapshot.folders.map(\.code)).union(planned.map(\.code))
+        var parent = spec.parentCode
+        for (index, level) in spec.levels.enumerated() {
+            let name = TaxonomyStore.displayName(level.name)
+            let sameName = { (other: String) in TaxonomyStore.sameName(other, name) }
+            if let existing = snapshot.children(of: parent).first(where: { $0.holdsUserDocuments && sameName($0.name) })?.code
+                ?? planned.first(where: { $0.parentCode == parent && sameName($0.name) })?.code {
+                parent = existing
+                continue
             }
-        } else {
-            return nil
+            let code = FolderCode.next(after: used)
+            used.insert(code)
+            let last = index == spec.levels.count - 1
+            planned.append(PlannedFolder(code: code, name: name, description: level.description, parentCode: parent,
+                                         yearSubfolders: last && spec.yearSubfolders, yearRule: last ? spec.yearRule : nil,
+                                         kind: level.kind, logic: spec.logic, senders: [], documentTypes: []))
+            parent = code
         }
-        if newArea == nil, let same = snapshot.folders.first(where: {
-            $0.kind == .category && $0.parentCode == areaCode && TaxonomyStore.sameName($0.name, name)
-        }) {
-            return same.code
-        }
-        guard let code = JDCode.nextFreeCategory(in: areaCode, used: used) else { return nil }
-        planned.append(PlannedFolder(code: code, name: name, description: spec.description, areaCode: areaCode, newArea: newArea,
-                                     yearSubfolders: spec.yearSubfolders, yearRule: spec.yearRule))
-        return code
+        return parent
     }
 
     // MARK: Applying
@@ -402,7 +396,7 @@ public actor RethinkCoordinator {
                     try await store.save(item)
                     continue
                 }
-                let folder = try await realize(code, planned: run.plannedFolders, created: &created, root: root)
+                let folder = try await realize(code, planned: try run.plannedFolders(), created: &created, root: root)
                 decision.folderCode = folder.code
                 content.source.path = document.path
                 let trace = item.traceId.map { TraceContext(traceID: $0, sink: services.traces) } ?? .disabled
@@ -444,8 +438,7 @@ public actor RethinkCoordinator {
         }
         let removed = try await services.taxonomy.pruneEmpty(root: root)
         await services.learner.placementsRearranged(moves, removedFolderIDs: Set(removed.map(\.id)))
-        let categories = created.values.filter { $0.kind == .category }.count
-        let summary = "Rethink applied: moved \(Format.count(moved, "document")), created \(Format.count(categories, "folder")), "
+        let summary = "Rethink applied: moved \(Format.count(moved, "document")), created \(Format.count(created.count, "folder")), "
             + "removed \(Format.count(removed.count, "empty folder"))"
         let finished = try await store.finish(run, status: .applied, summary: summary, by: .system)
         Log.info(.fileops, "Rethink applied", ["run": String(runID), "moved": String(moved), "removed": String(removed.count)])
@@ -453,7 +446,8 @@ public actor RethinkCoordinator {
         return finished
     }
 
-    /// The real folder behind a code in the plan, creating a planned folder the first time it is used.
+    /// The real folder behind a code in the plan, creating a planned folder, after the planned folders it is in, the
+    /// first time it is used.
     private func realize(_ code: String, planned: [PlannedFolder], created: inout [String: TaxonomyFolder],
                          root: URL) async throws -> TaxonomyFolder {
         if let folder = created[code] { return folder }
@@ -463,30 +457,16 @@ public actor RethinkCoordinator {
             }
             return existing
         }
-        let area = try await realizeArea(plan.areaCode, planned: planned, created: &created, root: root)
-        let used = Set(try await services.taxonomy.records().map(\.code))
-        let requested = JDCode.area(of: plan.code) == area.code && !used.contains(plan.code) ? plan.code : nil
-        let folder = try await services.taxonomy.createCategory(
-            root: root, areaCode: area.code, code: requested, name: plan.name, description: plan.description,
-            body: TaxonomyStore.body(code: nil, name: plan.name, description: plan.description),
-            yearSubfolders: plan.yearSubfolders, yearRule: plan.yearRule, origin: .learned)
+        var parent: TaxonomyFolder?
+        if let parentCode = plan.parentCode {
+            parent = try await realize(parentCode, planned: planned, created: &created, root: root)
+        }
+        let taken = try await services.taxonomy.allCodes().contains(plan.code)
+        let folder = try await services.taxonomy.createFolder(
+            root: root, parentCode: parent?.code, name: plan.name, description: plan.description, yearSubfolders: plan.yearSubfolders,
+            yearRule: plan.yearRule, origin: .learned, kind: plan.kind, logic: plan.logic, code: taken ? nil : plan.code)
         created[code] = folder
         return folder
-    }
-
-    private func realizeArea(_ code: String, planned: [PlannedFolder], created: inout [String: TaxonomyFolder],
-                             root: URL) async throws -> TaxonomyFolder {
-        if let area = created[code] { return area }
-        if let spec = planned.lazy.compactMap(\.newArea).first(where: { $0.code == code }) {
-            let area = try await services.taxonomy.createArea(root: root, name: spec.name, description: spec.description,
-                                                              origin: .learned, code: spec.code)
-            created[code] = area
-            return area
-        }
-        guard let area = try await services.taxonomy.snapshot(root: root).folder(code: code), area.kind == .area else {
-            throw TaxonomyError.unknownArea(code)
-        }
-        return area
     }
 
     // MARK: Progress

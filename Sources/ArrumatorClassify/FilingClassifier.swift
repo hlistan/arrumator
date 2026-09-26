@@ -59,7 +59,7 @@ public struct FilingClassifier: DocumentClassifier {
 
         // 3. Learned rules (document-type conditions use what near-identical past filings agree on)
         let estimatedType = evidence.estimatedType(neighbors)
-        let engine = RuleEngine(rules: try await store.rules(), config: cc)
+        let engine = RuleEngine(rules: try await store.rules(), senders: correspondents, config: cc)
         let (ruleHit, evaluations) = engine.evaluateBeforeModel(content, matches: matches, detectedType: estimatedType)
         let consensus = evidence.consensus(neighbors, taxonomy: taxonomy)
         await trace.record(.rules, startedAt: Date(), input: ["rules": String(engine.rules.count)],
@@ -85,7 +85,7 @@ public struct FilingClassifier: DocumentClassifier {
         }
         if mayPlaceDirectly, let consensus, let folder = taxonomy.folder(id: consensus.folderID) {
             let decision = direct(folder: folder, confidence: consensus.meanSimilarity, decidedBy: .knnOnly,
-                                  rationale: "\(consensus.count) near-identical past filings are all in \(folder.code) \(folder.name)",
+                                  rationale: "\(consensus.count) near-identical past filings are all in \(taxonomy.path(of: folder))",
                                   type: consensus.documentType, correspondentID: consensus.correspondentID, content: content,
                                   matches: matches, correspondents: correspondents, settings: settings, ruleID: nil)
             if decision.band == .auto {
@@ -97,29 +97,29 @@ public struct FilingClassifier: DocumentClassifier {
             }
         }
 
-        // 5. Not confident → the model decides, with the learned evidence as context
+        // 5. Not confident → the model decides the path by the logic and the document alone. Shown any folder, even a
+        //    broad one, it copies it whether it fits or not (an older arrangement's, another sender's that looks
+        //    alike, one area for everything); step 6 resolves the path by identity, type, near-duplicates and judgement.
         var folderVectors: [String: [Float]] = [:]
-        let userAreas = taxonomy.areas.filter { $0.origin != .system }
-        if vector != nil, !taxonomy.fileableCategories.isEmpty {
+        if vector != nil, !taxonomy.fileable.isEmpty {
             folderVectors = try await FolderEmbeddingCache(store: store, embedder: embedder, taxonomy: config.taxonomy)
-                .vectors(for: taxonomy.fileableCategories)
+                .vectors(for: taxonomy.fileable, in: taxonomy)
         }
         let candidates = await trace.measure(.candidates, output: { (c: CandidateSet) in CandidatesTraceOutput(c) }) {
             CandidateGenerator(config: cc).generate(documentVector: vector, folderVectors: folderVectors, memories: neighbors,
                                                    taxonomy: taxonomy)
         }
-        let hints = self.hints(matches: matches, ruleHit: ruleHit, consensus: consensus, neighbors: neighbors, taxonomy: taxonomy,
-                               evidence: evidence, rulesPlaceDirectly: mayPlaceDirectly)
         let tiers = [LLMClassifier.Tier(model: resolved.chat, numCtx: resolved.numCtx, keepAlive: resolved.keepAliveChat),
                      LLMClassifier.Tier(model: resolved.fast, numCtx: resolved.fastNumCtx, keepAlive: resolved.keepAliveChat)]
             .reduce(into: [LLMClassifier.Tier]()) { acc, t in if !acc.contains(where: { $0.model == t.model }) { acc.append(t) } }
-        let system = try prompts.classifySystem(folderLanguage: settings.folderNamingLanguage, logic: try await logic.current())
-        let user = try prompts.classifyUser(content: content, candidates: candidates, taxonomy: taxonomy, hints: hints,
-                                            correspondents: matches)
-        let areaCodes = userAreas.map(\.code)
-        let schema = ClassificationSchema.classify(folders: candidates.ranked.map(\.code), areas: areaCodes,
-                                                   languages: config.extraction.languages, maxTags: cc.maxTags)
-        let validator = AnswerValidator(taxonomy: taxonomy, config: cc, entities: config.entities, languages: config.extraction.languages)
+        let currentLogic = try await logic.current()
+        let version = LogicStore.version(of: currentLogic)
+        let system = try prompts.classifySystem(folderLanguage: settings.folderNamingLanguage, logic: currentLogic)
+        let user = try prompts.classifyUser(content: content, correspondents: matches)
+        let schema = ClassificationSchema.classify(languages: config.extraction.languages, maxTags: cc.maxTags,
+                                                   maxDepth: config.taxonomy.maxDepth)
+        let validator = AnswerValidator(config: cc, entities: config.entities, naming: config.naming, languages: config.extraction.languages,
+                                        maxDepth: config.taxonomy.maxDepth, logic: currentLogic?.body)
         let prompts = prompts
         let started = Date()
         var answer: ModelAnswer<ValidatedDecision>?
@@ -142,9 +142,17 @@ public struct FilingClassifier: DocumentClassifier {
         }
         let a = model.answer
 
-        // 6. Check the mapping from the model's ideal home onto the tree, then calibrate against learned evidence
-        let placement = try await guardPlacement(a, embedder: embedder, available: vector != nil, taxonomy: taxonomy, config: cc,
-                                                 trace: trace)
+        // 6. Recognise the sender, map the path onto the tree by identity, then calibrate against learned evidence
+        let sender = Self.sender(reading: a.raw.correspondent, resolver: resolver, matches: matches)
+        let judge = ModelFolderJudge(model: LLMClassifier(gate: gate, models: models, config: cc), tiers: tiers, prompts: prompts,
+                                     system: try prompts.judgeSystem(folderLanguage: settings.folderNamingLanguage, logic: currentLogic),
+                                     trace: trace)
+        let senderNames = ([a.raw.correspondent] + (sender.known.map { [$0.canonicalName] + $0.aliases } ?? [])).compactMap(nonEmpty)
+        let placement = try await guardPlacement(a.ideal, sender: sender.known?.id, senderNames: senderNames,
+                                                 subject: nonEmpty(a.raw.subject), resolver: resolver, documentType: a.documentType,
+                                                 logic: version,
+                                                 yearFolder: a.yearFolder, embedder: embedder, available: vector != nil,
+                                                 taxonomy: taxonomy, config: cc, judge: judge, trace: trace)
         let (postHit, _) = engine.evaluateAfterModel(content, matches: matches, documentType: a.documentType)
         let checkingRule = ruleHit ?? postHit
         var confidence = await trace.measure(.calibrate, output: { (r: ConfidenceReport) in r }) {
@@ -159,6 +167,10 @@ public struct FilingClassifier: DocumentClassifier {
             try? await store.recordRuleHit(ruleID: checkingRule.rule.id, at: Date())
         }
         var reasons: [String] = []
+        if let conflict = sender.conflict ?? placement.conflict {
+            confidence.band = .review
+            reasons.append(conflict)
+        }
         if content.hasWarning(.encrypted) || content.hasWarning(.corrupted) {
             confidence.band = .review
             reasons.append(content.hasWarning(.encrypted) ? "encrypted" : "corrupted")
@@ -167,15 +179,22 @@ public struct FilingClassifier: DocumentClassifier {
             confidence.band = .review
             reasons.append("a new folder is proposed and automatic folder creation is off")
         }
+        if placement.folderCode == nil, placement.newFolder == nil, placement.conflict == nil {
+            confidence.band = .review
+            reasons.append(placement.notes.last ?? "the path leads nowhere documents can be filed")
+        }
+        if let code = placement.folderCode, let folder = taxonomy.folder(code: code), !folder.acceptsFiles {
+            confidence.band = .review
+            reasons.append("“\(taxonomy.path(of: folder))” was made by hand and is not described yet")
+        }
         if confidence.band == .review && reasons.isEmpty { reasons.append("low confidence") }
-        let known = resolver.known(a.raw.correspondent)
         let (date, dateSource) = documentDate(a.documentDate, content: content)
         let decision = FilingDecision(
-            folderCode: placement.folderCode, proposedNewFolder: placement.newFolder,
+            folderCode: placement.folderCode, proposedNewFolder: placement.newFolder, yearFolder: a.yearFolder,
             alternatives: candidates.ranked.filter { $0.code != placement.folderCode }.prefix(cc.alternativesCount)
                 .map { FolderAlternative(code: $0.code, score: $0.score) },
-            correspondent: known?.canonicalName ?? nonEmpty(a.raw.correspondent) ?? matches.first?.correspondent.canonicalName,
-            correspondentID: known?.id ?? (nonEmpty(a.raw.correspondent) == nil ? matches.first?.correspondent.id : nil),
+            correspondent: sender.known?.canonicalName ?? nonEmpty(a.raw.correspondent),
+            correspondentID: sender.known?.id,
             documentType: a.documentType, documentDate: date, dateSource: dateSource, periodYear: a.periodYear,
             title: nonEmpty(a.raw.title) ?? content.source.stem, fileName: nonEmpty(a.raw.fileName), tags: a.tags, language: a.language,
             confidence: confidence, decidedBy: .llm, rationale: a.raw.rationale, modelInfo: model.model, reviewReasons: reasons)
@@ -184,17 +203,74 @@ public struct FilingClassifier: DocumentClassifier {
 
     // MARK: Pieces
 
-    /// Lets `PlacementGuard` check the mapping from the model's ideal home onto the tree using name embeddings.
-    private func guardPlacement(_ a: ValidatedDecision, embedder: OllamaEmbedder, available: Bool, taxonomy: TaxonomySnapshot,
-                                config: ClassificationConfig, trace: TraceContext) async throws -> GuardedPlacement {
-        let unchanged = GuardedPlacement(folderCode: a.folderCode, newFolder: a.newFolder, idealSimilarity: nil, notes: [])
-        guard available, !taxonomy.fileableCategories.isEmpty || !taxonomy.areas.isEmpty else { return unchanged }
+    /// Who the document is from, as far as the app knows the sender. The model reads the sender from the document; a
+    /// known sender recognised in it (by a tax number, an IBAN, a domain, or its name) is that sender only when the
+    /// model named nobody or named it alike, since a document can carry other parties' identifiers (a statement
+    /// listing its debits). When the model names a known sender that nothing in the document shows, while an
+    /// identifier shows another one, the two disagree and the document waits for the user rather than risk filing it
+    /// with the wrong sender's documents. A sender the app does not know is nil: its folder is new.
+    static func sender(reading: String, resolver: CorrespondentResolver, matches: [CorrespondentMatch])
+        -> (known: Correspondent?, conflict: String?) {
+        let identified = matches.first { [.stableKey, .emailDomain, .webDomain].contains($0.matchedBy) }
+        guard let named = resolver.known(reading) else {
+            // The model wrote the sender another way (its full legal name, say): a known sender shown in the document,
+            // by an identifier or by its name, whose names the reading resembles. Matches come strongest first.
+            guard !reading.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return (identified?.correspondent, nil) }
+            return (matches.first { resolver.resembles(reading, $0.correspondent) }?.correspondent, nil)
+        }
+        if let identified, identified.correspondent.id != named.id, !matches.contains(where: { $0.correspondent.id == named.id }) {
+            return (nil, "the document's \(identified.matchedBy.rawValue) \(identified.evidence) is \(identified.correspondent.canonicalName)'s, "
+                + "but it reads as from \(named.canonicalName)")
+        }
+        return (named, nil)
+    }
+
+    /// Places the decided path onto the tree with `PlacementGuard`, comparing names by their embeddings when there are
+    /// any; without them, or before the archive has folders, only the same name is the same folder.
+    /// What each level of the decided path stands for, worked out from what the document is identified as rather than
+    /// asked of the model, whose labels proved unreliable: the level named like the document's sender stands for the
+    /// sender, the one named like its subject for the subject, the rest for topics. Names are compared as written,
+    /// legal forms aside, then across languages by embeddings, since the logic may name folders in another language
+    /// than the document's.
+    static func marked(_ ideal: [FolderLevel], senderNames: [String], subject: String?, resolver: CorrespondentResolver,
+                       vectors: [String: [Float]], partyAbove: Double) -> [FolderLevel] {
+        func level(named names: [String], other: Int?) -> Int? {
+            guard !names.isEmpty else { return nil }
+            let candidates = ideal.indices.filter { $0 != other }
+            if let written = candidates.last(where: { resolver.resembles(ideal[$0].name, anyOf: names) }) { return written }
+            return candidates.compactMap { index -> (Int, Double)? in
+                guard let vector = vectors[ideal[index].name] else { return nil }
+                return names.compactMap { vectors[$0].map { Double(VectorCodec.dot(vector, $0)) } }.max().map { (index, $0) }
+            }.filter { $0.1 >= partyAbove }.max { $0.1 < $1.1 }?.0
+        }
+        let sender = level(named: senderNames, other: nil)
+        let subject = level(named: subject.map { [$0] } ?? [], other: sender)
+        return ideal.enumerated().map { index, level in
+            var marked = level
+            marked.kind = index == sender ? .sender : index == subject ? .subject : .topic
+            return marked
+        }
+    }
+
+    private func guardPlacement(_ ideal: [FolderLevel], sender: Int64?, senderNames: [String], subject: String?,
+                                resolver: CorrespondentResolver, documentType: DocumentType, logic: String, yearFolder: Bool,
+                                embedder: OllamaEmbedder,
+                                available: Bool, taxonomy: TaxonomySnapshot, config: ClassificationConfig, judge: any FolderJudge,
+                                trace: TraceContext) async throws -> GuardedPlacement {
         let started = Date()
-        let vectors = try await names.vectors(for: PlacementGuard.names(for: a, taxonomy: taxonomy), embedder: embedder)
-        let result = PlacementGuard(config: config.placementGuard).review(a, taxonomy: taxonomy, names: vectors)
-        await trace.record(.validate, status: result.notes.isEmpty ? .ok : .warn, startedAt: started,
-                           input: ["ideal": "\(a.ideal.newAreaName ?? a.ideal.areaCode ?? "") / \(a.ideal.name)",
-                                   "chosen": a.folderCode ?? "NEW"],
+        let parties = senderNames + (subject.map { [$0] } ?? [])
+        let vectors = available
+            ? try await names.vectors(for: PlacementGuard.names(for: ideal, taxonomy: taxonomy) + parties, embedder: embedder) : [:]
+        let ideal = Self.marked(ideal, senderNames: senderNames, subject: subject, resolver: resolver, vectors: vectors,
+                                partyAbove: config.placementGuard.partyAbove)
+        let result = try await PlacementGuard(config: config.placementGuard).place(ideal, sender: sender, documentType: documentType,
+                                                                                   logic: logic,
+                                                                                   yearFolder: yearFolder, taxonomy: taxonomy,
+                                                                                   names: vectors, judge: judge)
+        await trace.record(.validate, startedAt: started,
+                           input: ["ideal": ideal.map(\.name).joined(separator: TaxonomySnapshot.pathSeparator),
+                                   "kinds": ideal.map { $0.kind?.rawValue ?? "—" }.joined(separator: TaxonomySnapshot.pathSeparator),
+                                   "sender": sender.map(String.init) ?? "unknown", "yearFolder": yearFolder ? "yes" : "no"],
                            output: result)
         return result
     }
@@ -280,32 +356,6 @@ public struct FilingClassifier: DocumentClassifier {
                        rationale: "The model gave no valid answer", reviewReasons: ["no valid model answer"])
     }
 
-    /// Learned context for the model: known correspondent habits, partially trusted rules, near-identical filings.
-    /// - Parameter rulesPlaceDirectly: trusted rules already placed the document when they could, so only rules that
-    ///   are not yet reliable are worth mentioning; otherwise every matching rule is advice.
-    private func hints(matches: [CorrespondentMatch], ruleHit: RuleHit?, consensus: NeighborConsensus?, neighbors: [ScoredMemory],
-                       taxonomy: TaxonomySnapshot, evidence: LearnedEvidence, rulesPlaceDirectly: Bool) -> [String] {
-        var out: [String] = []
-        for m in matches.prefix(2) {
-            var line = "\(m.correspondent.canonicalName) is a known correspondent (recognised by \(m.matchedBy.rawValue) \(m.evidence))"
-            if let code = m.correspondent.defaultFolderCode, let f = taxonomy.folder(code: code) {
-                line += "; its documents usually go to \(f.code) \(f.name)"
-            }
-            out.append(line)
-        }
-        if let hit = ruleHit {
-            if !evidence.trusts(hit.rule) {
-                out.append("A learned rule “\(hit.rule.name)” matches but is not yet reliable (\(String(format: "%.2f", hit.rule.reliability)))")
-            } else if !rulesPlaceDirectly {
-                out.append("A learned rule “\(hit.rule.name)” matches (reliability \(String(format: "%.2f", hit.rule.reliability)))")
-            }
-        }
-        if let consensus, let f = taxonomy.folder(id: consensus.folderID) {
-            out.append("\(consensus.count) near-identical past filings went to \(f.code) \(f.name)")
-        }
-        return out
-    }
-
     private func documentDate(_ answer: String?, content: ExtractedContent) -> (String?, DateSource) {
         if let d = answer {
             if let detected = content.entities.dates.first(where: { $0.date == d }) { return (d, detected.source) }
@@ -345,7 +395,7 @@ struct EvidenceTrace: Codable {
 
 struct CandidatesTraceOutput: Codable {
     var ranked: [FolderCandidate]
-    var memories: [MemoryTrace]
+    var neighbors: [MemoryTrace]
     var knnShare: [String: Double]
 
     struct MemoryTrace: Codable {
@@ -359,7 +409,7 @@ struct CandidatesTraceOutput: Codable {
 
     init(_ c: CandidateSet) {
         ranked = c.ranked
-        memories = c.memories.map { MemoryTrace(id: $0.memory.id, folder: $0.memory.folderCode, summary: $0.memory.summaryLine,
+        neighbors = c.neighbors.map { MemoryTrace(id: $0.memory.id, folder: $0.memory.folderCode, summary: $0.memory.summaryLine,
                                                 similarity: $0.similarity, score: $0.score, weight: $0.memory.weight) }
         knnShare = c.knnShare
     }

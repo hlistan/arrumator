@@ -10,6 +10,8 @@ struct LearnedPage: View {
     @State private var examples: [LearnedExample] = []
     @State private var rules: [FilingRule] = []
     @State private var senders: [Correspondent] = []
+    /// Every sender's name, for naming the sender a rule is about.
+    @State private var senderNames: [Int64: String] = [:]
     @State private var proposals: [ProposalRecord] = []
     @State private var pages = 1
     /// The example whose document is open underneath it.
@@ -28,8 +30,9 @@ struct LearnedPage: View {
 
     var body: some View {
         Page(.learned, notes: "Every filing and every correction teaches Arrumator. Documents it has filed become examples "
-            + "that similar documents follow, and reliable rules file documents without asking the model. Anything here "
-            + "can be forgotten.") {
+            + "that similar documents follow. Senders are who documents come from; once several filings from a sender "
+            + "agree on a folder, a rule forms, and reliable rules file that sender's documents without asking the model. "
+            + "Anything here can be forgotten.") {
             if !proposals.isEmpty {
                 PageSection("Suggestions") {
                     ForEach(proposals) { proposal in
@@ -64,7 +67,7 @@ struct LearnedPage: View {
                     Text("No rules yet. They form once several filings agree.").foregroundStyle(.secondary).padding(.vertical, 6)
                 }
                 ForEach(rules) { rule in
-                    RuleRow(rule: rule, open: openRule == rule.id)
+                    RuleRow(rule: rule, senderNames: senderNames, open: openRule == rule.id)
                         .onTapGesture { withAnimation(.snappy) { openRule = openRule == rule.id ? nil : rule.id } }
                 }
             }
@@ -74,7 +77,7 @@ struct LearnedPage: View {
                         .padding(.vertical, 6)
                 }
                 ForEach(senders) { sender in
-                    SenderRow(sender: sender, open: openSender == sender.id)
+                    SenderRow(sender: sender, rules: rules.filter { $0.senderID == sender.id }, open: openSender == sender.id)
                         .onTapGesture { withAnimation(.snappy) { openSender = openSender == sender.id ? nil : sender.id } }
                 }
             }
@@ -85,10 +88,9 @@ struct LearnedPage: View {
                 try await $0.learningStore.examples(limit: pages * $0.config.interface.pageSize)
             } ?? []
             rules = await model.load("Load rules") { try await $0.learningStore.rules().filter { !$0.forgotten } } ?? []
-            senders = await model.load("Load senders") { runtime in
-                Array(try await runtime.learningStore.correspondents().sorted { $0.filedCount > $1.filedCount }
-                    .prefix(runtime.config.interface.pageSize))
-            } ?? []
+            let all = await model.load("Load senders") { try await $0.learningStore.correspondents() } ?? []
+            senderNames = Correspondent.names(all)
+            senders = model.runtime.map { Array(all.sorted { $0.filedCount > $1.filedCount }.prefix($0.config.interface.pageSize)) } ?? []
             proposals = await model.load("Load suggestions") { try await $0.proposals.pending() } ?? []
         }
     }
@@ -102,7 +104,8 @@ private struct ExampleRow: View {
     @State private var hovering = false
 
     private var folder: String {
-        model.taxonomy?.folder(id: example.memory.folderID).map { "\($0.code) \($0.name)" } ?? example.memory.folderCode
+        model.taxonomy.flatMap { taxonomy in taxonomy.folder(id: example.memory.folderID).map { Wording.path(of: $0, in: taxonomy) } }
+            ?? example.memory.folderCode
     }
 
     var body: some View {
@@ -132,6 +135,7 @@ private struct ExampleRow: View {
 private struct RuleRow: View {
     @Environment(AppModel.self) private var model
     let rule: FilingRule
+    let senderNames: [Int64: String]
     let open: Bool
 
     var body: some View {
@@ -144,7 +148,7 @@ private struct RuleRow: View {
             }
             if open {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("When " + rule.predicates.map(\.summary).joined(separator: " and "))
+                    Text("When " + rule.condition { senderNames[$0] })
                     Text("\(Format.percent(rule.reliability)) reliable · \(rule.contradictions) times it was wrong")
                         .foregroundStyle(.secondary)
                     Button("Forget Rule", role: .destructive) {
@@ -175,14 +179,16 @@ private struct RuleRow: View {
 }
 
 /// A sender the app knows: how many of its filings it learned from and where they usually go; opened, its other names
-/// (each of which can be forgotten), what identifies it, and a way to forget it altogether.
+/// (each of which can be forgotten), what identifies it and what that is for, the rules about it, and a way to forget
+/// it altogether.
 private struct SenderRow: View {
     @Environment(AppModel.self) private var model
     let sender: Correspondent
+    let rules: [FilingRule]
     let open: Bool
 
     private var usualFolder: String? {
-        sender.defaultFolderCode.map { code in model.taxonomy?.folder(code: code).map { "\($0.code) \($0.name)" } ?? code }
+        sender.defaultFolderCode.flatMap { model.taxonomy?.path(ofCode: $0, separator: Wording.pathSeparator) }
     }
 
     var body: some View {
@@ -214,7 +220,16 @@ private struct SenderRow: View {
                     }
                     let recognisedBy = sender.stableKeys + sender.emailDomains.map { "@\($0)" } + sender.webDomains
                     if !recognisedBy.isEmpty {
-                        Text("Recognised by " + recognisedBy.joined(separator: ", ")).foregroundStyle(.secondary)
+                        Text("Recognised by " + recognisedBy.joined(separator: ", "))
+                        Text(Wording.recognition(of: sender.canonicalName)).foregroundStyle(.secondary)
+                    }
+                    if rules.isEmpty {
+                        Text(Wording.senderWithoutRules).foregroundStyle(.secondary)
+                    } else {
+                        Text("Rules").foregroundStyle(.secondary)
+                        ForEach(rules) { rule in
+                            Text(Wording.senderRule(rule, in: model.taxonomy)).foregroundStyle(rule.enabled ? .primary : .secondary)
+                        }
                     }
                     Button("Forget Sender", role: .destructive) {
                         let id = sender.id

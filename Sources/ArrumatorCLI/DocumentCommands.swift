@@ -51,14 +51,7 @@ struct Ingest: AsyncParsableCommand {
     }
 
     func describe(_ d: FilingDecision, content: ExtractedContent, steps: [TraceStep], taxonomy: TaxonomySnapshot) -> String {
-        let target: String
-        if let code = d.folderCode, let f = taxonomy.folder(code: code) {
-            target = f.relativePath
-        } else if let spec = d.proposedNewFolder {
-            target = "NEW \(spec.areaCode ?? "new area “\(spec.newAreaName ?? "")”") / \(spec.name)\(spec.yearSubfolders ? " (by year)" : "")"
-        } else {
-            target = "Needs review"
-        }
+        let target = Terminal.target(of: d, in: taxonomy) ?? "Needs review"
         return """
         \(content.source.originalFilename)
           content:   \(content.kind.rawValue), \(content.textOrigin.rawValue), \(content.text.count) chars, language \(content.language.primary)
@@ -208,8 +201,8 @@ struct Replay: AsyncParsableCommand {
         let original = try await runtime.services.documents.document(id: docID)?.decision
         options.emit(["original": original, "replay": outcome.decision]) {
             """
-            original: \(original?.folderCode ?? original?.proposedNewFolder?.name ?? "—") · \(original?.fileName ?? "—") · \(String(format: "%.2f", original?.confidence.final ?? 0))
-            replay:   \(outcome.decision.folderCode ?? outcome.decision.proposedNewFolder?.name ?? "review") · \(outcome.decision.fileName ?? "—") · \(String(format: "%.2f", outcome.decision.confidence.final)) (\(outcome.decision.decidedBy.rawValue))
+            original: \(original.flatMap { Terminal.target(of: $0, in: taxonomy) } ?? "—") · \(original?.fileName ?? "—") · \(String(format: "%.2f", original?.confidence.final ?? 0))
+            replay:   \(Terminal.target(of: outcome.decision, in: taxonomy) ?? "review") · \(outcome.decision.fileName ?? "—") · \(String(format: "%.2f", outcome.decision.confidence.final)) (\(outcome.decision.decidedBy.rawValue))
             trace #\(trace.traceID ?? 0)
             """
         }

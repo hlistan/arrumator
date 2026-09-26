@@ -32,7 +32,7 @@ import Testing
             id: 0, canonicalName: "EDP Comercial", country: "PT", aliases: ["EDP"], stableKeys: ["ptNIF:503504564"], emailDomains: [],
             webDomains: ["edp.pt"], defaultFolderCode: folder.code, filedCount: 2, origin: .learned))
         let rule = try await store.saveRule(FilingRule(
-            name: "EDP · invoice → \(folder.code) Utilities", priority: 50, origin: .induced,
+            name: "EDP · invoice → Home / Utilities", priority: 50, origin: .induced,
             predicates: [.correspondent(id: sender.id), .documentType(.invoice)],
             action: RuleAction(folderID: folder.id, folderCode: folder.code, documentType: .invoice), support: 3))
         _ = try await store.insertCorrection(CorrectionEvent(documentID: documents[0], source: .markCorrect, fromFolderID: folder.id,
@@ -228,6 +228,81 @@ import Testing
         let newListing = moved.url.deletingLastPathComponent().appendingPathComponent(w.h.env.config.taxonomy.documentsFileName)
         #expect(try String(contentsOf: newListing, encoding: .utf8).contains("uid: \(moved.uid)"))
         #expect(!FileManager.default.fileExists(atPath: oldListing.path), "a directory with no documents keeps no listing")
+    }
+
+    @Test func aLostIndexFindsDocumentsAtAnyDepth() async throws {
+        let path = ["Portugal", "Hlistan Zolerani LDA", "Banking", "Santander"]
+        let deep = FolderSpec(parentCode: nil, levels: path.map { FolderLevel(name: $0, description: "\($0).") },
+                              yearSubfolders: true, yearRule: .documentDate)
+        let h = try await Harness.make(classifier: StubClassifier(newFolder: deep, band: .auto))
+        defer { h.env.cleanup() }
+        for (name, text) in [("july.txt", "Santander July"), ("august.txt", "Santander August")] {
+            await h.coordinator.enqueue(try h.env.drop(name, text: text))
+        }
+        await h.coordinator.drain()
+        try await ArchiveRecords(database: h.env.database, settings: h.env.settings, taxonomy: h.env.taxonomy, config: h.env.config,
+                                 registry: nil).flush()
+        let before = try await h.env.taxonomy.snapshot(root: h.env.archive)
+        let santander = try #require(before.folders.first { $0.name == "Santander" })
+        let banking = try #require(santander.parentCode.flatMap(before.folder(code:)))
+        let dropped = [before.url(for: banking).appendingPathComponent("overview.txt"),
+                       before.url(for: santander).appendingPathComponent("2025/old-statement.txt")]
+        for url in dropped {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data("put there by hand".utf8).write(to: url)
+        }
+
+        let database = try AppDatabase.inMemory()
+        let taxonomy = TaxonomyStore(database: database, config: h.env.config.taxonomy, registry: nil)
+        let summary = try await ArchiveRecords(database: database, settings: h.env.settings, taxonomy: taxonomy, config: h.env.config,
+                                               registry: nil).rebuild()
+        #expect(summary.documents == 2 && summary.missing == 0)
+        #expect(summary.adopted == 2, "files put by hand into any folder are adopted, whatever its depth")
+        let after = try await taxonomy.snapshot(root: h.env.archive)
+        let found = try #require(after.folder(code: santander.code))
+        let adoptions = try await JobStore(database: database).active(kinds: [.adopt])
+        #expect(Set(adoptions.map(\.sourcePath)) == Set(dropped.map(\.standardizedFileURL.path)))
+        let rebuiltBanking = try #require(after.folder(code: banking.code))
+        #expect(Set(adoptions.compactMap(\.payload.userFolderID)) == [rebuiltBanking.id, found.id], "each in the folder the user put it in")
+        #expect(after.lineage(of: found).map(\.code) == before.lineage(of: santander).map(\.code), "the tree comes back with its codes")
+        #expect(after.path(of: found) == path.joined(separator: " / ") && found.yearSubfolders)
+        let documents = try await DocumentStore(database: database).list(DocumentFilter(), limit: 10)
+        #expect(documents.count == 2 && documents.allSatisfy { $0.folderId == found.id },
+                "documents in its year folder belong to the folder four levels down")
+    }
+
+    @Test func theSystemAreaIsFoundWhateverItIsCalled() async throws {
+        let env = try await TestEnvironment.make()
+        defer { env.cleanup() }
+        let config = env.config
+        #expect(!ArchiveRecords.mayHoldRecords(archive: env.archive, config: config), "an archive that does not exist yet")
+        try FileManager.default.createDirectory(at: env.archive, withIntermediateDirectories: true)
+        #expect(!ArchiveRecords.mayHoldRecords(archive: env.archive, config: config), "an empty archive")
+        _ = try await env.taxonomy.ensureSystemFolder(.logic, root: env.archive)
+        #expect(ArchiveRecords.mayHoldRecords(archive: env.archive, config: config), "System / Logic, as a new archive has it")
+
+        /// Writes `_about.md` files along a chain of directories under a new root.
+        func layout(_ levels: [(directory: String, definition: FolderDefinition)]) throws -> URL {
+            let root = env.archive.deletingLastPathComponent().appendingPathComponent(UUID().uuidString, isDirectory: true)
+            var dir = root
+            for level in levels {
+                dir = dir.appendingPathComponent(level.directory, isDirectory: true)
+                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                let about = AboutFile(definition: level.definition, body: "")
+                try Data(try about.render(hash: .recompute).utf8).write(to: dir.appendingPathComponent(config.taxonomy.aboutFileName))
+            }
+            return root
+        }
+        func definition(_ code: String, _ name: String, role: FolderRole? = nil, origin: FolderOrigin) -> FolderDefinition {
+            FolderDefinition(code: code, name: name, role: role, description: name, yearSubfolders: false, yearRule: nil,
+                             autoFile: false, origin: origin)
+        }
+        let earlier = try layout([("00-09 System", definition("00-09", "System", origin: .system)),
+                                  ("05 Learned", definition("05", "Learned", role: .learned, origin: .system))])
+        #expect(ArchiveRecords.mayHoldRecords(archive: earlier, config: config), "the numbered layout of earlier versions")
+        let lookalike = try layout([("System", definition("F1", "System", origin: .learned)),
+                                    ("Learned", definition("F2", "Learned", origin: .learned))])
+        #expect(!ArchiveRecords.mayHoldRecords(archive: lookalike, config: config), "a folder of the user's that is only named so")
     }
 
     @Test func anUnreadableIndexIsSetAsideOnlyWhenTheArchiveCanRebuildIt() throws {

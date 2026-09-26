@@ -50,11 +50,17 @@ struct Senders: AsyncParsableCommand {
     static let configuration = CommandConfiguration(abstract: "Senders the app has learned: names, identifiers and usual folders.")
     @OptionGroup var options: GlobalOptions
     func run() async throws {
-        let senders = try await options.runtime().learningStore.correspondents().sorted { $0.filedCount > $1.filedCount }
+        let runtime = try await options.runtime()
+        let senders = try await runtime.learningStore.correspondents().sorted { $0.filedCount > $1.filedCount }
+        let rules = try await runtime.learningStore.rules().filter { !$0.forgotten }
+        let taxonomy = try await runtime.taxonomy.snapshot(root: await runtime.settings.current.archiveURL)
         options.emit(senders) {
             senders.isEmpty ? "No senders learned yet." : Terminal.table(senders.map { c in
-                ["#\(c.id)", c.canonicalName, "\(c.filedCount) filed", c.defaultFolderCode.map { "usually \($0)" } ?? "",
-                 c.aliases.isEmpty ? "" : "also “" + c.aliases.joined(separator: "”, “") + "”"]
+                let own = rules.filter { $0.senderID == c.id }
+                return ["#\(c.id)", c.canonicalName, "\(c.filedCount) filed",
+                        c.defaultFolderCode.flatMap { taxonomy.path(ofCode: $0) }.map { "usually \($0)" } ?? "",
+                        own.isEmpty ? "no rules" : Format.count(own.count, "rule"),
+                        c.aliases.isEmpty ? "" : "also “" + c.aliases.joined(separator: "”, “") + "”"]
             })
         }
     }

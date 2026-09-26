@@ -40,6 +40,14 @@ enum Terminal {
         SearchHighlight.runs(s).map { $0.1 ? "\u{1B}[1m\($0.0)\u{1B}[0m" : $0.0 }.joined()
     }
 
+    /// A decision's folder by path, "NEW …" for one it would create: "NEW Portugal / Banking / Santander (by year)".
+    static func target(of decision: FilingDecision, in taxonomy: TaxonomySnapshot) -> String? {
+        taxonomy.destination(of: decision).map { destination in
+            guard destination.isNew else { return destination.path }
+            return "NEW \(destination.path)" + (decision.proposedNewFolder?.yearSubfolders == true ? " (by year)" : "")
+        }
+    }
+
     static func table(_ rows: [[String]]) -> String {
         guard let first = rows.first else { return "" }
         let widths = (0..<first.count).map { i in rows.map { $0.indices.contains(i) ? $0[i].count : 0 }.max() ?? 0 }
@@ -98,6 +106,7 @@ struct Settings: AsyncParsableCommand {
     @Option(help: "Language for folder names and descriptions.") var folderLanguage: String?
     @Option(help: "Automatically create folders the model proposes (true/false).") var autoCreateFolders: Bool?
     @Option(help: "Ollama management: launchApp, spawnServe, external.") var ollama: OllamaManagement?
+    @Option(help: "Ollama server: this Mac or a machine on the local network, such as http://192.168.1.20:11434.") var ollamaURL: String?
     @Option(help: "Pause processing (true/false).") var paused: Bool?
 
     func run() async throws {
@@ -113,7 +122,12 @@ struct Settings: AsyncParsableCommand {
             if let paused { s.paused = paused }
         }
         _ = try runtime.config.models(for: updated.models)
-        options.emit(updated) { JSON.string(updated, pretty: true) }
+        if let ollamaURL {
+            try await runtime.useOllama(at: ollamaURL)
+            _ = await runtime.lifecycle.ensureRunning()
+        }
+        let current = await runtime.settings.current
+        options.emit(current) { JSON.string(current, pretty: true) }
     }
 }
 

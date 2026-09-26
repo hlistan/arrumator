@@ -27,7 +27,6 @@ public struct PipelineConfig: Sendable, Codable, Hashable {
         if let user = try ConfigLoader.overrideValue(at: paths.pipelineOverrideURL) { overrides.append(user) }
         if let path = environment.pipelineOverridePath,
            let extra = try ConfigLoader.overrideValue(at: URL(fileURLWithPath: path)) { overrides.append(extra) }
-        if let url = environment.ollamaURL { overrides.append(["ollama": ["baseURL": .string(url)]]) }
         return try ConfigLoader.load(PipelineConfig.self, defaults: "pipeline", overrides: overrides)
     }
 
@@ -89,8 +88,6 @@ public struct OllamaConfig: Sendable, Codable, Hashable {
         /// 0 = no timeout.
         public var pull: Double
     }
-    public var baseURL: String
-    public var allowedHosts: [String]
     public var appBundleIdentifier: String
     public var appBinarySubpath: String
     public var binarySearchPaths: [String]
@@ -139,9 +136,9 @@ public struct TaxonomyConfig: Sendable, Codable, Hashable {
     /// App-managed area holding the system folders; created only when first needed.
     public var systemArea: SystemFolderSpec
     public var systemFolders: [SystemFolderSpec]
-    /// Area codes are assigned in steps of ten from `firstAreaCode` to `lastAreaCode` (e.g. 10-19 … 90-99).
-    public var firstAreaCode: Int
-    public var lastAreaCode: Int
+    /// The deepest a folder can be, counted from the top of the archive; year folders do not count. The logic decides
+    /// how deep the tree goes, up to this.
+    public var maxDepth: Int
     /// Files the app or macOS leave in a folder that do not stop it counting as empty (besides `_about.md`).
     public var prunableLeftovers: [String]
 
@@ -288,23 +285,24 @@ public struct CalibrationWeights: Sendable, Codable, Hashable {
     public var knn: Double
     /// Document ↔ chosen folder description similarity.
     public var similarity: Double
-    /// Model's ideal category ↔ chosen folder similarity.
+    /// Last level of the model's ideal path ↔ chosen folder similarity.
     public var ideal: Double
 }
 
 public struct ClassificationConfig: Sendable, Codable, Hashable {
-    /// Checks the model's mapping from its ideal category to the actual folder tree by comparing folder *names*
+    /// Maps the model's ideal path onto the actual folder tree by comparing folder *names*
     /// (descriptions share boilerplate and are too similar to separate topics).
     public struct PlacementGuard: Sendable, Codable, Hashable {
-        /// An existing folder whose name is less similar than this to the ideal category is a mismatch.
-        public var mismatchBelow: Double
-        /// A proposed new folder whose name is at least this similar to an existing one reuses that folder.
+        /// A level of the model's path whose name is at least this similar to a folder in the same place is that
+        /// folder, rather than a new one beside it.
         public var duplicateAbove: Double
-        /// A proposed new area whose name is at least this similar to an existing area joins that area.
-        public var areaMatchAbove: Double
-        /// An existing folder whose area is less similar than this to the ideal area is in the wrong part of the
-        /// archive: the document goes to that category in the ideal area instead.
-        public var areaMismatchBelow: Double
+        /// A name at least this similar, but short of a duplicate, is put to the model: is it the same folder?
+        public var judgeAbove: Double
+        /// Questions of that kind asked for one document at most.
+        public var maxJudgements: Int
+        /// A level whose name is at least this similar to the document's sender (or subject), when the two are not
+        /// written alike, stands for that party: the same name in another language.
+        public var partyAbove: Double
     }
     public struct KNN: Sendable, Codable, Hashable {
         public var k: Int
@@ -331,8 +329,6 @@ public struct ClassificationConfig: Sendable, Codable, Hashable {
     public var excerptChars: Int
     public var embeddingSummaryChars: Int
     public var embeddingNumCtx: Int
-    public var promptMemories: Int
-    public var promptMemoriesPerFolder: Int
     public var promptExamplesPerFolder: Int
     public var knn: KNN
     public var candidateWeights: CandidateWeights
@@ -349,9 +345,6 @@ public struct ClassificationConfig: Sendable, Codable, Hashable {
     public var ruleTextScanChars: Int
     /// Re-asks after an invalid answer before falling back to the fast model.
     public var repairAttempts: Int
-    /// Top-ranked folders shown with an excerpt of their `_about.md` body in addition to the description.
-    public var promptDetailedFolders: Int
-    public var promptFolderBodyChars: Int
     public var placementGuard: PlacementGuard
 }
 
@@ -361,7 +354,7 @@ public struct CalibrationConfig: Sendable, Codable, Hashable {
     /// Cosine similarities are mapped linearly from [floor, ceiling] to [0, 1].
     public var similarityFloor: Double
     public var similarityCeiling: Double
-    /// Ideal-category ↔ folder name similarities are mapped linearly from [idealFloor, idealCeiling] to [0, 1].
+    /// Ideal-path ↔ folder name similarities are mapped linearly from [idealFloor, idealCeiling] to [0, 1].
     public var idealFloor: Double
     public var idealCeiling: Double
     public var ruleAgreeFloor: Double

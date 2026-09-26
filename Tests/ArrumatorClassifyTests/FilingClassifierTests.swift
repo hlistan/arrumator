@@ -6,37 +6,152 @@ import Testing
 
 @Suite struct FilingClassifierTests {
     @Test func emptyArchiveModelProposesFirstFolderAndFileName() async throws {
-        let h = try await ClassifyHarness.make(handler: Fixtures.answering(code: nil))
+        let h = try await ClassifyHarness.make(handler: Fixtures.answering())
         defer { h.env.cleanup() }
         let sink = MemoryTraceSink()
         let outcome = try await h.classify(Fixtures.content("scan_0001.pdf", text: Fixtures.edpText),
                                            trace: TraceContext(traceID: 1, sink: sink))
         let d = outcome.decision
         #expect(d.folderCode == nil)
-        #expect(d.proposedNewFolder?.newAreaName == "Home" && d.proposedNewFolder?.name == "Utilities")
-        #expect(d.proposedNewFolder?.description == "Electricity, gas and water bills.")
-        #expect(d.proposedNewFolder?.yearSubfolders == true)
+        #expect(d.proposedNewFolder?.parentCode == nil && d.proposedNewFolder?.levels.map(\.name) == ["Home", "Utilities"])
+        #expect(d.proposedNewFolder?.levels.last?.description == "Electricity, gas and water bills.")
+        #expect(d.proposedNewFolder?.yearSubfolders == true && d.yearFolder == true)
         #expect(d.fileName == "2026-07-05 EDP - Fatura eletricidade junho")
         #expect(d.decidedBy == .llm && d.documentType == .invoice && d.documentDate == "2026-07-05")
         let request = try #require(await h.mock.chatRequests.first)
-        #expect(request.allText.contains("the archive is empty"))
-        #expect(request.allText.contains("Findability first"))
+        #expect(Fixtures.isDecision(request) && request.allText.contains("Findability first"), "the logic decides the path")
+        #expect(await h.mock.chatCount == 1, "one request decides the path and names the file")
         #expect(!request.allText.contains("{{"))
-        let allowed = request.format?["properties"]?["folder_code"]?["enum"]?.arrayValue?.compactMap(\.stringValue)
-        #expect(allowed == ["NEW"])
+        #expect(request.format?["properties"]?["ideal_path"] != nil, "the model describes a path")
+        #expect(request.format?["properties"]?["folder_code"] == nil, "and never picks a folder code: the app maps the path")
         #expect(Set(await sink.steps.map(\.stage)).isSuperset(of: [.correspondent, .embed, .rules, .candidates, .llm, .validate, .calibrate]))
     }
 
-    @Test func modelSeesExistingFoldersWithTheirContext() async throws {
-        let h = try await ClassifyHarness.make(handler: Fixtures.answering(code: "11"))
+    @Test func theModelIsShownNoFolderToCopy() async throws {
+        let h = try await ClassifyHarness.make(handler: Fixtures.answering(path: ["Home", "Utilities"]))
         defer { h.env.cleanup() }
-        let folder = try await h.env.folder("Utilities", area: "Home", yearly: true, description: "Electricity, gas and water bills.")
-        let outcome = try await h.classify(Fixtures.content("x.pdf", text: Fixtures.edpText))
-        #expect(outcome.decision.folderCode == folder.code)
-        let request = try #require(await h.mock.chatRequests.first)
-        #expect(request.allText.contains("11 Utilities (in 10-19 Home)"))
-        #expect(request.allText.contains("Split by year"))
+        try await h.logic.update(body: "Areas of life, topics inside them.")
+        let current = LogicStore.version(of: try await h.logic.current())
+        _ = try await h.env.folder(path: ["Finances", "Energy Bills"], description: "Electricity and gas bills.", logic: current)
+        _ = try await h.classify(Fixtures.content("x.pdf", text: Fixtures.edpText))
+        let decision = try #require(await h.mock.chatRequests.first(where: Fixtures.isDecision))
+        #expect(!decision.allText.contains("Finances") && !decision.allText.contains("Energy Bills"),
+                "shown any folder, broad ones included, a model copies it whether it fits or not; the app resolves the path")
     }
+
+    @Test func aRewordedTopicJoinsTheFolderOnlyWhenTheJudgeSaysItIsTheSame() async throws {
+        for (verdict, joins) in [("yes", true), ("no", false), ("unsure", false)] {
+            let h = try await ClassifyHarness.make(handler: { request in
+                Fixtures.isJudge(request) ? Fixtures.same(verdict) : Fixtures.answer(path: ["Home", "Household Utilities"])
+            })
+            defer { h.env.cleanup() }
+            let folder = try await h.env.folder("Utilities", area: "Home", yearly: true, description: "Electricity, gas and water bills.")
+            let outcome = try await h.classify(Fixtures.content("x.pdf", text: Fixtures.edpText))
+            #expect((outcome.decision.folderCode == folder.code) == joins, "\(verdict)")
+            #expect(joins || outcome.decision.proposedNewFolder?.levels.map(\.name) == ["Household Utilities"], "\(verdict)")
+            let requests = await h.mock.chatRequests
+            let decision = try #require(requests.first(where: Fixtures.isDecision))
+            #expect(!decision.allText.contains("Utilities —") && !decision.allText.contains(folder.code),
+                    "the folders that exist cannot pull the decision away from the logic")
+            let judge = try #require(requests.first(where: Fixtures.isJudge))
+            #expect(judge.allText.contains("## PLACE\nHome") && judge.allText.contains("## DECIDED FOLDER\nHousehold Utilities — Electricity")
+                    && judge.allText.contains("## EXISTING FOLDER\nUtilities — Electricity, gas and water bills."),
+                    "the judge sees both folders, what each is for, and where")
+        }
+    }
+
+    @Test func aKnownSendersDocumentJoinsItsFolderHoweverTheModelWordsThePath() async throws {
+        let reworded = ["Global - Cross-Border", "EDP Comercial – Comercialização de Energia"]
+        let h = try await ClassifyHarness.make(handler: { _ in
+            Fixtures.answer(path: reworded, correspondent: "EDP Comercial – Comercialização de Energia, S.A.")
+        })
+        defer { h.env.cleanup() }
+        try await h.logic.update(body: "Jurisdiction / Institution.")
+        let version = LogicStore.version(of: try await h.logic.current())
+        let edp = try await h.store.saveCorrespondent(Correspondent(canonicalName: "EDP Comercial", stableKeys: [Self.edpNIF.token],
+                                                                    origin: .learned))
+        let home = try await h.env.folder(path: ["Portugal", "EDP Comercial"], kinds: [.topic, .sender], logic: version)
+        try await h.filed("july.pdf", into: home, from: edp.id)
+
+        let outcome = try await h.classify(Fixtures.content("august.pdf", text: Fixtures.edpText, keys: [Self.edpNIF]))
+        #expect(outcome.decision.folderCode == home.code && outcome.decision.correspondentID == edp.id,
+                "recognised by its tax number, the sender's document joins the folder its documents are in")
+        let decision = try #require(await h.mock.chatRequests.first(where: Fixtures.isDecision))
+        #expect(!decision.allText.contains("Portugal"), "the model decides from the logic and the document; it is shown no folder to copy")
+    }
+
+    @Test func aDocumentWhoseIdentifiersShowAnotherSenderWaitsForTheUser() async throws {
+        let h = try await ClassifyHarness.make(handler: { _ in
+            Fixtures.answer(path: ["Portugal", "MEO"], correspondent: "MEO", confidence: 0.99)
+        })
+        defer { h.env.cleanup() }
+        let edp = try await h.store.saveCorrespondent(Correspondent(canonicalName: "EDP Comercial", stableKeys: [Self.edpNIF.token],
+                                                                    origin: .learned))
+        _ = try await h.store.saveCorrespondent(Correspondent(canonicalName: "MEO", origin: .learned))
+        let disputed = try await h.classify(Fixtures.content("x.pdf", text: Fixtures.edpText, keys: [Self.edpNIF]))
+        #expect(disputed.decision.band == .review && disputed.decision.correspondentID == nil)
+        #expect(disputed.decision.reviewReasons.contains { $0.contains("EDP Comercial's") && $0.contains("reads as from MEO") })
+        #expect(disputed.decision.reviewReasons.count == Set(disputed.decision.reviewReasons).count, "each reason is given once")
+
+        let statement = try await h.classify(Fixtures.content("y.pdf", text: Fixtures.edpText + "\nDébito MEO 29,99", keys: [Self.edpNIF]))
+        #expect(statement.decision.reviewReasons.allSatisfy { !$0.contains("reads as from") } && statement.decision.correspondent == "MEO",
+                "a document showing the sender it names is from that sender, whatever other parties it lists")
+
+        let h2 = try await ClassifyHarness.make(handler: { _ in
+            Fixtures.answer(path: ["Portugal", "Millennium BCP"], correspondent: "Millennium BCP")
+        })
+        defer { h2.env.cleanup() }
+        _ = try await h2.store.saveCorrespondent(Correspondent(id: edp.id, canonicalName: "EDP Comercial", stableKeys: [Self.edpNIF.token],
+                                                               origin: .learned))
+        let newcomer = try await h2.classify(Fixtures.content("z.pdf", text: Fixtures.edpText, keys: [Self.edpNIF]))
+        #expect(newcomer.decision.correspondentID == nil && newcomer.decision.correspondent == "Millennium BCP",
+                "a sender the app does not know is not taken for a known one whose identifier it merely carries")
+    }
+
+    @Test func aSenderWrittenOutInFullIsTheKnownSenderWhoseNameTheDocumentShows() async throws {
+        let h = try await ClassifyHarness.make(handler: { _ in
+            Fixtures.answer(path: ["Portugal", "EDP Comercial – Comercialização de Energia, S.A."],
+                            correspondent: "EDP Comercial – Comercialização de Energia, S.A.")
+        })
+        defer { h.env.cleanup() }
+        let edp = try await h.store.saveCorrespondent(Correspondent(canonicalName: "EDP Comercial", origin: .learned))
+        let named = try await h.classify(Fixtures.content("x.pdf", text: Fixtures.edpText))
+        #expect(named.decision.correspondentID == edp.id,
+                "before any identifier is learned, a known sender named in the document and read alike is that sender")
+        let absent = try await h.classify(Fixtures.content("y.pdf", text: "Fatura de eletricidade, sem nome do fornecedor"))
+        #expect(absent.decision.correspondentID == nil, "a reading alike is not enough when the document does not show the name")
+    }
+
+    @Test func whatALevelStandsForComesFromWhoTheDocumentIsFromAndAbout() throws {
+        let config = try PipelineConfig.bundledDefaults()
+        let resolver = CorrespondentResolver(correspondents: [], config: config.classification, entities: config.entities, ambiguousKeys: [])
+        let path = ["Portugal", "Hlistan", "Taxes", "Tax Authority"].map { FolderLevel(name: $0, description: "") }
+        let threshold = config.classification.placementGuard.partyAbove
+        let across = Float(threshold + (1 - threshold) / 2)
+        let vectors: [String: [Float]] = ["Portugal": [1, 0, 0], "Hlistan": [0, 1, 0], "Taxes": VectorCodec.normalized([0.5, 0, 0.5]),
+                                          "Tax Authority": [0, 0, 1],
+                                          "Autoridade Tributária e Aduaneira": VectorCodec.normalized([0, (1 - across * across).squareRoot(), across])]
+        let marked = FilingClassifier.marked(path, senderNames: ["Autoridade Tributária e Aduaneira"], subject: "Hlistan Zolerani, Lda.",
+                                             resolver: resolver, vectors: vectors, partyAbove: threshold)
+        #expect(marked.map(\.kind) == [.topic, .subject, .topic, .sender],
+                "the subject is named alike, the sender in another language; everything else is a topic")
+        let unlike = FilingClassifier.marked(path, senderNames: ["Autoridade Tributária e Aduaneira"], subject: nil, resolver: resolver,
+                                             vectors: [:], partyAbove: threshold)
+        #expect(unlike.allSatisfy { $0.kind == .topic }, "without a name alike, nothing is taken for the sender")
+        let country = FilingClassifier.marked(["Portugal", "Maria Exemplo", "Health"].map { FolderLevel(name: $0, description: "") },
+                                              senderNames: ["Unilabs Portugal, S.A."], subject: nil, resolver: resolver, vectors: [:],
+                                              partyAbove: threshold)
+        #expect(country.allSatisfy { $0.kind == .topic }, "a country in the sender's name does not make the country's folder the sender's")
+        let written = FilingClassifier.marked(["Portugal", "EDP Comercial"].map { FolderLevel(name: $0, description: "") },
+                                              senderNames: ["EDP Comercial – Comercialização de Energia, S.A."], subject: nil,
+                                              resolver: resolver, vectors: [:], partyAbove: threshold)
+        #expect(written.map(\.kind) == [.topic, .sender], "a sender's short name is its name")
+        let same = FilingClassifier.marked([FolderLevel(name: "Maria Exemplo", description: "")], senderNames: ["Maria Exemplo"],
+                                           subject: "Maria Exemplo", resolver: resolver, vectors: [:], partyAbove: threshold)
+        #expect(same.map(\.kind) == [.sender], "one level stands for one party")
+    }
+
+    private static let edpNIF = StableKey(kind: .ptNIF, value: "503504564")
 
     @Test func invalidAnswersAreRepairedThenHeldForReview() async throws {
         let h = try await ClassifyHarness.make(handler: { _ in "not json" })
@@ -48,7 +163,7 @@ import Testing
     }
 
     @Test func usageFormsARuleAndConfidentRulesSkipTheModel() async throws {
-        let h = try await ClassifyHarness.make(handler: Fixtures.answering(code: "11"))
+        let h = try await ClassifyHarness.make(handler: Fixtures.answering())
         defer { h.env.cleanup() }
         let folder = try await h.env.folder("Utilities", area: "Home", yearly: true)
         let nif = StableKey(kind: .ptNIF, value: "503504564")
@@ -86,7 +201,7 @@ import Testing
     }
 
     @Test func nearIdenticalPastFilingsPlaceDirectly() async throws {
-        let h = try await ClassifyHarness.make(handler: Fixtures.answering(code: "11"))
+        let h = try await ClassifyHarness.make(handler: Fixtures.answering())
         defer { h.env.cleanup() }
         let folder = try await h.env.folder("Utilities", area: "Home")
         let text = "Monthly water bill for flat 5B, water consumption and sewage charges"
@@ -103,35 +218,31 @@ import Testing
         #expect(await h.mock.chatCount == before + 1, "past filings place it; the model only names it")
     }
 
-    @Test func modelChoosingAnUnrelatedExistingFolderGetsTheIdealOneInstead() async throws {
-        let h = try await ClassifyHarness.make(handler: { request in
-            let allowed = request.format?["properties"]?["folder_code"]?["enum"]?.arrayValue?.compactMap(\.stringValue) ?? []
-            return Fixtures.answer(folder: allowed.first ?? "NEW", idealArea: "Money and Taxes", idealCategory: "Taxes Portugal",
-                                   idealDescription: "IRS declarations and tax assessments from the Portuguese tax authority.",
-                                   yearly: "yes")
+    @Test func aPathThatDoesNotExistIsCreatedWhateverFoldersDo() async throws {
+        let h = try await ClassifyHarness.make(handler: { _ in
+            Fixtures.answer(path: ["Money and Taxes", "Taxes Portugal"],
+                            description: "IRS declarations and tax assessments from the Portuguese tax authority.")
         })
         defer { h.env.cleanup() }
         _ = try await h.env.folder("Utilities", area: "Home")
         let outcome = try await h.classify(Fixtures.content("irs.pdf", text: "Declaração Modelo 3 IRS rendimentos 2025"))
         #expect(outcome.decision.folderCode == nil)
-        #expect(outcome.decision.proposedNewFolder?.name == "Taxes Portugal")
+        #expect(outcome.decision.proposedNewFolder?.levels.map(\.name) == ["Money and Taxes", "Taxes Portugal"])
     }
 
-    @Test func aTopicInTheWrongAreaMovesToTheIdealArea() async throws {
-        let h = try await ClassifyHarness.make(handler: { request in
-            let allowed = request.format?["properties"]?["folder_code"]?["enum"]?.arrayValue?.compactMap(\.stringValue) ?? []
-            return Fixtures.answer(folder: allowed.first ?? "NEW", idealArea: "Work", idealCategory: "Payslips",
-                                   idealDescription: "Monthly salary statements.", yearly: "yes")
+    @Test func aTopicTheLogicPutsElsewhereGetsItsFolderThere() async throws {
+        let h = try await ClassifyHarness.make(handler: { _ in
+            Fixtures.answer(path: ["Work", "Payslips"], description: "Monthly salary statements.")
         })
         defer { h.env.cleanup() }
         let misplaced = try await h.env.folder("Payslips", area: "Home")
         let outcome = try await h.classify(Fixtures.content("payslip.pdf", text: "Acme Ltd payslip August 2026 net pay"))
-        #expect(outcome.decision.folderCode == nil, "\(misplaced.code) Payslips is in the wrong part of the archive")
-        #expect(outcome.decision.proposedNewFolder?.name == "Payslips" && outcome.decision.proposedNewFolder?.newAreaName == "Work")
+        #expect(outcome.decision.folderCode == nil, "\(misplaced.relativePath) is in the wrong part of the archive")
+        #expect(outcome.decision.proposedNewFolder?.parentCode == nil && outcome.decision.proposedNewFolder?.levels.map(\.name) == ["Work", "Payslips"])
     }
 
     @Test func sharedIdentifiersNeverIdentifyACorrespondent() async throws {
-        let h = try await ClassifyHarness.make(handler: Fixtures.answering(code: "11"))
+        let h = try await ClassifyHarness.make(handler: Fixtures.answering())
         defer { h.env.cleanup() }
         let folder = try await h.env.folder("Utilities", area: "Home")
         let mine = StableKey(kind: .ptNIF, value: "999999990")
@@ -156,7 +267,7 @@ import Testing
     }
 
     @Test func confirmingUncertainPlacementsMakesThemEvidence() async throws {
-        let h = try await ClassifyHarness.make(handler: Fixtures.answering(code: "11"))
+        let h = try await ClassifyHarness.make(handler: Fixtures.answering())
         defer { h.env.cleanup() }
         let folder = try await h.env.folder("Utilities", area: "Home", yearly: true, description: "Electricity, gas and water bills.")
         let nif = StableKey(kind: .ptNIF, value: "503504564")
@@ -177,7 +288,7 @@ import Testing
     }
 
     @Test func contradictionsDisableRules() async throws {
-        let h = try await ClassifyHarness.make(handler: Fixtures.answering(code: "11"))
+        let h = try await ClassifyHarness.make(handler: Fixtures.answering())
         defer { h.env.cleanup() }
         let folder = try await h.env.folder("Utilities", area: "Home")
         let other = try await h.env.folder("Rent", area: "Home")
@@ -198,7 +309,7 @@ import Testing
     }
 
     @Test func moreAgreeingFilingsStrengthenAnExistingRule() async throws {
-        let h = try await ClassifyHarness.make(handler: Fixtures.answering(code: "11"))
+        let h = try await ClassifyHarness.make(handler: Fixtures.answering())
         defer { h.env.cleanup() }
         let folder = try await h.env.folder("Utilities", area: "Home", yearly: true)
         let nif = StableKey(kind: .ptNIF, value: "503504564")
@@ -217,7 +328,7 @@ import Testing
     }
 
     @Test func aDisabledRuleComesBackWhenTheEvidenceRecovers() async throws {
-        let h = try await ClassifyHarness.make(handler: Fixtures.answering(code: "11"))
+        let h = try await ClassifyHarness.make(handler: Fixtures.answering())
         defer { h.env.cleanup() }
         let folder = try await h.env.folder("Utilities", area: "Home", yearly: true)
         let other = try await h.env.folder("Rent", area: "Home")
@@ -246,7 +357,7 @@ import Testing
     }
 
     @Test func approvingWhereARuleAlreadyPointedIsNotADisagreement() async throws {
-        let h = try await ClassifyHarness.make(handler: Fixtures.answering(code: "11"))
+        let h = try await ClassifyHarness.make(handler: Fixtures.answering())
         defer { h.env.cleanup() }
         let folder = try await h.env.folder("Utilities", area: "Home")
         let review = try await h.env.folder("Needs review", area: "System")
@@ -268,7 +379,7 @@ import Testing
     }
 
     @Test func filingsLeftUntouchedEventuallyTeachTheApp() async throws {
-        let h = try await ClassifyHarness.make(handler: Fixtures.answering(code: "11"))
+        let h = try await ClassifyHarness.make(handler: Fixtures.answering())
         defer { h.env.cleanup() }
         let folder = try await h.env.folder("Utilities", area: "Home", yearly: true)
         let nif = StableKey(kind: .ptNIF, value: "503504564")
@@ -286,7 +397,7 @@ import Testing
     }
 
     @Test func whatWasLearnedIsRecordedAgainstTheDocumentItCameFrom() async throws {
-        let h = try await ClassifyHarness.make(handler: Fixtures.answering(code: "11"))
+        let h = try await ClassifyHarness.make(handler: Fixtures.answering())
         defer { h.env.cleanup() }
         let folder = try await h.env.folder("Utilities", area: "Home", yearly: true)
         let nif = StableKey(kind: .ptNIF, value: "503504564")
@@ -296,7 +407,7 @@ import Testing
         let history = HistoryStore(database: h.env.database)
         let learned = try await history.events(limit: 100, kinds: [.learned])
         #expect(learned.count == h.env.config.learning.ruleMinSupport)
-        #expect(learned.allSatisfy { $0.docId != nil && $0.summary.hasSuffix("\(folder.code) Utilities (you confirmed it)") })
+        #expect(learned.allSatisfy { $0.docId != nil && $0.summary.hasSuffix("Home / Utilities (you confirmed it)") })
         let rule = try #require(try await history.events(limit: 10, kinds: [.ruleInduced]).first)
         #expect(rule.docId == learned.first?.docId, "the filing that formed the rule is the one it is recorded against")
 

@@ -12,34 +12,36 @@ public struct TaxonomyChange: Sendable, Codable, Hashable {
 
 public enum TaxonomyError: Error, LocalizedError {
     case unknownFolder(Int64)
-    case unknownArea(String)
-    case areaFull(String)
-    case archiveFull
+    case unknownParent(String)
+    case tooDeep(name: String, limit: Int)
     case codeInUse(String)
     case invalidName(String)
+    case nameTaken(String)
     case missingSystemFolder(FolderRole)
 
     public var errorDescription: String? {
         switch self {
         case let .unknownFolder(id): "Folder \(id) does not exist"
-        case let .unknownArea(a): "Area \(a) does not exist"
-        case let .areaFull(a): "Area \(a) has no free category codes"
-        case .archiveFull: "All area codes are in use"
+        case let .unknownParent(code): "Folder \(code), where the new folder was to go, does not exist"
+        case let .tooDeep(name, limit): "“\(name)” would be more than \(limit) folders deep"
         case let .codeInUse(c): "Code \(c) is already used"
         case let .invalidName(n): "Folder name \"\(n)\" is not allowed"
+        case let .nameTaken(path): "\(path) is already there and is not a folder documents can be filed into"
         case let .missingSystemFolder(role): "No system folder is configured for \(role.rawValue)"
         }
     }
 }
 
-/// Owns the folder tree. Nothing is pre-created: folders appear on demand (from model decisions, the user, or
-/// lazily for system roles), and disk changes made by the user are mirrored into the database.
+/// Owns the folder tree, whatever its depth. Nothing is pre-created: folders appear on demand (from model decisions,
+/// the user, or lazily for system roles), and disk changes made by the user are mirrored into the database.
 public actor TaxonomyStore {
     public let database: AppDatabase
     private let config: TaxonomyConfig
     /// Registers the store's own writes so the archive watcher does not mistake them for user edits.
     private let registry: SelfChangeRegistry?
     private let fileManager = FileManager.default
+    /// Subtrees of the archive that are not part of its folder tree, such as Incoming when it lives inside.
+    private var excluded: [String] = []
     static let versionKey = "taxonomy_version"
 
     public init(database: AppDatabase, config: TaxonomyConfig, registry: SelfChangeRegistry?) {
@@ -48,96 +50,141 @@ public actor TaxonomyStore {
         self.registry = registry
     }
 
+    /// Leaves these directories, and everything in them, out of the folder tree.
+    public func exclude(_ directories: [URL]) {
+        excluded = directories.map { $0.standardizedFileURL.path + "/" }
+    }
+
     // MARK: On-demand creation
 
     /// Returns the system folder for `role`, creating it (and the system area) the first time it is needed.
     public func ensureSystemFolder(_ role: FolderRole, root: URL) async throws -> TaxonomyFolder {
         if let existing = try await snapshot(root: root).folder(role: role) { return existing }
         guard let spec = config.systemFolder(role) else { throw TaxonomyError.missingSystemFolder(role) }
-        let areaDir = try await directory(forArea: config.systemArea, root: root, origin: .system)
-        let dir = areaDir.appendingPathComponent("\(spec.code) \(spec.name)", isDirectory: true)
+        let areaDir = try await systemAreaDirectory(root: root)
+        let dir = areaDir.appendingPathComponent(spec.name, isDirectory: true)
         if !fileManager.fileExists(atPath: dir.path) {
             try fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
-            let def = FolderDefinition(code: spec.code, area: config.systemArea.code, name: spec.name, role: role,
-                                       description: spec.description, yearSubfolders: false, yearRule: nil, autoFile: false,
-                                       origin: .system)
-            try await write(AboutFile(definition: def, body: Self.body(code: spec.code, name: spec.name, description: spec.description)),
-                      to: dir.appendingPathComponent(config.aboutFileName), hash: .recompute)
+            let def = FolderDefinition(code: spec.code, name: spec.name, role: role, description: spec.description,
+                                       yearSubfolders: false, yearRule: nil, autoFile: false, origin: .system)
+            try await write(AboutFile(definition: def, body: Self.body(title: spec.name, description: spec.description)),
+                            to: dir.appendingPathComponent(config.aboutFileName), hash: .recompute)
         }
         _ = try await sync(root: root)
         guard let folder = try await snapshot(root: root).folder(role: role) else { throw TaxonomyError.missingSystemFolder(role) }
         return folder
     }
 
-    private func directory(forArea spec: SystemFolderSpec, root: URL, origin: FolderOrigin) async throws -> URL {
+    /// The system area is the top-level folder whose `_about.md` says it is the system's, whatever it is called.
+    private func systemAreaDirectory(root: URL) async throws -> URL {
         try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
-        if let existing = try locateDirectory(code: spec.code, in: root) { return existing }
-        let dir = root.appendingPathComponent("\(spec.code) \(spec.name)", isDirectory: true)
+        let snapshot = try await snapshot(root: root)
+        if let area = snapshot.children(of: nil).first(where: { $0.origin == .system && $0.role == nil }) {
+            return snapshot.url(for: area)
+        }
+        for dir in try subdirectories(of: root) where (try? readAbout(dir.appendingPathComponent(config.aboutFileName)))?.definition.origin == .system {
+            return dir
+        }
+        let spec = config.systemArea
+        let dir = root.appendingPathComponent(spec.name, isDirectory: true)
         try fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
-        let def = FolderDefinition(code: spec.code, area: nil, name: spec.name, description: spec.description, yearSubfolders: false,
-                                   yearRule: nil, autoFile: false, origin: origin)
-        try await write(AboutFile(definition: def, body: Self.body(code: spec.code, name: spec.name, description: spec.description)),
-                  to: dir.appendingPathComponent(config.aboutFileName), hash: .recompute)
+        let def = FolderDefinition(code: spec.code, name: spec.name, description: spec.description, yearSubfolders: false,
+                                   yearRule: nil, autoFile: false, origin: .system)
+        try await write(AboutFile(definition: def, body: Self.body(title: spec.name, description: spec.description)),
+                        to: dir.appendingPathComponent(config.aboutFileName), hash: .recompute)
         return dir
     }
 
-    /// Creates the folder described by `spec` (and its area when new) and returns it.
+    /// Creates the folders `spec` describes, level by level under its parent, and returns the last. A level whose
+    /// name the parent already has is that folder, so only what is missing is created.
     @discardableResult
     public func materialize(_ spec: FolderSpec, root: URL, origin: FolderOrigin) async throws -> TaxonomyFolder {
-        let areaCode: String
-        if let code = spec.areaCode {
-            guard try await snapshot(root: root).folder(code: code)?.kind == .area else { throw TaxonomyError.unknownArea(code) }
-            areaCode = code
-        } else {
-            guard let name = spec.newAreaName else { throw TaxonomyError.invalidName("") }
-            areaCode = try await createArea(root: root, name: name, description: spec.newAreaDescription ?? "", origin: origin).code
+        guard !spec.levels.isEmpty else { throw TaxonomyError.invalidName("") }
+        let snapshot = try await snapshot(root: root)
+        var depth = 0
+        if let code = spec.parentCode {
+            guard let parent = snapshot.folder(code: code), parent.holdsUserDocuments else { throw TaxonomyError.unknownParent(code) }
+            depth = snapshot.depth(of: parent)
         }
-        let name = Self.displayName(spec.name)
-        return try await createCategory(root: root, areaCode: areaCode, code: nil, name: name, description: spec.description,
-                                        body: Self.body(code: nil, name: name, description: spec.description),
-                                        yearSubfolders: spec.yearSubfolders, yearRule: spec.yearRule, origin: origin)
-    }
-
-    /// Creates an area with the next free code, or with `code` when it is given and still free.
-    @discardableResult
-    public func createArea(root: URL, name rawName: String, description: String, origin: FolderOrigin,
-                           code requested: String? = nil) async throws -> TaxonomyFolder {
-        let name = Self.displayName(rawName)
-        try Self.validate(name)
-        if let existing = try await snapshot(root: root).areas.first(where: { Self.sameName($0.name, name) }) {
-            Log.info(.taxonomy, "Area already exists; reusing it", ["code": existing.code, "name": name])
-            return existing
+        guard depth + spec.levels.count <= config.maxDepth else { throw TaxonomyError.tooDeep(name: spec.name, limit: config.maxDepth) }
+        var parentCode = spec.parentCode
+        var folder: TaxonomyFolder?
+        for (index, level) in spec.levels.enumerated() {
+            let last = index == spec.levels.count - 1
+            let created = try await createFolder(root: root, parentCode: parentCode, name: level.name, description: level.description,
+                                                 yearSubfolders: last && spec.yearSubfolders, yearRule: last ? spec.yearRule : nil,
+                                                 origin: origin, kind: level.kind, logic: spec.logic)
+            parentCode = created.code
+            folder = created
         }
-        try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
-        let used = Set(try await records().map(\.code)).union([config.systemArea.code])
-        let code: String
-        if let requested, JDCode.isArea(requested), !used.contains(requested) {
-            code = requested
-        } else {
-            guard let free = JDCode.nextFreeArea(used: used, first: config.firstAreaCode, last: config.lastAreaCode) else {
-                throw TaxonomyError.archiveFull
-            }
-            code = free
-        }
-        let def = FolderDefinition(code: code, area: nil, name: name, description: description, yearSubfolders: false,
-                                   yearRule: nil, autoFile: true, origin: origin)
-        let dir = root.appendingPathComponent(def.directoryName, isDirectory: true)
-        try fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
-        try await write(AboutFile(definition: def, body: Self.body(code: code, name: name, description: description)),
-                  to: dir.appendingPathComponent(config.aboutFileName), hash: origin == .user ? .preserve : .recompute)
-        _ = try await sync(root: root)
-        guard let folder = try await snapshot(root: root).folder(code: code) else { throw TaxonomyError.codeInUse(code) }
-        Log.info(.taxonomy, "Created area", ["code": code, "name": name, "origin": origin.rawValue])
+        guard let folder else { throw TaxonomyError.invalidName(spec.name) }
         return folder
     }
 
-    static func sameName(_ a: String, _ b: String) -> Bool {
+    /// Creates a folder named `name` inside `parentCode` (at the top of the archive for nil), with the next free code
+    /// or with `code` when it is given and free. A folder of that name already there is reused: one home per name.
+    @discardableResult
+    public func createFolder(root: URL, parentCode: String?, name rawName: String, description: String, yearSubfolders: Bool,
+                             yearRule: YearRule?, origin: FolderOrigin, kind: LevelKind? = nil, logic: String? = nil,
+                             code requested: String? = nil) async throws -> TaxonomyFolder {
+        let name = Self.displayName(rawName)
+        try Self.validate(name)
+        let snapshot = try await snapshot(root: root)
+        var parent: TaxonomyFolder?
+        if let parentCode {
+            guard let found = snapshot.folder(code: parentCode), found.holdsUserDocuments else { throw TaxonomyError.unknownParent(parentCode) }
+            parent = found
+        }
+        if let existing = snapshot.children(of: parentCode).first(where: { $0.holdsUserDocuments && Self.sameName($0.name, name) }) {
+            Log.info(.taxonomy, "Folder already exists; reusing it", ["code": existing.code, "path": existing.relativePath])
+            return existing
+        }
+        let dir = (parent.map(snapshot.url(for:)) ?? root).appendingPathComponent(name, isDirectory: true)
+        if fileManager.fileExists(atPath: dir.path) {
+            // A directory the index has yet to read may be a folder the user just made; anything else, such as the
+            // system area or an Incoming folder kept in the archive, is never taken over.
+            _ = try await sync(root: root)
+            if let made = try await self.snapshot(root: root).children(of: parentCode)
+                .first(where: { $0.holdsUserDocuments && Self.sameName($0.name, name) }) {
+                return made
+            }
+            throw TaxonomyError.nameTaken(dir.path)
+        }
+        let depth = (parent.map(snapshot.depth(of:)) ?? 0) + 1
+        guard depth <= config.maxDepth else { throw TaxonomyError.tooDeep(name: name, limit: config.maxDepth) }
+        let used = try await allCodes()
+        let code: String
+        if let requested {
+            guard !used.contains(requested) else { throw TaxonomyError.codeInUse(requested) }
+            code = requested
+        } else {
+            code = FolderCode.next(after: used)
+        }
+        let def = FolderDefinition(code: code, name: name, description: description, yearSubfolders: yearSubfolders,
+                                   yearRule: yearSubfolders ? (yearRule ?? .documentDate) : nil, autoFile: true, origin: origin,
+                                   kind: kind, logic: logic)
+        try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
+        try await write(AboutFile(definition: def, body: Self.body(title: name, description: description)),
+                        to: dir.appendingPathComponent(config.aboutFileName), hash: origin == .user ? .preserve : .recompute)
+        _ = try await sync(root: root)
+        guard let folder = try await self.snapshot(root: root).folder(code: code) else { throw TaxonomyError.codeInUse(code) }
+        Log.info(.taxonomy, "Created folder", ["code": code, "path": folder.relativePath, "origin": origin.rawValue])
+        return folder
+    }
+
+    /// Every code a folder has had, removed folders' included, so none is used twice.
+    public func allCodes() async throws -> Set<String> {
+        try await database.reader.read { db in Set(try String.fetchAll(db, sql: "SELECT code FROM folders")) }
+    }
+
+    public static func sameName(_ a: String, _ b: String) -> Bool {
         a.trimmingCharacters(in: .whitespaces).compare(b.trimmingCharacters(in: .whitespaces),
                                                        options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
     }
 
     /// Names written entirely in lower case get their first letter capitalised; other names are kept as written.
-    static func displayName(_ raw: String) -> String {
+    public static func displayName(_ raw: String) -> String {
         let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard name == name.lowercased(), let first = name.first else { return name }
         return first.uppercased() + name.dropFirst()
@@ -145,86 +192,110 @@ public actor TaxonomyStore {
 
     static func validate(_ name: String) throws {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !trimmed.contains("/"), !trimmed.contains(":"), !trimmed.hasPrefix(".") else {
+        guard !trimmed.isEmpty, !trimmed.contains("/"), !trimmed.contains(":"), !trimmed.hasPrefix("."),
+              !YearFolder.matches(trimmed) else {
             throw TaxonomyError.invalidName(name)
         }
     }
 
-    static func body(code: String?, name: String, description: String) -> String {
-        "# \(code.map { "\($0) " } ?? "")\(name)\n\n\(description)"
+    /// The Markdown a new `_about.md` starts with, below its front matter.
+    public static func body(title: String, description: String) -> String {
+        "# \(title)\n\n\(description)"
     }
 
     // MARK: Disk → database
 
-    /// Mirrors the archive tree into the database: adoptions, renames, edits and removals.
+    /// Mirrors the archive tree into the database: adoptions, renames, moves, edits and removals.
     @discardableResult
     public func sync(root: URL) async throws -> [TaxonomyChange] {
         let scanned = try scan(root: root)
         let existing = try await database.reader.read { db in try FolderRecord.fetchAll(db) }
-        let byCode = Dictionary(existing.filter { !$0.isArchived }.map { ($0.code, $0) }, uniquingKeysWith: { a, _ in a })
-        let changes: [TaxonomyChange] = try await database.writer.write { [scanned] db in
+        let live = existing.filter { !$0.isArchived }
+        let byCode = Dictionary(live.map { ($0.code, $0) }, uniquingKeysWith: { a, _ in a })
+        let byInode = Dictionary(live.compactMap { r in r.inode.map { ($0, r) } }, uniquingKeysWith: { a, _ in a })
+        let byPath = Dictionary(live.map { ($0.relPath, $0) }, uniquingKeysWith: { a, _ in a })
+        // A folder with `_about.md` is known by the code in it; one the user made, by its directory (followed through a
+        // rename) or else by where it is. Codes are settled before the transaction, so new ones never repeat.
+        var used = Set(existing.map(\.code))
+        var seen = Set<String>()
+        var resolved: [(item: ScannedFolder, prior: FolderRecord?, code: String)] = []
+        for item in scanned {
+            let prior = item.definition.map { byCode[$0.code] }
+                ?? item.inode.flatMap { byInode[$0] }.flatMap { $0.relPath == item.relPath || byPath[item.relPath] == nil ? $0 : nil }
+                ?? byPath[item.relPath]
+            let code = item.definition?.code ?? prior?.code ?? FolderCode.next(after: used)
+            used.insert(code)
+            guard seen.insert(code).inserted else {
+                Log.warning(.taxonomy, "Two folders carry the same code; the second is left out", ["code": code, "path": item.relPath])
+                continue
+            }
+            resolved.append((item, prior, code))
+        }
+        let (planned, present) = (resolved, seen)
+        let changes: [TaxonomyChange] = try await database.writer.write { db in
             var changes: [TaxonomyChange] = []
-            var seen = Set<String>()
-            var idByCode: [String: Int64] = [:]
-            for item in scanned.sorted(by: { $0.definition.kind == .area && $1.definition.kind != .area }) {
+            var idByPath: [String: Int64] = [:]
+            for (item, prior, code) in planned {
                 let def = item.definition
-                seen.insert(def.code)
                 let now = Date()
-                let parentID = def.area.flatMap { idByCode[$0] }
-                var record = byCode[def.code] ?? FolderRecord(
-                    id: nil, uid: UUID().uuidString, parentId: parentID, code: def.code, name: item.name, relPath: item.relPath,
-                    kind: def.kind.rawValue, role: def.role?.rawValue, autoFile: def.autoFile, yearSubfolders: def.yearSubfolders,
-                    yearRule: (def.yearRule ?? .documentDate).rawValue, origin: (def.origin ?? .user).rawValue,
-                    description: def.description, aboutJson: "{}", descriptionHash: "", generatedHash: def.generatedHash,
+                let parentID = item.parentRelPath.flatMap { idByPath[$0] }
+                var record = prior ?? FolderRecord(
+                    id: nil, uid: UUID().uuidString, parentId: parentID, code: code, name: item.name, relPath: item.relPath,
+                    role: nil, autoFile: false, yearSubfolders: false, yearRule: YearRule.documentDate.rawValue,
+                    origin: FolderOrigin.inferred.rawValue, levelKind: nil, logicVersion: nil, description: "", aboutJson: "{}",
+                    descriptionHash: "", generatedHash: nil,
                     userEdited: false, inode: item.inode, sort: item.sort, isArchived: false, createdAt: now, updatedAt: now)
                 let isNew = record.id == nil
                 let oldPath = record.relPath
                 let oldAbout = record.aboutJson
+                let oldParent = record.parentId
+                let oldMeaning = (record.levelKind, record.logicVersion)
                 record.parentId = parentID
                 record.name = item.name
                 record.relPath = item.relPath
-                record.kind = def.kind.rawValue
-                record.role = def.role?.rawValue
-                record.autoFile = item.inferred ? false : def.autoFile
-                record.yearSubfolders = def.yearSubfolders
-                record.yearRule = (def.yearRule ?? .documentDate).rawValue
-                record.origin = (item.inferred ? FolderOrigin.inferred : (def.origin ?? .user)).rawValue
-                record.description = def.description
+                record.role = def?.role?.rawValue
+                record.autoFile = def?.autoFile ?? false
+                record.yearSubfolders = def?.yearSubfolders ?? false
+                record.yearRule = (def?.yearRule ?? .documentDate).rawValue
+                record.origin = (def.map { $0.origin ?? .user } ?? .inferred).rawValue
+                record.levelKind = def?.kind?.rawValue
+                record.logicVersion = def?.logic
+                record.description = def?.description ?? ""
                 record.aboutJson = JSON.string(item.about)
-                record.generatedHash = def.generatedHash
+                record.generatedHash = def?.generatedHash
                 record.userEdited = !item.pristine
                 record.inode = item.inode
                 record.sort = item.sort
-                if isNew || record.aboutJson != oldAbout || record.relPath != oldPath {
+                if isNew || record.aboutJson != oldAbout || record.relPath != oldPath || record.parentId != oldParent
+                    || oldMeaning != (record.levelKind, record.logicVersion) {
                     record.updatedAt = now
                     try record.save(db)
                 }
-                idByCode[def.code] = record.id
+                idByPath[item.relPath] = record.id
                 if isNew {
-                    let kind: TaxonomyChange.Kind = item.inferred ? .inferred : .adopted
-                    changes.append(TaxonomyChange(kind: kind, code: def.code, path: item.relPath, detail: item.name))
-                    try HistoryStore.insert(db, .folderCreated, summary: "Folder \(def.code) \(item.name)",
-                                            payload: ["code": def.code, "path": item.relPath, "origin": record.origin])
+                    changes.append(TaxonomyChange(kind: def == nil ? .inferred : .adopted, code: code, path: item.relPath, detail: item.name))
+                    try HistoryStore.insert(db, .folderCreated, summary: "Folder \(item.relPath)",
+                                            payload: ["code": code, "path": item.relPath, "origin": record.origin])
                 } else if oldPath != item.relPath {
-                    changes.append(TaxonomyChange(kind: .renamed, code: def.code, path: item.relPath, detail: oldPath))
+                    changes.append(TaxonomyChange(kind: .renamed, code: code, path: item.relPath, detail: oldPath))
                     try HistoryStore.insert(db, .folderRenamed, actor: .user, summary: "\(oldPath) → \(item.relPath)",
                                             payload: ["from": oldPath, "to": item.relPath])
                     try Self.rebasePaths(db, root: root, from: oldPath, to: item.relPath)
                 } else if oldAbout != "{}", JSON.decode(FolderAbout.self, from: oldAbout)?.body != item.about.body
-                            || byCode[def.code]?.description != def.description {
-                    changes.append(TaxonomyChange(kind: .edited, code: def.code, path: item.relPath, detail: "description"))
+                            || prior?.description != record.description {
+                    changes.append(TaxonomyChange(kind: .edited, code: code, path: item.relPath, detail: "description"))
                     try HistoryStore.insert(db, .descriptionChanged, actor: item.pristine ? .system : .user,
-                                            summary: "Description of \(def.code) changed", payload: ["code": def.code])
+                                            summary: "Description of \(item.relPath) changed", payload: ["code": code])
                 }
             }
-            for (code, record) in byCode where !seen.contains(code) {
+            for (code, record) in byCode where !present.contains(code) {
                 var r = record
                 r.isArchived = true
                 r.updatedAt = Date()
                 try r.update(db)
                 try db.execute(sql: "UPDATE memories SET orphaned = 1 WHERE folder_id = ?", arguments: [r.id])
                 changes.append(TaxonomyChange(kind: .removed, code: code, path: r.relPath, detail: r.name))
-                try HistoryStore.insert(db, .folderRemoved, actor: .user, summary: "Folder \(code) \(r.name) disappeared",
+                try HistoryStore.insert(db, .folderRemoved, actor: .user, summary: "Folder \(r.relPath) disappeared",
                                         payload: ["code": code, "path": r.relPath])
             }
             if !changes.isEmpty {
@@ -254,70 +325,59 @@ public actor TaxonomyStore {
     }
 
     private struct ScannedFolder: Sendable {
-        var definition: FolderDefinition
+        /// From `_about.md`; nil for a directory the user made, which has none.
+        var definition: FolderDefinition?
         var about: FolderAbout
         var name: String
         var relPath: String
+        var parentRelPath: String?
         var inode: Int64?
         var sort: Int
         var pristine: Bool
-        var inferred: Bool
         var invalidReason: String?
     }
 
-    /// Scans `root/NN-NN Area/NN Category`. Folder identity is the code in `_about.md`, else the directory name.
+    /// Every folder in the archive, parents before children, down to `maxDepth`. Year folders, excluded subtrees and
+    /// packages are not folders.
     private func scan(root: URL) throws -> [ScannedFolder] {
         var out: [ScannedFolder] = []
         var sort = 0
-        for areaURL in try subdirectories(of: root) {
-            guard let area = try scanFolder(areaURL, relPath: areaURL.lastPathComponent, parentCode: nil, sort: &sort),
-                  area.definition.kind == .area else { continue }
-            out.append(area)
-            for catURL in try subdirectories(of: areaURL) {
-                let rel = area.relPath + "/" + catURL.lastPathComponent
-                guard let cat = try scanFolder(catURL, relPath: rel, parentCode: area.definition.code, sort: &sort),
-                      cat.definition.kind == .category else { continue }
-                out.append(cat)
+        func visit(_ directory: URL, relPath: String?, depth: Int) throws {
+            for child in try subdirectories(of: directory) {
+                let path = child.standardizedFileURL.path + "/"
+                guard !excluded.contains(where: { path.hasPrefix($0) }) else { continue }
+                if relPath != nil, YearFolder.matches(child.lastPathComponent) { continue }
+                let rel = relPath.map { $0 + "/" + child.lastPathComponent } ?? child.lastPathComponent
+                out.append(scanFolder(child, relPath: rel, parentRelPath: relPath, sort: &sort))
+                if depth < config.maxDepth { try visit(child, relPath: rel, depth: depth + 1) }
             }
         }
+        try visit(root, relPath: nil, depth: 1)
         return out
     }
 
-    private func scanFolder(_ url: URL, relPath: String, parentCode: String?, sort: inout Int) throws -> ScannedFolder? {
-        let dirName = url.lastPathComponent
-        let parsed = JDCode.parse(directoryName: dirName)
+    private func scanFolder(_ url: URL, relPath: String, parentRelPath: String?, sort: inout Int) -> ScannedFolder {
+        let directoryName = url.lastPathComponent
         let aboutURL = url.appendingPathComponent(config.aboutFileName)
         let inode = FileFingerprint.inode(of: url)
         sort += 1
+        var invalidReason: String?
         if fileManager.fileExists(atPath: aboutURL.path) {
             do {
                 let about = try readAbout(aboutURL)
-                var def = about.definition
-                if let parentCode, def.kind == .category, def.area != parentCode {
-                    def.area = parentCode
-                }
-                let name = parsed?.code == def.code ? (parsed?.name ?? def.name) : def.name
-                def.name = name
-                return ScannedFolder(definition: def, about: FolderAbout(about), name: name, relPath: relPath, inode: inode,
-                                     sort: sort, pristine: about.isPristine, inferred: false, invalidReason: nil)
+                var definition = about.definition
+                definition.name = definition.name(fromDirectory: directoryName)
+                return ScannedFolder(definition: definition, about: FolderAbout(about), name: definition.name, relPath: relPath,
+                                     parentRelPath: parentRelPath, inode: inode, sort: sort, pristine: about.isPristine,
+                                     invalidReason: nil)
             } catch {
-                guard let parsed else { return nil }
-                return inferred(parsed, parentCode: parentCode, relPath: relPath, inode: inode, sort: sort,
-                                reason: error.localizedDescription)
+                invalidReason = error.localizedDescription
             }
         }
-        guard let parsed else { return nil }
-        return inferred(parsed, parentCode: parentCode, relPath: relPath, inode: inode, sort: sort, reason: nil)
-    }
-
-    private func inferred(_ parsed: (code: String, name: String), parentCode: String?, relPath: String, inode: Int64?,
-                          sort: Int, reason: String?) -> ScannedFolder? {
-        let isArea = JDCode.isArea(parsed.code)
-        guard isArea || (JDCode.isCategory(parsed.code) && parentCode != nil) else { return nil }
-        let def = FolderDefinition(code: parsed.code, area: isArea ? nil : parentCode, name: parsed.name, description: "",
-                                   yearSubfolders: false, yearRule: nil, autoFile: false, origin: .inferred)
-        return ScannedFolder(definition: def, about: FolderAbout(AboutFile(definition: def, body: "")), name: parsed.name,
-                             relPath: relPath, inode: inode, sort: sort, pristine: false, inferred: true, invalidReason: reason)
+        // A folder the user made, named as its directory.
+        return ScannedFolder(definition: nil, about: FolderAbout.empty, name: directoryName,
+                             relPath: relPath, parentRelPath: parentRelPath, inode: inode, sort: sort, pristine: false,
+                             invalidReason: invalidReason)
     }
 
     private func subdirectories(of url: URL) throws -> [URL] {
@@ -328,15 +388,6 @@ public actor TaxonomyStore {
                 return v?.isDirectory == true && v?.isPackage != true
             }
             .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
-    }
-
-    private func locateDirectory(code: String, in parent: URL) throws -> URL? {
-        for dir in try subdirectories(of: parent) {
-            let aboutURL = dir.appendingPathComponent(config.aboutFileName)
-            if let about = try? readAbout(aboutURL), about.definition.code == code { return dir }
-            if JDCode.parse(directoryName: dir.lastPathComponent)?.code == code { return dir }
-        }
-        return nil
     }
 
     // MARK: Snapshot
@@ -355,23 +406,32 @@ public actor TaxonomyStore {
         let records = try await records()
         let documents = DocumentStore(database: database)
         let counts = try await documents.counts(byFolder: true)
+        let senders = try await documents.sendersByFolder()
+        let types = try await documents.typesByFolder()
         let titles = try await documents.recentTitles(perFolder: config.recentTitlesPerFolder)
         let codeByID = Dictionary(uniqueKeysWithValues: records.compactMap { r in r.id.map { ($0, r.code) } })
         let folders: [TaxonomyFolder] = records.compactMap { r in
             guard let id = r.id else { return nil }
             let about = JSON.decode(FolderAbout.self, from: r.aboutJson)
-            var folder = TaxonomyFolder(
+            return TaxonomyFolder(
                 id: id, code: r.code, name: r.name, parentCode: r.parentId.flatMap { codeByID[$0] }, relativePath: r.relPath,
-                kind: FolderKind(rawValue: r.kind) ?? .category, role: r.role.flatMap(FolderRole.init(rawValue:)),
-                autoFile: r.autoFile, description: r.description, body: about?.body ?? "",
-                learnedExamples: about?.learnedExamples ?? [], learnedCorrespondents: about?.learnedCorrespondents ?? [],
-                yearSubfolders: r.yearSubfolders, yearRule: YearRule(rawValue: r.yearRule) ?? .documentDate,
-                origin: FolderOrigin(rawValue: r.origin) ?? .user, documentCount: counts[id] ?? 0, recentTitles: titles[id] ?? [])
-            let text = folder.embeddingText(bodyChars: config.embeddingBodyChars, exampleLimit: config.embeddingExampleLimit)
-            folder.descriptionHash = SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
-            return folder
+                role: r.role.flatMap(FolderRole.init(rawValue:)), autoFile: r.autoFile, description: r.description,
+                body: about?.body ?? "", learnedExamples: about?.learnedExamples ?? [],
+                learnedCorrespondents: about?.learnedCorrespondents ?? [], yearSubfolders: r.yearSubfolders,
+                yearRule: YearRule(rawValue: r.yearRule) ?? .documentDate, origin: FolderOrigin(rawValue: r.origin) ?? .user,
+                documentCount: counts[id] ?? 0, recentTitles: titles[id] ?? [], kind: r.levelKind.flatMap(LevelKind.init(rawValue:)),
+                logic: r.logicVersion, senders: senders[id] ?? [], documentTypes: types[id] ?? [])
         }
-        return TaxonomySnapshot(version: try await version(), rootPath: root.path, folders: folders)
+        var snapshot = TaxonomySnapshot(version: try await version(), rootPath: root.path, folders: folders)
+        // A folder is embedded with the names above it: "Santander" under one company is not "Santander" under another.
+        snapshot.folders = folders.map { folder in
+            var hashed = folder
+            let text = folder.embeddingText(path: snapshot.path(of: folder), bodyChars: config.embeddingBodyChars,
+                                            exampleLimit: config.embeddingExampleLimit)
+            hashed.descriptionHash = SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
+            return hashed
+        }
+        return snapshot
     }
 
     // MARK: Edits
@@ -417,68 +477,29 @@ public actor TaxonomyStore {
         _ = try await sync(root: root)
     }
 
-    /// Creates a new category under `areaCode` with the next free code (or `code` when given).
-    @discardableResult
-    public func createCategory(root: URL, areaCode: String, code: String?, name rawName: String, description: String,
-                               body: String, yearSubfolders: Bool, yearRule: YearRule?, origin: FolderOrigin) async throws -> TaxonomyFolder {
-        let name = Self.displayName(rawName)
-        try Self.validate(name)
-        // One home per kind of document in each area: a category with this name in the area is reused.
-        if let existing = try await snapshot(root: root).folders.first(where: {
-            $0.kind == .category && $0.parentCode == areaCode && Self.sameName($0.name, name)
-        }) {
-            Log.info(.taxonomy, "Category already exists; reusing it", ["code": existing.code, "name": name])
-            return existing
-        }
-        let records = try await records()
-        guard let area = records.first(where: { $0.code == areaCode }) else { throw TaxonomyError.unknownArea(areaCode) }
-        let used = Set(records.map(\.code))
-        let newCode: String
-        if let code {
-            guard !used.contains(code), JDCode.area(of: code) == areaCode else { throw TaxonomyError.codeInUse(code) }
-            newCode = code
-        } else {
-            guard let free = JDCode.nextFreeCategory(in: areaCode, used: used) else { throw TaxonomyError.areaFull(areaCode) }
-            newCode = free
-        }
-        let def = FolderDefinition(code: newCode, area: areaCode, name: name, description: description,
-                                   yearSubfolders: yearSubfolders, yearRule: yearSubfolders ? (yearRule ?? .documentDate) : nil,
-                                   autoFile: true, origin: origin)
-        let dir = root.appendingPathComponent(area.relPath).appendingPathComponent(def.directoryName, isDirectory: true)
-        try fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
-        let text = body.replacingOccurrences(of: "# \(name)", with: "# \(newCode) \(name)")
-        try await write(AboutFile(definition: def, body: text), to: dir.appendingPathComponent(config.aboutFileName),
-                  hash: origin == .user ? .preserve : .recompute)
-        _ = try await sync(root: root)
-        guard let folder = try await snapshot(root: root).folder(code: newCode) else { throw TaxonomyError.codeInUse(newCode) }
-        Log.info(.taxonomy, "Created category", ["code": newCode, "name": name, "origin": origin.rawValue])
-        return folder
-    }
-
     // MARK: Empty folders
 
-    /// Removes folders that hold no documents: year folders, categories and areas whose only contents are the app's
-    /// own `_about.md` and leftovers such as `.DS_Store`. System folders are kept. A removed folder stays in the
-    /// database as archived, description included, so nothing the user wrote about it is lost.
-    /// - Parameter folderIDs: only these categories (and the areas they leave empty); nil considers the whole tree.
-    /// - Returns: the areas and categories removed.
+    /// Removes folders that hold no documents: year folders, and folders whose only contents are the app's own
+    /// `_about.md` and leftovers such as `.DS_Store`, deepest first, so a folder left empty by the removal of the ones
+    /// inside it goes too. System folders are kept. A removed folder stays in the database as archived, description
+    /// included, so nothing the user wrote about it is lost.
+    /// - Parameter folderIDs: only these folders and the folders around them; nil considers the whole tree.
+    /// - Returns: the folders removed.
     @discardableResult
     public func pruneEmpty(root: URL, folderIDs: Set<Int64>? = nil) async throws -> [TaxonomyFolder] {
         let snapshot = try await snapshot(root: root)
-        let categories = snapshot.folders.filter {
-            $0.kind == .category && $0.role == nil && $0.origin != .system && (folderIDs?.contains($0.id) ?? true)
-        }
+        let considered: Set<Int64> = folderIDs.map { ids in
+            Set(snapshot.folders.filter { ids.contains($0.id) }.flatMap { snapshot.lineage(of: $0).map(\.id) })
+        } ?? Set(snapshot.folders.map(\.id))
+        let candidates = snapshot.folders.filter { $0.holdsUserDocuments && considered.contains($0.id) }
+            .sorted { snapshot.depth(of: $0) > snapshot.depth(of: $1) }
         var removed: [TaxonomyFolder] = []
-        for category in categories {
-            let directory = snapshot.url(for: category)
-            for year in try subdirectories(of: directory) where JDCode.isYearFolder(year.lastPathComponent) {
+        for folder in candidates {
+            let directory = snapshot.url(for: folder)
+            for year in (try? subdirectories(of: directory)) ?? [] where YearFolder.matches(year.lastPathComponent) {
                 _ = await removeIfEmpty(year)
             }
-            if await removeIfEmpty(directory) { removed.append(category) }
-        }
-        let areaCodes = folderIDs == nil ? Set(snapshot.areas.map(\.code)) : Set(categories.compactMap(\.parentCode))
-        for area in snapshot.areas where area.origin != .system && areaCodes.contains(area.code) {
-            if await removeIfEmpty(snapshot.url(for: area)) { removed.append(area) }
+            if await removeIfEmpty(directory) { removed.append(folder) }
         }
         guard !removed.isEmpty else { return [] }
         let archived = removed
@@ -487,7 +508,7 @@ public actor TaxonomyStore {
                 try db.execute(sql: "UPDATE folders SET is_archived = 1, updated_at = ? WHERE id = ?",
                                arguments: [Date().unixSeconds, folder.id])
                 try db.execute(sql: "UPDATE memories SET orphaned = 1 WHERE folder_id = ?", arguments: [folder.id])
-                try HistoryStore.insert(db, .folderRemoved, summary: "Removed empty folder \(folder.code) \(folder.name)",
+                try HistoryStore.insert(db, .folderRemoved, summary: "Removed empty folder \(folder.relativePath)",
                                         payload: ["code": folder.code, "path": folder.relativePath])
             }
             let v = try Int.fetchOne(db, sql: "SELECT CAST(value AS INTEGER) FROM meta WHERE key = ?", arguments: [Self.versionKey]) ?? 0
@@ -495,7 +516,7 @@ public actor TaxonomyStore {
                            arguments: [Self.versionKey, String(v + 1)])
         }
         try await regenerateIndex(root: root, snapshot: try await self.snapshot(root: root))
-        Log.info(.taxonomy, "Removed empty folders", ["folders": removed.map(\.code).joined(separator: ",")])
+        Log.info(.taxonomy, "Removed empty folders", ["folders": removed.map(\.relativePath).joined(separator: ", ")])
         return removed
     }
 
@@ -545,6 +566,15 @@ public struct FolderAbout: Sendable, Codable, Hashable {
     public var body: String
     public var learnedExamples: [String]
     public var learnedCorrespondents: [String]
+
+    /// A folder without `_about.md`.
+    static let empty = FolderAbout(body: "", learnedExamples: [], learnedCorrespondents: [])
+
+    init(body: String, learnedExamples: [String], learnedCorrespondents: [String]) {
+        self.body = body
+        self.learnedExamples = learnedExamples
+        self.learnedCorrespondents = learnedCorrespondents
+    }
 
     public init(_ about: AboutFile) {
         body = about.body

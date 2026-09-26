@@ -10,6 +10,8 @@ struct Stats: AsyncParsableCommand {
     func run() async throws {
         let runtime = try await options.runtime()
         let insights = try await runtime.stats.insights()
+        let taxonomy = try await runtime.taxonomy.snapshot(root: await runtime.settings.current.archiveURL)
+        let folder = { (code: String) in taxonomy.path(ofCode: code) ?? code }
         options.emit(insights) {
             var out = ["Documents: \(insights.documents) · decided by \(insights.decidedBy.sorted { $0.key < $1.key }.map { "\($0.key) \($0.value)" }.joined(separator: ", "))"]
             out.append("Accuracy (not later moved by you): " + insights.accuracy.map { "\($0.days)d \(Format.percent($0.accuracy)) of \($0.autoFiled)" }
@@ -20,7 +22,7 @@ struct Stats: AsyncParsableCommand {
             }
             if !insights.confusion.isEmpty {
                 out.append("Most frequent corrections:")
-                out += insights.confusion.map { "  \($0.from) → \($0.to): \($0.count)" }
+                out += insights.confusion.map { "  \(folder($0.from)) → \(folder($0.to)): \($0.count)" }
             }
             out.append("Auto-filing threshold what-if:")
             out += insights.whatIf.map { "  ≥ \(String(format: "%.2f", $0.autoThreshold)): \(Format.percent($0.autoShare)) automatic, \(Format.percent($0.autoAccuracy)) right" }
@@ -31,7 +33,7 @@ struct Stats: AsyncParsableCommand {
             if !insights.warnings.isEmpty { out.append("Extraction warnings: " + insights.warnings.map { "\($0.key) \($0.value)" }.joined(separator: ", ")) }
             if !insights.overlaps.isEmpty {
                 out.append("Folders that look alike (consider merging or sharpening descriptions):")
-                out += insights.overlaps.map { "  \($0.a) ~ \($0.b) (\(String(format: "%.2f", $0.similarity)))" }
+                out += insights.overlaps.map { "  \(folder($0.a)) ~ \(folder($0.b)) (\(String(format: "%.2f", $0.similarity)))" }
             }
             return out.joined(separator: "\n")
         }

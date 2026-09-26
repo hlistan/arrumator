@@ -28,8 +28,9 @@ struct StubClassifier: DocumentClassifier {
         ([1, 0, 0], "stub-embed")
     }
 
-    static let utilities = FolderSpec(areaCode: nil, newAreaName: "Home", newAreaDescription: "Home documents.", name: "Utilities",
-                                      description: "Electricity, gas and water bills.", yearSubfolders: true, yearRule: .documentDate)
+    static let utilities = FolderSpec(parentCode: nil, levels: [FolderLevel(name: "Home", description: "Home documents."),
+                                                                FolderLevel(name: "Utilities", description: "Electricity, gas and water bills.")],
+                                      yearSubfolders: true, yearRule: .documentDate)
 }
 
 actor RecordingLearner: LearningSink {
@@ -101,7 +102,7 @@ struct VanishingFolderClassifier: DocumentClassifier {
     func classify(_ content: ExtractedContent, taxonomy: TaxonomySnapshot, settings: AppSettings, config: PipelineConfig,
                   mode: ClassificationMode, trace: TraceContext) async throws -> ClassificationOutcome {
         await calls.next()
-        if let folder = taxonomy.fileableCategories.first(where: { $0.name == "Utilities" }) {
+        if let folder = taxonomy.fileable.first(where: { $0.name == "Utilities" }) {
             _ = try await store.pruneEmpty(root: root, folderIDs: [folder.id])
             return try await StubClassifier(code: folder.code, band: .auto)
                 .classify(content, taxonomy: taxonomy, settings: settings, config: config, mode: mode, trace: trace)
@@ -140,7 +141,7 @@ struct VanishingFolderClassifier: DocumentClassifier {
         await h.coordinator.drain()
         let filed = try #require(try await h.services.documents.list(DocumentFilter(statuses: [.filed]), limit: 1).first)
         let snapshot = try await h.env.taxonomy.snapshot(root: h.env.archive)
-        let utilities = try #require(snapshot.fileableCategories.first { $0.name == "Utilities" })
+        let utilities = try #require(snapshot.fileable.first { $0.name == "Utilities" })
         #expect(snapshot.place(of: filed, incoming: h.env.incoming) == .folder(utilities, year: "2026"))
         var unknownFolder = filed
         unknownFolder.folderId = -1
@@ -178,7 +179,7 @@ struct VanishingFolderClassifier: DocumentClassifier {
         await h.coordinator.enqueue(url)
         await h.coordinator.drain()
         let snapshot = try await h.env.taxonomy.snapshot(root: h.env.archive)
-        let folder = try #require(snapshot.fileableCategories.first { $0.name == "Utilities" })
+        let folder = try #require(snapshot.fileable.first { $0.name == "Utilities" })
         let target = snapshot.url(for: folder).appendingPathComponent("2026").appendingPathComponent("2026-07-05 EDP - Fatura eletricidade julho.txt")
         #expect(FileManager.default.fileExists(atPath: target.path))
         #expect(!FileManager.default.fileExists(atPath: url.path))
@@ -187,8 +188,10 @@ struct VanishingFolderClassifier: DocumentClassifier {
         let doc = try #require(found)
         let docID = try #require(doc.id)
         #expect(doc.status == .filed && doc.decision?.folderCode == folder.code)
-        let kinds = try await h.services.history.events(limit: 50).map(\.kind)
-        #expect(Set(kinds).isSuperset(of: [.arrived, .extracted, .classified, .folderCreated, .filed]))
+        let events = try await h.services.history.events(limit: 50)
+        #expect(Set(events.map(\.kind)).isSuperset(of: [.arrived, .extracted, .classified, .folderCreated, .filed]))
+        #expect(events.first { $0.kind == .classified }?.summary.hasPrefix("new Home / Utilities · auto") == true,
+                "history names the folder by its path, not the app's code")
         let traceID = try #require(doc.lastTraceId)
         let loaded = try await h.services.traces.trace(id: traceID)
         let trace = try #require(loaded)
@@ -213,14 +216,16 @@ struct VanishingFolderClassifier: DocumentClassifier {
         try await h.env.settings.update { $0.autoCreateFolders = false }
         await h.coordinator.enqueue(try h.env.drop("a.txt", text: "x"))
         await h.coordinator.drain()
-        #expect(try await h.env.taxonomy.snapshot(root: h.env.archive).fileableCategories.isEmpty)
+        #expect(try await h.env.taxonomy.snapshot(root: h.env.archive).fileable.isEmpty)
         let held = try await h.services.documents.reviewQueue()
         let doc = try #require(held.first)
         let actions = ReviewActions(services: h.services, coordinator: h.coordinator)
         let docID = try #require(doc.id)
         try await actions.approve(docID)
         let snapshot = try await h.env.taxonomy.snapshot(root: h.env.archive)
-        #expect(snapshot.fileableCategories.map(\.name) == ["Utilities"])
+        let filed = try #require(try await h.services.documents.document(id: docID))
+        let home = try #require(filed.folderId.flatMap(snapshot.folder(id:)))
+        #expect(snapshot.path(of: home) == "Home / Utilities" && filed.status == .filed, "approving creates the proposed path")
     }
 
     @Test func duplicatesGoToTheDuplicatesFolder() async throws {
@@ -255,7 +260,7 @@ struct VanishingFolderClassifier: DocumentClassifier {
         let reloaded = try await h.services.documents.document(id: docID)
         let moved = try #require(reloaded)
         #expect(moved.status == .filed && moved.folderId == target.id)
-        #expect(moved.path.contains("/\(target.code) "))
+        #expect(moved.path.contains("/\(target.relativePath)/"))
         #expect(await h.learner.corrections.count == 1)
     }
 
@@ -291,6 +296,57 @@ struct VanishingFolderClassifier: DocumentClassifier {
         #expect(!FileManager.default.fileExists(atPath: url.path))
     }
 
+    @Test func aFileDroppedIntoAFolderAtAnyDepthIsAdoptedWhereItIs() async throws {
+        let h = try await Harness.make(classifier: StubClassifier(newFolder: StubClassifier.utilities, band: .review))
+        defer { h.env.cleanup() }
+        let santander = try await h.env.folder(path: ["Portugal", "Hlistan Zolerani LDA", "Banking", "Santander"], yearly: true)
+        let snapshot = try await h.env.taxonomy.snapshot(root: h.env.archive)
+        let banking = try #require(santander.parentCode.flatMap(snapshot.folder(code:)))
+        let review = try await h.env.taxonomy.ensureSystemFolder(.needsReview, root: h.env.archive)
+        func place(_ name: String, in directory: URL) throws -> URL {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let url = directory.appendingPathComponent(name)
+            try Data("\(name) contents".utf8).write(to: url)
+            return url
+        }
+        let statement = try place("statement.txt", in: snapshot.url(for: santander).appendingPathComponent("2025"))
+        let overview = try place("overview.txt", in: snapshot.url(for: banking))
+        let stray = try place("stray.txt", in: try await h.env.taxonomy.snapshot(root: h.env.archive).url(for: review))
+
+        await ArchiveReconciler(services: h.services, coordinator: h.coordinator)
+            .apply([.untrackedFile(path: statement.path), .untrackedFile(path: overview.path), .untrackedFile(path: stray.path)])
+        await h.coordinator.drain()
+
+        let documents = try await h.services.documents.list(DocumentFilter(), limit: 10)
+        let adopted = try #require(documents.first { $0.originalFilename == "statement.txt" })
+        #expect(adopted.folderId == santander.id && adopted.status == .filed, "the folder the user put it in is the decision")
+        #expect(adopted.path == statement.path, "it stays in the year folder it was put in")
+        #expect(documents.first { $0.originalFilename == "overview.txt" }?.folderId == banking.id, "any level holds documents")
+        #expect(!documents.contains { $0.originalFilename == "stray.txt" }, "a file in the app's own folders is not adopted")
+        let summaries = try await h.services.history.events(limit: 50, kinds: [.adopted]).map(\.summary)
+        #expect(summaries.contains("statement.txt added to Portugal / Hlistan Zolerani LDA / Banking / Santander"))
+    }
+
+    @Test func statisticsCoverEveryFolderOfTheUsersAtAnyDepth() async throws {
+        let path = ["Portugal", "Banking", "Santander"]
+        let deep = FolderSpec(parentCode: nil, levels: path.map { FolderLevel(name: $0, description: "\($0).") }, yearSubfolders: true,
+                              yearRule: .documentDate)
+        let h = try await Harness.make(classifier: StubClassifier(newFolder: deep, band: .auto))
+        defer { h.env.cleanup() }
+        await h.coordinator.enqueue(try h.env.drop("statement.txt", text: "Santander statement"))
+        await h.coordinator.drain()
+        _ = try await h.env.taxonomy.ensureSystemFolder(.needsReview, root: h.env.archive)
+        let snapshot = try await h.env.taxonomy.snapshot(root: h.env.archive)
+        let santander = try #require(snapshot.folders.first { $0.name == "Santander" })
+
+        let insights = try await StatsService(database: h.env.database, config: h.env.config.stats).insights()
+        #expect(insights.folders.map(\.code) == snapshot.lineage(of: santander).map(\.code),
+                "every level is a folder of the user's, outermost first; the app's own folders are not")
+        #expect(insights.folders.last?.documents == 1)
+        #expect(snapshot.path(ofCode: santander.code) == path.joined(separator: " / "))
+        #expect(snapshot.path(ofCode: "F999") == nil)
+    }
+
     @Test func undoReturnsFileToIncomingAndHoldsIt() async throws {
         let h = try await Harness.make(classifier: StubClassifier(newFolder: StubClassifier.utilities, band: .auto))
         defer { h.env.cleanup() }
@@ -309,7 +365,7 @@ struct VanishingFolderClassifier: DocumentClassifier {
         #expect(await h.coordinator.enqueue(undone.url) == nil)
         #expect(await h.learner.forgotten == [docID])
         let snapshot = try await h.env.taxonomy.snapshot(root: h.env.archive)
-        #expect(snapshot.fileableCategories.isEmpty, "the folder it left empty is removed")
+        #expect(snapshot.fileable.isEmpty, "the folder it left empty is removed")
         #expect(await h.learner.removedFolders.count == 2, "the category and the area it leaves empty")
     }
 }

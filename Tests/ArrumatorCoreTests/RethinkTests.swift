@@ -11,11 +11,12 @@ struct ScriptedClassifier: DocumentClassifier {
     func classify(_ content: ExtractedContent, taxonomy: TaxonomySnapshot, settings: AppSettings, config: PipelineConfig,
                   mode: ClassificationMode, trace: TraceContext) async throws -> ClassificationOutcome {
         let text = content.text
-        let home = taxonomy.areas.first { $0.name == "Home" }
+        let home = taxonomy.topLevel.first { $0.name == "Home" }
         func folder(_ name: String) -> (String?, FolderSpec?) {
-            if let code = taxonomy.folders.first(where: { $0.kind == .category && $0.name == name })?.code { return (code, nil) }
-            return (nil, FolderSpec(areaCode: home?.code, newAreaName: home == nil ? "Home" : nil, newAreaDescription: "Home documents.",
-                                    name: name, description: "\(name) documents.", yearSubfolders: false, yearRule: nil))
+            if let home, let code = taxonomy.children(of: home.code).first(where: { $0.name == name })?.code { return (code, nil) }
+            let levels = (home == nil ? [FolderLevel(name: "Home", description: "Home documents.")] : [])
+                + [FolderLevel(name: name, description: "\(name) documents.")]
+            return (nil, FolderSpec(parentCode: home?.code, levels: levels, yearSubfolders: false, yearRule: nil))
         }
         var band = Band.auto
         let target: (String?, FolderSpec?)
@@ -55,6 +56,87 @@ struct HesitantClassifier: DocumentClassifier {
         if case .rethink = mode, content.text.contains("slow") { try await Task.sleep(for: Self.thinking) }
         return try await ScriptedClassifier().classify(content, taxonomy: taxonomy, settings: settings, config: config, mode: mode,
                                                        trace: trace)
+    }
+
+    func embedding(for content: ExtractedContent, sender: String?, settings: AppSettings, config: PipelineConfig,
+                   trace: TraceContext) async throws -> (vector: [Float], model: String)? { nil }
+}
+
+/// Files everything in "Home / Utilities" on arrival. When rethinking, it answers as a logic of jurisdictions and
+/// institutions would: EDP bills in "Portugal / Housing / Utilities / EDP" by year, water bills beside them without,
+/// walking the tree it is shown (planned folders included) as the placement guard does.
+struct ReorganizingClassifier: DocumentClassifier {
+    static let edp = ["Portugal", "Housing", "Utilities", "EDP"]
+    static let water = ["Portugal", "Housing", "Utilities", "Water"]
+
+    func classify(_ content: ExtractedContent, taxonomy: TaxonomySnapshot, settings: AppSettings, config: PipelineConfig,
+                  mode: ClassificationMode, trace: TraceContext) async throws -> ClassificationOutcome {
+        let path: [String]
+        switch mode {
+        case .arrival: path = ["Home", "Utilities"]
+        case .rethink: path = content.text.contains("EDP") ? Self.edp : Self.water
+        }
+        let yearly = path == Self.edp
+        var parent: String?
+        var spec: FolderSpec?
+        for (index, name) in path.enumerated() {
+            guard let child = taxonomy.children(of: parent).first(where: { $0.name == name }) else {
+                spec = FolderSpec(parentCode: parent, levels: path[index...].map { FolderLevel(name: $0, description: "\($0) documents.") },
+                                  yearSubfolders: yearly, yearRule: yearly ? .documentDate : nil)
+                break
+            }
+            parent = child.code
+        }
+        return ClassificationOutcome(decision: FilingDecision(
+            folderCode: spec == nil ? parent : nil, proposedNewFolder: spec, yearFolder: yearly, correspondent: "EDP",
+            documentType: .invoice, documentDate: "2026-07-05", dateSource: .label, title: "Bill", fileName: content.source.stem,
+            language: "pt", confidence: ConfidenceReport(llm: 0.95, final: 0.95, band: .auto, thresholds: settings.thresholds),
+            decidedBy: .llm, rationale: "scripted"), embedding: nil, embeddingModel: nil)
+    }
+
+    func embedding(for content: ExtractedContent, sender: String?, settings: AppSettings, config: PipelineConfig,
+                   trace: TraceContext) async throws -> (vector: [Float], model: String)? { nil }
+}
+
+/// Rethinks every EDP bill into "Portugal / EDP" as a logic of jurisdictions and senders would, marking what each
+/// level stands for, and remembers the trees it was shown while planning.
+struct SenderClassifier: DocumentClassifier {
+    actor Seen {
+        private(set) var snapshots: [TaxonomySnapshot] = []
+        /// The sender every document is from, known once the test has created it.
+        var sender: Int64?
+        func add(_ snapshot: TaxonomySnapshot) { snapshots.append(snapshot) }
+        func set(sender: Int64) { self.sender = sender }
+    }
+
+    static let logic = "sender-logic"
+    let seen = Seen()
+
+    func classify(_ content: ExtractedContent, taxonomy: TaxonomySnapshot, settings: AppSettings, config: PipelineConfig,
+                  mode: ClassificationMode, trace: TraceContext) async throws -> ClassificationOutcome {
+        let path: [FolderLevel]
+        switch mode {
+        case .arrival:
+            path = [FolderLevel(name: "Home", description: "Home."), FolderLevel(name: "Utilities", description: "Bills.")]
+        case .rethink:
+            await seen.add(taxonomy)
+            path = [FolderLevel(name: "Portugal", description: "Portugal.", kind: .topic),
+                    FolderLevel(name: "EDP", description: "Documents from EDP.", kind: .sender)]
+        }
+        var parent: String?
+        var spec: FolderSpec?
+        for (index, level) in path.enumerated() {
+            guard let child = taxonomy.children(of: parent).first(where: { $0.name == level.name }) else {
+                spec = FolderSpec(parentCode: parent, levels: Array(path[index...]), yearSubfolders: false, yearRule: nil, logic: Self.logic)
+                break
+            }
+            parent = child.code
+        }
+        return ClassificationOutcome(decision: FilingDecision(
+            folderCode: spec == nil ? parent : nil, proposedNewFolder: spec, correspondent: "EDP", correspondentID: await seen.sender,
+            documentType: .invoice, documentDate: "2026-07-05", dateSource: .label, title: "Bill", fileName: content.source.stem,
+            language: "pt", confidence: ConfidenceReport(llm: 0.95, final: 0.95, band: .auto, thresholds: settings.thresholds),
+            decidedBy: .llm, rationale: "scripted"), embedding: nil, embeddingModel: nil)
     }
 
     func embedding(for content: ExtractedContent, sender: String?, settings: AppSettings, config: PipelineConfig,
@@ -156,7 +238,7 @@ struct HesitantClassifier: DocumentClassifier {
         let store = RethinkStore(database: h.env.database)
         let planned = try #require(try await store.activeRun())
         #expect(planned.status == .ready)
-        #expect(planned.plannedFolders.map(\.name) == ["Energy"], "the second EDP bill reuses the folder planned for the first")
+        #expect(try planned.plannedFolders().map(\.name) == ["Energy"], "the second EDP bill reuses the folder planned for the first")
         let counts = try await store.counts(runID: try #require(planned.id))
         #expect(counts[.move] == 2 && counts[.unchanged] == 1 && counts[.unsure] == 1,
                 "a document whose folder stays the same is unchanged, however the model words its name")
@@ -179,6 +261,63 @@ struct HesitantClassifier: DocumentClassifier {
         #expect(await h.learner.rearranged.map(\.documentID).sorted() == Array(ids.prefix(2)).sorted())
         #expect(await h.learner.removedFolders.contains(oldBills.id))
         #expect(try await store.activeRun() == nil)
+    }
+
+    @Test func aPlanCreatesEveryLevelOfADeepPathAndMovesDocumentsThere() async throws {
+        let h = try await Harness.make(classifier: ReorganizingClassifier())
+        defer { h.env.cleanup() }
+        let ids = try await arrive(h, [("edp1.txt", "EDP July"), ("edp2.txt", "EDP August"), ("water.txt", "water bill")])
+        let home = try #require(try await folder(h, "Home"))
+
+        let rethink = RethinkCoordinator(services: h.services, ingest: h.coordinator)
+        try await rethink.begin(.all, includeUserPlaced: false)
+        try await rethink.planAll()
+        let store = RethinkStore(database: h.env.database)
+        let planned = try #require(try await store.activeRun()).plannedFolders()
+        #expect(planned.map(\.name) == ["Portugal", "Housing", "Utilities", "EDP", "Water"],
+                "each level is planned once, and later documents build on what earlier ones planned")
+        let taxonomy = try await h.env.taxonomy.snapshot(root: h.env.archive)
+        let edp = try #require(planned.last { $0.name == "EDP" })
+        #expect(RethinkStore.path(of: edp, planned: planned, taxonomy: taxonomy) == ReorganizingClassifier.edp.joined(separator: " / "))
+        #expect(edp.yearSubfolders && planned.filter(\.yearSubfolders).count == 1, "only the level the documents sit in is by year")
+        #expect(try await folder(h, "Portugal") == nil, "planning creates nothing on disk")
+
+        #expect(try await rethink.apply().status == .applied)
+        let after = try await h.env.taxonomy.snapshot(root: h.env.archive)
+        for (id, path) in [(ids[0], ReorganizingClassifier.edp + ["2026"]), (ids[1], ReorganizingClassifier.edp + ["2026"]),
+                           (ids[2], ReorganizingClassifier.water)] {
+            let doc = try #require(try await h.services.documents.document(id: id))
+            let folder = try #require(after.folder(holding: doc.url.deletingLastPathComponent()))
+            #expect(after.lineage(of: folder).map(\.name) == Array(path.prefix(4)))
+            #expect(doc.url.deletingLastPathComponent().path.hasSuffix("/" + path.joined(separator: "/")))
+        }
+        #expect(after.folder(code: home.code) == nil, "the old area emptied with its category and went with it")
+        #expect(after.folders.filter(\.holdsUserDocuments).count == 5)
+    }
+
+    @Test func aSendersFolderAPlanCreatesIsTheSendersForTheRestOfThePlanAndAfter() async throws {
+        let classifier = SenderClassifier()
+        let h = try await Harness.make(classifier: classifier)
+        defer { h.env.cleanup() }
+        let edp = try await GRDBLearningStore(database: h.env.database).saveCorrespondent(Correspondent(canonicalName: "EDP", origin: .learned))
+        await classifier.seen.set(sender: edp.id)
+        let ids = try await arrive(h, [("edp1.txt", "EDP July"), ("edp2.txt", "EDP August")])
+
+        let rethink = RethinkCoordinator(services: h.services, ingest: h.coordinator)
+        try await rethink.begin(.all, includeUserPlaced: false)
+        try await rethink.planAll()
+        let second = try #require(await classifier.seen.snapshots.last)
+        let planned = try #require(second.folders.first { $0.name == "EDP" })
+        #expect(planned.kind == .sender && planned.logic == SenderClassifier.logic && planned.senders == [edp.id],
+                "the plan's later documents see whose folder the planned one is")
+        #expect(try #require(try await RethinkStore(database: h.env.database).activeRun()).plannedFolders().map(\.name) == ["Portugal", "EDP"])
+
+        #expect(try await rethink.apply().status == .applied)
+        let after = try await h.env.taxonomy.snapshot(root: h.env.archive)
+        let created = try #require(after.folders.first { $0.name == "EDP" })
+        #expect(created.kind == .sender && created.logic == SenderClassifier.logic)
+        #expect(after.folder(code: try #require(created.parentCode))?.kind == .topic)
+        for id in ids { #expect(try await h.services.documents.document(id: id)?.folderId == created.id) }
     }
 
     @Test func rethinkLeavesConfirmedAndDeselectedDocumentsAlone() async throws {

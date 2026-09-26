@@ -1,11 +1,5 @@
 {
   "ollama": {
-    "baseURL": "http://127.0.0.1:11434",
-    "allowedHosts": [
-      "127.0.0.1",
-      "localhost",
-      "::1"
-    ],
     "appBundleIdentifier": "com.electron.ollama",
     "appBinarySubpath": "Contents/Resources/ollama",
     "binarySearchPaths": [
@@ -121,44 +115,43 @@
     "embeddingBodyChars": 1200,
     "learnedExamplesLimit": 8,
     "systemArea": {
-      "code": "00-09",
+      "code": "system",
       "name": "System",
       "description": "Folders the app manages itself; documents here are waiting for a decision."
     },
     "systemFolders": [
       {
         "role": "needsReview",
-        "code": "02",
+        "code": "needs-review",
         "name": "Needs review",
-        "description": "Documents the app could not file confidently. Moving one into a category teaches the app."
+        "description": "Documents the app could not file confidently. Moving one into a folder teaches the app."
       },
       {
         "role": "duplicates",
-        "code": "03",
+        "code": "duplicates",
         "name": "Duplicates",
         "description": "Byte-identical copies of documents that are already filed; the app's history names the original."
       },
       {
         "role": "learned",
-        "code": "05",
+        "code": "learned",
         "name": "Learned",
         "description": "What Arrumator has learned from how you file: senders, rules, corrections and filing memories. The app rebuilds its index from these files."
       },
       {
         "role": "logic",
-        "code": "06",
+        "code": "logic",
         "name": "Logic",
         "description": "How this archive is organised: the logic the model follows when it files documents here. The prompt is the text of _logic.md; edit it in the app or in any editor."
       },
       {
         "role": "history",
-        "code": "07",
+        "code": "history",
         "name": "History",
         "description": "Everything that happened, one file per month."
       }
     ],
-    "firstAreaCode": 10,
-    "lastAreaCode": 90,
+    "maxDepth": 8,
     "learnedCorrespondentsLimit": 5,
     "prunableLeftovers": [
       ".DS_Store",
@@ -336,7 +329,6 @@
     "excerptChars": 12000,
     "embeddingSummaryChars": 2000,
     "embeddingNumCtx": 2048,
-    "promptMemories": 5,
     "promptExamplesPerFolder": 3,
     "knn": {
       "k": 24,
@@ -374,14 +366,11 @@
     "alternativesCount": 3,
     "ruleTextScanChars": 20000,
     "repairAttempts": 1,
-    "promptMemoriesPerFolder": 3,
-    "promptDetailedFolders": 6,
-    "promptFolderBodyChars": 900,
     "placementGuard": {
-      "mismatchBelow": 0.6,
       "duplicateAbove": 0.85,
-      "areaMatchAbove": 0.85,
-      "areaMismatchBelow": 0.6
+      "judgeAbove": 0.6,
+      "maxJudgements": 2,
+      "partyAbove": 0.8
     }
   },
   "calibration": {
@@ -594,6 +583,7 @@
           "detail": "A folder and a file name chosen, by a learned rule or by the local model.",
           "stages": [
             "llm",
+            "judge",
             "validate",
             "calibrate"
           ],

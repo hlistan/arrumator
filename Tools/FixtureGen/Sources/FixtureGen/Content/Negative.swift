@@ -48,17 +48,17 @@ enum NegativeFixtures {
         rows.append([.text("Notes: keep a 10% emergency fund; review the electricity tariff in October.")])
         let workbook = Workbook(title: "Household budget 2026", creator: "Alex Sample", created: Day(2026, 1, 4),
                                 sheets: [Sheet(name: "Budget 2026", columnWidths: [22] + Array(repeating: 10, count: 13), rows: rows)])
-        return .heldBack(file, .en, .xlsx, category: "02", type: .other, titleContains: ["Budget"], payload: .xlsx(workbook))
+        return .heldBack(file, .en, .xlsx, category: "needs-review", type: .other, titleContains: ["Budget"], payload: .xlsx(workbook))
     }
 
     static func duplicate() -> Fixture {
-        .heldBack("negative/91-edp-fatura-2026-07-copy.pdf", .pt, .pdfText, category: "03", type: nil,
+        .heldBack("negative/91-edp-fatura-2026-07-copy.pdf", .pt, .pdfText, category: "duplicates", type: nil,
                   duplicateOf: "pt/01-edp-fatura-2026-07.pdf", payload: .copy(of: "pt/01-edp-fatura-2026-07.pdf"))
     }
 
     static func blankScan() -> Fixture {
         let info = DocumentInfo(title: "", author: "", subject: "", created: Day(2026, 9, 10))
-        return .heldBack("negative/92-blank-scan.pdf", .und, .pdfScan, category: "02", type: nil, warnings: [.emptyText],
+        return .heldBack("negative/92-blank-scan.pdf", .und, .pdfScan, category: "needs-review", type: nil, warnings: [.emptyText],
                          payload: .pdfScan(.blank(info)))
     }
 
@@ -79,7 +79,7 @@ enum NegativeFixtures {
                              totals: [["Total (IVA incluído)", price.eurPT]])),
                 .paragraph("Garantia de 3 anos a contar da data da fatura. Guarde este documento."),
             ])
-        return .heldBack(file, .pt, .pdfText, category: "02", type: nil, warnings: [.encrypted], password: password,
+        return .heldBack(file, .pt, .pdfText, category: "needs-review", type: nil, warnings: [.encrypted], password: password,
                          payload: .encryptedPDF(document, password: password))
     }
 
@@ -98,7 +98,7 @@ enum NegativeFixtures {
                              rows: [["Domain renewal example-sample.dev (1 year)", Money(14, 98).eurEN]],
                              totals: [["Total", Money(14, 98).eurEN]])),
             ])
-        return .heldBack(file, .en, .pdfText, category: "02", type: nil, warnings: [.corrupted],
+        return .heldBack(file, .en, .pdfText, category: "needs-review", type: nil, warnings: [.corrupted],
                          payload: .truncatedPDF(document))
     }
 }

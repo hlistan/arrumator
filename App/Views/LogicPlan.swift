@@ -131,7 +131,7 @@ struct LogicPlan: View {
             if !decided.isEmpty {
                 group("Decided So Far") {
                     ForEach(decided) { item in
-                        DecisionRow(item: item, archive: model.settings?.archiveURL, expanded: open == item.id) {
+                        DecisionRow(item: item, taxonomy: model.taxonomy, expanded: open == item.id) {
                             withAnimation(.snappy) { open = open == item.id ? nil : item.id }
                         }
                     }
@@ -146,8 +146,13 @@ struct LogicPlan: View {
         let staying = items.filter { $0.status == .unchanged }
         let undecided = items.filter { ($0.status == .unsure && !$0.canMove) || $0.status == .failed || $0.status == .skipped }
         let ticked = items.filter { $0.selected && $0.canMove }
-        let folders = RethinkStore.folders(run.plannedFolders, neededBy: items)
+        let planned = Result { try run.plannedFolders() }
+        let folders = RethinkStore.folders((try? planned.get()) ?? [], neededBy: items)
         let leftOut = items.filter { $0.status == .notDecided }.count
+
+        if case let .failure(error) = planned {
+            Text(error.localizedDescription).foregroundStyle(Palette.attention).fixedSize(horizontal: false, vertical: true)
+        }
 
         Text(moves.isEmpty
              ? "The logic keeps every document where it is, except any suggestion you tick below."
@@ -167,8 +172,9 @@ struct LogicPlan: View {
         if !folders.isEmpty {
             group("New Folders") {
                 ForEach(folders, id: \.code) { folder in
-                    let area = folder.newArea?.name ?? model.taxonomy?.folder(code: folder.areaCode)?.name ?? folder.areaCode
-                    ListRow(symbol: "folder.badge.plus", tint: Destination.logic.tint, title: "\(area) › \(folder.name)",
+                    ListRow(symbol: "folder.badge.plus", tint: Destination.logic.tint,
+                            title: RethinkStore.path(of: folder, planned: folders, taxonomy: model.taxonomy,
+                                                     separator: Wording.pathSeparator),
                             detail: folder.description)
                 }
             }
@@ -180,7 +186,7 @@ struct LogicPlan: View {
                 if showStaying {
                     ForEach(staying) { item in
                         ListRow(symbol: "equal.circle", tint: .secondary, title: item.fileName,
-                                detail: Wording.place(of: item.fromPath, in: model.settings?.archiveURL))
+                                detail: Wording.place(of: item.fromPath, in: model.taxonomy))
                     }
                 }
             }
@@ -221,7 +227,7 @@ struct LogicPlan: View {
 
     /// A document the plan can move: the checkbox decides, and clicking the name shows why the logic chose the place.
     @ViewBuilder private func row(_ item: RethinkItemRecord) -> some View {
-        PlanRow(item: item, archive: model.settings?.archiveURL, expanded: open == item.id) {
+        PlanRow(item: item, taxonomy: model.taxonomy, expanded: open == item.id) {
             withAnimation(.snappy) { open = open == item.id ? nil : item.id }
         }
     }
@@ -244,7 +250,7 @@ struct LogicPlan: View {
 private struct PlanRow: View {
     @Environment(AppModel.self) private var model
     let item: RethinkItemRecord
-    let archive: URL?
+    let taxonomy: TaxonomySnapshot?
     let expanded: Bool
     let toggleExpanded: () -> Void
     @State private var hovering = false
@@ -261,7 +267,7 @@ private struct PlanRow: View {
                     Text(item.fileName).lineLimit(1).truncationMode(.middle)
                         .foregroundStyle(item.selected ? .primary : .secondary)
                     Spacer(minLength: 16)
-                    Text("\(Wording.place(of: item.fromPath, in: archive)) → \(item.targetPath.map { Wording.place(of: $0, in: archive) } ?? "")")
+                    Text("\(Wording.place(of: item.fromPath, in: taxonomy)) → \(item.targetPath.map { Wording.place(of: $0, in: taxonomy) } ?? "")")
                         .foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
                 }
                 .contentShape(.rect)
@@ -279,7 +285,7 @@ private struct PlanRow: View {
 /// One decision as planning makes it: what the logic would do with the document and, opened, why.
 private struct DecisionRow: View {
     let item: RethinkItemRecord
-    let archive: URL?
+    let taxonomy: TaxonomySnapshot?
     let expanded: Bool
     let toggle: () -> Void
     @State private var hovering = false
@@ -290,7 +296,7 @@ private struct DecisionRow: View {
                 Image(systemName: item.status.symbol).foregroundStyle(item.status.tint).frame(width: Style.decisionSymbolWidth)
                 Text(item.fileName).lineLimit(1).truncationMode(.middle)
                 Spacer(minLength: 16)
-                Text(Wording.outcome(of: item, in: archive)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
+                Text(Wording.outcome(of: item, in: taxonomy)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
             }
             .padding(.horizontal, 8)
             .frame(minHeight: Style.rowHeight)

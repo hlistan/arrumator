@@ -6,21 +6,21 @@ import Testing
 
 @Suite struct LogicAndRethinkTests {
     @Test func theModelFollowsTheArchivesLogic() async throws {
-        let h = try await ClassifyHarness.make(handler: Fixtures.answering(code: nil))
+        let h = try await ClassifyHarness.make(handler: Fixtures.answering())
         defer { h.env.cleanup() }
         _ = try await h.classify(Fixtures.content("a.pdf", text: Fixtures.edpText))
-        var request = try #require(await h.mock.chatRequests.last)
+        var request = try #require(await h.mock.chatRequests.last(where: Fixtures.isDecision))
         #expect(request.allText.contains("## LOGIC") && request.allText.contains("Findability first"), "an archive starts with the built-in logic")
 
         try await h.logic.update(body: "Everything about the car goes under Vehicles, named in {{folder_language}}.")
         _ = try await h.classify(Fixtures.content("b.pdf", text: Fixtures.edpText))
-        request = try #require(await h.mock.chatRequests.last)
+        request = try #require(await h.mock.chatRequests.last(where: Fixtures.isDecision))
         #expect(!request.allText.contains("Findability first"))
         #expect(request.allText.contains("Everything about the car goes under Vehicles, named in \(h.settings.folderNamingLanguage)."))
     }
 
     @Test func rethinkingAsksTheModelAndLeavesTheDocumentsOwnFilingOut() async throws {
-        let h = try await ClassifyHarness.make(handler: Fixtures.answering(code: "11"))
+        let h = try await ClassifyHarness.make(handler: Fixtures.answering(path: ["Home", "Energy"]))
         defer { h.env.cleanup() }
         let folder = try await h.env.folder("Utilities", area: "Home", yearly: true)
         let nif = StableKey(kind: .ptNIF, value: "503504564")
@@ -36,16 +36,22 @@ import Testing
 
         let memories = try await h.store.memories(model: "bge-m3")
         let own = try #require(memories.first { $0.summaryLine.hasPrefix("edp_0.pdf") })
-        let rethought = try await h.classify(content, mode: .rethink(documentID: own.documentID))
-        #expect(rethought.decision.decidedBy == .llm)
-        let request = try #require(await h.mock.chatRequests.last)
-        #expect(request.allText.contains("edp_1.pdf |"), "other confirmed filings still advise")
-        #expect(!request.allText.contains("edp_0.pdf |"), "its own past filing would only repeat the old placement")
-        #expect(request.allText.contains("A learned rule"), "the rule that placed it directly is now advice")
+        let sink = MemoryTraceSink()
+        let rethought = try await h.classify(content, mode: .rethink(documentID: own.documentID), trace: TraceContext(traceID: 2, sink: sink))
+        #expect(rethought.decision.decidedBy == .llm, "rethinking decides again by the logic, whatever the rules say")
+        let request = try #require(await h.mock.chatRequests.last(where: Fixtures.isDecision))
+        #expect(!request.allText.contains("edp_1.pdf") && !request.allText.contains("A learned rule"),
+                "what was learned under the old arrangement never shapes the path the logic decides")
+        #expect(request.allText.contains("KNOWN CORRESPONDENTS FOUND: EDP Comercial (by stableKey)")
+                && request.allText.contains("If KNOWN CORRESPONDENTS FOUND names one that matches"), "who it is from is still known")
+        let candidates = try #require(await sink.steps.first { $0.stage == .candidates }?.output)
+        let voters = try #require(try JSONSerialization.jsonObject(with: Data(candidates.utf8)) as? [String: Any])["neighbors"] as? [[String: Any]]
+        let ids = Set((voters ?? []).compactMap { $0["id"] as? Int64 })
+        #expect(!ids.isEmpty && !ids.contains(own.id), "its own past filing would only repeat the old placement")
     }
 
     @Test func rulesFollowTheirDocumentsWhenPlacementIsRethought() async throws {
-        let h = try await ClassifyHarness.make(handler: Fixtures.answering(code: nil))
+        let h = try await ClassifyHarness.make(handler: Fixtures.answering())
         defer { h.env.cleanup() }
         let utilities = try await h.env.folder("Utilities", area: "Home")
         let energy = try await h.env.folder("Energy", area: "Home")
@@ -53,10 +59,10 @@ import Testing
         let edp = try await h.store.saveCorrespondent(Correspondent(canonicalName: "EDP", origin: .learned))
         let meo = try await h.store.saveCorrespondent(Correspondent(canonicalName: "MEO", origin: .learned))
         let follows = try await h.store.saveRule(FilingRule(
-            name: "EDP → \(utilities.code) Utilities", priority: 50, origin: .induced, predicates: [.correspondent(id: edp.id)],
+            name: "EDP → Home / Utilities", priority: 50, origin: .induced, predicates: [.correspondent(id: edp.id)],
             action: RuleAction(folderID: utilities.id, folderCode: utilities.code), support: 3))
         let scattered = try await h.store.saveRule(FilingRule(
-            name: "MEO → \(misc.code) Misc Bills", priority: 50, origin: .induced, predicates: [.correspondent(id: meo.id)],
+            name: "MEO → Home / Misc Bills", priority: 50, origin: .induced, predicates: [.correspondent(id: meo.id)],
             action: RuleAction(folderID: misc.id, folderCode: misc.code), support: 3))
         let moves = (1...3).map {
             PlacementMove(documentID: Int64($0), fromFolderID: utilities.id, toFolderID: energy.id, correspondentID: edp.id,
@@ -68,7 +74,7 @@ import Testing
 
         let rules = try await h.store.rules()
         let followed = try #require(rules.first { $0.id == follows.id })
-        #expect(followed.action.folderID == energy.id && followed.name == "EDP → \(energy.code) Energy")
+        #expect(followed.action.folderID == energy.id && followed.name == "EDP → Home / Energy", "a rule names its folder by path")
         #expect(rules.first { $0.id == scattered.id }?.enabled == false, "documents that scattered leave their rule without a home")
         let kinds = try await HistoryStore(database: h.env.database).events(limit: 10).map(\.kind)
         #expect(kinds.contains(.ruleChanged) && kinds.contains(.ruleDisabled))

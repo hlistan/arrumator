@@ -104,6 +104,30 @@ public struct DocumentStore: Sendable {
         }
     }
 
+    /// The senders of the documents filed in each folder, by the folder's id.
+    public func sendersByFolder() async throws -> [Int64: Set<Int64>] {
+        try await database.reader.read { db in
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT DISTINCT folder_id, correspondent_id FROM documents
+                WHERE folder_id IS NOT NULL AND correspondent_id IS NOT NULL AND status = ?
+                """, arguments: [DocumentStatus.filed.rawValue])
+            return rows.reduce(into: [Int64: Set<Int64>]()) { $0[$1["folder_id"], default: []].insert($1["correspondent_id"]) }
+        }
+    }
+
+    /// The types of the documents filed in each folder, by the folder's id.
+    public func typesByFolder() async throws -> [Int64: Set<DocumentType>] {
+        try await database.reader.read { db in
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT DISTINCT folder_id, doc_type FROM documents
+                WHERE folder_id IS NOT NULL AND doc_type IS NOT NULL AND status = ?
+                """, arguments: [DocumentStatus.filed.rawValue])
+            return rows.reduce(into: [Int64: Set<DocumentType>]()) { out, row in
+                if let type = DocumentType(rawValue: row["doc_type"]) { out[row["folder_id"], default: []].insert(type) }
+            }
+        }
+    }
+
     public func recentTitles(perFolder limit: Int) async throws -> [Int64: [String]] {
         try await database.reader.read { db in
             let rows = try Row.fetchAll(db, sql: """

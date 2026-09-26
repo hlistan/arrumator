@@ -25,7 +25,7 @@ public enum ArchiveChange: Sendable, Hashable {
     case documentMoved(uid: String, newPath: String)
     /// A tracked document's path no longer exists.
     case documentMissing(path: String)
-    /// A file the app does not know appeared inside a category.
+    /// A file the app does not know appeared inside a folder.
     case untrackedFile(path: String)
     /// Folders or `_about.md` changed; the taxonomy must be re-synced.
     case taxonomyChanged
@@ -124,7 +124,7 @@ public actor ArchiveWatcher {
             if FileManager.default.fileExists(atPath: path) {
                 if let uid = Xattr.get(Xattr.documentID, from: url) {
                     result.append(.documentMoved(uid: uid, newPath: path))
-                } else if isInsideCategory(url, root: root) {
+                } else if isInsideFolder(url, root: root) {
                     result.append(.untrackedFile(path: path))
                 }
             } else if event.isFile {
@@ -151,9 +151,8 @@ public actor ArchiveWatcher {
             && name != taxonomyConfig.aboutFileName && name != taxonomyConfig.indexFileName
     }
 
-    /// `root/Area/Category/[YYYY/]file`
-    private func isInsideCategory(_ url: URL, root: URL) -> Bool {
-        let depth = url.pathComponents.count - root.pathComponents.count
-        return depth == 3 || (depth == 4 && JDCode.isYearFolder(url.deletingLastPathComponent().lastPathComponent))
+    /// Inside some folder of the archive rather than loose at its top; which folder, the reconciler decides.
+    private func isInsideFolder(_ url: URL, root: URL) -> Bool {
+        url.pathComponents.count - root.pathComponents.count >= 2
     }
 }

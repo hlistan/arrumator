@@ -6,21 +6,22 @@ corrupting an index costs time, never information: the app rebuilds it from the 
 
 This is the pattern of plain-text vaults such as Obsidian, whose notes are the source of truth and whose metadata cache
 is disposable and rebuilt from the files ([Obsidian help: how Obsidian stores data](https://help.obsidian.md/Files+and+folders/How+Obsidian+stores+data)).
-It also follows the Johnny.Decimal convention of keeping a system's own files in the `00-09` area
-([standard zeros](https://johnnydecimal.com/documentation/the-standard-zeros)).
+The app's own files sit together in one `System` folder at the top of the archive, apart from the user's folders.
+It is known by its `_about.md`, whatever it is called: archives started by earlier versions have it as `00-09 System`,
+with `05 Learned`, `06 Logic` and `07 History` inside.
 
 ## What lives where
 
 | What | File | Contents |
 |---|---|---|
-| A folder | `<folder>/_about.md` | Code, name, description, year folders, what the app learned about it. |
+| A folder | `<folder>/_about.md` | Code, name, description, year folders, what it stands for in the logic that made it (`kind`: sender, subject or topic) and which logic that was (`logic`), what the app learned about it. |
 | The documents in a directory | `<directory>/_documents.md` | One entry per file in that directory: identity, original name, checksum, sender, type, date, title, language, tags, status, and the decision (who decided, how sure, why, with which logic). |
-| Senders | `00-09 System/05 Learned/_senders.md` | Names, other names, identifiers, e-mail and web domains, usual folder. |
-| Rules | `00-09 System/05 Learned/_rules.md` | Conditions, target folder, evidence, whether on, confirmed or forgotten. |
-| Corrections | `00-09 System/05 Learned/_corrections.md` | Every time you moved, renamed, approved or confirmed a document. |
-| Filing memories | `00-09 System/05 Learned/_memories.md` | Which document taught what about which folder, and how much it counts. |
-| Logic | `00-09 System/06 Logic/_logic.md` | The archive's one logic. The prompt is the file's body, so it can be edited in any editor. The front matter holds the checksum of the built-in text the logic follows, if it follows one. |
-| History | `00-09 System/07 History/_<year>-<month>.md` | One line per event, newest last. |
+| Senders | `System/Learned/_senders.md` | Names, other names, identifiers, e-mail and web domains, usual folder. |
+| Rules | `System/Learned/_rules.md` | Conditions, target folder, evidence, whether on, confirmed or forgotten. |
+| Corrections | `System/Learned/_corrections.md` | Every time you moved, renamed, approved or confirmed a document. |
+| Filing memories | `System/Learned/_memories.md` | Which document taught what about which folder, and how much it counts. |
+| Logic | `System/Logic/_logic.md` | The archive's one logic. The prompt is the file's body, so it can be edited in any editor. The front matter holds the checksum of the built-in text the logic follows, if it follows one. |
+| History | `System/History/_<year>-<month>.md` | One line per event, newest last. |
 
 Every file starts with YAML front matter holding the exact data, followed by a Markdown rendering for people. The front
 matter is what the app reads; the rendering is regenerated on every write. The logic file is the exception: its body is
@@ -94,7 +95,7 @@ not yet in the files. Documents are then updated in place from their entries and
 text, embeddings and traces stay attached; everything else recorded in files is replaced by what the files say.
 
 A rebuild reads every folder's `_about.md`, every `_documents.md`, the learned files, the logic file and the history.
-Documents whose file is not where their entry says are looked up by the identifier on the file; files in the archive
-that have no entry are taken in as adopted documents. Then, in the background and giving way to new arrivals, each
+Documents whose file is not where their entry says are looked up by the identifier on the file; files that have no entry,
+in any of your folders at any depth, are taken in as adopted documents of the folder they are in. Then, in the background and giving way to new arrivals, each
 document's text is extracted again and its embedding recomputed. Search by words and by meaning fills in as that
 proceeds; filing works from the start.

@@ -14,9 +14,10 @@ struct Review: AsyncParsableCommand {
         func run() async throws {
             let runtime = try await options.runtime()
             let docs = try await runtime.services.documents.reviewQueue()
+            let taxonomy = try await runtime.taxonomy.snapshot(root: await runtime.settings.current.archiveURL)
             options.emit(docs) {
                 docs.isEmpty ? "Nothing to review." : Terminal.table(docs.map { d in
-                    let proposal = d.decision.map { $0.folderCode ?? $0.proposedNewFolder.map { "NEW \($0.name)" } ?? "—" } ?? "—"
+                    let proposal = d.decision.flatMap { Terminal.target(of: $0, in: taxonomy) } ?? "—"
                     return ["#\(d.id ?? 0)", d.status.rawValue, proposal, Format.percent(d.confidence), d.filename,
                             d.decision?.reviewReasons.joined(separator: "; ") ?? ""]
                 })
@@ -114,30 +115,32 @@ struct Folders: AsyncParsableCommand {
             let snapshot = try await runtime.taxonomy.snapshot(root: await runtime.settings.current.archiveURL)
             options.emit(snapshot) {
                 guard !snapshot.folders.isEmpty else { return "The archive is empty; folders appear as documents arrive." }
-                return snapshot.areas.map { area in
-                    (["\(area.code) \(area.name) — \(area.description)"] + snapshot.children(of: area.code).map { f in
-                        "   \(f.code) \(f.name)\(f.yearSubfolders ? " [by year]" : "") · \(f.documentCount) docs · \(f.origin.rawValue)\n      \(f.description)"
-                    }).joined(separator: "\n")
+                return snapshot.outline().map { folder, depth in
+                    let indent = String(repeating: "   ", count: depth - 1)
+                    return "\(indent)\(folder.name)\(folder.yearSubfolders ? " [by year]" : "") · \(folder.documentCount) docs · "
+                        + "\(folder.origin.rawValue) · \(folder.code)" + (folder.description.isEmpty ? "" : "\n\(indent)   \(folder.description)")
                 }.joined(separator: "\n")
             }
         }
     }
 
     struct Create: AsyncParsableCommand {
-        static let configuration = CommandConfiguration(abstract: "Create a category (in an existing area or a new one).")
+        static let configuration = CommandConfiguration(
+            abstract: "Create a folder at any depth, with the folders above it that do not exist yet.")
         @OptionGroup var options: GlobalOptions
-        @Option(help: "Existing area code, e.g. 20-29.") var area: String?
-        @Option(help: "Name of a new area to create.") var newArea: String?
-        @Option var name: String
-        @Option var description: String
+        @Option(help: "Folder names from the top of the archive, separated by /, e.g. \"Portugal/Acme Lda/Banking\".") var path: String
+        @Option(help: "What belongs in the last folder of the path.") var description: String
         @Flag(help: "Split into year subfolders.") var yearly = false
 
         func run() async throws {
-            guard (area == nil) != (newArea == nil) else { throw ValidationError("Give exactly one of --area or --new-area") }
+            let names = path.split(separator: "/").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            guard !names.isEmpty else { throw ValidationError("Give the folder's path, e.g. --path \"Home/Utilities\"") }
             let runtime = try await options.runtime()
+            let levels = names.enumerated().map { index, name in
+                FolderLevel(name: name, description: index == names.count - 1 ? description : "")
+            }
             let folder = try await runtime.taxonomy.materialize(
-                FolderSpec(areaCode: area, newAreaName: newArea, newAreaDescription: newArea.map { "\($0)." }, name: name,
-                           description: description, yearSubfolders: yearly, yearRule: yearly ? .documentDate : nil),
+                FolderSpec(parentCode: nil, levels: levels, yearSubfolders: yearly, yearRule: yearly ? .documentDate : nil),
                 root: await runtime.settings.current.archiveURL, origin: .user)
             options.emit(folder) { "Created \(folder.relativePath)" }
         }
@@ -154,11 +157,12 @@ struct Rules: AsyncParsableCommand {
         func run() async throws {
             let runtime = try await options.runtime()
             let rules = try await runtime.learningStore.rules().filter { !$0.forgotten }
+            let senders = Correspondent.names(try await runtime.learningStore.correspondents())
             options.emit(rules) {
                 rules.isEmpty ? "No rules yet; they form as documents are filed." : Terminal.table(rules.map { r in
                     ["#\(r.id)", r.enabled ? "on" : "off", r.origin.rawValue, String(format: "%.2f", r.reliability),
                      "support \(r.support) hits \(r.hits) contra \(r.contradictions)", r.name,
-                     r.predicates.map(\.summary).joined(separator: " ∧ ")]
+                     "when " + r.condition { senders[$0] }]
                 })
             }
         }

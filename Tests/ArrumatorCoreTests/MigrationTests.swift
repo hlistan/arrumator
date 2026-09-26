@@ -9,7 +9,7 @@ import Testing
     /// Every identifier that has ever shipped, in order. Append new migrations; never rename or remove one.
     static let shipped = ["v1_initial", "v2_datesAsUnixSeconds", "v3_brainsAndRethink", "v4_renameBrainsToLogic",
                           "v5_logicEvents", "v6_archiveRecords", "v7_oneLogicPerArchive",
-                          "v8_undoForgets"]
+                          "v8_undoForgets", "v9_foldersOfAnyDepth", "v10_folderKinds"]
 
     @Test func shippedIdentifiersNeverChange() {
         let registered = AppDatabase.migrator.migrations

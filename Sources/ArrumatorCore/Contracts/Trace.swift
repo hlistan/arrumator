@@ -2,7 +2,7 @@ import Foundation
 
 public enum TraceStage: String, Sendable, Codable, CaseIterable {
     case stability, hash, dedupe, extract, ocr, vlm, entities, correspondent, rules, embed, candidates
-    case llm, validate, calibrate, name, place, index, learn, review, undo
+    case llm, judge, validate, calibrate, name, place, index, learn, review, undo
 }
 
 public enum TraceStatus: String, Sendable, Codable {

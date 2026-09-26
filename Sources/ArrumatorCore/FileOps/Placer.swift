@@ -20,8 +20,8 @@ public enum PlacementError: Error, LocalizedError {
     }
 }
 
-/// Computes where a document goes, enforcing the archive shape: `root/Area/Category[/YYYY]/file`, never deeper,
-/// never into user-only or system folders except the review and duplicate folders.
+/// Computes where a document goes: into a folder of the tree, at whatever depth, or its year folder, never into a
+/// folder that holds no documents of the user's or a system folder other than the review and duplicate folders.
 public struct Placer: Sendable {
     public let builder: FilenameBuilder
     public let operations: FileOperations
@@ -31,17 +31,18 @@ public struct Placer: Sendable {
         self.operations = operations
     }
 
-    /// - Parameter userChosen: the user picked the folder explicitly, so any category is allowed.
+    /// - Parameter userChosen: the user picked the folder explicitly, so any of the user's folders is allowed.
     public func plan(decision: FilingDecision, folderCode: String, source: SourceFile, taxonomy: TaxonomySnapshot,
                      settings: AppSettings, userChosen: Bool) throws -> PlacementPlan {
         guard let folder = taxonomy.folder(code: folderCode) else { throw PlacementError.unknownFolder(folderCode) }
         let isSystemTarget = folder.role == .needsReview || folder.role == .duplicates
-        guard folder.kind == .category, folder.acceptsFiles || isSystemTarget || (userChosen && folder.role == nil) else {
+        guard folder.acceptsFiles || isSystemTarget || (userChosen && folder.holdsUserDocuments) else {
             throw PlacementError.notFileable(folderCode)
         }
         var directory = taxonomy.url(for: folder)
         var yearFolder: String?
-        if folder.yearSubfolders, !isSystemTarget {
+        // The decision says whether this document goes in a year folder; placements from learned evidence follow the folder.
+        if decision.yearFolder ?? folder.yearSubfolders, !isSystemTarget {
             let year = (folder.yearRule == .fiscalPeriod ? decision.periodYear : nil)
                 ?? decision.year
                 ?? source.modifiedAt.map { Calendar(identifier: .gregorian).component(.year, from: $0) }

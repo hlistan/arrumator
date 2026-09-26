@@ -20,6 +20,8 @@ enum Style {
     static let cardShadowOffset: CGFloat = 4
     static let thumbnail = CGSize(width: 66, height: 88)
     static let logicEditorHeight: CGFloat = 300
+    /// How far each level of the folder tree is indented where it is listed as an outline.
+    static let outlineIndent: CGFloat = 14
     static let decisionSymbolWidth: CGFloat = 16
     /// Lines up an opened plan row's reasoning with the file name above it, past the checkbox or symbol.
     static let reasoningIndent: CGFloat = 35
@@ -118,10 +120,10 @@ extension RethinkItemStatus {
 
 /// How documents, decisions and events are put into words on screen.
 enum Wording {
-    /// What a rethink decided for a document, by area and folder name: "Home › Bills → Home › Energy".
-    static func outcome(of item: RethinkItemRecord, in archive: URL?) -> String {
-        let from = place(of: item.fromPath, in: archive)
-        let target = item.targetPath.map { place(of: $0, in: archive) }
+    /// What a rethink decided for a document, by folder path: "Home › Bills → Home › Energy".
+    static func outcome(of item: RethinkItemRecord, in taxonomy: TaxonomySnapshot?) -> String {
+        let from = place(of: item.fromPath, in: taxonomy)
+        let target = item.targetPath.map { place(of: $0, in: taxonomy) }
         return switch item.status {
         case .pending: "Being decided"
         case .move: "\(from) → \(target ?? "")"
@@ -134,37 +136,77 @@ enum Wording {
         }
     }
 
-    /// A document's place by folder code and name, and the year folder inside it: "41 Identity Documents › 2025".
-    static func place(_ place: DocumentPlace) -> String {
+    /// Separates folder names where the app shows a path.
+    static let pathSeparator = " › "
+
+    /// A folder by its path from the top of the archive: "Portugal › Acme Lda › Banking".
+    static func path(of folder: TaxonomyFolder, in taxonomy: TaxonomySnapshot) -> String {
+        taxonomy.path(of: folder, separator: pathSeparator)
+    }
+
+    /// A folder known only by its code, by path. Codes are the app's own, so a folder that has gone is named as gone,
+    /// never by its code.
+    static func path(ofCode code: String, in taxonomy: TaxonomySnapshot?) -> String {
+        taxonomy?.path(ofCode: code, separator: pathSeparator) ?? removedFolder
+    }
+
+    static let removedFolder = "a removed folder"
+
+    /// Where Ollama may answer, under the server field.
+    static let ollamaServerNote = "This Mac or a machine of yours on the local network, such as http://192.168.1.20:11434. "
+        + "Documents are read by the model there; nothing is sent beyond the local network."
+
+    /// The models section's title: where they run.
+    static func modelsRun(at url: URL?) -> String {
+        guard let url, !OllamaEndpoint.isThisMac(url) else { return "Models (all run on this Mac)" }
+        return "Models (all run on \(url.host(percentEncoded: false) ?? url.absoluteString))"
+    }
+
+    static let managementOnThisMacOnly = "The app starts and stops Ollama only on this Mac."
+
+    /// What recognising a sender is for, under what recognises it.
+    static func recognition(of sender: String) -> String {
+        "A new document showing any of these is taken to be from \(sender), so its rules can file it."
+    }
+
+    static let senderWithoutRules = "No rules yet. They form once several of its filings agree on a folder."
+
+    /// One of a sender's rules on its card: what else it asks, where it files, and how much agrees.
+    /// "document type invoice → Home › Utilities · 4 agree"
+    static func senderRule(_ rule: FilingRule, in taxonomy: TaxonomySnapshot?) -> String {
+        let others = rule.predicates.filter { if case .correspondent = $0 { false } else { true } }
+            .map { $0.summary(sender: { _ in nil }) }
+        let folder = taxonomy.flatMap { tree in tree.folder(id: rule.action.folderID).map { path(of: $0, in: tree) } } ?? removedFolder
+        return (others.isEmpty ? "everything" : others.joined(separator: " and ")) + " → \(folder) · \(rule.support) agree"
+            + (rule.enabled ? "" : " · off")
+    }
+
+    /// A document's place by folder path, and the year folder inside it: "Identity Documents › Passports › 2025".
+    static func place(_ place: DocumentPlace, in taxonomy: TaxonomySnapshot) -> String {
         switch place {
-        case let .folder(folder, year): "\(folder.code) \(folder.name)" + (year.map { " › \($0)" } ?? "")
+        case let .folder(folder, year): path(of: folder, in: taxonomy) + (year.map { pathSeparator + $0 } ?? "")
         case .incoming: "Incoming"
         case let .elsewhere(directory): directory
         case .missing: StatsService.stopReason(for: .missing).text
         }
     }
 
-    /// Where a path sits, by area and folder name without codes or year folders: "Home & Utilities › Payslips".
-    static func place(of path: String, in archive: URL?) -> String {
-        let root = (archive?.path ?? "") + "/"
-        let relative = path.hasPrefix(root) ? String(path.dropFirst(root.count)) : path
-        return relative.split(separator: "/").dropLast().map(String.init)
-            .filter { !JDCode.isYearFolder($0) }
-            .map { JDCode.parse(directoryName: $0)?.name ?? $0 }
-            .joined(separator: " › ")
+    /// Where a file sits, by folder path without year folders: "Home › Payslips". A folder a plan has yet to create
+    /// is named as its directory will be.
+    static func place(of filePath: String, in taxonomy: TaxonomySnapshot?) -> String {
+        let directory = URL(fileURLWithPath: filePath).deletingLastPathComponent()
+        if let taxonomy, let folder = taxonomy.folder(holding: directory) { return path(of: folder, in: taxonomy) }
+        let root = (taxonomy?.rootPath ?? "") + "/"
+        let relative = directory.path.hasPrefix(root) ? String(directory.path.dropFirst(root.count)) : directory.path
+        return relative.split(separator: "/").map(String.init).filter { !YearFolder.matches($0) }.joined(separator: pathSeparator)
     }
 
     /// The folder a decision points at, existing or proposed.
     /// Nil when there is nothing to accept, including a suggested folder that has since been removed.
     static func target(of decision: FilingDecision?, in taxonomy: TaxonomySnapshot?) -> String? {
         guard let decision else { return nil }
-        if let code = decision.folderCode {
-            return taxonomy?.folder(code: code).map { "\($0.code) \($0.name)" }
-        }
-        if let spec = decision.proposedNewFolder {
-            return "new folder \(spec.newAreaName.map { "\($0) › " } ?? "")\(spec.name)"
-        }
-        return nil
+        guard let taxonomy else { return decision.proposedNewFolder.map { "new folder " + $0.name } }
+        return taxonomy.destination(of: decision, separator: pathSeparator).map { ($0.isNew ? "new folder " : "") + $0.path }
     }
 
     /// The short outcome shown at the end of a document's row.
@@ -179,9 +221,9 @@ enum Wording {
             return reason ?? StatsService.stopReason(for: document.status).text
         }
         // A filed document is described by where it is; anything else by what happened, then where it is now.
-        if reason == nil, case .folder = place { return Self.place(place) }
+        if reason == nil, case .folder = place { return Self.place(place, in: taxonomy) }
         let preposition = document.status == .undone && place == .incoming ? "back in" : "in"
-        return "\(reason ?? StatsService.stopReason(for: document.status).text) · \(preposition) \(Self.place(place))"
+        return "\(reason ?? StatsService.stopReason(for: document.status).text) · \(preposition) \(Self.place(place, in: taxonomy))"
     }
 
     /// Who decided, as a small tag: nil when nobody has decided yet.

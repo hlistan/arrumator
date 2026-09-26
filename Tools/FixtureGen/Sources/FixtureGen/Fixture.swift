@@ -29,17 +29,6 @@ enum DocType: String, Decodable, Sendable {
     case payslip, letter, application, policy
     case medicalReport = "medical-report"
     case prescription, ticket, license, manual, quote, legal, other
-
-    /// English Title Case label used in renamed files.
-    var label: String {
-        switch self {
-        case .idDocument: "ID Document"
-        case .taxReturn: "Tax Return"
-        case .taxAssessment: "Tax Assessment"
-        case .medicalReport: "Medical Report"
-        default: rawValue.prefix(1).uppercased() + rawValue.dropFirst()
-        }
-    }
 }
 
 /// Soft extraction warnings the app is expected to raise (raw values match the app's `WarningCode`).
@@ -106,7 +95,6 @@ struct Expected: Decodable, Sendable {
     let date: String?
     let titleContains: [String]
     let identifiers: [String]
-    let renamed: String?
     let minBand: Band
     let warnings: [WarningCode]?
 
@@ -120,7 +108,6 @@ struct Expected: Decodable, Sendable {
             ("date", date.json { .string($0) }),
             ("title_contains", .array(titleContains.map { .string($0) })),
             ("identifiers", .array(identifiers.map { .string($0) })),
-            ("renamed", renamed.json { .string($0) }),
             ("min_band", .string(minBand.rawValue)),
         ]
         if let warnings {
@@ -265,21 +252,19 @@ struct Fixture: Sendable {
         return true
     }
 
-    /// A document the app should file under `category` and rename.
+    /// A document the app should file under `category`, a label shared by the fixtures that belong together.
     static func filed(
         _ file: String, _ lang: Language, _ kind: FixtureKind, core: Bool,
-        category: String, year: Int?, type: DocType, correspondent: String, date: Day, title: String,
+        category: String, year: Int?, type: DocType, correspondent: String, date: Day,
         titleContains: [String], identifiers: [Identifier] = [], minBand: Band = .check,
         acceptAlso: AcceptAlso? = nil, invalidIdentifiers: [Identifier] = [], warnings: [WarningCode] = [],
         encoding: TextEncoding? = nil, payload: Payload
     ) -> Fixture {
         precondition(identifiers.allSatisfy(\.isChecksumValid), "\(file): an expected identifier fails its checksum")
         precondition(!invalidIdentifiers.contains(where: \.isChecksumValid), "\(file): a distractor passes its checksum")
-        let fileExtension = (file as NSString).pathExtension.lowercased()
         let expected = Expected(
             category: category, yearFolder: year.map(String.init), docType: type, correspondent: correspondent,
             date: date.iso, titleContains: titleContains, identifiers: identifiers.map(\.token),
-            renamed: "\(date.iso) \(correspondent) - \(type.label) - \(title).\(fileExtension)",
             minBand: minBand, warnings: warnings.isEmpty ? nil : warnings)
         let record = FixtureRecord(
             file: file, lang: lang, kind: kind, core: core, expected: expected, acceptAlso: acceptAlso,
@@ -288,7 +273,7 @@ struct Fixture: Sendable {
         return Fixture(record: record, payload: payload)
     }
 
-    /// A file the app must hold back (Needs review or Duplicates) and leave unrenamed.
+    /// A file the app must hold back: `needs-review` or `duplicates`, left with its own name.
     static func heldBack(
         _ file: String, _ lang: Language, _ kind: FixtureKind, category: String, type: DocType?,
         titleContains: [String] = [], warnings: [WarningCode] = [], duplicateOf: String? = nil,
@@ -296,7 +281,7 @@ struct Fixture: Sendable {
     ) -> Fixture {
         let expected = Expected(
             category: category, yearFolder: nil, docType: type, correspondent: nil, date: nil,
-            titleContains: titleContains, identifiers: [], renamed: nil, minBand: .review,
+            titleContains: titleContains, identifiers: [], minBand: .review,
             warnings: warnings.isEmpty ? nil : warnings)
         let record = FixtureRecord(
             file: file, lang: lang, kind: kind, core: true, expected: expected, acceptAlso: nil,

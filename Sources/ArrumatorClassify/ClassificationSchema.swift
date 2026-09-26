@@ -2,13 +2,13 @@ import ArrumatorCore
 import Foundation
 
 /// JSON schemas sent as Ollama `format`. Property order is deliberate: the model first states its evidence, then
-/// describes the ideal home a well-organised archive would give this document, and only then maps that ideal onto
-/// the existing folders (or creates it); the file name comes after the folder so it can follow that folder's naming
-/// pattern. Only string/number/array/enum types are used, which every grammar backend supports.
+/// describes the home the logic gives this document, as a path of folders from the top of the archive; the file name
+/// comes after the folder so it can follow that folder's naming pattern. The app, not the model, maps the path onto
+/// the folders that exist. Only string/number/object/array/enum types are used, which every grammar backend supports.
 public enum ClassificationSchema {
-    public static let newCode = "NEW"
     static let yes = "yes"
     static let no = "no"
+    static let unsure = "unsure"
 
     static func string(_ enumValues: [String]? = nil) -> JSONValue {
         var e: [JSONEntry] = [JSONEntry("type", "string")]
@@ -28,26 +28,32 @@ public enum ClassificationSchema {
         ])
     }
 
-    public static func classify(folders: [String], areas: [String], languages: [String], maxTags: Int) -> JSONValue {
+    public static func classify(languages: [String], maxTags: Int, maxDepth: Int) -> JSONValue {
         object([
             JSONEntry("rationale", string()),
             JSONEntry("correspondent", string()),
+            JSONEntry("subject", string()),
             JSONEntry("document_type", string(DocumentType.allCases.map(\.rawValue))),
             JSONEntry("document_date", string()),
             JSONEntry("period_year", string()),
             JSONEntry("language", string(languages + ["other"])),
             JSONEntry("title", string()),
             JSONEntry("tags", stringArray(maxItems: maxTags)),
-            JSONEntry("ideal_area", string()),
-            JSONEntry("ideal_area_description", string()),
-            JSONEntry("ideal_category", string()),
-            JSONEntry("ideal_category_description", string()),
-            JSONEntry("ideal_year_folders", string([no, yes])),
-            JSONEntry("folder_code", string(folders + [newCode])),
-            JSONEntry("new_folder_area_code", string([""] + areas + [newCode])),
+            JSONEntry("ideal_path", .orderedObject([
+                JSONEntry("type", "array"),
+                JSONEntry("items", object([JSONEntry("name", string()), JSONEntry("description", string())])),
+                JSONEntry("minItems", .number(1)),
+                JSONEntry("maxItems", .number(Double(maxDepth))),
+            ])),
+            JSONEntry("ideal_year_folder", string([no, yes])),
             JSONEntry("file_name", string()),
             JSONEntry("confidence", .orderedObject([JSONEntry("type", "number")])),
         ])
+    }
+
+    /// Whether a decided folder is one that exists: "yes", "no" or "unsure".
+    public static func sameFolder() -> JSONValue {
+        object([JSONEntry("same", string([yes, no, unsure]))])
     }
 
     public static func folderDescription(maxExamples: Int) -> JSONValue {
@@ -73,37 +79,50 @@ struct FileNameAnswer: Decodable {
 public struct ModelDecisionAnswer: Sendable, Codable, Hashable {
     public var rationale: String
     public var correspondent: String
+    /// Whom the document is about or addressed to, as it names them; "" when it does not say.
+    public var subject: String
     public var documentType: String
     public var documentDate: String
     public var periodYear: String
     public var language: String
     public var title: String
     public var tags: [String]
-    public var idealArea: String
-    public var idealAreaDescription: String
-    public var idealCategory: String
-    public var idealCategoryDescription: String
-    public var idealYearFolders: String
-    public var folderCode: String
-    public var newFolderAreaCode: String
+    public var idealPath: [ModelFolderLevel]
+    public var idealYearFolder: String
     public var fileName: String
     public var confidence: Double
 
     enum CodingKeys: String, CodingKey {
-        case rationale, correspondent
+        case rationale, correspondent, subject
         case documentType = "document_type"
         case documentDate = "document_date"
         case periodYear = "period_year"
         case language, title, tags
-        case idealArea = "ideal_area"
-        case idealAreaDescription = "ideal_area_description"
-        case idealCategory = "ideal_category"
-        case idealCategoryDescription = "ideal_category_description"
-        case idealYearFolders = "ideal_year_folders"
-        case folderCode = "folder_code"
-        case newFolderAreaCode = "new_folder_area_code"
+        case idealPath = "ideal_path"
+        case idealYearFolder = "ideal_year_folder"
         case fileName = "file_name"
         case confidence
+    }
+}
+
+/// One folder of the path the model decides by the logic. What it stands for is not the model's to say: the app
+/// works it out from what the document is identified as (`FilingClassifier.marked`).
+public struct ModelFolderLevel: Sendable, Codable, Hashable {
+    public var name: String
+    public var description: String
+}
+
+/// The model's answer to whether a decided folder is one that exists.
+public struct SameFolderAnswer: Sendable, Codable, Hashable {
+    public var same: String
+
+    /// true, false, or nil when the model could not tell.
+    public var verdict: Bool? {
+        switch same {
+        case ClassificationSchema.yes: true
+        case ClassificationSchema.no: false
+        default: nil
+        }
     }
 }
 
@@ -115,11 +134,10 @@ public struct FolderDescriptionAnswer: Sendable, Codable, Hashable {
 /// A validated model decision with normalised values and notes on what was corrected.
 public struct ValidatedDecision: Sendable, Codable, Hashable {
     public var raw: ModelDecisionAnswer
-    /// Existing folder, or nil when `newFolder` is set.
-    public var folderCode: String?
-    public var newFolder: FolderSpec?
-    /// The home a well-organised archive would give this document, as the model described it.
-    public var ideal: FolderSpec
+    /// The home the logic gives this document, from the top of the archive down, as the model described it.
+    public var ideal: [FolderLevel]
+    /// This document goes in a year folder inside that home.
+    public var yearFolder: Bool
     public var documentType: DocumentType
     public var documentDate: String?
     public var periodYear: Int?
@@ -143,15 +161,24 @@ public enum AnswerValidationError: Error, LocalizedError, Hashable {
 
 /// Parses and checks model output. Recoverable issues are normalised; violations go back to the model for repair.
 public struct AnswerValidator: Sendable {
-    public let taxonomy: TaxonomySnapshot
     public let titleMaxChars: Int
     public let maxTags: Int
     public let languages: [String]
     public let plausibleYears: ClosedRange<Int>
+    public let maxDepth: Int
+    /// Cleans folder names as file names are cleaned: no path separators or control characters reach a directory.
+    public let names: FilenameBuilder
+    /// The archive's logic, folded for comparison: a path that repeats its own names for its levels is no answer.
+    public let logic: String?
+    /// The logic's names for its levels, where it lays them out as a sequence ("Jurisdiction / Subject / …"), folded.
+    public let levelNames: [String]
 
-    public init(taxonomy: TaxonomySnapshot, config: ClassificationConfig, entities: EntityConfig, languages: [String],
-                now: Date = Date()) {
-        self.taxonomy = taxonomy
+    public init(config: ClassificationConfig, entities: EntityConfig, naming: NamingConfig, languages: [String], maxDepth: Int,
+                logic: String?, now: Date = Date()) {
+        self.maxDepth = maxDepth
+        self.logic = logic.map(Self.folded)
+        levelNames = logic.map(Self.levelNames(in:)) ?? []
+        names = FilenameBuilder(config: naming)
         titleMaxChars = config.titleMaxChars
         maxTags = config.maxTags
         self.languages = languages
@@ -172,55 +199,7 @@ public struct AnswerValidator: Sendable {
         }
         var problems: [String] = []
         var notes: [String] = []
-        var category = raw.idealCategory.trimmingCharacters(in: .whitespacesAndNewlines)
-        var areaName = raw.idealArea.trimmingCharacters(in: .whitespacesAndNewlines)
-        // The tree is shown as "10-19 Insurance & Legal", and models echo it so. An echoed area code that exists is
-        // that area, whatever the name; any other code is dropped, never made part of a new folder's name.
-        var idealAreaCode: String?
-        if let echo = JDCode.echoedCode(in: areaName), JDCode.isArea(echo.code) {
-            areaName = echo.name
-            if taxonomy.folder(code: echo.code)?.kind == .area { idealAreaCode = echo.code }
-            notes.append("ideal_area \(raw.idealArea) → \(idealAreaCode.map { "area \($0)" } ?? echo.name)")
-        }
-        if let echo = JDCode.echoedCode(in: category), JDCode.isCategory(echo.code),
-           taxonomy.folder(code: echo.code) != nil || (idealAreaCode != nil && JDCode.area(of: echo.code) == idealAreaCode) {
-            category = echo.name
-            notes.append("ideal_category \(raw.idealCategory) → \(echo.name)")
-        }
-        if category.isEmpty { problems.append("ideal_category must name the category this document belongs to") }
-        let normalizedCategory = category.lowercased().replacingOccurrences(of: " ", with: "-")
-        if DocumentType(rawValue: normalizedCategory) != nil {
-            problems.append("ideal_category must be a life topic such as \"Identity Documents\" or \"Medical Records\", not a document_type value")
-        }
-        if !category.isEmpty, category.caseInsensitiveCompare(areaName) == .orderedSame {
-            problems.append("ideal_category must be a specific topic inside ideal_area, not the area itself")
-        }
-        if areaName.isEmpty { problems.append("ideal_area must name the area this document belongs to") }
-        if (category + areaName).contains("/") || (category + areaName).contains(":") {
-            problems.append("ideal_area and ideal_category must not contain / or :")
-        }
-        let yearly = raw.idealYearFolders == ClassificationSchema.yes
-        var ideal = FolderSpec(areaCode: idealAreaCode, newAreaName: idealAreaCode == nil ? areaName : nil,
-                               newAreaDescription: idealAreaCode == nil ? raw.idealAreaDescription : nil, name: category,
-                               description: raw.idealCategoryDescription, yearSubfolders: yearly, yearRule: yearly ? .documentDate : nil)
-        var folderCode: String?
-        var newFolder: FolderSpec?
-        if raw.folderCode == ClassificationSchema.newCode {
-            if raw.newFolderAreaCode == ClassificationSchema.newCode || raw.newFolderAreaCode.isEmpty {
-                newFolder = ideal
-            } else if taxonomy.folder(code: raw.newFolderAreaCode)?.kind == .area {
-                ideal.areaCode = raw.newFolderAreaCode
-                ideal.newAreaName = nil
-                ideal.newAreaDescription = nil
-                newFolder = ideal
-            } else {
-                problems.append("new_folder_area_code must be one of the AREAS codes or NEW")
-            }
-        } else if taxonomy.folder(code: raw.folderCode)?.acceptsFiles == true {
-            folderCode = raw.folderCode
-        } else {
-            problems.append("folder_code \(raw.folderCode) is not an existing folder code or NEW")
-        }
+        let (ideal, trailingYear) = idealPath(raw.idealPath, problems: &problems, notes: &notes)
         guard problems.isEmpty else { throw AnswerValidationError.invalid(problems) }
         let type = DocumentType(lenient: raw.documentType)
         if type.rawValue != raw.documentType { notes.append("document_type \(raw.documentType) → \(type.rawValue)") }
@@ -232,9 +211,74 @@ public struct AnswerValidator: Sendable {
         var seen = Set<String>()
         let tags = Array(raw.tags.map { $0.lowercased().trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty && seen.insert($0).inserted }.prefix(maxTags))
-        return ValidatedDecision(raw: r, folderCode: folderCode, newFolder: newFolder, ideal: ideal, documentType: type, documentDate: date,
+        return ValidatedDecision(raw: r, ideal: ideal, yearFolder: trailingYear || raw.idealYearFolder == ClassificationSchema.yes,
+                                 documentType: type,
+                                 documentDate: date,
                                  periodYear: period, tags: tags, language: languages.contains(raw.language) ? raw.language : "other",
                                  confidence: min(1, max(0, raw.confidence)), notes: notes)
+    }
+
+    /// The folders of the ideal path, normalised; what cannot be a folder's name goes back to the model for repair.
+    /// A logic may spell out the year as the last level ("… / Institution / [YYYY Year]"): a trailing year is the year
+    /// folder, not a folder, so it is taken off the path and asks for one. A name is cleaned the way file names are,
+    /// so "Global / Cross-Border" becomes "Global - Cross-Border", and a level that repeats the one above is dropped.
+    private func idealPath(_ path: [ModelFolderLevel], problems: inout [String], notes: inout [String]) -> (levels: [FolderLevel], yearFolder: Bool) {
+        var path = path
+        var trailingYear = false
+        while let last = path.last, path.count > 1, YearFolder.matches(last.name.trimmingCharacters(in: .whitespacesAndNewlines)) {
+            path.removeLast()
+            trailingYear = true
+        }
+        if trailingYear { notes.append("the year at the end of ideal_path is its year folder") }
+        if path.isEmpty { problems.append("ideal_path must name at least one folder") }
+        var levels: [FolderLevel] = []
+        for (index, level) in path.enumerated() {
+            let name = names.sanitize(level.name)
+            let at = "ideal_path[\(index)]"
+            if name != level.name.trimmingCharacters(in: .whitespacesAndNewlines) { notes.append("\(at).name “\(level.name)” → “\(name)”") }
+            if name.isEmpty { problems.append("\(at).name must not be empty") }
+            if DocumentType(rawValue: name.lowercased().replacingOccurrences(of: " ", with: "-")) != nil {
+                problems.append("\(at).name must be a subject such as \"Identity Documents\" or \"Banking\", not a document_type value")
+            }
+            if YearFolder.matches(name) { problems.append("\(at).name must not be a year; ideal_year_folder asks for the year folder") }
+            if names(levelNames, include: name) {
+                problems.append("\(at).name \"\(name)\" is the LOGIC's own name for a level; name the folder with what that level is for this document")
+            }
+            if let above = levels.last, TaxonomyStore.sameName(above.name, name) {
+                notes.append("\(at).name repeats the folder above it and is dropped")
+                continue
+            }
+            levels.append(FolderLevel(name: name, description: level.description.trimmingCharacters(in: .whitespacesAndNewlines)))
+        }
+        if levels.count > maxDepth { problems.append("ideal_path has \(levels.count) folders; the archive allows at most \(maxDepth)") }
+        if levels.count > 1, let logic, logic.contains(Self.folded(levels.map(\.name).joined(separator: " / "))) {
+            problems.append("ideal_path repeats the LOGIC's own names for its levels; name each folder with what that level is for this document")
+        }
+        return (levels, trailingYear)
+    }
+
+    /// Where the logic lays its levels out as a sequence of three or more names separated by " / ", those names;
+    /// brackets are dropped. The first may end a sentence ("Build paths as Jurisdiction"), so its last word counts too.
+    static func levelNames(in logic: String) -> [String] {
+        let trimmed = CharacterSet(charactersIn: "[](){}.,;:*- ").union(.whitespaces)
+        return logic.split(whereSeparator: \.isNewline).flatMap { line -> [String] in
+            let parts = line.components(separatedBy: " / ").map { folded($0.trimmingCharacters(in: trimmed)) }
+            guard parts.count >= 3, let first = parts.first else { return [] }
+            return parts + (first.split(separator: " ").last.map { [String($0)] } ?? [])
+        }
+    }
+
+    private func names(_ labels: [String], include name: String) -> Bool { labels.contains(Self.folded(name)) }
+
+    static func folded(_ text: String) -> String {
+        text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+    }
+
+    /// The verdict in an answer to whether two folders are the same.
+    public static func sameFolder(_ text: String) throws -> Bool? {
+        do { return try JSONDecoder().decode(SameFolderAnswer.self, from: Data(stripThinking(text).utf8)).verdict } catch {
+            throw AnswerValidationError.notJSON(String(describing: error))
+        }
     }
 
     /// The file name in an answer that only names a document.

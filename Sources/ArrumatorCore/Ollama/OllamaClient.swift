@@ -1,6 +1,7 @@
 import Foundation
 
-/// URLSession-based Ollama client restricted to loopback hosts.
+/// URLSession-based Ollama client for one server, which `OllamaEndpoint` has checked is on this Mac or the local
+/// network. Its session refuses every other host.
 public struct OllamaClient: OllamaAPI {
     public let baseURL: URL
     private let config: OllamaConfig
@@ -8,15 +9,11 @@ public struct OllamaClient: OllamaAPI {
     private let decoder: JSONDecoder
     private let encoder: JSONEncoder
 
-    public init(config: OllamaConfig) throws {
-        guard let url = URL(string: config.baseURL), let host = url.host()?.lowercased() else {
-            throw OllamaError.invalidBaseURL(config.baseURL)
+    public init(config: OllamaConfig, baseURL url: URL) throws {
+        guard let host = url.host(percentEncoded: false)?.lowercased(), OllamaEndpoint.isLocal(host: host) else {
+            throw OllamaError.nonLocalHost(url.host() ?? url.absoluteString)
         }
-        let allowed = Set(config.allowedHosts.map { $0.lowercased() })
-        guard allowed.contains(host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))) else {
-            throw OllamaError.nonLocalHost(host)
-        }
-        NetworkGuardProtocol.configure(allowedHosts: config.allowedHosts)
+        NetworkGuardProtocol.configure(allowedHosts: [host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))])
         baseURL = url
         self.config = config
         session = URLSession(configuration: NetworkGuardProtocol.guardedConfiguration())

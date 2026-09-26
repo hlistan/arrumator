@@ -1,8 +1,8 @@
 import ArrumatorCore
 import SwiftUI
 
-/// One folder of the archive, like a Things area or project: its description as the notes under the title, then its
-/// folders (for an area) or its documents (for a category).
+/// One folder of the archive, like a Things area or project: its description as the notes under the title, then the
+/// folders inside it and the documents filed in it.
 struct FolderPage: View {
     @Environment(AppModel.self) private var model
     let folderID: Int64
@@ -13,8 +13,9 @@ struct FolderPage: View {
 
     var body: some View {
         if let folder {
-            Page(title: folder.name, symbol: folder.kind == .area ? "shippingbox.fill" : "folder.fill", tint: .secondary,
-                 accessory: folder.code, notes: folder.description) {
+            Page(title: folder.name, symbol: "folder.fill", tint: .secondary,
+                 accessory: model.taxonomy.flatMap { taxonomy in folder.parentCode.flatMap(taxonomy.folder(code:)).map { Wording.path(of: $0, in: taxonomy) } },
+                 notes: folder.description) {
                 HStack(spacing: 14) {
                     Button("Edit Description…") { editing = true }
                     Button("Show in Finder") { if let taxonomy = model.taxonomy { model.open(taxonomy.url(for: folder).path) } }
@@ -22,11 +23,8 @@ struct FolderPage: View {
                 }
                 .buttonStyle(.link)
                 .font(.callout)
-                if folder.kind == .area {
-                    categories(of: folder)
-                } else {
-                    contents(of: folder)
-                }
+                subfolders(of: folder)
+                contents(of: folder)
             }
             .task(id: model.activity) { await load(folder) }
             .sheet(isPresented: $editing) { FolderEditor(folder: folder) { editing = false }.environment(model) }
@@ -35,15 +33,14 @@ struct FolderPage: View {
         }
     }
 
-    private func categories(of area: TaxonomyFolder) -> some View {
-        let children = model.taxonomy?.children(of: area.code).filter { $0.role == nil } ?? []
-        return PageSection("Folders") {
-            if children.isEmpty {
-                Text("No folders yet.").foregroundStyle(.secondary).padding(.vertical, 6)
-            }
-            ForEach(children) { child in
-                ListRow(symbol: "folder", tint: .secondary, title: child.name, detail: child.description)
-                    .onTapGesture { model.go(.folder(child.id)) }
+    @ViewBuilder private func subfolders(of folder: TaxonomyFolder) -> some View {
+        let children = model.taxonomy?.children(of: folder.code).filter(\.holdsUserDocuments) ?? []
+        if !children.isEmpty {
+            PageSection("Folders") {
+                ForEach(children) { child in
+                    ListRow(symbol: "folder", tint: .secondary, title: child.name, detail: child.description)
+                        .onTapGesture { model.go(.folder(child.id)) }
+                }
             }
         }
     }
@@ -52,7 +49,7 @@ struct FolderPage: View {
         if !folder.learnedCorrespondents.isEmpty {
             Text("Usually from " + folder.learnedCorrespondents.joined(separator: ", ")).font(.callout).foregroundStyle(.secondary)
         }
-        if documents.isEmpty {
+        if documents.isEmpty, model.taxonomy?.children(of: folder.code).contains(where: \.holdsUserDocuments) != true {
             EmptyState(symbol: "doc", text: "Nothing filed here yet.")
         } else {
             VStack(alignment: .leading, spacing: 0) { DocumentList(documents: documents, detail: .document) }
@@ -60,7 +57,6 @@ struct FolderPage: View {
     }
 
     private func load(_ folder: TaxonomyFolder) async {
-        guard folder.kind != .area else { return }
         documents = await model.load("Load documents") {
             try await $0.services.documents.list(DocumentFilter(folderIDs: [folder.id]), order: .documentDate,
                                                  limit: $0.config.interface.pageSize)

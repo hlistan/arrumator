@@ -18,7 +18,7 @@ public struct PromptLibrary: Sendable {
     private let templates: [String: String]
 
     public static func bundled() throws -> PromptLibrary {
-        let names = ["organizing-principles", "field-rules", "file-name-rule", "classify-system", "classify-user", "repair-user",
+        let names = ["organizing-principles", "field-rules", "file-name-rule", "classify-system", "classify-user", "judge-system", "judge-user", "repair-user",
                      "name-system", "name-user", "describe-folder-system", "describe-folder-user", "absorb-folder-system",
                      "absorb-folder-user"]
         var templates: [String: String] = [:]

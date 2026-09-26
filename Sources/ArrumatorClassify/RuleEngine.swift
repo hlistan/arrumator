@@ -22,11 +22,14 @@ public struct RuleHit: Sendable, Codable, Hashable {
 /// Deterministic, user-editable filing rules evaluated before the model (and, for document-type rules, after it).
 public struct RuleEngine: Sendable {
     public let rules: [FilingRule]
+    /// Senders' names by id, so the trace says which sender a condition is about.
+    public let senderNames: [Int64: String]
     public let ruleMinimumStrength: Double
     public let textScanChars: Int
 
-    public init(rules: [FilingRule], config: ClassificationConfig) {
+    public init(rules: [FilingRule], senders: [Correspondent], config: ClassificationConfig) {
         self.rules = rules.filter(\.enabled).sorted { ($0.priority, $0.createdAt) < ($1.priority, $1.createdAt) }
+        senderNames = Correspondent.names(senders)
         ruleMinimumStrength = config.correspondentStrength.ruleMinimum
         textScanChars = config.ruleTextScanChars
     }
@@ -49,7 +52,7 @@ public struct RuleEngine: Sendable {
         var hit: RuleHit?
         for rule in candidates {
             let preds = rule.predicates.map { p in
-                PredicateEvaluation(predicate: p.summary, matched: holds(p, content: content, matches: matches, documentType: documentType))
+                PredicateEvaluation(predicate: p.summary(sender: { senderNames[$0] }), matched: holds(p, content: content, matches: matches, documentType: documentType))
             }
             let matched = !preds.isEmpty && preds.allSatisfy(\.matched)
             evaluations.append(RuleEvaluation(ruleID: rule.id, name: rule.name, matched: matched, predicates: preds))

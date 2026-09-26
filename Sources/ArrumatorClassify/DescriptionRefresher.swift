@@ -35,15 +35,15 @@ public struct DescriptionRefresher: Sendable {
         guard !memories.isEmpty else { return nil }
         let excerpts = try await store.excerpts(documentIDs: Array(memories.prefix(config.excerptSamples).map(\.documentID)),
                                                 maxChars: config.excerptChars)
-        let neighbours = taxonomy.children(of: folder.parentCode ?? "").filter { $0.code != folder.code }
-            .map { "- \($0.code) \($0.name): \($0.description)" }.joined(separator: "\n")
+        let neighbours = taxonomy.children(of: folder.parentCode).filter { $0.holdsUserDocuments && $0.code != folder.code }
+            .map { "- \($0.name): \($0.description)" }.joined(separator: "\n")
         let documents = memories.map { m in
             "- \(m.summaryLine)" + (excerpts[m.documentID].map { "\n  \($0.replacingOccurrences(of: "\n", with: " "))" } ?? "")
         }.joined(separator: "\n")
         let system = try library.render("describe-folder-system", ["folder_language": language,
                                                                    "max_examples": String(config.exampleCount)])
         let user = try library.render("describe-folder-user", [
-            "folder": "\(folder.code) \(folder.name)", "description": folder.description,
+            "folder": "\(taxonomy.path(of: folder))", "description": folder.description,
             "neighbours": neighbours.isEmpty ? "(none)" : neighbours, "documents": documents,
         ])
         let request = OllamaChatRequest(model: model, messages: [.system(system), .user(user)],
@@ -55,7 +55,7 @@ public struct DescriptionRefresher: Sendable {
                                               from: Data(AnswerValidator.stripThinking(response.message.content).utf8))
         try await store.setMeta(Self.counterKey(folder.id), "0")
         try await store.setMeta(Self.lastRunKey(folder.id), String(Date().timeIntervalSince1970))
-        let title = "Improve description of \(folder.code) \(folder.name)"
+        let title = "Improve description of \(taxonomy.path(of: folder))"
         if try await store.hasPendingProposal(kind: .folderDescription, folderID: folder.id, title: title) { return nil }
         let payload = DescriptionProposal(folderID: folder.id, folderCode: folder.code, oldDescription: folder.description,
                                           newDescription: answer.description, examples: answer.examples,
@@ -84,17 +84,17 @@ public struct FolderAbsorber: Sendable {
 
     public func propose(folder: TaxonomyFolder, taxonomy: TaxonomySnapshot, model: String, keepAlive: String,
                         numCtx: Int, language: String) async throws {
-        let title = "Describe new folder \(folder.code) \(folder.name)"
+        let title = "Describe new folder \(taxonomy.path(of: folder))"
         if try await store.hasPendingProposal(kind: .newFolder, folderID: folder.id, title: title) { return }
         let dir = taxonomy.url(for: folder)
         let files = ((try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? [])
             .filter { skip.ignoreReason($0) == nil }.prefix(config.absorbSampleFiles).map(\.lastPathComponent)
-        let neighbours = taxonomy.children(of: folder.parentCode ?? "").filter { $0.code != folder.code }
-            .map { "- \($0.code) \($0.name): \($0.description)" }.joined(separator: "\n")
+        let neighbours = taxonomy.children(of: folder.parentCode).filter { $0.holdsUserDocuments && $0.code != folder.code }
+            .map { "- \($0.name): \($0.description)" }.joined(separator: "\n")
         let system = try library.render("absorb-folder-system", ["folder_language": language,
                                                                  "max_examples": String(config.descriptionRefresh.exampleCount)])
         let user = try library.render("absorb-folder-user", [
-            "folder": "\(folder.code) \(folder.name)", "neighbours": neighbours.isEmpty ? "(none)" : neighbours,
+            "folder": "\(taxonomy.path(of: folder))", "neighbours": neighbours.isEmpty ? "(none)" : neighbours,
             "documents": files.isEmpty ? "(empty folder)" : files.map { "- \($0)" }.joined(separator: "\n"),
         ])
         let request = OllamaChatRequest(model: model, messages: [.system(system), .user(user)],

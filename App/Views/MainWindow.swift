@@ -46,7 +46,8 @@ struct MainWindow: View {
 struct Sidebar: View {
     @Environment(AppModel.self) private var model
 
-    private var areas: [TaxonomyFolder] { model.taxonomy?.areas.filter { $0.origin != .system } ?? [] }
+    /// The user's folders as a tree the sidebar can fold open, as deep as the archive goes.
+    private var tree: [FolderNode] { model.taxonomy.map { FolderNode.tree(of: $0) } ?? [] }
 
     var body: some View {
         List(selection: Binding(get: { model.destination }, set: { if let d = $0 { model.go(d) } })) {
@@ -61,13 +62,10 @@ struct Sidebar: View {
                     .tag(destination)
                 }
             }
-            if !areas.isEmpty {
+            if !tree.isEmpty {
                 Section("Archive") {
-                    ForEach(areas) { area in
-                        Label(area.name, systemImage: "shippingbox").tag(Destination.folder(area.id))
-                        ForEach(model.taxonomy?.children(of: area.code).filter { $0.role == nil } ?? []) { folder in
-                            Label(folder.name, systemImage: "folder").padding(.leading, 12).tag(Destination.folder(folder.id))
-                        }
+                    OutlineGroup(tree, children: \.children) { node in
+                        Label(node.folder.name, systemImage: "folder").tag(Destination.folder(node.folder.id))
                     }
                 }
             }
@@ -134,5 +132,20 @@ struct Sidebar: View {
         .buttonStyle(.borderless)
         .foregroundStyle(.secondary)
         .padding(.horizontal, 12).padding(.vertical, 9)
+    }
+}
+
+/// A folder of the sidebar's tree and the folders inside it; nil for none, so it shows no disclosure triangle.
+struct FolderNode: Identifiable, Hashable {
+    let folder: TaxonomyFolder
+    let children: [FolderNode]?
+    var id: Int64 { folder.id }
+
+    static func tree(of taxonomy: TaxonomySnapshot, inside code: String? = nil) -> [FolderNode] {
+        let folders = code == nil ? taxonomy.topLevel : taxonomy.children(of: code).filter(\.holdsUserDocuments)
+        return folders.map { folder in
+            let inside = tree(of: taxonomy, inside: folder.code)
+            return FolderNode(folder: folder, children: inside.isEmpty ? nil : inside)
+        }
     }
 }

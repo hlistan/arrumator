@@ -43,16 +43,24 @@ public struct TestEnvironment: Sendable {
         return url
     }
 
-    /// Creates a category (and its area) the way the app does on demand.
+    /// Creates a folder inside a top-level one named `area`, the way the app does on demand.
     @discardableResult
     public func folder(_ name: String, area: String, yearly: Bool = false, description: String? = nil) async throws -> TaxonomyFolder {
-        let snapshot = try await taxonomy.snapshot(root: archive)
-        let existingArea = snapshot.areas.first { $0.name == area }
-        return try await taxonomy.materialize(
-            FolderSpec(areaCode: existingArea?.code, newAreaName: existingArea == nil ? area : nil,
-                       newAreaDescription: existingArea == nil ? "\(area) documents." : nil, name: name,
-                       description: description ?? "\(name) documents.", yearSubfolders: yearly, yearRule: yearly ? .documentDate : nil),
-            root: archive, origin: .learned)
+        try await folder(path: [area, name], yearly: yearly, description: description)
+    }
+
+    /// Creates the folders along `path`, outermost first, reusing those that exist, and returns the last.
+    @discardableResult
+    /// `kinds` says, level by level, what the folders stand for in the logic with `LogicStore.version` `logic`.
+    public func folder(path: [String], yearly: Bool = false, description: String? = nil, kinds: [LevelKind] = [],
+                       logic: String? = nil) async throws -> TaxonomyFolder {
+        let levels = path.enumerated().map { index, name in
+            FolderLevel(name: name, description: index == path.count - 1 ? (description ?? "\(name) documents.") : "\(name) documents.",
+                        kind: kinds.indices.contains(index) ? kinds[index] : nil)
+        }
+        return try await taxonomy.materialize(FolderSpec(parentCode: nil, levels: levels, yearSubfolders: yearly,
+                                                         yearRule: yearly ? .documentDate : nil, logic: logic),
+                                              root: archive, origin: .learned)
     }
 }
 

@@ -4,19 +4,19 @@ import Testing
 
 @Suite struct AboutFileTests {
     func sample() -> AboutFile {
-        AboutFile(definition: FolderDefinition(code: "32", area: "30-39", name: "Utilities",
+        AboutFile(definition: FolderDefinition(code: "F32", name: "Utilities",
                                                description: "Electricity, gas and water invoices; квитанции ЖКХ.",
                                                yearSubfolders: true, yearRule: .documentDate, autoFile: true, origin: .learned),
-                  body: "# 32 Utilities\n\n## What belongs here\nBills.")
+                  body: "# Utilities\n\n## What belongs here\nBills.")
     }
 
     @Test func roundTripAndPristine() throws {
         let text = try sample().render(hash: .recompute)
         let parsed = try AboutFile.parse(text, path: "t")
-        #expect(parsed.definition.code == "32")
+        #expect(parsed.definition.code == "F32")
         #expect(parsed.definition.description.contains("квитанции"))
         #expect(parsed.definition.yearRule == .documentDate)
-        #expect(parsed.body.hasPrefix("# 32 Utilities"))
+        #expect(parsed.body.hasPrefix("# Utilities"))
         #expect(parsed.isPristine)
     }
 

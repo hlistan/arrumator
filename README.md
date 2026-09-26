@@ -6,9 +6,11 @@ Drop any file into your **Incoming** folder (PDF, scans, photos, screenshots, Wo
 Arrumator reads it, decides where it belongs and what it should be called, files it into your archive, indexes it for
 search, and learns from every correction you make. Documents in English, Russian and Portuguese are supported.
 
-**Privacy:** recognition uses only local models through [Ollama](https://ollama.com) on `127.0.0.1`. Every network
-request goes through a guard that refuses non-loopback hosts (`NetworkGuardProtocol`); the only time the internet is
-used is when *you* press "Download" for a model.
+**Privacy:** recognition uses only local models through [Ollama](https://ollama.com), on this Mac or on a machine of
+yours on the local network (Settings › Models › Server, or `arrumator settings --ollama-url`). The address must be
+this Mac, a private or link-local address, or a `.local` name; anything else is refused. Every network request goes
+through a guard that lets through only that one server (`NetworkGuardProtocol`); the only time the internet is used is
+when *you* press "Download" for a model, and then by the Ollama server, not the app.
 
 ## How a file is handled
 
@@ -19,14 +21,13 @@ new file in Incoming ──► wait until it stops changing ──► hash (exac
    ──► learned evidence: known correspondents (by learned identifiers, e-mail/web domains, names),
        similar past filings (bge-m3 embeddings), rules formed from usage
    ──► confident?  ── yes ─► place directly; the model is only asked for the file name, as the logic says
-                   └─ no ──► the local model decides, following the archive's logic (your prompt) with the whole
-                             folder tree and learned hints as advice:
-                               1. the IDEAL home for this document (area / category / description / year folders)
-                               2. mapping onto existing folders, or creating the ideal one
-                               3. the file name
-                             The app checks the mapping with embeddings (an unrelated folder is never reused; a
-                             near-duplicate new folder reuses the existing one; an area the model names with its
-                             code, "10-19 Insurance & Legal", is that area) and calibrates confidence.
+                   └─ no ──► the local model identifies the document and decides from the archive's logic (your
+                             prompt) and the document alone: who it is from and whom it is about; the path, as many
+                             levels as the logic describes, each named and described; whether it goes in a year
+                             folder; the file name. It is shown no folders: shown any, even broad ones, a model
+                             copies them whether they fit or not (an older arrangement's, another sender's that looks
+                             alike, one area for everything). The app then resolves the path by identity (below),
+                             creates the rest and calibrates confidence.
    ──► file it (create folders on demand, name it, keep the original name in an extended attribute); when the
        chosen folder was removed while the model decided, decide again against the tree as it is now
    ──► learn: every placement becomes a memory; confirmed/confident ones form rules; folder context is refreshed
@@ -35,6 +36,18 @@ new file in Incoming ──► wait until it stops changing ──► hash (exac
 Uncertain documents wait in **Needs review** (created only when first needed). Moving a file in Finder, choosing a
 folder in the app, renaming, undoing — all are recorded as corrections and change future decisions: correspondents gain
 aliases and folders' learned context updates.
+
+**Senders are what rules are built on.** A sender is whoever a document comes from (EDP, the tax authority, a bank, a
+landlord). The model names the sender of each document, and filing it links the document to a sender the app knows, or
+to a new one. A sender collects its other names, the identifiers that are only ever on its documents (a tax number,
+IBAN or account number seen in at least `learning.stableKeyMinFilings` trusted filings), its e-mail and web domains, and
+its usual folder. From a sender's trusted filings — ones you confirmed or corrected, or filed with high confidence —
+rules form: `learning.ruleMinSupport` of one document type in one folder make "EDP · invoice → Home / Utilities", and
+`learning.correspondentRuleMinSupport` in one folder with none elsewhere make "EDP → Home / Utilities". A rule applies
+to a new document only when its sender is recognised there, by an identifier first, then a domain, then a name; a
+reliable rule then files it without the model deciding. Otherwise the model decides by the logic alone; where the
+logic gives senders folders of their own, a known sender's document still joins its sender's folder (see the folder
+tree below), and rules and similar past filings weigh in on how sure the decision is.
 
 Rules keep learning after they form. Each filing that agrees with a rule raises its support, so it becomes more
 trusted; filing a document somewhere other than where a rule points counts against it, and two disagreements switch it
@@ -58,10 +71,10 @@ app forgets something, whether you asked or you undid a filing, it is recorded i
 ## Logic: you decide how the archive is organised
 
 **Logic** is the prompt the model follows when it decides where a document goes and what it is called. Each archive
-has exactly one, kept in the archive itself as `00-09 System/06 Logic/_logic.md`. It comes first in every decision, and
+has exactly one, kept in the archive itself as `System/Logic/_logic.md`. It comes first in every decision, and
 learned rules, past filings and corrections only advise it: when they disagree, the logic wins. A new archive starts
 with the built-in logic, *Organizing principles*, which condenses established records-management practice (NIST,
-university research-data guides, Johnny.Decimal, paperless-ngx; sources in
+university research-data guides, paperless-ngx; sources in
 [docs/organizing-principles-sources.md](docs/organizing-principles-sources.md)). Until you change it, it is kept up to
 date with each new version of the app. You can edit it and reset it to the original.
 
@@ -84,8 +97,8 @@ documents follow the logic from then on. Then:
    the files, creates the folders, removes every folder left empty and lets rules follow their documents to their
    new folders.
 
-A topic's home is decided per area: when the logic puts payslips under "Work", a "Payslips" folder under "Home" is not
-their home, and reprocessing moves them. Nothing is moved while a plan is being made, and the logic cannot be
+A topic's home is where the logic puts it: when the logic puts payslips under "Work", a "Payslips" folder under
+"Home" is not their home, and reprocessing moves them. Nothing is moved while a plan is being made, and the logic cannot be
 changed until the plan is applied or discarded, so one plan never mixes two kinds of logic. Every decision records
 which logic made it.
 
@@ -105,11 +118,43 @@ description stays in the database, and a folder that still holds any file is nev
 
 ## The folder tree grows with your documents
 
-Nothing is pre-created. The first document creates the first folder. Folders follow Johnny.Decimal conventions
-(`20-29 Money & Taxes/21 Taxes (Portugal)/2025/…`: two levels, codes assigned by the app, year subfolders for recurring
-documents). Each folder has an `_about.md` whose description the model reads when deciding; a machine-maintained block
-at its end lists what actually lives there (recent file names, usual correspondents). Edit descriptions freely — your
-text is never overwritten. `_INDEX.md` at the archive root lists the whole tree.
+Nothing is pre-created. The first document creates the first folders. The tree takes the shape the archive's logic
+describes, as many levels deep as it asks for (up to `taxonomy.maxDepth` in `pipeline.json`), with folders named as
+the logic names them: the built-in logic keeps to two levels, `Money & Taxes/Taxes (Portugal)/2025/…`, and a logic of
+your own can ask for `Portugal/Acme Lda/Banking/Santander/2025/…`. For every document the model identifies who it is
+from (its sender) and whom it is about (its subject), and describes its home as a path from the top of the archive.
+It is shown no folders, so a folder is never taken because its name looks right, and a logic you change really
+changes the arrangement. The app works out which level of the path stands for which party — the level
+named like the sender, the one named like the subject, as written or across languages (`placementGuard.partyAbove`) —
+rather than asking the model, whose labels for its levels proved unreliable. The app
+puts the path onto the tree, keeping misfilings down:
+
+- **A sender's folder is recognised by its sender, not its name.** Senders are recognised by what identifies them (a
+  tax number, an IBAN, an e-mail or web domain) before their name. A known sender's documents join the folder its
+  documents are in — one the current logic made — however the model words or arranges the path this time, but only
+  under the subject the document is about: a bank serving your company and you has a folder under each, and a document
+  that does not say whom it concerns is not assumed to be either's. Inside a sender's folder, a document joins the
+  folder holding the sender's documents of the same type. A folder holding another sender's documents is never reused,
+  and a document whose path would put it there waits in Needs review.
+- **When the document and the model disagree about the sender** — an identifier in it belongs to one known sender and
+  the model names another that nothing in it shows — the document waits in Needs review. A document that lists other
+  parties' identifiers, such as a statement's debits, is no disagreement when the sender the model names shows too.
+- **A topic** is an existing folder of the same name there, or of a name so close it would be a duplicate. A name
+  only somewhat close is put to the model as one narrow question — is this the same folder as that one, both
+  described? — a few times per document at most (`placementGuard.judgeAbove`, `placementGuard.maxJudgements`);
+  "unsure" keeps them apart, since a second folder is easier to put right than a misfiled document. Names whose
+  qualifiers differ ("Taxes (Portugal)", "Taxes (Russia)") are never the same folder.
+
+Each folder the model makes records in its `_about.md` what it stands for and which logic made it. The model also says whether the document goes in
+a year folder, so a bank's statements can be kept by year while its account agreement sits in the bank's folder. A
+logic that spells the year out as its last level ("… / Institution / [YYYY Year]") gets exactly that: a year at the
+end of a path is its year folder. Folder names are cleaned the way file names are, so a name such as
+"Global / Cross-Border" becomes "Global - Cross-Border".
+
+Each folder has an `_about.md` whose description the model reads when deciding; a machine-maintained block at its end
+lists what actually lives there (recent file names, usual correspondents). Edit descriptions freely — your text is
+never overwritten. `_INDEX.md` at the archive root lists the whole tree. Folders made by earlier versions keep their
+numbered names until reprocessing moves their documents into the tree the logic describes.
 
 ## Requirements
 
@@ -130,7 +175,7 @@ xcodegen generate
 xcodebuild -project Arrumator.xcodeproj -scheme Arrumator -configuration Debug -derivedDataPath build/DerivedData build
 open build/DerivedData/Build/Products/Debug/Arrumator.app      # first launch shows onboarding
 
-swift test                                                       # 160 tests: extraction, core, classification, runtime
+swift test                                                       # 193 tests: extraction, core, classification, runtime
 swift run arrumator doctor                                       # environment self-check
 swift run arrumator ingest --dry-run ~/Downloads/some.pdf        # what would happen, without moving anything
 swift run arrumator run                                          # headless: watch Incoming and file
@@ -148,13 +193,14 @@ Other commands: `search`, `history`, `trace <doc>`, `replay <doc> [--model m]`, 
 
 No tunable lives in code. Defaults are bundled in `Sources/ArrumatorCore/Resources/Defaults/`:
 
-- `settings.json` — user preferences (folders, thresholds, model profile, folder-name language, …). The app stores only
+- `settings.json` — user preferences (folders, Ollama server, thresholds, model profile, folder-name language, …). The app stores only
   your changes in `~/Library/Application Support/Arrumator/settings.json`.
-- `pipeline.json` — every pipeline tunable (Ollama endpoint and timeouts, model profiles, OCR/extraction limits,
+- `pipeline.json` — every pipeline tunable (Ollama timeouts, model profiles, OCR/extraction limits,
   learning and direct-placement thresholds, calibration weights, search, logging). Override any subset in
   `~/Library/Application Support/Arrumator/pipeline.json`.
 
-Environment variables: `ARRUMATOR_HOME` (relocate all state), `ARRUMATOR_OLLAMA_URL` (must be loopback),
+Environment variables: `ARRUMATOR_HOME` (relocate all state), `ARRUMATOR_OLLAMA_URL` (the Ollama server while set, in
+place of the setting; this Mac or the local network only),
 `ARRUMATOR_PIPELINE_CONFIG` (extra override file), `ARRUMATOR_LOG_LEVEL`, `ARRUMATOR_LIVE=1` (enables tests that need a
 running Ollama).
 
@@ -162,8 +208,9 @@ running Ollama).
 
 Everything Arrumator knows that it could not work out again is kept in Markdown files inside the archive, next to what
 it describes: each folder's `_about.md`, a `_documents.md` in every directory holding filed documents, and, in the
-`00-09 System` area, the senders, rules, corrections and filing memories it learned (`05 Learned`), the archive's logic
-(`06 Logic/_logic.md`, the prompt as the file's text) and the history (`07 History`, one file per month). Each archive
+`System` folder, the senders, rules, corrections and filing memories it learned (`Learned`), the archive's logic
+(`Logic/_logic.md`, the prompt as the file's text) and the history (`History`, one file per month). In an archive
+started by an earlier version these folders are `00-09 System`, `05 Learned` and so on; they keep those names. Each archive
 has its own SQLite index in `~/Library/Application Support/Arrumator/Indexes`, which only indexes those files and caches
 what can be recomputed, such as extracted text and embeddings. If it is lost, cannot be opened or cannot be migrated,
 the app rebuilds it from the archive and reads each document's text again in the background. You can edit the files by hand; the app reads the change back and never overwrites it.
@@ -185,12 +232,13 @@ card.
 - **Needs You**: documents the app was not sure about, with its suggestion to accept or override.
 - **Processed**: everything finished, newest first and grouped by day, like Things' Logbook.
 - **Learned**: what the app knows now: the documents it files by as examples of their folders, newest first, the
-  rules that formed, the senders it knows, and suggestions to accept. Anything there can be forgotten.
+  rules that formed (each says which sender it is about), the senders it knows (each with what recognises it and the
+  rules about it), and suggestions to accept. Anything there can be forgotten.
 - **Logic**: the archive's logic, edited in place, and the two steps after a change: try it on a few documents, then
   reprocess everything. The plan forms decision by decision and can be stopped at any point; it is reviewed and
   applied on the same page, which says when the logic has changed since it was last tried. While a plan waits for
   you, the number of documents you can decide on shows next to Logic in the sidebar.
-- **Archive**: each area and folder, with its description and its documents.
+- **Archive**: the folder tree at any depth; each folder with its description, its subfolders and its documents.
 
 Search sits at the top of the sidebar. **Statistics** and **History** are in the menu at its foot.
 
@@ -228,7 +276,11 @@ colours rather than the system accent, which macOS greys out whenever the window
 KOI8-R text, e-mail, negatives) with expected outcomes; `Tools/FixtureGen` regenerates them deterministically.
 `arrumator eval Tests/Fixtures --passes 2` runs them through the live pipeline in a throw-away archive and reports
 grouping consistency (documents of the same kind share a folder, different kinds don't), type/date/correspondent
-accuracy, how many were placed without the model, and the folder tree that emerged.
+accuracy, how many were placed without the model, how deep documents were filed, and the folder tree that emerged.
+`--only <prefix>` runs just the fixtures whose path starts with it (`--only pt/`) for a quick look. `--logic <file>` files
+by that logic instead of the built-in one, to see how a logic of your own arranges the corpus.
+It also counts sender mix-ups (sender folders holding documents the corpus says come from different senders: the
+misfilings that matter most) and the ordinary documents held for review, which is what keeping them down costs.
 
 ## Project layout
 

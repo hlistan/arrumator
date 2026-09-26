@@ -43,7 +43,7 @@ import Testing
         let rule = FilingRule(id: 7, name: "EDP invoices", priority: 10, origin: .user,
                               predicates: [.stableKey(token: "ptNIF:503504564"), .filenameGlob("*.pdf"), .textRegex(pattern: "fatura")],
                               action: RuleAction(folderID: 1, folderCode: "11"))
-        let engine = RuleEngine(rules: [rule], config: config.classification)
+        let engine = RuleEngine(rules: [rule], senders: [], config: config.classification)
         let c = Fixtures.content("f.pdf", text: Fixtures.edpText, keys: [StableKey(kind: .ptNIF, value: "503504564")])
         #expect(engine.evaluateBeforeModel(c, matches: [], detectedType: nil).0?.rule.id == 7)
         let miss = Fixtures.content("f.txt", text: Fixtures.edpText, keys: [StableKey(kind: .ptNIF, value: "503504564")])
@@ -53,11 +53,29 @@ import Testing
     @Test func typeConditionsNeedAnEstimateBeforeTheModel() {
         let rule = FilingRule(id: 8, name: "ids", priority: 10, origin: .induced, predicates: [.documentType(.idDocument)],
                               action: RuleAction(folderID: 1, folderCode: "11"))
-        let engine = RuleEngine(rules: [rule], config: config.classification)
+        let engine = RuleEngine(rules: [rule], senders: [], config: config.classification)
         let c = Fixtures.content("p.pdf", text: "Passport")
         #expect(engine.evaluateBeforeModel(c, matches: [], detectedType: nil).0 == nil)
         #expect(engine.evaluateBeforeModel(c, matches: [], detectedType: .idDocument).0 != nil)
         #expect(engine.evaluateAfterModel(c, matches: [], documentType: .idDocument).0 != nil)
+    }
+
+    @Test func aRuleNamesTheSenderItIsAbout() {
+        let edp = Correspondent(id: 12, canonicalName: "EDP Comercial", origin: .learned)
+        let rule = FilingRule(id: 9, name: "EDP · invoice → Home / Utilities", priority: 50, origin: .induced,
+                              predicates: [.correspondent(id: 12), .documentType(.invoice)],
+                              action: RuleAction(folderID: 1, folderCode: "F2", documentType: .invoice, correspondentID: 12))
+        #expect(rule.senderID == 12)
+        #expect(rule.condition { Correspondent.names([edp])[$0] } == "from EDP Comercial and document type invoice")
+        #expect(rule.condition { _ in nil } == "from \(RulePredicate.forgottenSender) and document type invoice",
+                "a database id never stands in for a sender")
+        let engine = RuleEngine(rules: [rule], senders: [edp], config: config.classification)
+        let (_, evaluations) = engine.evaluateAfterModel(Fixtures.content("f.pdf", text: Fixtures.edpText), matches: [],
+                                                         documentType: .invoice)
+        #expect(evaluations.first?.predicates.map(\.predicate) == ["from EDP Comercial", "document type invoice"],
+                "the trace says which sender a condition is about")
+        #expect(FilingRule(name: "text", priority: 10, origin: .user, predicates: [.textRegex(pattern: "x")],
+                           action: RuleAction(folderID: 1, folderCode: "F2")).senderID == nil)
     }
 
     @Test func reliabilityWeighsContradictionsNotUses() {
@@ -75,112 +93,249 @@ import Testing
     let config: PipelineConfig
     init() throws { config = try PipelineConfig.bundledDefaults() }
 
-    func validator() -> AnswerValidator {
-        let area = TaxonomyFolder(id: 1, code: "10-19", name: "Home", parentCode: nil, relativePath: "10-19 Home", kind: .area)
-        let folder = TaxonomyFolder(id: 2, code: "11", name: "Utilities", parentCode: "10-19", relativePath: "10-19 Home/11 Utilities",
-                                    kind: .category)
-        return AnswerValidator(taxonomy: TaxonomySnapshot(version: 1, rootPath: "/tmp", folders: [area, folder]),
-                               config: config.classification, entities: config.entities, languages: config.extraction.languages)
+    func validator(logic: String? = nil) -> AnswerValidator {
+        AnswerValidator(config: config.classification, entities: config.entities, naming: config.naming, languages: config.extraction.languages,
+                        maxDepth: config.taxonomy.maxDepth, logic: logic)
     }
 
-    @Test func existingFolderAnswerIsNormalised() throws {
-        let raw = "<think>hmm</think>" + Fixtures.answer(folder: "11", confidence: 1.7)
-        let v = try validator().validate(raw)
-        #expect(v.folderCode == "11" && v.newFolder == nil)
-        #expect(v.ideal.name == "Utilities" && v.ideal.newAreaName == "Home" && v.ideal.yearSubfolders)
-        #expect(v.documentType == .invoice && v.documentDate == "2026-07-05")
+    private func folder(_ id: Int64, _ name: String, in parent: TaxonomyFolder? = nil, origin: FolderOrigin = .learned,
+                        role: FolderRole? = nil, kind: LevelKind? = nil, logic: String? = nil, senders: Set<Int64> = [],
+                        types: Set<DocumentType> = [], documents: Int = 0) -> TaxonomyFolder {
+        TaxonomyFolder(id: id, code: "F\(id)", name: name, parentCode: parent?.code,
+                       relativePath: (parent.map { $0.relativePath + "/" } ?? "") + name, role: role, origin: origin,
+                       documentCount: documents, kind: kind, logic: logic, senders: senders, documentTypes: types)
+    }
+
+    private func levels(_ names: String...) -> [FolderLevel] { names.map { FolderLevel(name: $0, description: "\($0) documents.", kind: .topic) } }
+
+    /// The levels of a path by the logic "jurisdiction / sender".
+    private func byJurisdiction(_ jurisdiction: String, sender: String) -> [FolderLevel] {
+        [FolderLevel(name: jurisdiction, description: "\(jurisdiction) documents.", kind: .topic),
+         FolderLevel(name: sender, description: "Documents from \(sender).", kind: .sender)]
+    }
+
+    private static let logic = "a1b2c3"
+
+    private func place(_ ideal: [FolderLevel], sender: Int64? = nil, type: DocumentType = .invoice, yearFolder: Bool = false,
+                       in taxonomy: TaxonomySnapshot, names: [String: [Float]] = [:], judge: StubJudge = StubJudge()) async throws -> GuardedPlacement {
+        try await PlacementGuard(config: config.classification.placementGuard)
+            .place(ideal, sender: sender, documentType: type, logic: Self.logic, yearFolder: yearFolder, taxonomy: taxonomy, names: names,
+                   judge: judge)
+    }
+
+    private func level(_ name: String, _ kind: LevelKind) -> FolderLevel { FolderLevel(name: name, description: "\(name).", kind: kind) }
+
+    @Test func answerIsNormalised() throws {
+        let v = try validator().validate("<think>hmm</think>" + Fixtures.answer(confidence: 1.7))
+        #expect(v.ideal.map(\.name) == ["Home", "Utilities"] && v.ideal.last?.description == "Electricity, gas and water bills.")
+        #expect(v.yearFolder && v.documentType == .invoice && v.documentDate == "2026-07-05")
         #expect(v.tags == ["energy"] && v.confidence == 1)
         #expect(v.raw.fileName == "2026-07-05 EDP - Fatura eletricidade junho")
     }
 
-    @Test func newFolderComesFromTheIdealHome() throws {
-        let inArea = try validator().validate(Fixtures.answer(folder: "NEW", newArea: "10-19", idealCategory: "Internet and Phone"))
-        #expect(inArea.newFolder?.areaCode == "10-19" && inArea.newFolder?.name == "Internet and Phone")
-        #expect(inArea.newFolder?.newAreaName == nil)
-        let newArea = try validator().validate(Fixtures.answer(folder: "NEW", newArea: "NEW", idealArea: "Health",
-                                                               idealCategory: "Medical Records"))
-        #expect(newArea.newFolder?.areaCode == nil && newArea.newFolder?.newAreaName == "Health")
-        #expect(newArea.newFolder?.yearSubfolders == true)
+    @Test func thePathIsAsDeepAsTheLogicSays() throws {
+        let deep = try validator().validate(Fixtures.answer(path: ["Portugal", "Hlistan Zolerani LDA", "Banking", "Santander"], yearly: "no"))
+        #expect(deep.ideal.map(\.name) == ["Portugal", "Hlistan Zolerani LDA", "Banking", "Santander"] && !deep.yearFolder)
+        let digits = try validator().validate(Fixtures.answer(path: ["Money", "2025 Taxes"]))
+        #expect(digits.ideal.last?.name == "2025 Taxes", "a name that starts with digits is no year")
     }
 
-    @Test func namesEchoedWithTheirCodesAreTheFoldersTheyName() throws {
-        let area = try validator().validate(Fixtures.answer(folder: "NEW", idealArea: "10-19 Home", idealCategory: "Internet and Phone"))
-        #expect(area.newFolder?.areaCode == "10-19" && area.newFolder?.newAreaName == nil,
-                "an existing area named as its directory is that area, never a new one with the code in its name")
-        let unknown = try validator().validate(Fixtures.answer(folder: "NEW", newArea: "NEW", idealArea: "60-69 Travel",
-                                                               idealCategory: "Trips"))
-        #expect(unknown.newFolder?.newAreaName == "Travel" && unknown.newFolder?.areaCode == nil,
-                "a code that names no area is dropped from the name")
-        let category = try validator().validate(Fixtures.answer(folder: "11", idealArea: "10-19 Home", idealCategory: "11 Utilities"))
-        #expect(category.ideal.name == "Utilities" && category.ideal.areaCode == "10-19" && category.folderCode == "11")
-        let digits = try validator().validate(Fixtures.answer(folder: "NEW", newArea: "NEW", idealArea: "Money",
-                                                              idealCategory: "2025 Taxes"))
-        #expect(digits.newFolder?.name == "2025 Taxes", "a name that starts with digits keeps them")
+    @Test func whatALogicSpellsOutIsNormalisedNotRejected() throws {
+        let yearLast = try validator().validate(Fixtures.answer(path: ["Portugal", "Banking", "Santander", "2026"], yearly: "no"))
+        #expect(yearLast.ideal.map(\.name) == ["Portugal", "Banking", "Santander"] && yearLast.yearFolder,
+                "a logic's “[YYYY Year]” level is the year folder")
+        let slash = try validator().validate(Fixtures.answer(path: ["Global / Cross-Border", "Banking"]))
+        #expect(slash.ideal.first?.name == "Global - Cross-Border", "a separator in a name is cleaned as in file names")
+        let repeated = try validator().validate(Fixtures.answer(path: ["Portugal", "portugal", "Taxes"]))
+        #expect(repeated.ideal.map(\.name) == ["Portugal", "Taxes"], "a level repeating the one above is dropped")
+        #expect(repeated.notes.contains { $0.contains("repeats") } && slash.notes.contains { $0.contains("Global - Cross-Border") })
+    }
+
+    @Test func aPathOfTheLogicsOwnLevelNamesIsSentBackForRepair() throws {
+        let logic = "Build paths as Jurisdiction / Subject / Functional Area / Institution or Process / [YYYY Year]."
+        let echoed = Fixtures.answer(path: ["Jurisdiction", "Subject", "Functional Area", "Institution or Process"])
+        #expect(throws: AnswerValidationError.self, "the logic's names for its levels are no folders") {
+            try validator(logic: logic).validate(echoed)
+        }
+        #expect(try validator(logic: logic).validate(Fixtures.answer(path: ["Portugal", "Acme Lda", "Banking", "Santander"])).ideal.count == 4)
+        #expect(throws: AnswerValidationError.self, "nor is any one of them, where the logic lays its levels out") {
+            try validator(logic: logic).validate(Fixtures.answer(path: ["Jurisdiction", "Portugal", "Taxes", "AT"]))
+        }
+        #expect(try validator(logic: "Keep a folder per Subject you care about.").validate(Fixtures.answer(path: ["Subject"])).ideal.map(\.name)
+                == ["Subject"], "a word the logic merely uses can still be a folder's name")
+        #expect(try validator(logic: logic).validate(Fixtures.answer(path: ["Portugal", "Taxes"])).ideal.count == 2)
+        #expect(try validator(logic: logic).validate(Fixtures.answer(path: ["Portugal", "Process"])).ideal.count == 2,
+                "a word inside one of the logic's level names is no echo")
     }
 
     @Test func invalidAnswersAreRejected() {
-        #expect(throws: AnswerValidationError.self) { try validator().validate(Fixtures.answer(folder: "99")) }
-        #expect(throws: AnswerValidationError.self) { try validator().validate(Fixtures.answer(folder: "NEW", newArea: "77-79")) }
-        #expect(throws: AnswerValidationError.self) { try validator().validate(Fixtures.answer(folder: "NEW", idealCategory: "")) }
-        #expect(throws: AnswerValidationError.self) { try validator().validate(Fixtures.answer(folder: "11", idealCategory: "A/B")) }
+        let tooDeep = (0...config.taxonomy.maxDepth).map { "Level \($0)" }
+        for path in [[], tooDeep, ["Home", ""], ["Health", "medical-report"], ["Money", "2025", "Taxes"]] {
+            #expect(throws: AnswerValidationError.self, "\(path)") { try validator().validate(Fixtures.answer(path: path)) }
+        }
         #expect(throws: AnswerValidationError.self) { try validator().validate("not json") }
-        #expect(throws: AnswerValidationError.self) {
-            try validator().validate(Fixtures.answer(folder: "NEW", newArea: "NEW", idealArea: "Health", idealCategory: "medical-report"))
-        }
-        #expect(throws: AnswerValidationError.self) {
-            try validator().validate(Fixtures.answer(folder: "NEW", newArea: "NEW", idealArea: "Money", idealCategory: "money"))
-        }
     }
 
-    @Test func guardReplacesMismatchesAndReusesDuplicates() throws {
-        let area = TaxonomyFolder(id: 1, code: "10-19", name: "Home", parentCode: nil, relativePath: "10-19 Home", kind: .area)
-        let utilities = TaxonomyFolder(id: 2, code: "11", name: "Utilities", parentCode: "10-19", relativePath: "10-19 Home/11 Utilities",
-                                       kind: .category)
-        let taxonomy = TaxonomySnapshot(version: 1, rootPath: "/tmp", folders: [area, utilities])
-        let guardrail = PlacementGuard(config: config.classification.placementGuard)
-        let tax = try validator().validate(Fixtures.answer(folder: "11", idealArea: "Money", idealCategory: "Taxes (Portugal)"))
-        let names: [String: [Float]] = ["Taxes (Portugal)": [1, 0, 0], "Utilities": [0, 1, 0], "Home": [0, 1, 0], "Money": [0, 0, 1],
-                                        "Household Utilities": VectorCodec.normalized([0.1, 1, 0])]
-        let mismatch = guardrail.review(tax, taxonomy: taxonomy, names: names)
-        #expect(mismatch.folderCode == nil && mismatch.newFolder?.name == "Taxes (Portugal)" && mismatch.newFolder?.newAreaName == "Money")
-        let homeTax = try validator().validate(Fixtures.answer(folder: "11", idealArea: "Home", idealCategory: "Taxes (Portugal)"))
-        #expect(guardrail.review(homeTax, taxonomy: taxonomy, names: names).newFolder?.areaCode == "10-19")
-        let taxes = TaxonomyFolder(id: 3, code: "12", name: "Taxes (Portugal)", parentCode: "10-19",
-                                   relativePath: "10-19 Home/12 Taxes (Portugal)", kind: .category)
-        let withTaxes = TaxonomySnapshot(version: 2, rootPath: "/tmp", folders: [area, utilities, taxes])
-        let wrongArea = guardrail.review(tax, taxonomy: withTaxes, names: names)
-        #expect(wrongArea.folderCode == nil && wrongArea.newFolder?.newAreaName == "Money",
-                "the same topic in an area unlike the ideal one is not its home")
-        let money = TaxonomyFolder(id: 4, code: "20-29", name: "Money", parentCode: nil, relativePath: "20-29 Money", kind: .area)
-        let moneyTaxes = TaxonomyFolder(id: 5, code: "21", name: "Taxes (Portugal)", parentCode: "20-29",
-                                        relativePath: "20-29 Money/21 Taxes (Portugal)", kind: .category)
-        let withMoney = TaxonomySnapshot(version: 3, rootPath: "/tmp", folders: [area, utilities, taxes, money, moneyTaxes])
-        let existingIdeal = guardrail.review(tax, taxonomy: withMoney, names: names)
-        #expect(existingIdeal.folderCode == "21" && existingIdeal.newFolder == nil)
-        let duplicate = try validator().validate(Fixtures.answer(folder: "NEW", newArea: "NEW", idealCategory: "Household Utilities"))
-        let reused = guardrail.review(duplicate, taxonomy: taxonomy, names: names)
-        #expect(reused.folderCode == "11" && reused.newFolder == nil)
-        let keep = guardrail.review(try validator().validate(Fixtures.answer(folder: "11")), taxonomy: taxonomy, names: names)
-        #expect(keep.folderCode == "11" && keep.idealSimilarity == 1)
+    @Test func thePathIsFollowedDownTheTreeAndTheRestCreated() async throws {
+        let home = folder(1, "Home")
+        let utilities = folder(2, "Utilities", in: home)
+        let taxonomy = TaxonomySnapshot(version: 1, rootPath: "/tmp", folders: [home, utilities])
+        let existing = try await place(levels("Home", "Utilities"), yearFolder: true, in: taxonomy)
+        #expect(existing.folderCode == "F2" && existing.newFolder == nil && existing.idealSimilarity == 1)
+        let beside = try await place(levels("Home", "Water"), yearFolder: true, in: taxonomy)
+        #expect(beside.folderCode == nil && beside.newFolder?.parentCode == "F1" && beside.newFolder?.levels.map(\.name) == ["Water"])
+        #expect(beside.newFolder?.yearSubfolders == true, "the document's year folder sets the new folder's")
+        #expect(beside.newFolder?.logic == Self.logic && beside.newFolder?.levels.first?.kind == .topic,
+                "a new folder remembers the logic that made it and what it stands for")
+        let elsewhere = try await place(levels("Portugal", "Acme Lda", "Banking"), in: taxonomy)
+        #expect(elsewhere.newFolder?.parentCode == nil && elsewhere.newFolder?.levels.count == 3)
+        #expect(try await place(levels("Home"), in: taxonomy).folderCode == "F1",
+                "a folder with folders inside is a home too, when the logic says so")
     }
 
-    @Test func differentQualifiersAreDifferentCategories() throws {
-        let area = TaxonomyFolder(id: 1, code: "10-19", name: "Money", parentCode: nil, relativePath: "10-19 Money", kind: .area)
-        let pt = TaxonomyFolder(id: 2, code: "11", name: "Taxes (Portugal)", parentCode: "10-19", relativePath: "10-19 Money/11 Taxes (Portugal)",
-                                kind: .category)
-        let taxonomy = TaxonomySnapshot(version: 1, rootPath: "/tmp", folders: [area, pt])
-        let v: [Float] = [1, 0]
-        let names: [String: [Float]] = ["Taxes (Russia)": v, "Taxes (Portugal)": v, "Money": v]
-        let guardrail = PlacementGuard(config: config.classification.placementGuard)
-        let wrongCountry = guardrail.review(try validator().validate(Fixtures.answer(folder: "11", idealArea: "Money",
-                                                                                     idealCategory: "Taxes (Russia)")),
-                                            taxonomy: taxonomy, names: names)
-        #expect(wrongCountry.folderCode == nil && wrongCountry.newFolder?.name == "Taxes (Russia)")
-        let proposed = guardrail.review(try validator().validate(Fixtures.answer(folder: "NEW", newArea: "NEW", idealArea: "Money",
-                                                                                 idealCategory: "Taxes (Russia)")),
-                                        taxonomy: taxonomy, names: names)
-        #expect(proposed.newFolder?.name == "Taxes (Russia)")
+    @Test func nearDuplicatesAreTheSameFolderButOtherQualifiersAreNot() async throws {
+        let money = folder(1, "Money")
+        let utilities = folder(2, "Utilities", in: money)
+        let pt = folder(3, "Taxes (Portugal)", in: money)
+        let taxonomy = TaxonomySnapshot(version: 1, rootPath: "/tmp", folders: [money, utilities, pt])
+        let tax: [Float] = [1, 0]
+        let names: [String: [Float]] = ["Money": [0, 1], "Utilities": [0, 1], "Household Utilities": VectorCodec.normalized([0.1, 1]),
+                                        "Taxes (Portugal)": tax, "Taxes (Russia)": tax]
+        let near = try await place(levels("Money", "Household Utilities"), in: taxonomy, names: names)
+        #expect(near.folderCode == "F2" && (near.idealSimilarity ?? 0) >= config.classification.placementGuard.duplicateAbove)
+        let russia = try await place(levels("Money", "Taxes (Russia)"), in: taxonomy, names: names)
+        #expect(russia.folderCode == nil && russia.newFolder?.name == "Taxes (Russia)", "another country's taxes are another folder")
+        let unembedded = try await place(levels("Money", "Household Utilities"), in: taxonomy)
+        #expect(unembedded.newFolder?.name == "Household Utilities", "without embeddings only the same name is the same folder")
         #expect(PlacementGuard.qualifier("Impostos (Portugal) ") == "portugal")
+    }
+
+    @Test func aSendersFolderIsFoundByItsSenderWhateverTheModelCallsIt() async throws {
+        let portugal = folder(1, "Portugal", kind: .topic, logic: Self.logic)
+        let edp = folder(2, "EDP Comercial", in: portugal, kind: .sender, logic: Self.logic, senders: [7], documents: 2)
+        let taxonomy = TaxonomySnapshot(version: 1, rootPath: "/tmp", folders: [portugal, edp])
+        let reworded = try await place(byJurisdiction("Portugal", sender: "EDP – Comercialização de Energia, S.A."), sender: 7, in: taxonomy)
+        #expect(reworded.folderCode == "F2", "the sender's documents join its folder however the model spells its name")
+        let elsewhere = try await place(byJurisdiction("Global - Cross-Border", sender: "EDP"), sender: 7, in: taxonomy)
+        #expect(elsewhere.folderCode == "F2", "and wherever the model puts the levels above it")
+        let olderLogic = TaxonomySnapshot(version: 1, rootPath: "/tmp", folders: [portugal,
+            folder(2, "EDP Comercial", in: portugal, kind: .sender, logic: "an earlier logic", senders: [7], documents: 2)])
+        #expect(try await place(byJurisdiction("Global - Cross-Border", sender: "EDP"), sender: 7, in: olderLogic).folderCode == nil,
+                "a folder an earlier logic made does not pull the path back to the older shape")
+        let shallower = [FolderLevel(name: "EDP", description: "EDP.", kind: .sender)]
+        #expect(try await place(shallower, sender: 7, in: taxonomy).folderCode == "F2",
+                "however many levels the model gives the path this time")
+    }
+
+    @Test func aSendersFolderIsFoundOnlyUnderTheSubjectTheDocumentIsAbout() async throws {
+        let acme = folder(1, "Acme Lda", kind: .subject, logic: Self.logic)
+        let maria = folder(2, "Maria", kind: .subject, logic: Self.logic)
+        let forAcme = folder(3, "Santander", in: acme, kind: .sender, logic: Self.logic, senders: [7], documents: 3)
+        let forMaria = folder(4, "Santander", in: maria, kind: .sender, logic: Self.logic, senders: [7], documents: 1)
+        let taxonomy = TaxonomySnapshot(version: 1, rootPath: "/tmp", folders: [acme, maria, forAcme, forMaria])
+        let personal = try await place([level("Maria", .subject), level("Banco Santander", .sender)], sender: 7, in: taxonomy)
+        #expect(personal.folderCode == "F4", "a bank serving the company and the person has a folder for each; the person's goes to theirs")
+        let company = try await place([level("Acme Lda", .subject), level("Santander Totta", .sender)], sender: 7, in: taxonomy)
+        #expect(company.folderCode == "F3")
+        let unsaid = try await place([level("Santander Totta", .sender)], sender: 7, in: taxonomy)
+        #expect(unsaid.folderCode == nil, "when the document does not say whom it is about, neither folder is assumed")
+        let stranger = try await place([level("Joana", .subject), level("Santander", .sender)], sender: 7, in: taxonomy)
+        #expect(stranger.newFolder?.levels.map(\.name) == ["Joana", "Santander"], "a subject the archive does not have yet gets its own")
+    }
+
+    @Test func insideASendersFolderALevelJoinsTheFolderHoldingTheSameKindOfDocument() async throws {
+        let edp = folder(1, "EDP", kind: .sender, logic: Self.logic, senders: [7], documents: 2)
+        let bills = folder(2, "Utilities", in: edp, kind: .topic, logic: Self.logic, senders: [7], types: [.invoice], documents: 2)
+        let taxonomy = TaxonomySnapshot(version: 1, rootPath: "/tmp", folders: [edp, bills])
+        let reworded = try await place([level("EDP", .sender), level("Energy", .topic)], sender: 7, type: .invoice, in: taxonomy)
+        #expect(reworded.folderCode == "F2", "the sender's invoices go where its invoices are, whatever the model calls that folder")
+        let contract = try await place([level("EDP", .sender), level("Contracts", .topic)], sender: 7, type: .contract, in: taxonomy)
+        #expect(contract.newFolder?.parentCode == "F1" && contract.newFolder?.levels.map(\.name) == ["Contracts"],
+                "another kind of document from the sender gets a folder of its own beside them")
+        let outside = TaxonomySnapshot(version: 1, rootPath: "/tmp", folders: [folder(1, "Home"), folder(2, "Utilities", in: folder(1, "Home"),
+                                                                                                         types: [.invoice])])
+        #expect(try await place(levels("Home", "Energy"), type: .invoice, in: outside).folderCode == nil,
+                "outside a sender's folder, a document's type is no reason to join a folder of another name")
+    }
+
+    @Test func aKnownSendersDocumentReachesItsFolderWhateverTheModelDoesWithTheLevels() async throws {
+        let portugal = folder(1, "Portugal", kind: .topic, logic: Self.logic)
+        let maria = folder(2, "Maria Exemplo", in: portugal, kind: .subject, logic: Self.logic)
+        let edp = folder(3, "EDP Comercial", in: maria, kind: .sender, logic: Self.logic, senders: [7], types: [.invoice], documents: 1)
+        let taxonomy = TaxonomySnapshot(version: 1, rootPath: "/tmp", folders: [portugal, maria, edp])
+        let dropped = try await place([level("Portugal", .topic), level("Maria Exemplo", .subject), level("Utilities", .topic)],
+                                      sender: 7, in: taxonomy)
+        #expect(dropped.folderCode == "F3", "the model leaving the sender out of the path does not take its document elsewhere")
+        let appended = try await place([level("Portugal", .topic), level("EDP Comercial", .sender), level("Utilities", .topic)],
+                                       sender: 7, in: taxonomy)
+        #expect(appended.folderCode == "F3", "nor does a level the model adds after it, when the folder already holds such documents")
+        let other = try await place([level("Portugal", .topic), level("EDP Comercial", .sender), level("Contracts", .topic)],
+                                    sender: 7, type: .contract, in: taxonomy)
+        #expect(other.newFolder?.parentCode == "F3", "another kind of document from it still gets a folder of its own inside")
+        let someoneElse = try await place([level("Portugal", .topic), level("João", .subject), level("Utilities", .topic)],
+                                          sender: 7, in: taxonomy)
+        #expect(someoneElse.folderCode == nil, "a document about someone else is not taken to the sender's folder for Maria")
+    }
+
+    @Test func anotherSendersFolderIsNeverReusedEvenUnderTheSameName() async throws {
+        let portugal = folder(1, "Portugal", kind: .topic, logic: Self.logic)
+        let edp = folder(2, "EDP Comercial", in: portugal, kind: .sender, logic: Self.logic, senders: [7], documents: 2)
+        let taxonomy = TaxonomySnapshot(version: 1, rootPath: "/tmp", folders: [portugal, edp])
+        for sender in [Int64(8), nil] {
+            let copied = try await place(byJurisdiction("Portugal", sender: "EDP Comercial"), sender: sender, in: taxonomy)
+            #expect(copied.folderCode == nil && copied.newFolder == nil && copied.conflict?.contains("another sender's documents") == true,
+                    "a document from someone else, known or not, is held back rather than filed with EDP's")
+        }
+        let asTopic = try await place(levels("Portugal", "EDP Comercial"), sender: 8, in: taxonomy)
+        #expect(asTopic.conflict != nil, "nor when the model calls that level a topic")
+        let names: [String: [Float]] = ["Portugal": [1, 0], "EDP Comercial": [0, 1], "EDP Comercial SA": VectorCodec.normalized([0.05, 1])]
+        let near = try await place(byJurisdiction("Portugal", sender: "EDP Comercial SA"), sender: 8, in: taxonomy, names: names)
+        #expect(near.newFolder?.levels.map(\.name) == ["EDP Comercial SA"], "nor under a near-duplicate name")
+        let legacy = TaxonomySnapshot(version: 1, rootPath: "/tmp", folders: [portugal, folder(2, "EDP Comercial", in: portugal, senders: [7])])
+        #expect(try await place(byJurisdiction("Portugal", sender: "EDP Comercial"), sender: 7, in: legacy).folderCode == "F2",
+                "a folder holding only this sender's documents is its folder, whoever made it")
+        let empty = TaxonomySnapshot(version: 1, rootPath: "/tmp", folders: [portugal, folder(2, "MEO", in: portugal, kind: .sender, logic: Self.logic)])
+        #expect(try await place(byJurisdiction("Portugal", sender: "MEO"), sender: nil, in: empty).folderCode == "F2",
+                "an empty folder of that name is free for a sender the app does not know yet")
+    }
+
+    @Test func aTopicThatMayBeTheSameIsPutToTheJudgeAFewTimesAtMost() async throws {
+        let home = folder(1, "Home")
+        let utilities = folder(2, "Utilities", in: home)
+        let rent = folder(3, "Rent", in: home)
+        let taxonomy = TaxonomySnapshot(version: 1, rootPath: "/tmp", folders: [home, utilities, rent])
+        let limits = config.classification.placementGuard
+        let between = Float((limits.judgeAbove + limits.duplicateAbove) / 2)
+        let names: [String: [Float]] = ["Home": [0, 0, 1], "Utilities": [1, 0, 0], "Rent": [0, 1, 0],
+                                        "Utility Bills": VectorCodec.normalized([between, (1 - between * between).squareRoot(), 0]),
+                                        "Garden": [0.1, 0.1, 0.99]]
+        let yes = StubJudge(verdict: true)
+        let same = try await place(levels("Home", "Utility Bills"), in: taxonomy, names: names, judge: yes)
+        let asked = await yes.asked
+        #expect(same.folderCode == "F2" && asked == [["Utility Bills", "Utilities", "Home"]])
+        for verdict in [false, nil] as [Bool?] {
+            let judge = StubJudge(verdict: verdict)
+            let apart = try await place(levels("Home", "Utility Bills"), in: taxonomy, names: names, judge: judge)
+            #expect(apart.newFolder?.levels.map(\.name) == ["Utility Bills"], "not the same, or unsure, keeps them apart")
+        }
+        let unasked = StubJudge(verdict: true)
+        _ = try await place(levels("Home", "Garden"), in: taxonomy, names: names, judge: unasked)
+        #expect(await unasked.asked.isEmpty, "a name nowhere near an existing one is not put to the judge")
+        let deep = TaxonomySnapshot(version: 1, rootPath: "/tmp", folders: [folder(1, "A"), folder(2, "B", in: folder(1, "A")),
+                                                                              folder(3, "C", in: folder(2, "B", in: folder(1, "A")))])
+        let close = VectorCodec.normalized([between, (1 - between * between).squareRoot()])
+        let vectors: [String: [Float]] = ["A": [1, 0], "B": [1, 0], "C": [1, 0], "A2": close, "B2": close, "C2": close]
+        let counted = StubJudge(verdict: true)
+        _ = try await place(levels("A2", "B2", "C2"), in: deep, names: vectors, judge: counted)
+        #expect(await counted.asked.count == limits.maxJudgements, "a document is put to the judge a few times at most")
+    }
+
+    @Test func aPathIntoTheAppsOwnFoldersLeadsNowhere() async throws {
+        let system = folder(1, "System", origin: .system)
+        let review = folder(2, "Needs review", in: system, origin: .system, role: .needsReview)
+        let taxonomy = TaxonomySnapshot(version: 1, rootPath: "/tmp", folders: [system, review])
+        let placement = try await place(levels("System", "Bills"), in: taxonomy)
+        #expect(placement.folderCode == nil && placement.newFolder == nil, "a folder of the user's is never made inside the system area")
     }
 
     @Test func calibrationBands() {
@@ -188,7 +343,7 @@ import Testing
         let thresholds = Thresholds(auto: 0.85, review: 0.5)
         let candidates = CandidateSet(ranked: [FolderCandidate(code: "11", similarity: 0.8, knnVote: 2, score: 1),
                                                FolderCandidate(code: "12", similarity: 0.2, knnVote: 0, score: 0)],
-                                      memories: [], knnShare: ["11": 1], usedMemories: true)
+                                      neighbors: [], knnShare: ["11": 1], usedMemories: true)
         let good = ExtractedContentSummary(Fixtures.content("a.pdf", text: "x"))
         func run(_ llm: Double, _ code: String?, new: Bool = false, ideal: Double? = 0.9, content: ExtractedContentSummary) -> ConfidenceReport {
             calibrator.calibrate(CalibrationInput(llmConfidence: llm, chosenCode: code, isNewFolder: new, idealSimilarity: ideal,
@@ -202,5 +357,18 @@ import Testing
         var metadataOnly = good
         metadataOnly.textOrigin = .metadataOnly
         #expect(run(1, "11", content: metadataOnly).final <= config.calibration.metadataOnlyCap)
+    }
+}
+
+/// Answers every question the same way and remembers what it was asked: the level, the folder, and where.
+actor StubJudge: FolderJudge {
+    let verdict: Bool?
+    private(set) var asked: [[String]] = []
+
+    init(verdict: Bool? = nil) { self.verdict = verdict }
+
+    func isSame(_ level: FolderLevel, as folder: TaxonomyFolder, inside place: String) async throws -> Bool? {
+        asked.append([level.name, folder.name, place])
+        return verdict
     }
 }

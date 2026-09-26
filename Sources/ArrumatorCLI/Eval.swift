@@ -13,6 +13,8 @@ struct Eval: AsyncParsableCommand {
     @Option(help: "Chat model to use instead of the profile's.") var model: String?
     @Option(help: "Model profile from pipeline.json.") var profile: String?
     @Option(help: "Passes over the corpus; later passes show how much was learned.") var passes = 1
+    @Option(help: "A file with the logic to file by, instead of the built-in logic.") var logic: String?
+    @Option(help: "Only the fixtures whose path starts with this, such as \"pt/\", for a quick look.") var only: String?
     @Option(help: "Write the full report as JSON to this path.") var report: String?
     @Option(help: "Fail when grouping F1 is below this value.") var minF1: Double?
     @Flag(help: "Simulate a user who confirms consistent placements and moves inconsistent ones (exercises learning).")
@@ -54,6 +56,11 @@ struct Eval: AsyncParsableCommand {
         var correspondentOK: Bool?
         var yearFolderOK: Bool?
         var seconds: Double
+        /// Levels from the top of the archive to the folder it was filed in.
+        var depth: Int? = nil
+        /// Who the corpus says the document is from, and whether the folder it was filed in stands for a sender.
+        var expectedCorrespondent: String? = nil
+        var inSenderFolder: Bool = false
         var feedback: String?
     }
 
@@ -69,13 +76,22 @@ struct Eval: AsyncParsableCommand {
         var yearFolderAccuracy: Double?
         var modelFree: Int
         var medianSeconds: Double
+        /// Folders of the user's that hold documents.
         var folders: Int
+        /// Mean levels from the top of the archive to the folders documents were filed in.
+        var meanDepth: Double?
+        /// Sender folders holding documents the corpus says come from different senders: misfilings by identity.
+        var senderMixups: Int
+        /// Ordinary documents held for review rather than filed: what keeping misfilings down costs.
+        var heldForReview: Int
     }
 
     func run() async throws {
         setvbuf(stdout, nil, _IOLBF, 0)
         let dir = URL(fileURLWithPath: fixtures.expandingTilde, isDirectory: true)
-        let corpus = try JSONDecoder().decode(Corpus.self, from: Data(contentsOf: dir.appendingPathComponent("expected.json")))
+        var corpus = try JSONDecoder().decode(Corpus.self, from: Data(contentsOf: dir.appendingPathComponent("expected.json")))
+        if let only { corpus.fixtures = corpus.fixtures.filter { $0.file.hasPrefix(only) } }
+        guard !corpus.fixtures.isEmpty else { throw ValidationError("No fixture path starts with \(only ?? "")") }
         let home = FileManager.default.temporaryDirectory.appendingPathComponent("arrumator-eval-\(UUID().uuidString)", isDirectory: true)
         var environment = RuntimeEnvironment.current
         environment.home = home.path
@@ -90,6 +106,7 @@ struct Eval: AsyncParsableCommand {
         let runtime = try await ArrumatorRuntime.bootstrap(appVersion: Arrumator.version, environment: environment,
                                                            echoLogsToStderr: options.verbose)
         try await runtime.openArchive()
+        if let logic { try await runtime.logic.update(body: try String(contentsOf: URL(fileURLWithPath: logic.expandingTilde), encoding: .utf8)) }
         let settings = await runtime.settings.current
         guard await runtime.lifecycle.ensureRunning().isReady else { throw ValidationError("Ollama is not running") }
         print("Evaluating \(corpus.fixtures.count) fixtures × \(passes) pass(es) in \(home.path)")
@@ -123,16 +140,15 @@ struct Eval: AsyncParsableCommand {
             let summary = await summarize(pass: pass, rows: passRows, runtime: runtime, settings: settings)
             summaries.append(summary)
             rows += passRows
-            print(String(format: "pass %d: grouping F1 %.2f (P %.2f R %.2f) · type %.0f%% · date %.0f%% · correspondent %.0f%% · model-free %d · median %.1fs · %d folders",
+            print(String(format: "pass %d: grouping F1 %.2f (P %.2f R %.2f) · type %.0f%% · date %.0f%% · correspondent %.0f%% · model-free %d · median %.1fs · %d folders · depth %.1f · sender mix-ups %d · held %d",
                          pass, summary.groupingF1, summary.groupingPrecision, summary.groupingRecall, summary.docTypeAccuracy * 100,
                          summary.dateAccuracy * 100, summary.correspondentAccuracy * 100, summary.modelFree, summary.medianSeconds,
-                         summary.folders))
+                         summary.folders, summary.meanDepth ?? 0, summary.senderMixups, summary.heldForReview))
         }
         let tree = try await runtime.taxonomy.snapshot(root: settings.archiveURL)
         print("\nFolder tree created:")
-        for area in tree.areas {
-            print("  \(area.code) \(area.name)")
-            for f in tree.children(of: area.code) { print("     \(f.code) \(f.name) (\(f.documentCount))") }
+        for (folder, depth) in tree.outline(include: \.holdsUserDocuments) {
+            print(String(repeating: "  ", count: depth) + "\(folder.name) (\(folder.documentCount))")
         }
         if let report {
             struct Report: Encodable { var rows: [Row]; var summaries: [Summary]; var tree: TaxonomySnapshot }
@@ -160,9 +176,11 @@ struct Eval: AsyncParsableCommand {
         }
         let yearOK: Bool? = e.yearFolder.map { doc.path.contains("/\($0)/") }
         return Row(pass: pass, file: fixture.file, expectedCategory: e.category, status: doc.status.rawValue,
-                   folder: folder.map { "\($0.code) \($0.name)" }, fileName: doc.filename, decidedBy: d?.decidedBy.rawValue,
+                   folder: folder.map { snapshot.path(of: $0) }, fileName: doc.filename, decidedBy: d?.decidedBy.rawValue,
                    band: d?.band.rawValue, docTypeOK: e.docType.map { $0 == doc.docType }, dateOK: e.date.map { $0 == doc.docDate },
-                   correspondentOK: same(doc.correspondent, e.correspondent), yearFolderOK: yearOK, seconds: seconds)
+                   correspondentOK: same(doc.correspondent, e.correspondent), yearFolderOK: yearOK, seconds: seconds,
+                   depth: folder.flatMap { $0.holdsUserDocuments ? snapshot.depth(of: $0) : nil },
+                   expectedCorrespondent: e.correspondent, inSenderFolder: folder?.kind == .sender)
     }
 
     /// The simulated user keeps one folder per expected category: the first folder a document of that category was
@@ -193,7 +211,8 @@ struct Eval: AsyncParsableCommand {
     }
 
     /// System categories in the corpus (review, duplicates) are scored as routing, not grouping.
-    static let systemCategories: [String: DocumentStatus] = ["02": .needsReview, "03": .duplicate]
+    /// Labels the corpus gives files the app must hold back, and the status that holds them.
+    static let systemCategories: [String: DocumentStatus] = ["needs-review": .needsReview, "duplicates": .duplicate]
 
     private func summarize(pass: Int, rows: [Row], runtime: ArrumatorRuntime, settings: AppSettings) async -> Summary {
         let content = rows.filter { $0.expectedCategory.map { Self.systemCategories[$0] == nil } ?? false }
@@ -215,13 +234,21 @@ struct Eval: AsyncParsableCommand {
         }
         let years = content.compactMap(\.yearFolderOK)
         let seconds = rows.map(\.seconds).sorted()
-        let folders = (try? await runtime.taxonomy.snapshot(root: settings.archiveURL).fileableCategories.count) ?? 0
+        let depths = rows.compactMap(\.depth)
+        let bySenderFolder = Dictionary(grouping: rows.filter(\.inSenderFolder), by: { $0.folder ?? "" })
+        let mixups = bySenderFolder.values.filter { Set($0.compactMap(\.expectedCorrespondent)).count > 1 }.count
+        let held = content.filter { $0.status == DocumentStatus.needsReview.rawValue }.count
+        // Folders documents were filed into, at whatever depth: the folders above them only group them.
+        let folders = (try? await runtime.taxonomy.snapshot(root: settings.archiveURL).folders
+            .filter { $0.holdsUserDocuments && $0.documentCount > 0 }.count) ?? 0
         return Summary(pass: pass, groupingPrecision: precision, groupingRecall: recall,
                        groupingF1: precision + recall == 0 ? 0 : 2 * precision * recall / (precision + recall),
                        systemRoutingAccuracy: system.isEmpty ? nil : Double(routed.count) / Double(system.count),
                        docTypeAccuracy: rate(content.map(\.docTypeOK)), dateAccuracy: rate(content.map(\.dateOK)),
                        correspondentAccuracy: rate(content.map(\.correspondentOK)),
                        yearFolderAccuracy: years.isEmpty ? nil : rate(years), modelFree: rows.filter { $0.decidedBy == "rule" || $0.decidedBy == "knnOnly" }.count,
-                       medianSeconds: seconds.isEmpty ? 0 : seconds[seconds.count / 2], folders: folders)
+                       medianSeconds: seconds.isEmpty ? 0 : seconds[seconds.count / 2], folders: folders,
+                       meanDepth: depths.isEmpty ? nil : Double(depths.reduce(0, +)) / Double(depths.count),
+                       senderMixups: mixups, heldForReview: held)
     }
 }

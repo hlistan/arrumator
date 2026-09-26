@@ -31,52 +31,52 @@ negative/ 90–94   files the app must hold back
 
 ## Fixtures
 
-Target is the category code, with the year folder where the category has one. Band is the lowest acceptable
+Target is the fixture's label (`expected.category`), with the year folder where one is expected. Band is the lowest acceptable
 confidence band.
 
 | File | Kind | Target | Type | Correspondent | Date | Band | What it exercises |
 |---|---|---|---|---|---|---|---|
-| `pt/01-edp-fatura-2026-07.pdf` | pdf-text | 32/2026 | invoice | EDP | 2026-08-05 | check | Baseline invoice; billing-period and due-date distractors; the CPE "PT 0002 …" looks like an IBAN |
-| `pt/02-edp-fatura-2026-08-scan.pdf` | pdf-scan | 32/2026 | invoice | EDP | 2026-09-05 | check | Two-page image-only PDF (OCR path); its PDF creation date is the scan day, which is a distractor |
-| `pt/03-meo-fatura-2026-08.pdf` | pdf-text | 33/2026 | invoice | MEO | 2026-08-10 | check | Account number 123456780 fails the NIF check (listed in `invalid_identifiers`); masked IBAN |
-| `pt/04-at-irs-modelo3-2025.pdf` | pdf-text | 23/2025 | tax-return | Autoridade Tributária | 2026-05-20 | check | Fiscal-period year folder: filed in 2026, filed under 2025 |
-| `pt/05-at-nota-liquidacao-2025.pdf` | pdf-text | 23/2025 | tax-assessment | Autoridade Tributária | 2026-06-12 | check | Refund IBAN; "data prevista do reembolso" distractor |
-| `pt/06-ss-comprovativo-niss.pdf` | pdf-text | 11 | attestation | Segurança Social | 2024-03-12 | check | Identity vs social security (27 also accepted); date-of-birth distractor |
-| `pt/07-aima-titulo-residencia-frente.jpg` | image-photo | 13 | id-document | AIMA | 2025-02-01 | review | Card photo; EXIF date ≠ issue date; birth and expiry distractors; 11 also accepted |
-| `pt/08-millennium-extrato-2026-08.pdf` | pdf-text | 21/2026 | statement | Millennium BCP | 2026-08-31 | check | IBAN as stable key; debits match the EDP, MEO and rent documents |
-| `pt/09-contrato-arrendamento.docx` | docx | 31 | contract | João Exemplo | 2025-08-25 | check | A person (the landlord) as correspondent; mentions the tax authority; start-date distractor |
-| `pt/10-recibo-renda-2026-09.pdf` | pdf-text | 34/2026 | receipt | João Exemplo | 2026-09-05 | check | Portal das Finanças layout, but it is the landlord's rent receipt (34, not 23) |
-| `pt/11-unilabs-analises-2026-06.pdf` | pdf-text | 41/2026 | medical-report | Unilabs | 2026-06-18 | check | SNS user number (9 digits, not a NIF); collection-date distractor |
-| `pt/12-multicare-apolice.pdf` | pdf-text | 61 | policy | Multicare | 2025-12-15 | check | Policy issue date vs start date |
-| `pt/13-continente-talao.jpeg` | image-photo | 28/2026 | receipt | Continente | 2026-09-14 | review | Photographed till receipt ("fatura simplificada"; invoice also accepted) |
-| `pt/14-orcamento-canalizador.xlsx` | xlsx | 35 | quote | Canalizações Exemplo | 2026-08-15 | review | Spreadsheet with formulas and cached values |
-| `pt/15-ss-situacao-contributiva.pdf` | pdf-text | 27/2026 | attestation | Segurança Social | 2026-03-05 | check | "Válida até" distractor |
-| `pt/16-farmacia-fatura-recibo.heic` | image-photo | 42/2026 | receipt | Farmácia Central Exemplo | 2026-06-20 | review | HEIC decoding; pharmacy (42) vs purchase (28) |
-| `ru/20-mosenergosbyt-kvitanciya-2026-08.pdf` | pdf-scan | 32/2026 | invoice | Mosenergosbyt | 2026-09-03 | check | Cyrillic OCR; "Оплатить до" distractor |
-| `ru/21-fns-3ndfl-2025.pdf` | pdf-text | 24/2025 | tax-return | FNS | 2026-04-15 | check | Fiscal-period year folder; 20-digit budget code |
-| `ru/22-fns-uvedomlenie-2025.pdf` | pdf-text | 24/2025 | tax-assessment | FNS | 2026-09-01 | check | Payment deadline distractor; two ИНН (taxpayer and treasury) |
-| `ru/23-sber-vypiska-2026-07.pdf` | pdf-text | 21/2026 | statement | Sberbank | 2026-07-31 | check | 20-digit account with a valid control key for its БИК |
-| `ru/24-snils.jpg` | image-photo | 11 | id-document | SFR | 2015-06-14 | review | Card photo in Cyrillic; issuer is implicit (ПФР, now СФР) |
-| `ru/25-vypisnoy-epikriz.pdf` | pdf-scan | 41/2025 | medical-report | ГКБ № 1 | 2025-11-03 | check | Serif Cyrillic scan; admission-date distractor |
-| `ru/26-osago-polis.pdf` | pdf-text | 63 | policy | Ingosstrakh | 2026-05-14 | check | Insurer decides the folder (63, not a vehicle category) |
-| `ru/27-dogovor-kupli-prodazhi.docx` | docx | 31 | contract | Пётр Образцов | 2018-11-20 | review | A private seller as correspondent; old document |
-| `ru/28-spravka-2ndfl-2025.pdf` | pdf-text | 52/2026 | payslip | ООО Ромашка | 2026-02-10 | check | Annual income statement: year 2025 and type attestation also accepted |
-| `ru/29-egrn-vypiska.pdf` | pdf-text | 31 | certificate | Rosreestr | 2018-12-03 | check | "Выписка" here is a certificate, not a bank statement |
-| `ru/30-rostelecom-schet-koi8r.txt` | text | 33/2026 | invoice | Rostelecom | 2026-08-05 | review | KOI8-R (not valid UTF-8); 12-digit account that fails the ИНН check |
-| `ru/31-spravka-s-mesta-raboty.txt` | text | 51 | attestation | ООО Ромашка | 2026-03-16 | review | Plain UTF-8 text without BOM |
-| `en/40-acme-employment-agreement.docx` | docx | 51 | contract | Acme Ltd | 2024-01-15 | check | English contract; start-date distractor |
-| `en/41-acme-payslip-2026-08.pdf` | pdf-text | 52/2026 | payslip | Acme Ltd | 2026-08-31 | check | UK payslip (NI number, tax code, year to date) |
-| `en/42-hetzner-invoice-2026-09.pdf` | pdf-text | 82/2026 | invoice | Hetzner | 2026-09-01 | check | Billing period in the previous month |
-| `en/43-jetbrains-license.pdf` | pdf-text | 81 | license | JetBrains | 2026-01-10 | check | "Valid until" distractor |
-| `en/44-revolut-transfer.png` | image-screenshot | 21/2026 | receipt | Revolut | 2026-09-12 | review | Phone screenshot (OCR path); Belgian IBAN |
-| `en/45-tap-booking.pdf` | pdf-text | 73/2026 | ticket | TAP | 2026-08-15 | check | Issue date vs flight dates |
-| `en/46-passport-scan.pdf` | pdf-scan | 11 | id-document | HM Passport Office | 2022-03-01 | review | ID page on the scanner glass; MRZ with valid check digits; SPECIMEN overprint |
-| `en/47-aima-appointment.eml` | eml | 13 | letter | AIMA | 2026-03-04 | check | RFC 2047 subject, 8bit / quoted-printable / base64 parts, `.ics` attachment |
-| `negative/90-budget-2026.xlsx` | xlsx | 02 | other | – | – | review | Self-made spreadsheet, not a received document |
-| `negative/91-edp-fatura-2026-07-copy.pdf` | pdf-text | 03 | – | – | – | review | Byte-identical copy of `pt/01` |
-| `negative/92-blank-scan.pdf` | pdf-scan | 02 | – | – | – | review | Empty page with scanner noise only |
-| `negative/93-encrypted.pdf` | pdf-text | 02 | – | – | – | review | User password (`password` field); an empty password fails |
-| `negative/94-corrupt.pdf` | pdf-text | 02 | – | – | – | review | First 40 % of a valid PDF; PDFKit cannot read it |
+| `pt/01-edp-fatura-2026-07.pdf` | pdf-text | `energy-bills`/2026 | invoice | EDP | 2026-08-05 | check | Baseline invoice; billing-period and due-date distractors; the CPE "PT 0002 …" looks like an IBAN |
+| `pt/02-edp-fatura-2026-08-scan.pdf` | pdf-scan | `energy-bills`/2026 | invoice | EDP | 2026-09-05 | check | Two-page image-only PDF (OCR path); its PDF creation date is the scan day, which is a distractor |
+| `pt/03-meo-fatura-2026-08.pdf` | pdf-text | `telecom-bills`/2026 | invoice | MEO | 2026-08-10 | check | Account number 123456780 fails the NIF check (listed in `invalid_identifiers`); masked IBAN |
+| `pt/04-at-irs-modelo3-2025.pdf` | pdf-text | `taxes-portugal`/2025 | tax-return | Autoridade Tributária | 2026-05-20 | check | Fiscal-period year folder: filed in 2026, filed under 2025 |
+| `pt/05-at-nota-liquidacao-2025.pdf` | pdf-text | `taxes-portugal`/2025 | tax-assessment | Autoridade Tributária | 2026-06-12 | check | Refund IBAN; "data prevista do reembolso" distractor |
+| `pt/06-ss-comprovativo-niss.pdf` | pdf-text | `identity-documents` | attestation | Segurança Social | 2024-03-12 | check | Identity vs social security (`social-security` also accepted); date-of-birth distractor |
+| `pt/07-aima-titulo-residencia-frente.jpg` | image-photo | `residence-permits` | id-document | AIMA | 2025-02-01 | review | Card photo; EXIF date ≠ issue date; birth and expiry distractors; `identity-documents` also accepted |
+| `pt/08-millennium-extrato-2026-08.pdf` | pdf-text | `bank-accounts`/2026 | statement | Millennium BCP | 2026-08-31 | check | IBAN as stable key; debits match the EDP, MEO and rent documents |
+| `pt/09-contrato-arrendamento.docx` | docx | `property` | contract | João Exemplo | 2025-08-25 | check | A person (the landlord) as correspondent; mentions the tax authority; start-date distractor |
+| `pt/10-recibo-renda-2026-09.pdf` | pdf-text | `rent`/2026 | receipt | João Exemplo | 2026-09-05 | check | Portal das Finanças layout, but it is the landlord's rent receipt (`rent`, not `taxes-portugal`) |
+| `pt/11-unilabs-analises-2026-06.pdf` | pdf-text | `medical-records`/2026 | medical-report | Unilabs | 2026-06-18 | check | SNS user number (9 digits, not a NIF); collection-date distractor |
+| `pt/12-multicare-apolice.pdf` | pdf-text | `health-insurance` | policy | Multicare | 2025-12-15 | check | Policy issue date vs start date |
+| `pt/13-continente-talao.jpeg` | image-photo | `shopping-receipts`/2026 | receipt | Continente | 2026-09-14 | review | Photographed till receipt ("fatura simplificada"; invoice also accepted) |
+| `pt/14-orcamento-canalizador.xlsx` | xlsx | `home-repairs` | quote | Canalizações Exemplo | 2026-08-15 | review | Spreadsheet with formulas and cached values |
+| `pt/15-ss-situacao-contributiva.pdf` | pdf-text | `social-security`/2026 | attestation | Segurança Social | 2026-03-05 | check | "Válida até" distractor |
+| `pt/16-farmacia-fatura-recibo.heic` | image-photo | `pharmacy`/2026 | receipt | Farmácia Central Exemplo | 2026-06-20 | review | HEIC decoding; pharmacy vs shopping receipt |
+| `ru/20-mosenergosbyt-kvitanciya-2026-08.pdf` | pdf-scan | `energy-bills`/2026 | invoice | Mosenergosbyt | 2026-09-03 | check | Cyrillic OCR; "Оплатить до" distractor |
+| `ru/21-fns-3ndfl-2025.pdf` | pdf-text | `taxes-russia`/2025 | tax-return | FNS | 2026-04-15 | check | Fiscal-period year folder; 20-digit budget code |
+| `ru/22-fns-uvedomlenie-2025.pdf` | pdf-text | `taxes-russia`/2025 | tax-assessment | FNS | 2026-09-01 | check | Payment deadline distractor; two ИНН (taxpayer and treasury) |
+| `ru/23-sber-vypiska-2026-07.pdf` | pdf-text | `bank-accounts`/2026 | statement | Sberbank | 2026-07-31 | check | 20-digit account with a valid control key for its БИК |
+| `ru/24-snils.jpg` | image-photo | `identity-documents` | id-document | SFR | 2015-06-14 | review | Card photo in Cyrillic; issuer is implicit (ПФР, now СФР) |
+| `ru/25-vypisnoy-epikriz.pdf` | pdf-scan | `medical-records`/2025 | medical-report | ГКБ № 1 | 2025-11-03 | check | Serif Cyrillic scan; admission-date distractor |
+| `ru/26-osago-polis.pdf` | pdf-text | `vehicle-insurance` | policy | Ingosstrakh | 2026-05-14 | check | Motor insurance policy; the insurer, not the car, is the correspondent |
+| `ru/27-dogovor-kupli-prodazhi.docx` | docx | `property` | contract | Пётр Образцов | 2018-11-20 | review | A private seller as correspondent; old document |
+| `ru/28-spravka-2ndfl-2025.pdf` | pdf-text | `income-and-payslips`/2026 | payslip | ООО Ромашка | 2026-02-10 | check | Annual income statement: year 2025 and type attestation also accepted |
+| `ru/29-egrn-vypiska.pdf` | pdf-text | `property` | certificate | Rosreestr | 2018-12-03 | check | "Выписка" here is a certificate, not a bank statement |
+| `ru/30-rostelecom-schet-koi8r.txt` | text | `telecom-bills`/2026 | invoice | Rostelecom | 2026-08-05 | review | KOI8-R (not valid UTF-8); 12-digit account that fails the ИНН check |
+| `ru/31-spravka-s-mesta-raboty.txt` | text | `employment` | attestation | ООО Ромашка | 2026-03-16 | review | Plain UTF-8 text without BOM |
+| `en/40-acme-employment-agreement.docx` | docx | `employment` | contract | Acme Ltd | 2024-01-15 | check | English contract; start-date distractor |
+| `en/41-acme-payslip-2026-08.pdf` | pdf-text | `income-and-payslips`/2026 | payslip | Acme Ltd | 2026-08-31 | check | UK payslip (NI number, tax code, year to date) |
+| `en/42-hetzner-invoice-2026-09.pdf` | pdf-text | `hosting-services`/2026 | invoice | Hetzner | 2026-09-01 | check | Billing period in the previous month |
+| `en/43-jetbrains-license.pdf` | pdf-text | `software-licences` | license | JetBrains | 2026-01-10 | check | "Valid until" distractor |
+| `en/44-revolut-transfer.png` | image-screenshot | `bank-accounts`/2026 | receipt | Revolut | 2026-09-12 | review | Phone screenshot (OCR path); Belgian IBAN |
+| `en/45-tap-booking.pdf` | pdf-text | `travel`/2026 | ticket | TAP | 2026-08-15 | check | Issue date vs flight dates |
+| `en/46-passport-scan.pdf` | pdf-scan | `identity-documents` | id-document | HM Passport Office | 2022-03-01 | review | ID page on the scanner glass; MRZ with valid check digits; SPECIMEN overprint |
+| `en/47-aima-appointment.eml` | eml | `residence-permits` | letter | AIMA | 2026-03-04 | check | RFC 2047 subject, 8bit / quoted-printable / base64 parts, `.ics` attachment |
+| `negative/90-budget-2026.xlsx` | xlsx | `needs-review` | other | – | – | review | Self-made spreadsheet, not a received document |
+| `negative/91-edp-fatura-2026-07-copy.pdf` | pdf-text | `duplicates` | – | – | – | review | Byte-identical copy of `pt/01` |
+| `negative/92-blank-scan.pdf` | pdf-scan | `needs-review` | – | – | – | review | Empty page with scanner noise only |
+| `negative/93-encrypted.pdf` | pdf-text | `needs-review` | – | – | – | review | User password (`password` field); an empty password fails |
+| `negative/94-corrupt.pdf` | pdf-text | `needs-review` | – | – | – | review | First 40 % of a valid PDF; PDFKit cannot read it |
 
 `core: true` marks the set the evaluation gates apply to. That is every fixture except `pt/14–16`,
 `ru/27–31` and `en/45–47`.
@@ -86,26 +86,24 @@ confidence band.
 ```json
 { "schema": 1, "baseline_version": 1, "seed": 42, "fixtures": [
   { "file": "pt/04-at-irs-modelo3-2025.pdf", "lang": "pt", "kind": "pdf-text", "core": true,
-    "expected": { "category": "23", "year_folder": "2025", "doc_type": "tax-return",
+    "expected": { "category": "taxes-portugal", "year_folder": "2025", "doc_type": "tax-return",
                   "correspondent": "Autoridade Tributária", "date": "2026-05-20",
                   "title_contains": ["Modelo 3", "2025"], "identifiers": ["ptNIF:999999990"],
-                  "renamed": "2026-05-20 Autoridade Tributária - Tax Return - IRS Modelo 3 ano 2025.pdf",
                   "min_band": "check" },
-    "accept_also": { "category": ["02"] } } ] }
+    "accept_also": { "category": ["needs-review"] } } ] }
 ```
 
 | Field | Meaning |
 |---|---|
 | `lang` | `pt`, `ru`, `en`, or `und` (no readable text) |
 | `kind` | `pdf-text`, `pdf-scan`, `image-photo`, `image-screenshot`, `docx`, `xlsx`, `text`, `eml` (the generator has no `pptx` fixture yet) |
-| `expected.category` | Johnny.Decimal category code; `02` Needs review, `03` Duplicates |
-| `expected.year_folder` | `YYYY` subfolder, or `null` for categories without year folders. For fiscal-period categories (23, 24) it is the tax year, not the year of the document date |
+| `expected.category` | A label shared by the fixtures that belong in one folder, such as `energy-bills` or `taxes-portugal`; `needs-review` and `duplicates` for files the app must hold back. Folders are created by the logic, so the eval scores grouping: fixtures with the same label should share a folder, and fixtures with different labels should not |
+| `expected.year_folder` | `YYYY` subfolder, or `null` for documents that do not go in a year folder. For tax documents (`taxes-portugal`, `taxes-russia`) it is the tax year, not the year of the document date |
 | `expected.doc_type` | Value of the app's `document_type` vocabulary; `null` when the file is not classified (duplicate, unreadable) |
 | `expected.correspondent` | Canonical name from `correspondents.yaml` when the organisation is listed there, otherwise the name as the document writes it |
 | `expected.date` | Issue date (never a due, period or birth date) as `YYYY-MM-DD` |
 | `expected.title_contains` | Words the generated title should contain, matched ignoring case and accents. All of them also appear in the document itself |
 | `expected.identifiers` | Every checksum-valid stable key in the document, as `kind:value` tokens (`ptNIF:…`, `ruINN:…`, `iban:…` without spaces). The list is complete: the generator and `--verify` fail if the text contains a 9-digit mod-11-valid number or a 10/12-digit checksum-valid ИНН that is not listed |
-| `expected.renamed` | Expected file name after filing (`{date} {correspondent} - {DocType} - {title}.{ext}`); `null` when the file is not renamed |
 | `expected.min_band` | Lowest acceptable band: `auto` must auto-file; `check` means auto or check; `review` accepts any band |
 | `expected.warnings` | Extraction warnings the app should raise (`encrypted`, `corrupted`, `encodingGuessed`, `emptyText`); present only when non-empty |
 | `accept_also` | Alternative answers that still count as a pass, per field (`category`, `year_folder`, `doc_type`, `correspondent`) |

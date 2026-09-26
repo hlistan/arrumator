@@ -17,7 +17,7 @@ import Testing
     }
 
     @Test func aForgottenExampleIsNoLongerEvidence() async throws {
-        let h = try await ClassifyHarness.make(handler: Fixtures.answering(code: "11"))
+        let h = try await ClassifyHarness.make(handler: Fixtures.answering())
         defer { h.env.cleanup() }
         _ = try await learnEDP(h)
         let history = HistoryStore(database: h.env.database)
@@ -38,7 +38,7 @@ import Testing
     }
 
     @Test func everyExampleTheAppFilesByIsListedAndForgettingTakesItOff() async throws {
-        let h = try await ClassifyHarness.make(handler: Fixtures.answering(code: "11"))
+        let h = try await ClassifyHarness.make(handler: Fixtures.answering())
         defer { h.env.cleanup() }
         let folder = try await h.env.folder("Utilities", area: "Home", yearly: true)
         try await h.fileConfirmed(Fixtures.content("confirmed.pdf", text: Fixtures.edpText, keys: [nif]), into: folder)
@@ -63,7 +63,7 @@ import Testing
     }
 
     @Test func undoingAFilingIsForgettingNotALesson() async throws {
-        let h = try await ClassifyHarness.make(handler: Fixtures.answering(code: "11"))
+        let h = try await ClassifyHarness.make(handler: Fixtures.answering())
         defer { h.env.cleanup() }
         let folder = try await h.env.folder("Utilities", area: "Home", yearly: true)
         try await h.fileConfirmed(Fixtures.content("edp.pdf", text: Fixtures.edpText, keys: [nif]), into: folder)
@@ -76,7 +76,7 @@ import Testing
     }
 
     @Test func aForgottenRuleStopsPlacingAndDoesNotFormAgain() async throws {
-        let h = try await ClassifyHarness.make(handler: Fixtures.answering(code: "11"))
+        let h = try await ClassifyHarness.make(handler: Fixtures.answering())
         defer { h.env.cleanup() }
         let folder = try await learnEDP(h)
         let induced = try #require(try await HistoryStore(database: h.env.database).events(limit: 20, kinds: [.ruleInduced]).first)
@@ -93,7 +93,7 @@ import Testing
     }
 
     @Test func forgettingANameOrASender() async throws {
-        let h = try await ClassifyHarness.make(handler: Fixtures.answering(code: "11"))
+        let h = try await ClassifyHarness.make(handler: Fixtures.answering())
         defer { h.env.cleanup() }
         _ = try await learnEDP(h)
         let edp = try #require(try await h.store.correspondents().first { $0.canonicalName == "EDP Comercial" })

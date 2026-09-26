@@ -16,7 +16,7 @@ public enum DocumentPlace: Sendable, Hashable {
 extension TaxonomySnapshot {
     /// The folder a directory of documents belongs to: the folder itself, or the one around a year folder.
     public func folder(holding directory: URL) -> TaxonomyFolder? {
-        let isYear = JDCode.isYearFolder(directory.lastPathComponent)
+        let isYear = YearFolder.matches(directory.lastPathComponent)
         let owner = (isYear ? directory.deletingLastPathComponent() : directory).standardizedFileURL.path
         return folders.first { url(for: $0).standardizedFileURL.path == owner }
     }

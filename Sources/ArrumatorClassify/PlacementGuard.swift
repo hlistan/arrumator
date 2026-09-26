@@ -2,11 +2,21 @@ import ArrumatorCore
 import Foundation
 
 public struct GuardedPlacement: Sendable, Codable, Hashable {
+    /// The existing folder the whole path leads to; nil when part of it has to be created.
     public var folderCode: String?
     public var newFolder: FolderSpec?
-    /// Name similarity between the model's ideal category and the final existing folder (nil for a new folder).
+    /// How similar the last level of the path is to the existing folder it became (nil for a new folder).
     public var idealSimilarity: Double?
     public var notes: [String]
+    /// Why the document must wait for the user instead: the path would put it with another sender's documents.
+    public var conflict: String?
+}
+
+/// Tells whether a level of a decided path is a folder that already exists beside it under another name. Behind a
+/// protocol so the guard can be tested without a model.
+public protocol FolderJudge: Sendable {
+    /// Whether `level`, which the logic calls for inside `place`, is the existing `folder`; nil when it cannot tell.
+    func isSame(_ level: FolderLevel, as folder: TaxonomyFolder, inside place: String) async throws -> Bool?
 }
 
 /// Embeddings of folder names, cached per model and name.
@@ -25,12 +35,22 @@ public actor NameVectors {
     }
 }
 
-/// Checks the model's mapping from the ideal home it described onto the actual tree. Names that carry different
-/// qualifiers in parentheses ("Taxes (Portugal)" vs "Taxes (Russia)") are different categories by the organising
-/// principles, however similar they look. Otherwise: an existing folder whose name does not resemble the ideal
-/// category, or that sits in an area unlike the ideal area, is replaced by the ideal (new) folder — so logic can
-/// move a topic to another part of the archive; a new folder that nearly duplicates an existing one in the ideal
-/// area reuses it; a new area that nearly duplicates an existing area joins it.
+/// Places the path the model decided by the logic onto the actual tree, from the top down, so that nothing is filed
+/// where it does not belong while the tree keeps the shape the logic gives it.
+///
+/// - A level that stands for the document's sender is that sender's folder, recognised by the documents in it (their
+///   sender was recognised by what identifies it: a tax number, an IBAN, a domain), never by the folder's name. A known
+///   sender's documents go where its documents are under the current logic, however the model words or arranges the
+///   path this time, but only under the subject the document is about: a bank serving a company and a person has a
+///   folder under each. A folder holding another sender's documents is never reused, and one of the same name there
+///   sends the document to review. Inside a sender's folder, a level joins the folder holding that sender's documents
+///   of the same type before a sibling is made for it.
+/// - Any other level is an existing folder of the same name, or of a name so close it would be a duplicate. A name
+///   only somewhat close is put to the `FolderJudge`, a few times per document at most, since deciding whether two
+///   described folders are the same is a question a model answers far more reliably than matching a whole tree
+///   (entity matching; Narayan et al., "Can Foundation Models Wrangle Your Data?", VLDB 2022). Unsure is not the same:
+///   a second folder is easier to put right than a document filed with the wrong ones.
+/// - Names with different qualifiers in parentheses ("… (Portugal)", "… (Russia)") are never the same folder.
 public struct PlacementGuard: Sendable {
     public let config: ClassificationConfig.PlacementGuard
 
@@ -48,67 +68,137 @@ public struct PlacementGuard: Sendable {
         return qa != qb
     }
 
-    /// Names whose embeddings the guard needs.
-    public static func names(for decision: ValidatedDecision, taxonomy: TaxonomySnapshot) -> [String] {
-        [decision.ideal.name] + [decision.ideal.newAreaName].compactMap { $0 }
-            + taxonomy.fileableCategories.map(\.name) + taxonomy.areas.filter { $0.origin != .system }.map(\.name)
+    /// Names whose embeddings the guard needs: the path's and those of the user's folders.
+    public static func names(for ideal: [FolderLevel], taxonomy: TaxonomySnapshot) -> [String] {
+        ideal.map(\.name) + taxonomy.folders.filter(\.holdsUserDocuments).map(\.name)
     }
 
-    public func review(_ decision: ValidatedDecision, taxonomy: TaxonomySnapshot, names: [String: [Float]]) -> GuardedPlacement {
-        var result = GuardedPlacement(folderCode: decision.folderCode, newFolder: decision.newFolder, idealSimilarity: nil, notes: [])
-        guard let ideal = names[decision.ideal.name] else { return result }
-        func similarity(_ name: String) -> Double? { names[name].map { Double(VectorCodec.dot(ideal, $0)) } }
-        /// How similar a category's area is to the ideal area, when both can be compared.
-        func areaSimilarity(_ folder: TaxonomyFolder) -> Double? {
-            guard decision.ideal.areaCode == nil, let idealArea = decision.ideal.newAreaName.flatMap({ names[$0] }),
-                  let area = folder.parentCode.flatMap({ taxonomy.folder(code: $0) }), let vector = names[area.name] else { return nil }
-            return Double(VectorCodec.dot(idealArea, vector))
+    /// - Parameters:
+    ///   - sender: the document's sender as recognised, nil for one the app does not know yet.
+    ///   - logic: `LogicStore.version` of the logic the path was decided by.
+    ///   - names: embeddings of `names(for:taxonomy:)`; without them, only the same name is the same folder.
+    public func place(_ ideal: [FolderLevel], sender: Int64?, documentType: DocumentType, logic: String, yearFolder: Bool,
+                      taxonomy: TaxonomySnapshot, names: [String: [Float]], judge: any FolderJudge) async throws -> GuardedPlacement {
+        var notes: [String] = []
+        var parent: String?
+        var similarity: Double?
+        var start = 0
+        var judged = 0
+        // A known sender's documents reach its folder whatever the model does with the levels this time: leaves the
+        // sender out, rearranges the ones above it, or adds one below it for documents the folder already holds.
+        let senderLevel = ideal.firstIndex { $0.kind == .sender }
+        if let sender, let home = home(of: sender, subjects: ideal[..<(senderLevel ?? ideal.count)].filter { $0.kind == .subject },
+                                       logic: logic, taxonomy: taxonomy, names: names) {
+            notes.append("the sender's documents are in \(taxonomy.path(of: home))")
+            parent = home.code
+            similarity = 1
+            start = home.documentTypes.contains(documentType) ? ideal.count : senderLevel.map { $0 + 1 } ?? ideal.count
         }
-        func inIdealArea(_ folder: TaxonomyFolder) -> Bool {
-            if let code = decision.ideal.areaCode { return folder.parentCode == code }
-            return (areaSimilarity(folder) ?? 1) >= config.areaMismatchBelow
-        }
-        if let code = decision.folderCode, let folder = taxonomy.folder(code: code) {
-            let sim = similarity(folder.name)
-            result.idealSimilarity = sim
-            if Self.qualifiersDiffer(decision.ideal.name, folder.name) {
-                result.notes.append("“\(folder.name)” and the ideal “\(decision.ideal.name)” differ in scope")
-                result.folderCode = nil
-                result.newFolder = decision.ideal
-            } else if let sim, sim < config.mismatchBelow {
-                result.notes.append(String(format: "“%@” is not the ideal “%@” (%.2f)", folder.name, decision.ideal.name, sim))
-                result.folderCode = nil
-                result.newFolder = decision.ideal
-            } else if !inIdealArea(folder) {
-                result.notes.append(String(format: "“%@” is in another part of the archive than the ideal area “%@” (%.2f)",
-                                           folder.name, decision.ideal.newAreaName ?? "", areaSimilarity(folder) ?? 0))
-                result.folderCode = nil
-                result.newFolder = decision.ideal
-            } else {
-                return result
+        for index in ideal.indices where index >= start {
+            let level = ideal[index]
+            let all = taxonomy.children(of: parent)
+            if let system = all.first(where: { !$0.holdsUserDocuments && TaxonomyStore.sameName($0.name, level.name) }) {
+                notes.append("“\(level.name)” is the app's own \(taxonomy.path(of: system)); nothing is filed there")
+                return GuardedPlacement(folderCode: nil, newFolder: nil, idealSimilarity: nil, notes: notes, conflict: nil)
             }
+            let inside = all.filter(\.holdsUserDocuments)
+            let resemblance = { (folder: TaxonomyFolder) -> Double? in
+                names[level.name].flatMap { vector in names[folder.name].map { Double(VectorCodec.dot(vector, $0)) } }
+            }
+            // Only a folder holding no documents but this sender's can take this document as a sender's folder;
+            // whatever the model calls the level, another sender's folder of the same name is never it.
+            let fits = { (folder: TaxonomyFolder) in sender.map { folder.senders.isSubset(of: [$0]) } ?? folder.senders.isEmpty }
+            if let same = inside.first(where: { TaxonomyStore.sameName($0.name, level.name) }),
+               level.kind == .sender || same.kind == .sender, !fits(same) {
+                let conflict = "“\(taxonomy.path(of: same))” holds another sender's documents"
+                return GuardedPlacement(folderCode: nil, newFolder: nil, idealSimilarity: nil, notes: notes + [conflict], conflict: conflict)
+            }
+            if level.kind == .sender {
+                if let sender, let own = inside.first(where: { $0.kind == .sender && $0.senders == [sender] }) {
+                    notes.append("“\(level.name)” is the sender's own “\(own.name)”")
+                    parent = own.code
+                    similarity = 1
+                    continue
+                }
+                if let same = inside.first(where: { TaxonomyStore.sameName($0.name, level.name) }) {
+                    parent = same.code
+                    similarity = 1
+                    continue
+                }
+                if let (folder, sim) = closest(inside.filter(fits), to: level, resemblance), sim >= config.duplicateAbove {
+                    notes.append(String(format: "“%@” is the existing “%@” (%.2f)", level.name, folder.name, sim))
+                    parent = folder.code
+                    similarity = sim
+                    continue
+                }
+            } else {
+                if let same = inside.first(where: { TaxonomyStore.sameName($0.name, level.name) }) {
+                    parent = same.code
+                    similarity = 1
+                    continue
+                }
+                if let above = parent.flatMap({ taxonomy.folder(code: $0) }), above.kind == .sender,
+                   let alike = inside.first(where: { $0.kind != .sender && $0.documentTypes.contains(documentType) }) {
+                    notes.append("“\(level.name)” is “\(alike.name)”, where the sender's \(documentType.rawValue) documents are")
+                    parent = alike.code
+                    similarity = 1
+                    continue
+                }
+                if let (folder, sim) = closest(inside.filter { $0.kind != .sender }, to: level, resemblance) {
+                    if sim >= config.duplicateAbove {
+                        notes.append(String(format: "“%@” is the existing “%@” (%.2f)", level.name, folder.name, sim))
+                        parent = folder.code
+                        similarity = sim
+                        continue
+                    }
+                    if sim >= config.judgeAbove, judged < config.maxJudgements {
+                        judged += 1
+                        let place = parent.flatMap { taxonomy.folder(code: $0) }.map { taxonomy.path(of: $0) } ?? ""
+                        let same = try await judge.isSame(level, as: folder, inside: place)
+                        notes.append(String(format: "“%@” and the existing “%@” (%.2f): %@", level.name, folder.name, sim,
+                                            same == true ? "the same folder" : same == false ? "different folders" : "unsure, kept apart"))
+                        if same == true {
+                            parent = folder.code
+                            similarity = sim
+                            continue
+                        }
+                    }
+                }
+            }
+            let rest = Array(ideal[index...])
+            notes.append("new: \(rest.map(\.name).joined(separator: TaxonomySnapshot.pathSeparator))"
+                         + (parent.flatMap { taxonomy.folder(code: $0) }.map { " inside \(taxonomy.path(of: $0))" } ?? ""))
+            return GuardedPlacement(folderCode: nil,
+                                    newFolder: FolderSpec(parentCode: parent, levels: rest, yearSubfolders: yearFolder,
+                                                          yearRule: yearFolder ? .documentDate : nil, logic: logic),
+                                    idealSimilarity: nil, notes: notes, conflict: nil)
         }
-        // The ideal (or proposed) folder may already exist under another code in the ideal area: reuse it rather than
-        // duplicate it.
-        if let best = taxonomy.fileableCategories.filter({ !Self.qualifiersDiffer(decision.ideal.name, $0.name) && inIdealArea($0) })
-            .compactMap({ f in similarity(f.name).map { (f, $0) } }).max(by: { $0.1 < $1.1 }), best.1 >= config.duplicateAbove {
-            result.notes.append(String(format: "“%@” already exists as %@ %@ (%.2f); reusing it", decision.ideal.name, best.0.code,
-                                       best.0.name, best.1))
-            result.folderCode = best.0.code
-            result.newFolder = nil
-            result.idealSimilarity = best.1
-            return result
-        }
-        if var spec = result.newFolder, spec.areaCode == nil, let areaName = spec.newAreaName, let areaVector = names[areaName],
-           let best = taxonomy.areas.filter({ $0.origin != .system })
-               .compactMap({ a in names[a.name].map { (a, Double(VectorCodec.dot(areaVector, $0))) } }).max(by: { $0.1 < $1.1 }),
-           best.1 >= config.areaMatchAbove {
-            result.notes.append(String(format: "new area “%@” is existing %@ %@ (%.2f)", areaName, best.0.code, best.0.name, best.1))
-            spec.areaCode = best.0.code
-            spec.newAreaName = nil
-            spec.newAreaDescription = nil
-            result.newFolder = spec
-        }
-        return result
+        return GuardedPlacement(folderCode: parent, newFolder: nil, idealSimilarity: similarity, notes: notes, conflict: nil)
+    }
+
+    /// The folder of `sender` that the current logic made, under the subjects the path names. When the path names no
+    /// subject, the sender's only folder; with folders under several subjects, none, rather than a guess.
+    private func home(of sender: Int64, subjects: ArraySlice<FolderLevel>, logic: String, taxonomy: TaxonomySnapshot,
+                      names: [String: [Float]]) -> TaxonomyFolder? {
+        let homes = taxonomy.folders.filter { $0.kind == .sender && $0.logic == logic && $0.senders == [sender] }
+        guard !subjects.isEmpty else { return homes.count == 1 ? homes.first : nil }
+        return homes.filter { home in
+            let above = taxonomy.lineage(of: home).dropLast()
+            return subjects.allSatisfy { level in
+                above.contains { folder in
+                    TaxonomyStore.sameName(level.name, folder.name)
+                        || (names[level.name].flatMap { v in names[folder.name].map { Double(VectorCodec.dot(v, $0)) } } ?? 0) >= config.duplicateAbove
+                }
+            }
+        }.max { $0.documentCount < $1.documentCount }
+    }
+
+    /// The folder among `candidates` whose name is closest to the level's, when names can be compared; one whose
+    /// qualifier differs never counts.
+    private func closest(_ candidates: [TaxonomyFolder], to level: FolderLevel,
+                         _ resemblance: (TaxonomyFolder) -> Double?) -> (TaxonomyFolder, Double)? {
+        candidates.filter { !Self.qualifiersDiffer(level.name, $0.name) }
+            .compactMap { folder in resemblance(folder).map { (folder, $0) } }
+            .max { $0.1 < $1.1 }
     }
 }

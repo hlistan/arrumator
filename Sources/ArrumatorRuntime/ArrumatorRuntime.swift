@@ -23,7 +23,8 @@ public final class ArrumatorRuntime: Sendable {
     public let settings: SettingsStore
     public let registry: SelfChangeRegistry
     public let taxonomy: TaxonomyStore
-    public let ollama: OllamaClient
+    /// The Ollama server in use; `useOllama(at:)` points it elsewhere.
+    public let ollama: OllamaConnection
     public let gate: InferenceGate
     public let lifecycle: OllamaLifecycle
     public let models: ModelManager
@@ -61,7 +62,26 @@ public final class ArrumatorRuntime: Sendable {
         try FileManager.default.createDirectory(at: current.archiveURL, withIntermediateDirectories: true)
         try paths.moveSingleIndex(to: try paths.indexURL(for: current.archiveURL))
         return try ArrumatorRuntime(appVersion: appVersion, environment: environment, paths: paths, config: config,
-                                    settings: settings, archive: current.archiveURL)
+                                    settings: settings, archive: current.archiveURL,
+                                    ollamaURL: try OllamaEndpoint.validated(environment.ollamaURL ?? current.ollamaURL))
+    }
+
+    /// Points the app at the Ollama server at `address` — this Mac or a machine on the local network — from now on,
+    /// and remembers it. An address elsewhere is refused and nothing changes. Whether the server answers is the
+    /// caller's to check (`lifecycle.ensureRunning()`).
+    public func useOllama(at address: String) async throws {
+        let url = try OllamaEndpoint.validated(address)
+        try ollama.connect(to: url)
+        let updated = try await settings.update { $0.ollamaURL = url.absoluteString }
+        await lifecycle.configure(management: Self.management(for: updated, at: url), binaryOverride: updated.ollamaBinaryPath)
+        try await services.history.record(.settingsChanged, actor: .user, summary: "Ollama at \(url.absoluteString)",
+                                          payload: ["ollamaURL": url.absoluteString])
+        Log.info(.ollama, "Using Ollama", ["url": url.absoluteString])
+    }
+
+    /// A server on another machine is the user's to run: the app starts and stops only one on this Mac.
+    public static func management(for settings: AppSettings, at url: URL) -> OllamaManagement {
+        OllamaEndpoint.isThisMac(url) ? settings.ollamaManagement : .external
     }
 
     /// Stops this runtime and returns one open on the archive at `path`, with that archive's own index, logic and
@@ -89,7 +109,7 @@ public final class ArrumatorRuntime: Sendable {
         // The new index opens before anything stops, so a failure leaves this runtime as it was.
         let nextSettings = try SettingsStore(paths: paths)
         let next = try ArrumatorRuntime(appVersion: appVersion, environment: environment, paths: paths, config: config,
-                                        settings: nextSettings, archive: target)
+                                        settings: nextSettings, archive: target, ollamaURL: ollama.baseURL)
         await stop()
         let waiting = try await JobStore(database: database).cancelActive(kinds: [.ingest])
         try await services.history.record(
@@ -107,6 +127,7 @@ public final class ArrumatorRuntime: Sendable {
     /// given the built-in text if it has none, and every stale record file written. Reads the archive, so macOS may
     /// first ask for access to it.
     public func openArchive() async throws {
+        await taxonomy.exclude([await settings.current.incomingURL])
         if opening.needsRebuild, try await records.archiveHasRecords() {
             let summary = try await records.rebuild()
             Log.info(.app, "Index rebuilt from the archive", ["documents": String(summary.documents), "queued": String(summary.queued)])
@@ -118,7 +139,7 @@ public final class ArrumatorRuntime: Sendable {
     }
 
     private init(appVersion: String, environment: RuntimeEnvironment, paths: AppPaths, config: PipelineConfig,
-                 settings: SettingsStore, archive: URL) throws {
+                 settings: SettingsStore, archive: URL, ollamaURL: URL) throws {
         self.appVersion = appVersion
         self.environment = environment
         self.paths = paths
@@ -132,7 +153,7 @@ public final class ArrumatorRuntime: Sendable {
         registry = SelfChangeRegistry(ttl: config.watcher.selfChangeTTLSeconds)
         taxonomy = TaxonomyStore(database: database, config: config.taxonomy, registry: registry)
         records = ArchiveRecords(database: database, settings: settings, taxonomy: taxonomy, config: config, registry: registry)
-        ollama = try OllamaClient(config: config.ollama)
+        ollama = try OllamaConnection(config: config.ollama, url: ollamaURL)
         gate = InferenceGate(api: ollama, retryDelays: config.ollama.retryDelays)
         models = ModelManager(api: ollama, config: config.ollama)
         lifecycle = OllamaLifecycle(api: ollama, config: config.ollama, management: .external, binaryOverride: nil)
@@ -248,12 +269,13 @@ public final class ArrumatorRuntime: Sendable {
 
     /// Applies (changed) settings: Ollama management, watched folders, embedding model for search.
     public func apply(_ current: AppSettings) async {
-        await lifecycle.configure(management: current.ollamaManagement, binaryOverride: current.ollamaBinaryPath)
+        await lifecycle.configure(management: Self.management(for: current, at: ollama.baseURL), binaryOverride: current.ollamaBinaryPath)
         Log.shared.setMinLevel(environment.logLevel ?? current.logLevel)
         do {
             try await prepareSearch(current)
             try FileManager.default.createDirectory(at: current.archiveURL, withIntermediateDirectories: true)
             try await incomingWatcher.start(root: current.incomingURL)
+            await taxonomy.exclude([current.incomingURL])
             try await archiveWatcher.start(root: current.archiveURL, excluding: [current.incomingURL])
             _ = try await taxonomy.sync(root: current.archiveURL)
         } catch {
@@ -314,7 +336,7 @@ public final class ArrumatorRuntime: Sendable {
     }
 
     public func runDoctor() async -> DoctorReport {
-        await doctor.run(settings: await settings.current, config: config, lifecycle: lifecycle, models: models)
+        await doctor.run(settings: await settings.current, config: config, lifecycle: lifecycle, models: models, ollamaURL: ollama.baseURL)
     }
 }
 

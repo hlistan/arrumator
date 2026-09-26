@@ -6,42 +6,8 @@ import Testing
 /// Logic belongs to the archive: each archive keeps its own, with an index of its own, and switching archives brings
 /// the other archive's logic with it (docs/storage.md).
 @Suite struct ArchiveSwitchingTests {
-    /// A scratch app home whose settings name scratch folders, never the user's archive or Incoming.
-    private struct Home {
-        let root: URL
-        let environment: RuntimeEnvironment
-
-        var paths: AppPaths { AppPaths.resolve(environment) }
-        func folder(_ name: String) -> URL { root.appendingPathComponent(name, isDirectory: true).standardizedFileURL }
-        func cleanup() { try? FileManager.default.removeItem(at: root) }
-
-        static func make() async throws -> Home {
-            let root = FileManager.default.temporaryDirectory.appendingPathComponent("arrumator-runtime-\(UUID().uuidString)",
-                                                                                   isDirectory: true)
-            var environment = RuntimeEnvironment.current
-            environment.home = root.appendingPathComponent("support").path
-            environment.ollamaURL = nil
-            environment.pipelineOverridePath = nil
-            environment.logLevel = .error
-            let home = Home(root: root, environment: environment)
-            try home.paths.ensureDirectories()
-            try await SettingsStore(paths: home.paths).update {
-                $0.archivePath = home.folder("First").path
-                $0.incomingPath = home.folder("Incoming").path
-            }
-            return home
-        }
-
-        /// What the app and every command do first.
-        func open() async throws -> ArrumatorRuntime {
-            let runtime = try await ArrumatorRuntime.bootstrap(appVersion: "test", environment: environment, echoLogsToStderr: false)
-            try await runtime.openArchive()
-            return runtime
-        }
-    }
-
     @Test func eachArchiveKeepsItsOwnLogic() async throws {
-        let home = try await Home.make()
+        let home = try await RuntimeHome.make()
         defer { home.cleanup() }
         let first = try await home.open()
         #expect(try await first.logic.current()?.followsBuiltin == true, "an archive starts with the built-in logic")
@@ -71,7 +37,7 @@ import Testing
     }
 
     @Test func theLogicLivesInTheArchiveSoALostIndexGetsItBack() async throws {
-        let home = try await Home.make()
+        let home = try await RuntimeHome.make()
         defer { home.cleanup() }
         do {
             let runtime = try await home.open()
@@ -87,7 +53,7 @@ import Testing
     }
 
     @Test func theIndexOfEarlierVersionsBecomesTheArchivesOwn() async throws {
-        let home = try await Home.make()
+        let home = try await RuntimeHome.make()
         defer { home.cleanup() }
         let single = home.paths.supportDirectory.appendingPathComponent("arrumator.sqlite")
         do {
@@ -103,7 +69,7 @@ import Testing
     }
 
     @Test func theSameFolderSpelledAnotherWayIsTheSameArchive() async throws {
-        let home = try await Home.make()
+        let home = try await RuntimeHome.make()
         defer { home.cleanup() }
         // The temporary folder lives under /private/var, reached as /var; the archive does not exist yet.
         let aliased = "/private" + home.folder("Aliased").path
@@ -125,7 +91,7 @@ import Testing
     }
 
     @Test func switchingRefusesWhatCannotBeAnArchive() async throws {
-        let home = try await Home.make()
+        let home = try await RuntimeHome.make()
         defer { home.cleanup() }
         let runtime = try await home.open()
         let file = home.root.appendingPathComponent("note.txt")

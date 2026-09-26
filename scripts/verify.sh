@@ -40,7 +40,7 @@ gate environment "only RuntimeEnvironment reads the process environment" \
   'ProcessInfo\.processInfo\.environment|getenv\(|setenv\(' \
   Sources App Tests
 
-gate network "only OllamaClient opens connections, through the loopback guard" \
+gate network "only OllamaClient opens connections, through the guard that admits only the configured local server" \
   '^Sources/ArrumatorCore/Ollama/(OllamaClient|NetworkGuard)\.swift:' \
   'URLSession\(|URLSession\.shared|URLSessionConfiguration\.(default|background)|^import Network$|NWConnection|WKWebView' \
   Sources App

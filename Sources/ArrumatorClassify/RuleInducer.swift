@@ -36,7 +36,7 @@ public struct RuleInducer: Sendable {
                 try await refresh(known, with: candidate, folder: folder, into: &result)
                 continue
             }
-            let rule = FilingRule(name: "\(correspondentName) · \(type.rawValue) → \(folder.code) \(folder.name)",
+            let rule = FilingRule(name: "\(correspondentName) · \(type.rawValue) → \(taxonomy.path(of: folder))",
                                   enabled: policy == .autoEnableAndNotify, priority: config.ruleInducedPriority, origin: .induced,
                                   predicates: predicates,
                                   action: RuleAction(folderID: folder.id, folderCode: folder.code, documentType: type,
@@ -51,7 +51,7 @@ public struct RuleInducer: Sendable {
             if let known = existing.first(where: { Set($0.predicates) == Set(predicates) }) {
                 try await refresh(known, with: candidate, folder: folder, into: &result)
             } else {
-                let rule = FilingRule(name: "\(correspondentName) → \(folder.code) \(folder.name)", enabled: policy == .autoEnableAndNotify,
+                let rule = FilingRule(name: "\(correspondentName) → \(taxonomy.path(of: folder))", enabled: policy == .autoEnableAndNotify,
                                       priority: config.correspondentRulePriority, origin: .induced, predicates: predicates,
                                       action: RuleAction(folderID: folder.id, folderCode: folder.code, correspondentID: correspondentID),
                                       support: candidate.support,

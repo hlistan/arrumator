@@ -5,7 +5,7 @@ public struct CalibrationInput: Sendable, Hashable {
     public var llmConfidence: Double?
     public var chosenCode: String?
     public var isNewFolder: Bool
-    /// Similarity between the model's ideal category and the chosen existing folder.
+    /// Similarity between the last level of the model's ideal path and the existing folder it became.
     public var idealSimilarity: Double?
     public var candidates: CandidateSet
     public var ruleHit: FilingRule?

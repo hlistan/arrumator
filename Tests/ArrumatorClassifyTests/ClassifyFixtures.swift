@@ -23,22 +23,35 @@ enum Fixtures {
     Total a pagar: 54,21 €   Data limite de pagamento: 25/07/2026
     """
 
-    static func answer(folder: String, newArea: String = "", idealArea: String = "Home", idealCategory: String = "Utilities",
-                       idealDescription: String = "Electricity, gas and water bills.", yearly: String = "yes",
-                       confidence: Double = 0.93, fileName: String = "2026-07-05 EDP - Fatura eletricidade junho") -> String {
-        """
-        {"rationale":"EDP electricity invoice","correspondent":"EDP Comercial","document_type":"invoice","document_date":"05/07/2026","period_year":"","language":"pt","title":"Fatura eletricidade junho","tags":["energy","Energy"],"ideal_area":"\(idealArea)","ideal_area_description":"\(idealArea) documents.","ideal_category":"\(idealCategory)","ideal_category_description":"\(idealDescription)","ideal_year_folders":"\(yearly)","folder_code":"\(folder)","new_folder_area_code":"\(newArea)","file_name":"\(fileName)","confidence":\(confidence)}
+    /// A model answer placing the document at `path`, from the top of the archive; the last folder is described as
+    /// `description`, the others by their name. `subject` is whom the document is about.
+    static func answer(path: [String] = ["Home", "Utilities"], description: String = "Electricity, gas and water bills.",
+                       correspondent: String = "EDP Comercial", subject: String = "", yearly: String = "yes", confidence: Double = 0.93,
+                       fileName: String = "2026-07-05 EDP - Fatura eletricidade junho") -> String {
+        let levels = path.enumerated().map { index, name in
+            let text = index == path.count - 1 ? description : "\(name) documents."
+            return #"{"name":"\#(name)","description":"\#(text)"}"#
+        }
+        return """
+        {"rationale":"EDP electricity invoice","correspondent":"\(correspondent)","subject":"\(subject)","document_type":"invoice","document_date":"05/07/2026","period_year":"","language":"pt","title":"Fatura eletricidade junho","tags":["energy","Energy"],"ideal_path":[\(levels.joined(separator: ","))],"ideal_year_folder":"\(yearly)","file_name":"\(fileName)","confidence":\(confidence)}
         """
     }
 
-    /// Picks `code` when the schema allows it, otherwise creates the ideal "Home / Utilities" folder.
-    static func answering(code: String?) -> MockOllama.ChatHandler {
-        { request in
-            let allowed = request.format?["properties"]?["folder_code"]?["enum"]?.arrayValue?.compactMap(\.stringValue) ?? []
-            if let code, allowed.contains(code) { return answer(folder: code) }
-            return answer(folder: "NEW", newArea: "NEW")
-        }
+    /// Answers every request as `answer(path:)` does: the model always decides the same home, and cannot tell whether
+    /// two folders are the same.
+    static func answering(path: [String] = ["Home", "Utilities"]) -> MockOllama.ChatHandler {
+        { request in isJudge(request) ? same("unsure") : answer(path: path) }
     }
+
+    /// The request asking whether a decided folder is one that exists.
+    static func isJudge(_ request: OllamaChatRequest) -> Bool { request.format?["properties"]?["same"] != nil }
+
+    /// An answer to that request: "yes", "no" or "unsure".
+    static func same(_ verdict: String) -> String { #"{"same":"\#(verdict)"}"# }
+
+    /// The request that decides a document's path from the logic.
+    static func isDecision(_ request: OllamaChatRequest) -> Bool { request.format?["properties"]?["ideal_path"] != nil }
+
 }
 
 /// Classifier and learner over an empty temporary archive with a mock Ollama.
@@ -83,6 +96,17 @@ struct ClassifyHarness {
         record.correspondent = correspondent
         if folderID != nil { record.status = .filed; record.filedAt = Date() }
         return try await DocumentStore(database: env.database).save(record).id ?? 0
+    }
+
+    /// A document from `sender` filed into `folder`.
+    func filed(_ name: String, into folder: TaxonomyFolder, from sender: Int64) async throws {
+        var record = DocumentRecord.arrived(path: "/tmp/\(name)", sha256: UUID().uuidString, size: 1, uttype: "com.adobe.pdf",
+                                            inode: nil, modified: nil)
+        record.folderId = folder.id
+        record.status = .filed
+        record.filedAt = Date()
+        record.correspondentId = sender
+        _ = try await DocumentStore(database: env.database).save(record)
     }
 
     func classify(_ content: ExtractedContent, mode: ClassificationMode = .arrival,

@@ -50,6 +50,10 @@ public struct AppSettings: Sendable, Codable, Hashable {
     public var inducedRulePolicy: InducedRulePolicy
     public var thresholds: Thresholds
     public var models: ModelSelection
+    /// Where Ollama answers: this Mac or a machine on the local network (`OllamaEndpoint`). `ARRUMATOR_OLLAMA_URL`
+    /// takes its place while set.
+    public var ollamaURL: String
+    /// How the app starts Ollama on this Mac; a server on another machine is never started or stopped by the app.
     public var ollamaManagement: OllamaManagement
     public var ollamaBinaryPath: String?
     public var enableVLM: Bool

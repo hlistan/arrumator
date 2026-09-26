@@ -519,11 +519,17 @@ public actor ArchiveRecords {
     /// Cheaply, without walking the archive: whether it has the system folders that hold learned state, logic and
     /// history, which every archive the app has written records into has.
     public static func mayHoldRecords(archive: URL, config: PipelineConfig) -> Bool {
-        let area = archive.appendingPathComponent("\(config.taxonomy.systemArea.code) \(config.taxonomy.systemArea.name)")
-        return [FolderRole.learned, .logic, .history].contains { role in
-            config.taxonomy.systemFolder(role).map {
-                FileManager.default.fileExists(atPath: area.appendingPathComponent("\($0.code) \($0.name)").path)
-            } ?? false
+        func definition(_ directory: URL) -> FolderDefinition? {
+            let url = directory.appendingPathComponent(config.taxonomy.aboutFileName)
+            guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+            return try? AboutFile.parse(text, path: url.path).definition
+        }
+        func directories(_ url: URL) -> [URL] {
+            (try? FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])) ?? []
+        }
+        let roles: Set<FolderRole> = [.learned, .logic, .history]
+        return directories(archive).contains { area in
+            definition(area)?.origin == .system && directories(area).contains { definition($0)?.role.map(roles.contains) ?? false }
         }
     }
 
@@ -625,9 +631,15 @@ public actor ArchiveRecords {
             }
             _ = try await store.save(document)
         }
+        // A file put by hand into one of the user's folders, at any depth or in its year folder, is filed there.
         let jobs = JobStore(database: database)
-        for path in untracked where isInsideCategory(URL(fileURLWithPath: path), root: root) {
-            if try await jobs.enqueue(path: path, kind: .adopt) != nil { summary.adopted += 1 }
+        let tree = try await taxonomy.snapshot(root: root)
+        for path in untracked {
+            guard let folder = tree.folder(holding: URL(fileURLWithPath: path).deletingLastPathComponent()), folder.holdsUserDocuments
+            else { continue }
+            var payload = JobPayload()
+            payload.userFolderID = folder.id
+            if try await jobs.enqueue(path: path, kind: .adopt, payload: payload) != nil { summary.adopted += 1 }
         }
     }
 
@@ -641,12 +653,6 @@ public actor ArchiveRecords {
             files.append(url.standardizedFileURL)
         }
         return files
-    }
-
-    /// `root/Area/Category/[YYYY/]file`, the only places documents are filed.
-    private func isInsideCategory(_ url: URL, root: URL) -> Bool {
-        let depth = url.standardizedFileURL.pathComponents.count - root.standardizedFileURL.pathComponents.count
-        return depth == 3 || (depth == 4 && JDCode.isYearFolder(url.deletingLastPathComponent().lastPathComponent))
     }
 
     private func queueReindex(summary: inout RebuildSummary) async throws {

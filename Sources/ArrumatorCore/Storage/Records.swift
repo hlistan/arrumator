@@ -37,12 +37,13 @@ public struct FolderRecord: ArrumatorRecord, Identifiable, Hashable {
     public var code: String
     public var name: String
     public var relPath: String
-    public var kind: String
     public var role: String?
     public var autoFile: Bool
     public var yearSubfolders: Bool
     public var yearRule: String
     public var origin: String
+    public var levelKind: String?
+    public var logicVersion: String?
     public var description: String
     public var aboutJson: String
     public var descriptionHash: String

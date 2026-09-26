@@ -103,7 +103,8 @@ struct StepDetail: View {
         if !insights.overlaps.isEmpty {
             Text("Folders that look alike, which makes matching harder").font(.subheadline.weight(.medium))
             ForEach(insights.overlaps, id: \.self) { overlap in
-                Text("\(overlap.a) and \(overlap.b)").font(.callout)
+                Text("\(Wording.path(ofCode: overlap.a, in: model.taxonomy)) and \(Wording.path(ofCode: overlap.b, in: model.taxonomy))")
+                    .font(.callout)
             }
         }
     }
@@ -180,7 +181,7 @@ struct StepDetail: View {
             ForEach(insights.confusion, id: \.self) { pair in
                 HStack {
                     Text("\(pair.count)").monospacedDigit().frame(width: 40, alignment: .trailing)
-                    Text("filed into \(pair.from), you moved to \(pair.to)")
+                    Text("filed into \(Wording.path(ofCode: pair.from, in: model.taxonomy)), you moved to \(Wording.path(ofCode: pair.to, in: model.taxonomy))")
                     Spacer()
                 }
                 .font(.callout)
@@ -192,7 +193,7 @@ struct StepDetail: View {
             Text("Folders you correct most").font(.subheadline.weight(.medium))
             ForEach(busy.prefix(6), id: \.code) { folder in
                 HStack {
-                    Text("\(folder.code) \(folder.name)")
+                    Text(model.taxonomy?.path(ofCode: folder.code, separator: Wording.pathSeparator) ?? folder.name)
                     Spacer()
                     Text("\(folder.documents) filed · \(folder.correctionsIn) moved in · \(folder.correctionsOut) moved out")
                         .foregroundStyle(.secondary)

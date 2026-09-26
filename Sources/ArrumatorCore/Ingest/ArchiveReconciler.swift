@@ -61,7 +61,7 @@ public actor ArchiveReconciler {
                                              traceID: doc.lastTraceId)
             try await GRDBLearningStore(database: services.database).insertCorrection(correction)
             try await services.history.record(.userMoved, actor: .user, doc: docID,
-                                              summary: "\(oldName) moved to \(newFolder.code) \(newFolder.name)", payload: correction)
+                                              summary: "\(oldName) moved to \(taxonomy.path(of: newFolder))", payload: correction)
             await services.learner.correctionRecorded(correction, trace: .disabled)
             if newFolder.acceptsFiles, let content = try await services.documents.content(docID: docID) {
                 var decision = doc.decision ?? FilingDecision(folderCode: newFolder.code, title: content.source.stem,
@@ -95,19 +95,17 @@ public actor ArchiveReconciler {
         if try await services.documents.document(path: path) != nil { return }
         let settings = await services.settings.current
         let taxonomy = try await services.taxonomy.snapshot(root: settings.archiveURL)
-        guard let folder = folder(containing: path, taxonomy: taxonomy), folder.role == nil else { return }
+        guard let folder = folder(containing: path, taxonomy: taxonomy), folder.holdsUserDocuments else { return }
         var payload = JobPayload()
         payload.userFolderID = folder.id
         try await services.jobs.enqueue(path: path, kind: .adopt, payload: payload)
-        try await services.history.record(.adopted, actor: .user, summary: "\((path as NSString).lastPathComponent) added to \(folder.code)",
+        try await services.history.record(.adopted, actor: .user, summary: "\((path as NSString).lastPathComponent) added to \(taxonomy.path(of: folder))",
                                           payload: ["path": path])
         await coordinator.wake()
     }
 
-    /// Category containing `path` (directly or in a year subfolder).
+    /// The folder `path` is in, directly or in one of its year folders: the deepest that contains it.
     private func folder(containing path: String, taxonomy: TaxonomySnapshot) -> TaxonomyFolder? {
-        taxonomy.folders.filter { $0.kind == .category }
-            .filter { path.hasPrefix(taxonomy.url(for: $0).path + "/") }
-            .max { $0.relativePath.count < $1.relativePath.count }
+        taxonomy.folder(holding: URL(fileURLWithPath: path).deletingLastPathComponent())
     }
 }

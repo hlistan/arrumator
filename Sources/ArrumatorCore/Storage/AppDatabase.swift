@@ -518,6 +518,20 @@ public struct AppDatabase: Sendable {
                            arguments: [EventKind.forgot.rawValue, EventKind.learned.rawValue, "Forgot where this was filed"])
         }
 
+        /// The folder tree takes the shape the logic describes, at any depth, so a folder is no longer an area or a
+        /// category; where it sits is its parent.
+        m.registerMigration("v9_foldersOfAnyDepth") { db in
+            try db.execute(sql: "ALTER TABLE folders DROP COLUMN kind")
+        }
+        /// What a folder stands for in the logic that made it (a sender, a subject or a topic) and which logic that was,
+        /// so a sender's folder is recognised by its sender, not its name. Read from each folder's `_about.md`.
+        m.registerMigration("v10_folderKinds") { db in
+            try db.execute(sql: """
+            ALTER TABLE folders ADD COLUMN level_kind TEXT;
+            ALTER TABLE folders ADD COLUMN logic_version TEXT;
+            """)
+        }
+
         return m
     }
 

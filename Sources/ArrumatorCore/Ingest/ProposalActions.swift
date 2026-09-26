@@ -47,7 +47,7 @@ public struct ProposalActions: Sendable {
             def.description = p.description
             def.autoFile = true
             def.origin = .learned
-            let body = about.body.isEmpty ? "# \(record.code) \(record.name)\n\n\(p.description)" : about.body
+            let body = about.body.isEmpty ? TaxonomyStore.body(title: record.name, description: p.description) : about.body
             try await taxonomy.updateDescription(folderID: p.folderID, root: root, definition: def, body: body, actor: .system)
         case .rule:
             guard var p = JSON.decode(RuleProposal.self, from: proposal.payloadJson) else { throw ProposalError.unreadablePayload(id) }
@@ -86,7 +86,7 @@ public struct ProposalActions: Sendable {
         }
         let url = await taxonomy.aboutURL(for: record, root: root)
         if let about = try? await taxonomy.readAbout(url) { return (about, record) }
-        let def = FolderDefinition(code: record.code, area: JDCode.area(of: record.code), name: record.name,
+        let def = FolderDefinition(code: record.code, name: record.name,
                                    description: record.description, yearSubfolders: record.yearSubfolders,
                                    yearRule: YearRule(rawValue: record.yearRule), autoFile: record.autoFile,
                                    origin: FolderOrigin(rawValue: record.origin))

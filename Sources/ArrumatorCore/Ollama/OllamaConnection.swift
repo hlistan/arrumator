@@ -1,0 +1,33 @@
+import Foundation
+import Synchronization
+
+/// The Ollama server the app talks to. Every service holds this connection, which forwards to the client for the
+/// current address, so pointing the app at another server on the local network needs no restart.
+public final class OllamaConnection: OllamaAPI, Sendable {
+    private let config: OllamaConfig
+    private let client: Mutex<OllamaClient>
+
+    public init(config: OllamaConfig, url: URL) throws {
+        self.config = config
+        client = Mutex(try OllamaClient(config: config, baseURL: url))
+    }
+
+    public var baseURL: URL { client.withLock { $0.baseURL } }
+
+    /// Talks to the server at `url` from now on. `url` must come from `OllamaEndpoint.validated`.
+    public func connect(to url: URL) throws {
+        let next = try OllamaClient(config: config, baseURL: url)
+        client.withLock { $0 = next }
+    }
+
+    private var current: OllamaClient { client.withLock { $0 } }
+
+    public func version() async throws -> String { try await current.version() }
+    public func tags() async throws -> [OllamaModelInfo] { try await current.tags() }
+    public func running() async throws -> [OllamaRunningModel] { try await current.running() }
+    public func show(model: String) async throws -> OllamaShowResponse { try await current.show(model: model) }
+    public func chat(_ request: OllamaChatRequest) async throws -> OllamaChatResponse { try await current.chat(request) }
+    public func embed(_ request: OllamaEmbedRequest) async throws -> OllamaEmbedResponse { try await current.embed(request) }
+    public func pull(model: String) -> AsyncThrowingStream<OllamaPullProgress, any Error> { current.pull(model: model) }
+    public func unload(model: String) async throws { try await current.unload(model: model) }
+}

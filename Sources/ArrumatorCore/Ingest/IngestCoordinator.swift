@@ -322,7 +322,7 @@ public actor IngestCoordinator {
         payload.outcome = outcome
         let d = outcome.decision
         try await services.history.record(.classified, doc: docID, job: job.id, trace: trace.traceID,
-                                          summary: "\(d.folderCode ?? "review") · \(d.band.rawValue) · \(String(format: "%.2f", d.confidence.final))",
+                                          summary: "\(taxonomy.destination(of: d).map { ($0.isNew ? "new " : "") + $0.path } ?? "review") · \(d.band.rawValue) · \(String(format: "%.2f", d.confidence.final))",
                                           payload: d)
         try await save(&job, payload, state: .filing)
         return outcome

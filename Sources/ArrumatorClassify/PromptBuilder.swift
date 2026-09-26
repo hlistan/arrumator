@@ -1,8 +1,11 @@
 import ArrumatorCore
 import Foundation
 
-/// Renders the placement prompt from templates plus the current folder tree, learned hints, similar past filings
-/// and the document itself.
+/// Renders the prompts that place and name a document. The path is decided from the archive's logic and the document
+/// alone: shown folders, any at all, a model copies them whether they fit or not (an older arrangement's, another
+/// sender's that looks alike, one broad area for everything). The app maps the path onto the tree itself, resolving each
+/// level by identity (`PlacementGuard`), and asks the model only narrow questions about folders that may be the same
+/// (`judgeUser`).
 public struct PromptBuilder: Sendable {
     public let library: PromptLibrary
     public let config: ClassificationConfig
@@ -53,65 +56,40 @@ public struct PromptBuilder: Sendable {
 
     public func nameUser(content: ExtractedContent, decision: FilingDecision, folder: TaxonomyFolder, taxonomy: TaxonomySnapshot,
                          correspondents: [CorrespondentMatch]) throws -> String {
-        let area = folder.parentCode.flatMap { taxonomy.folder(code: $0) }.map { " (in \($0.code) \($0.name))" } ?? ""
         let recent = folder.recentTitles.prefix(config.promptExamplesPerFolder)
         let known = [("Correspondent", decision.correspondent), ("Document type", decision.documentType == .other ? nil : decision.documentType.rawValue),
                      ("Document date", decision.documentDate)]
             .compactMap { label, value in value.map { "\(label): \($0)" } }
         return try library.render("name-user", [
-            "folder": "\(folder.code) \(folder.name)\(area) — \(folder.description)",
+            "folder": "\(taxonomy.path(of: folder)) — \(folder.description)",
             "recent": recent.isEmpty ? "(none yet)" : recent.map { "- \($0)" }.joined(separator: "\n"),
             "known": known.isEmpty ? "(nothing beyond the document itself)" : known.joined(separator: "\n"),
             "document": documentBlock(content, correspondents: correspondents),
         ])
     }
 
-    public func classifyUser(content: ExtractedContent, candidates: CandidateSet, taxonomy: TaxonomySnapshot,
-                             hints: [String], correspondents: [CorrespondentMatch]) throws -> String {
-        try library.render("classify-user", [
-            "folders": folderBlock(candidates, taxonomy: taxonomy),
-            "areas": areaBlock(taxonomy),
-            "hints": hints.isEmpty ? "(none)" : hints.map { "- \($0)" }.joined(separator: "\n"),
-            "memories": memoryBlock(candidates.memories, taxonomy: taxonomy),
-            "document": documentBlock(content, correspondents: correspondents),
+    /// Deciding the path: only the document. Shown any folder, a model copies it whether it fits or not.
+    public func classifyUser(content: ExtractedContent, correspondents: [CorrespondentMatch]) throws -> String {
+        try library.render("classify-user", ["document": documentBlock(content, correspondents: correspondents)])
+    }
+
+    /// Asking whether a decided folder is one that exists beside it under another name.
+    public func judgeSystem(folderLanguage: String, logic: LogicRecord?) throws -> String {
+        try library.render("judge-system", ["logic": try logicBlock(logic, folderLanguage: folderLanguage)])
+    }
+
+    public func judgeUser(level: FolderLevel, folder: TaxonomyFolder, place: String) throws -> String {
+        let recent = folder.recentTitles.prefix(config.promptExamplesPerFolder)
+        return try library.render("judge-user", [
+            "place": place.isEmpty ? "(the top of the archive)" : place,
+            "decided": "\(level.name) — \(level.description)",
+            "existing": "\(folder.name) — \(folder.description)"
+                + (recent.isEmpty ? "" : "\nHolds, for example: " + recent.map { "\"\($0)\"" }.joined(separator: "; ")),
         ])
     }
 
     public func repair(errors: String) throws -> String {
         try library.render("repair-user", ["errors": errors])
-    }
-
-    func folderBlock(_ set: CandidateSet, taxonomy: TaxonomySnapshot) -> String {
-        guard !set.ranked.isEmpty else { return "(none yet — the archive is empty, so propose the first folder)" }
-        var lines: [String] = []
-        for (rank, candidate) in set.ranked.enumerated() {
-            guard let f = taxonomy.folder(code: candidate.code) else { continue }
-            let area = f.parentCode.flatMap { taxonomy.folder(code: $0) }.map { " (in \($0.code) \($0.name))" } ?? ""
-            lines.append("- \(f.code) \(f.name)\(area) — \(f.description)")
-            if rank < config.promptDetailedFolders, !f.body.isEmpty {
-                let body = f.body.replacingOccurrences(of: "\n", with: " ").prefix(config.promptFolderBodyChars)
-                lines.append("  Details: \(body)")
-            }
-            let recent = f.recentTitles.prefix(config.promptExamplesPerFolder)
-            if !recent.isEmpty { lines.append("  Recent files: " + recent.map { "\"\($0)\"" }.joined(separator: "; ")) }
-            if !f.learnedCorrespondents.isEmpty { lines.append("  Usual correspondents: " + f.learnedCorrespondents.joined(separator: ", ")) }
-            if f.yearSubfolders { lines.append("  Split by year") }
-        }
-        return lines.joined(separator: "\n")
-    }
-
-    func areaBlock(_ taxonomy: TaxonomySnapshot) -> String {
-        let areas = taxonomy.areas.filter { area in taxonomy.children(of: area.code).allSatisfy { $0.role == nil } && area.origin != .system }
-        guard !areas.isEmpty else { return "(none yet)" }
-        return areas.map { "- \($0.code) \($0.name) — \($0.description)" }.joined(separator: "\n")
-    }
-
-    func memoryBlock(_ memories: [ScoredMemory], taxonomy: TaxonomySnapshot) -> String {
-        guard !memories.isEmpty else { return "(none yet)" }
-        return memories.enumerated().map { i, m in
-            let folder = taxonomy.folder(id: m.memory.folderID).map { "\($0.code) \($0.name)" } ?? m.memory.folderCode
-            return "\(i + 1). → \(folder) | \(m.memory.summaryLine) | similarity \(String(format: "%.2f", m.similarity))"
-        }.joined(separator: "\n")
     }
 
     func documentBlock(_ c: ExtractedContent, correspondents: [CorrespondentMatch]) -> String {

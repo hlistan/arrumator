@@ -1,8 +1,9 @@
 import Foundation
 import Synchronization
 
-/// Fails every request whose host is not on the loopback allow-list and records it as a violation.
-/// Installed on the only `URLSession` the app creates, so document data cannot leave the Mac.
+/// Fails every request whose host is not the Ollama server the app was pointed at (this Mac, or one on the local
+/// network; see `OllamaEndpoint`) and records it as a violation. Installed on the only `URLSession` the app creates,
+/// so document data cannot reach any other machine.
 public final class NetworkGuardProtocol: URLProtocol, @unchecked Sendable {
     private struct State {
         var allowedHosts: Set<String> = []

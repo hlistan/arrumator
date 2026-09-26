@@ -58,7 +58,14 @@ public struct RethinkRunRecord: ArrumatorRecord, Identifiable, Hashable {
 
     public mutating func didInsert(_ inserted: InsertionSuccess) { id = inserted.rowID }
 
-    public var plannedFolders: [PlannedFolder] { JSON.decode([PlannedFolder].self, from: plannedFoldersJson) ?? [] }
+    /// The folders the plan would create. A plan an earlier version wrote in another shape is reported, never read as
+    /// planning no folders, which would move documents into folders that do not exist.
+    public func plannedFolders() throws -> [PlannedFolder] {
+        guard let folders = JSON.decode([PlannedFolder].self, from: plannedFoldersJson) else {
+            throw RethinkError.unreadablePlan(id ?? 0)
+        }
+        return folders
+    }
 }
 
 /// What a rethink decided for one document.
@@ -94,21 +101,22 @@ public struct RethinkItemRecord: ArrumatorRecord, Identifiable, Hashable {
     public var isUserChoice: Bool { status == .unsure && canMove }
 }
 
-/// A category a plan intends to create, with its code reserved, and the area to create first when that is new too.
+/// A folder a plan intends to create, with its code reserved: inside an existing folder, inside another planned one,
+/// or at the top of the archive. Plans list them parents first.
 public struct PlannedFolder: Sendable, Codable, Hashable {
     public var code: String
     public var name: String
     public var description: String
-    public var areaCode: String
-    public var newArea: PlannedArea?
+    /// Existing or planned; nil at the top of the archive.
+    public var parentCode: String?
     public var yearSubfolders: Bool
     public var yearRule: YearRule?
-}
-
-public struct PlannedArea: Sendable, Codable, Hashable {
-    public var code: String
-    public var name: String
-    public var description: String
+    /// What the folder stands for in the logic the plan follows, and that logic's `LogicStore.version`.
+    public var kind: LevelKind?
+    public var logic: String?
+    /// The senders and types of the documents the plan puts in it, so the plan's later documents from them join it.
+    public var senders: Set<Int64>
+    public var documentTypes: Set<DocumentType>
 }
 
 public enum RethinkError: Error, LocalizedError {
@@ -117,6 +125,7 @@ public enum RethinkError: Error, LocalizedError {
     case notReady(RethinkRunStatus)
     case notPlanning(RethinkRunStatus)
     case cannotMove(Int64)
+    case unreadablePlan(Int64)
 
     public var errorDescription: String? {
         switch self {
@@ -125,6 +134,7 @@ public enum RethinkError: Error, LocalizedError {
         case let .notReady(status): "The rethink is \(status.rawValue), not ready to apply"
         case let .notPlanning(status): "The rethink is \(status.rawValue); only a plan still being made can be stopped"
         case let .cannotMove(item): "Plan item #\(item) stays where it is; there is nowhere to move it"
+        case let .unreadablePlan(run): "Rethink #\(run) was planned by an earlier version and cannot be read; discard it and plan again"
         }
     }
 }
@@ -195,10 +205,36 @@ public struct RethinkStore: Sendable {
         try await database.reader.read { db in try RethinkItemRecord.fetchOne(db, key: id) }
     }
 
-    /// The planned folders that applying would create for the ticked documents that can move, in plan order.
+    /// The planned folders that applying would create for the ticked documents that can move, and the planned folders
+    /// they are in, in plan order.
     public static func folders(_ planned: [PlannedFolder], neededBy items: [RethinkItemRecord]) -> [PlannedFolder] {
-        let codes = Set(items.filter { $0.selected && $0.canMove }.compactMap(\.targetCode))
-        return planned.filter { codes.contains($0.code) }
+        let byCode = Dictionary(planned.map { ($0.code, $0) }, uniquingKeysWith: { a, _ in a })
+        var needed = Set<String>()
+        for target in items.filter({ $0.selected && $0.canMove }).compactMap(\.targetCode) {
+            var code: String? = target
+            while let current = code, let folder = byCode[current], needed.insert(current).inserted { code = folder.parentCode }
+        }
+        return planned.filter { needed.contains($0.code) }
+    }
+
+    /// Where a planned folder would be, by name from the top of the archive, through existing and planned folders.
+    public static func path(of folder: PlannedFolder, planned: [PlannedFolder], taxonomy: TaxonomySnapshot?,
+                            separator: String = TaxonomySnapshot.pathSeparator) -> String {
+        var names = [folder.name]
+        var code = folder.parentCode
+        var seen: Set<String> = [folder.code]
+        while let current = code, seen.insert(current).inserted {
+            if let parent = planned.first(where: { $0.code == current }) {
+                names.insert(parent.name, at: 0)
+                code = parent.parentCode
+            } else if let existing = taxonomy?.folder(code: current), let taxonomy {
+                names.insert(taxonomy.path(of: existing, separator: separator), at: 0)
+                code = nil
+            } else {
+                code = nil
+            }
+        }
+        return names.joined(separator: separator)
     }
 
     public func nextPending(runID: Int64) async throws -> RethinkItemRecord? {

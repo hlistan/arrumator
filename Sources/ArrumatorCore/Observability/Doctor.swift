@@ -32,8 +32,9 @@ public struct Doctor: Sendable {
         self.appVersion = appVersion
     }
 
-    public func run(settings: AppSettings, config: PipelineConfig, lifecycle: OllamaLifecycle,
-                    models: ModelManager) async -> DoctorReport {
+    /// - Parameter ollamaURL: the server in use; one on another machine is the user's to install and run.
+    public func run(settings: AppSettings, config: PipelineConfig, lifecycle: OllamaLifecycle, models: ModelManager,
+                    ollamaURL: URL) async -> DoctorReport {
         var checks: [DoctorCheck] = []
         let fm = FileManager.default
         func add(_ name: String, _ ok: Bool, _ detail: String, warnOnly: Bool = false) {
@@ -56,11 +57,15 @@ public struct Doctor: Sendable {
         } catch {
             add("Database", false, error.localizedDescription)
         }
-        let install = await lifecycle.discover()
-        add("Ollama installed", install.binaryURL != nil || install.appURL != nil,
-            install.appURL?.path ?? install.binaryURL?.path ?? "not found")
+        let local = OllamaEndpoint.isThisMac(ollamaURL)
+        if local {
+            let install = await lifecycle.discover()
+            add("Ollama installed", install.binaryURL != nil || install.appURL != nil,
+                install.appURL?.path ?? install.binaryURL?.path ?? "not found")
+        }
         let state = await lifecycle.check()
-        add("Ollama running", state.isReady, state.summary, warnOnly: true)
+        add("Ollama running", state.isReady,
+            local ? state.summary : "\(state.summary) at \(ollamaURL.absoluteString), a machine on the local network", warnOnly: true)
         var modelStatus: [ModelStatus] = []
         if state.isReady, let resolved = try? config.models(for: settings.models) {
             modelStatus = (try? await models.status(for: resolved)) ?? []
@@ -68,13 +73,14 @@ public struct Doctor: Sendable {
                 add("Model \(m.role)", m.installed, m.installed ? m.name : "\(m.name) is not installed", warnOnly: m.role == "fast")
             }
         }
-        if let values = try? fm.homeDirectoryForCurrentUser.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]),
+        if local, let values = try? fm.homeDirectoryForCurrentUser.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]),
            let free = values.volumeAvailableCapacityForImportantUsage {
             let gb = Double(free) / 1_073_741_824
             add("Free disk", gb > config.ollama.requiredFreeDiskGBAfterPull, String(format: "%.1f GB", gb), warnOnly: true)
         }
         let violations = NetworkGuardProtocol.violations
-        add("Network stays local", violations.isEmpty, violations.isEmpty ? "no blocked requests" : violations.joined(separator: ", "))
+        add("Network stays local", violations.isEmpty,
+            violations.isEmpty ? "no blocked requests; Ollama at \(ollamaURL.absoluteString)" : violations.joined(separator: ", "))
         let report = DoctorReport(generatedAt: Date(), appVersion: appVersion,
                                   macOS: ProcessInfo.processInfo.operatingSystemVersionString,
                                   paths: ["support": paths.supportDirectory.path, "logs": paths.logsDirectory.path,

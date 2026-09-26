@@ -12,7 +12,7 @@ struct FolderEditor: View {
 
     var body: some View {
         VStack(alignment: .leading) {
-            Text("\(folder.code) \(folder.name)").font(.title3.bold())
+            Text(model.taxonomy.map { Wording.path(of: folder, in: $0) } ?? folder.name).font(.title3.bold())
             Text("Describe what belongs here and what does not. Arrumator reads this when deciding where new files go.")
                 .font(.callout).foregroundStyle(.secondary)
             TextField("Description", text: $description, axis: .vertical).lineLimit(3...6)
@@ -28,7 +28,7 @@ struct FolderEditor: View {
                     Task {
                         await model.perform("Save description") { runtime in
                             let settings = await runtime.settings.current
-                            let def = FolderDefinition(code: folder.code, area: folder.parentCode, name: folder.name, role: folder.role,
+                            let def = FolderDefinition(code: folder.code, name: folder.name, role: folder.role,
                                                        description: description, yearSubfolders: yearly,
                                                        yearRule: yearly ? folder.yearRule : nil, autoFile: folder.autoFile || folder.origin == .inferred,
                                                        origin: .user)

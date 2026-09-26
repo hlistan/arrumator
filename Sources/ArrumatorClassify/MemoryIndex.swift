@@ -68,7 +68,7 @@ public struct FolderEmbeddingCache: Sendable {
         self.taxonomy = taxonomy
     }
 
-    public func vectors(for folders: [TaxonomyFolder]) async throws -> [String: [Float]] {
+    public func vectors(for folders: [TaxonomyFolder], in snapshot: TaxonomySnapshot) async throws -> [String: [Float]] {
         var out: [String: [Float]] = [:]
         var missing: [TaxonomyFolder] = []
         for f in folders {
@@ -84,7 +84,9 @@ public struct FolderEmbeddingCache: Sendable {
             }
         }
         guard !missing.isEmpty else { return out }
-        let texts = missing.map { $0.embeddingText(bodyChars: taxonomy.embeddingBodyChars, exampleLimit: taxonomy.embeddingExampleLimit) }
+        let texts = missing.map {
+            $0.embeddingText(path: snapshot.path(of: $0), bodyChars: taxonomy.embeddingBodyChars, exampleLimit: taxonomy.embeddingExampleLimit)
+        }
         let vectors = try await embedder.embed(texts)
         for (f, v) in zip(missing, vectors) {
             out[f.code] = v

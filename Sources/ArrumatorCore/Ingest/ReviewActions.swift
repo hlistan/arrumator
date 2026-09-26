@@ -47,7 +47,7 @@ public struct ReviewActions: Sendable {
         try await file(doc, into: folder, source: source, taxonomy: taxonomy, settings: settings)
     }
 
-    /// Creates a folder the user described (possibly in a new area) and files the document there.
+    /// Creates the folders the user described, at any depth, and files the document in the last.
     public func createFolderAndFile(_ docID: Int64, spec: FolderSpec) async throws {
         let settings = await services.settings.current
         let folder = try await services.taxonomy.materialize(spec, root: settings.archiveURL, origin: .user)

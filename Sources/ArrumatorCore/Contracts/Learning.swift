@@ -91,9 +91,10 @@ public enum RulePredicate: Sendable, Codable, Hashable {
         return false
     }
 
-    public var summary: String {
+    /// The condition in words, the sender named by `sender`; a database id never reaches a reader.
+    public func summary(sender: (Int64) -> String?) -> String {
         switch self {
-        case let .correspondent(id): "correspondent #\(id)"
+        case let .correspondent(id): "from \(sender(id) ?? Self.forgottenSender)"
         case let .stableKey(token): "identifier \(token)"
         case let .textRegex(p): "text ~ /\(p)/"
         case let .filenameGlob(g): "filename \(g)"
@@ -104,6 +105,9 @@ public enum RulePredicate: Sendable, Codable, Hashable {
         case let .documentType(t): "document type \(t.rawValue)"
         }
     }
+
+    /// How a condition names a sender the app no longer knows.
+    public static let forgottenSender = "a sender it has forgotten"
 }
 
 public struct RuleAction: Sendable, Codable, Hashable {
@@ -174,6 +178,18 @@ public struct FilingRule: Sendable, Codable, Identifiable, Hashable {
         let total = Double(agreeing + contradictions)
         return total > 0 ? Double(agreeing) / total : 0
     }
+
+    /// The sender the rule is about, when it names one. Rules the app forms are always about a sender.
+    public var senderID: Int64? {
+        predicates.lazy.compactMap { predicate -> Int64? in
+            if case let .correspondent(id) = predicate { id } else { nil }
+        }.first
+    }
+
+    /// When the rule applies, in words: "from EDP Comercial and document type invoice".
+    public func condition(sender: (Int64) -> String?) -> String {
+        predicates.map { $0.summary(sender: sender) }.joined(separator: " and ")
+    }
 }
 
 public enum CorrespondentOrigin: String, Sendable, Codable {
@@ -206,6 +222,11 @@ public struct Correspondent: Sendable, Codable, Identifiable, Hashable {
         self.defaultFolderCode = defaultFolderCode
         self.filedCount = filedCount
         self.origin = origin
+    }
+
+    /// Each sender's name by its id, for naming the senders in rule conditions.
+    public static func names(_ senders: [Correspondent]) -> [Int64: String] {
+        Dictionary(senders.map { ($0.id, $0.canonicalName) }, uniquingKeysWith: { first, _ in first })
     }
 }
 

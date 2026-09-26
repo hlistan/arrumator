@@ -6,7 +6,7 @@ enum FolderChoice {
     case new(FolderSpec)
 }
 
-/// Pick an existing category or describe a new one (optionally in a new area).
+/// Pick any folder of the tree, or name a new one inside any folder or at the top of the archive.
 struct FolderChooser: View {
     @Environment(AppModel.self) private var model
     let title: String
@@ -14,11 +14,13 @@ struct FolderChooser: View {
     @State private var taxonomy: TaxonomySnapshot?
     @State private var selected: Int64?
     @State private var creating = false
-    @State private var area: String = ""
-    @State private var newArea = ""
+    /// The folder a new one goes in; the top of the archive when empty.
+    @State private var parent = ""
     @State private var name = ""
     @State private var description = ""
     @State private var yearly = false
+
+    private var tree: [(folder: TaxonomyFolder, depth: Int)] { taxonomy?.outline(include: \.holdsUserDocuments) ?? [] }
 
     var body: some View {
         VStack(alignment: .leading) {
@@ -31,27 +33,27 @@ struct FolderChooser: View {
             .labelsHidden()
             if creating {
                 Form {
-                    Picker("Area", selection: $area) {
-                        ForEach(taxonomy?.areas.filter { $0.origin != .system } ?? []) { Text("\($0.code) \($0.name)").tag($0.code) }
-                        Text("New area…").tag("")
+                    Picker("Inside", selection: $parent) {
+                        Text("Top of the archive").tag("")
+                        ForEach(tree, id: \.folder.id) { item in
+                            Text(taxonomy.map { Wording.path(of: item.folder, in: $0) } ?? item.folder.name).tag(item.folder.code)
+                        }
                     }
-                    if area.isEmpty { TextField("New area name", text: $newArea) }
                     TextField("Folder name", text: $name)
                     TextField("What belongs here", text: $description, axis: .vertical).lineLimit(2...4)
                     Toggle("Split by year", isOn: $yearly)
                 }
             } else {
                 List(selection: $selected) {
-                    ForEach(taxonomy?.areas ?? []) { area in
-                        Section("\(area.code) \(area.name)") {
-                            ForEach(taxonomy?.children(of: area.code).filter { $0.role == nil } ?? []) { f in
-                                VStack(alignment: .leading) {
-                                    Text("\(f.code) \(f.name)")
-                                    Text(f.description).font(.caption).foregroundStyle(.secondary).lineLimit(2)
-                                }
-                                .tag(f.id)
+                    ForEach(tree, id: \.folder.id) { item in
+                        VStack(alignment: .leading) {
+                            Text(item.folder.name)
+                            if !item.folder.description.isEmpty {
+                                Text(item.folder.description).font(.caption).foregroundStyle(.secondary).lineLimit(2)
                             }
                         }
+                        .padding(.leading, CGFloat(item.depth - 1) * Style.outlineIndent)
+                        .tag(item.folder.id)
                     }
                 }
                 .frame(minHeight: 280)
@@ -61,15 +63,15 @@ struct FolderChooser: View {
                 Button("Cancel") { done(nil) }.keyboardShortcut(.cancelAction)
                 Button(creating ? "Create and move" : "Move") {
                     if creating {
-                        done(.new(FolderSpec(areaCode: area.isEmpty ? nil : area, newAreaName: area.isEmpty ? newArea : nil,
-                                             newAreaDescription: area.isEmpty ? newArea : nil, name: name, description: description,
+                        done(.new(FolderSpec(parentCode: parent.isEmpty ? nil : parent,
+                                             levels: [FolderLevel(name: name, description: description)],
                                              yearSubfolders: yearly, yearRule: yearly ? .documentDate : nil)))
                     } else if let selected {
                         done(.existing(selected))
                     }
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(creating ? name.isEmpty || (area.isEmpty && newArea.isEmpty) : selected == nil)
+                .disabled(creating ? name.trimmingCharacters(in: .whitespaces).isEmpty : selected == nil)
             }
         }
         .padding()
@@ -77,7 +79,6 @@ struct FolderChooser: View {
         .task {
             guard let archive = model.settings?.archiveURL else { return }
             taxonomy = await model.load("Load folders") { try await $0.taxonomy.snapshot(root: archive) }
-            area = taxonomy?.areas.first { $0.origin != .system }?.code ?? ""
         }
     }
 }

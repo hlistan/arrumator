@@ -60,6 +60,29 @@ public struct CorrespondentResolver: Sendable {
         return correspondents.first { c in ([c.canonicalName] + c.aliases).contains { TextNormalizer.normalize(stripSuffixes($0)) == n } }
     }
 
+    /// Whether `name` is `correspondent` written another way: one of its names begins with the other, legal forms aside
+    /// ("EDP Comercial – Comercialização de Energia, S.A." and "EDP Comercial").
+    public func resembles(_ name: String, _ correspondent: Correspondent) -> Bool {
+        resembles(name, anyOf: [correspondent.canonicalName] + correspondent.aliases)
+    }
+
+    /// Whether `name` is one of `names` written another way, legal forms aside: one begins with the other, word for
+    /// word. A name's distinctive part comes first, so a name that merely contains another ("Unilabs Portugal" and
+    /// "Portugal") is not it.
+    public func resembles(_ name: String, anyOf names: [String]) -> Bool {
+        let n = TextNormalizer.normalize(stripSuffixes(name))
+        guard !n.isEmpty else { return false }
+        return names.contains { known in
+            let k = TextNormalizer.normalize(stripSuffixes(known))
+            return !k.isEmpty && (Self.begins(n, with: k) || Self.begins(k, with: n))
+        }
+    }
+
+    static func begins(_ text: String, with start: String) -> Bool {
+        guard text.hasPrefix(start) else { return false }
+        return text.count == start.count || text.dropFirst(start.count).first == " "
+    }
+
     private func nameAppears(_ name: String, raw: String, padded: String) -> Bool {
         let normalized = TextNormalizer.normalize(stripSuffixes(name))
         // Very short names are only trusted as exact, case-sensitive words.

@@ -125,8 +125,8 @@ enum PortugueseFixtures {
         var fake = Fake(seed: seed, salt: file)
         let issued = Day(2026, 8, 5)
         let document = edpDocument(cast: cast, bill: julyBill, issued: issued, due: Day(2026, 8, 25), fake: &fake)
-        return .filed(file, .pt, .pdfText, core: true, category: "32", year: 2026, type: .invoice,
-                      correspondent: "EDP", date: issued, title: "Eletricidade julho 2026",
+        return .filed(file, .pt, .pdfText, core: true, category: "energy-bills", year: 2026, type: .invoice,
+                      correspondent: "EDP", date: issued,
                       titleContains: ["eletricidade", "julho"],
                       identifiers: [.ptNIF(cast.maria.nif), .ptNIF(cast.edp.taxID)],
                       payload: .pdfText(document))
@@ -137,8 +137,8 @@ enum PortugueseFixtures {
         var fake = Fake(seed: seed, salt: file)
         let issued = Day(2026, 9, 5)
         let document = edpDocument(cast: cast, bill: augustBill, issued: issued, due: Day(2026, 9, 25), fake: &fake)
-        return .filed(file, .pt, .pdfScan, core: true, category: "32", year: 2026, type: .invoice,
-                      correspondent: "EDP", date: issued, title: "Eletricidade agosto 2026",
+        return .filed(file, .pt, .pdfScan, core: true, category: "energy-bills", year: 2026, type: .invoice,
+                      correspondent: "EDP", date: issued,
                       titleContains: ["eletricidade", "agosto"],
                       identifiers: [.ptNIF(cast.maria.nif), .ptNIF(cast.edp.taxID)],
                       payload: .pdfScan(.document(document)))
@@ -187,8 +187,8 @@ enum PortugueseFixtures {
                 .paragraph("O detalhe das chamadas e a segunda via desta fatura estão disponíveis na Área de Cliente em meo.pt."),
                 .note("Fatura processada por programa certificado n.º \(fake.int(1000...2999))/AT. Os valores incluem IVA à taxa legal em vigor."),
             ])
-        return .filed(file, .pt, .pdfText, core: true, category: "33", year: 2026, type: .invoice,
-                      correspondent: "MEO", date: issued, title: "Fibra e TV agosto 2026",
+        return .filed(file, .pt, .pdfText, core: true, category: "telecom-bills", year: 2026, type: .invoice,
+                      correspondent: "MEO", date: issued,
                       titleContains: ["Fibra", "agosto"],
                       identifiers: [.ptNIF(cast.maria.nif), .ptNIF(cast.meo.taxID)],
                       invalidIdentifiers: [.ptNIF(Fake.invalidNIF)],
@@ -242,10 +242,10 @@ enum PortugueseFixtures {
                 .paragraph("A declaração foi submetida através do Portal das Finanças e validada centralmente. Pode acompanhar a liquidação em IRS › Consultar Declaração."),
                 .note("Este comprovativo não dispensa a consulta da nota de liquidação, que será disponibilizada no Portal das Finanças."),
             ])
-        return .filed(file, .pt, .pdfText, core: true, category: "23", year: 2025, type: .taxReturn,
-                      correspondent: "Autoridade Tributária", date: received, title: "IRS Modelo 3 ano 2025",
+        return .filed(file, .pt, .pdfText, core: true, category: "taxes-portugal", year: 2025, type: .taxReturn,
+                      correspondent: "Autoridade Tributária", date: received,
                       titleContains: ["Modelo 3", "2025"], identifiers: [.ptNIF(cast.maria.nif)],
-                      acceptAlso: AcceptAlso(category: ["02"]), payload: .pdfText(document))
+                      acceptAlso: AcceptAlso(category: ["needs-review"]), payload: .pdfText(document))
     }
 
     static func irsAssessment(cast: Cast, seed: UInt64) -> Fixture {
@@ -288,8 +288,8 @@ enum PortugueseFixtures {
                 .fields([Field("Data prevista do reembolso", Day(2026, 6, 26).iso)]),
                 .note("Desta liquidação pode ser apresentada reclamação graciosa no prazo de 120 dias ou impugnação judicial no prazo de 3 meses, contados do termo do prazo de pagamento voluntário."),
             ])
-        return .filed(file, .pt, .pdfText, core: true, category: "23", year: 2025, type: .taxAssessment,
-                      correspondent: "Autoridade Tributária", date: assessed, title: "Nota de liquidação IRS 2025",
+        return .filed(file, .pt, .pdfText, core: true, category: "taxes-portugal", year: 2025, type: .taxAssessment,
+                      correspondent: "Autoridade Tributária", date: assessed,
                       titleContains: ["liquidação", "2025"],
                       identifiers: [.ptNIF(cast.maria.nif), .iban(cast.maria.iban)], payload: .pdfText(document))
     }
@@ -323,10 +323,10 @@ enum PortugueseFixtures {
                 .paragraph("O NISS deve ser comunicado à entidade empregadora e indicado em todos os contactos com a Segurança Social. Os seus dados podem ser consultados na Segurança Social Direta."),
                 .note("Documento emitido eletronicamente pela Segurança Social Direta. Código de validação: \(fake.letters(4))-\(fake.letters(4))-\(fake.int(1000...9999))."),
             ])
-        return .filed(file, .pt, .pdfText, core: true, category: "11", year: nil, type: .attestation,
-                      correspondent: "Segurança Social", date: issued, title: "Comprovativo de NISS",
+        return .filed(file, .pt, .pdfText, core: true, category: "identity-documents", year: nil, type: .attestation,
+                      correspondent: "Segurança Social", date: issued,
                       titleContains: ["NISS"], identifiers: [.ptNIF(cast.maria.nif)],
-                      acceptAlso: AcceptAlso(category: ["27"]), payload: .pdfText(document))
+                      acceptAlso: AcceptAlso(category: ["social-security"]), payload: .pdfText(document))
     }
 
     static func contributionStatus(cast: Cast, seed: UInt64) -> Fixture {
@@ -355,8 +355,8 @@ enum PortugueseFixtures {
                 .paragraph("A autenticidade desta declaração pode ser confirmada em www.seg-social.pt, opção Consultar declaração, com o NISS e o código de acesso indicados."),
                 .note("Documento emitido através da Segurança Social Direta. Não carece de assinatura."),
             ])
-        return .filed(file, .pt, .pdfText, core: false, category: "27", year: 2026, type: .attestation,
-                      correspondent: "Segurança Social", date: issued, title: "Declaração de situação contributiva",
+        return .filed(file, .pt, .pdfText, core: false, category: "social-security", year: 2026, type: .attestation,
+                      correspondent: "Segurança Social", date: issued,
                       titleContains: ["situação contributiva"], identifiers: [.ptNIF(cast.maria.nif)],
                       payload: .pdfText(document))
     }
@@ -397,10 +397,10 @@ enum PortugueseFixtures {
             ])
         let photo = Photo(subject: .card(card), format: .jpeg,
                           taken: DateTimeStamp(Day(2025, 2, 3), hour: 18, minute: 22, second: 10))
-        return .filed(file, .pt, .imagePhoto, core: true, category: "13", year: nil, type: .idDocument,
-                      correspondent: "AIMA", date: issued, title: "Título de residência",
+        return .filed(file, .pt, .imagePhoto, core: true, category: "residence-permits", year: nil, type: .idDocument,
+                      correspondent: "AIMA", date: issued,
                       titleContains: ["Título", "residência"], minBand: .review,
-                      acceptAlso: AcceptAlso(category: ["11"]), payload: .photo(photo))
+                      acceptAlso: AcceptAlso(category: ["identity-documents"]), payload: .photo(photo))
     }
 
     // MARK: 08 Millennium bcp statement
@@ -465,8 +465,8 @@ enum PortugueseFixtures {
                 ]),
                 .note("Os depósitos estão abrangidos pelo Fundo de Garantia de Depósitos até 100.000 € por depositante. Comunique qualquer divergência no prazo de 30 dias."),
             ])
-        return .filed(file, .pt, .pdfText, core: true, category: "21", year: 2026, type: .statement,
-                      correspondent: "Millennium BCP", date: end, title: "Extrato conta à ordem agosto 2026",
+        return .filed(file, .pt, .pdfText, core: true, category: "bank-accounts", year: 2026, type: .statement,
+                      correspondent: "Millennium BCP", date: end,
                       titleContains: ["Extrato", "agosto"],
                       identifiers: [.ptNIF(cast.maria.nif), .iban(cast.maria.iban), .ptNIF(cast.millennium.taxID)],
                       payload: .pdfText(document))
@@ -511,8 +511,8 @@ enum PortugueseFixtures {
                 .columns(left: ["O Senhorio", "", "______________________________", cast.joao.name],
                          right: ["A Arrendatária", "", "______________________________", cast.maria.name]),
             ])
-        return .filed(file, .pt, .docx, core: true, category: "31", year: nil, type: .contract,
-                      correspondent: "João Exemplo", date: signed, title: "Contrato de arrendamento Rua Exemplo 12",
+        return .filed(file, .pt, .docx, core: true, category: "property", year: nil, type: .contract,
+                      correspondent: "João Exemplo", date: signed,
                       titleContains: ["arrendamento"],
                       identifiers: [.ptNIF(cast.joao.nif), .ptNIF(cast.maria.nif), .iban(cast.joao.iban)],
                       payload: .docx(document))
@@ -555,8 +555,8 @@ enum PortugueseFixtures {
                 .paragraph("O locador declara ter recebido do locatário a importância acima indicada, relativa à renda de setembro de 2026 do imóvel identificado."),
                 .note("Recibo emitido pelo locador no Portal das Finanças nos termos do artigo 115.º do Código do IRS. Documento processado por computador."),
             ])
-        return .filed(file, .pt, .pdfText, core: true, category: "34", year: 2026, type: .receipt,
-                      correspondent: "João Exemplo", date: issued, title: "Renda setembro 2026",
+        return .filed(file, .pt, .pdfText, core: true, category: "rent", year: 2026, type: .receipt,
+                      correspondent: "João Exemplo", date: issued,
                       titleContains: ["Renda", "setembro"],
                       identifiers: [.ptNIF(cast.joao.nif), .ptNIF(cast.maria.nif)], payload: .pdfText(document))
     }
@@ -611,8 +611,8 @@ enum PortugueseFixtures {
                 .paragraph("Resultados assinalados com H encontram-se acima do intervalo de referência. A interpretação deve ser feita pelo médico assistente."),
                 .note("Validado por: Dr. Rui Exemplo, Especialista em Patologia Clínica. Relatório emitido eletronicamente."),
             ])
-        return .filed(file, .pt, .pdfText, core: true, category: "41", year: 2026, type: .medicalReport,
-                      correspondent: "Unilabs", date: reported, title: "Análises clínicas",
+        return .filed(file, .pt, .pdfText, core: true, category: "medical-records", year: 2026, type: .medicalReport,
+                      correspondent: "Unilabs", date: reported,
                       titleContains: ["Análises", "Clínicas"], identifiers: [.ptNIF(cast.unilabs.taxID)],
                       payload: .pdfText(document))
     }
@@ -659,8 +659,8 @@ enum PortugueseFixtures {
                 .paragraph("Períodos de carência: 90 dias para ambulatório e hospitalização, 365 dias para parto. As doenças preexistentes à data de início estão excluídas, salvo declaração aceite pelo segurador."),
                 .paragraph("O cartão Multicare será enviado para a morada do tomador. Pode consultar a rede de prestadores convencionados em www.multicare.pt."),
             ])
-        return .filed(file, .pt, .pdfText, core: true, category: "61", year: nil, type: .policy,
-                      correspondent: "Multicare", date: issued, title: "Apólice seguro de saúde",
+        return .filed(file, .pt, .pdfText, core: true, category: "health-insurance", year: nil, type: .policy,
+                      correspondent: "Multicare", date: issued,
                       titleContains: ["Apólice", "Saúde"],
                       identifiers: [.ptNIF(cast.maria.nif), .ptNIF(cast.multicare.taxID)], payload: .pdfText(document))
     }
@@ -725,8 +725,8 @@ enum PortugueseFixtures {
         ])
         let photo = Photo(subject: .receipt(receipt), format: .jpeg,
                           taken: DateTimeStamp(bought.day, hour: 18, minute: 55, second: 3, utcOffsetMinutes: 60))
-        return .filed(file, .pt, .imagePhoto, core: true, category: "28", year: 2026, type: .receipt,
-                      correspondent: "Continente", date: bought.day, title: "Fatura simplificada supermercado",
+        return .filed(file, .pt, .imagePhoto, core: true, category: "shopping-receipts", year: 2026, type: .receipt,
+                      correspondent: "Continente", date: bought.day,
                       titleContains: ["Fatura", "simplificada"], identifiers: [.ptNIF(cast.maria.nif), .ptNIF(cast.continente.taxID)],
                       minBand: .review, acceptAlso: AcceptAlso(docType: [.invoice]), payload: .photo(photo))
     }
@@ -768,8 +768,8 @@ enum PortugueseFixtures {
         ])
         let photo = Photo(subject: .receipt(receipt), format: .heic,
                           taken: DateTimeStamp(bought.day, hour: 11, minute: 31, second: 2, utcOffsetMinutes: 60))
-        return .filed(file, .pt, .imagePhoto, core: false, category: "42", year: 2026, type: .receipt,
-                      correspondent: "Farmácia Central Exemplo", date: bought.day, title: "Fatura-recibo medicamentos",
+        return .filed(file, .pt, .imagePhoto, core: false, category: "pharmacy", year: 2026, type: .receipt,
+                      correspondent: "Farmácia Central Exemplo", date: bought.day,
                       titleContains: ["Fatura-recibo"], identifiers: [.ptNIF(cast.maria.nif), .ptNIF(cast.pharmacy.taxID)],
                       minBand: .review, acceptAlso: AcceptAlso(docType: [.invoice]), payload: .photo(photo))
     }
@@ -825,8 +825,8 @@ enum PortugueseFixtures {
         rows.append([.text("Prazo de execução: 2 dias úteis após adjudicação. Garantia dos trabalhos: 2 anos.")])
         let workbook = Workbook(title: "Orçamento reparação casa de banho", creator: "Canalizações Exemplo", created: issued,
                                 sheets: [Sheet(name: "Orçamento", columnWidths: [48, 8, 8, 16, 14], rows: rows)])
-        return .filed(file, .pt, .xlsx, core: false, category: "35", year: nil, type: .quote,
-                      correspondent: "Canalizações Exemplo", date: issued, title: "Orçamento reparação casa de banho",
+        return .filed(file, .pt, .xlsx, core: false, category: "home-repairs", year: nil, type: .quote,
+                      correspondent: "Canalizações Exemplo", date: issued,
                       titleContains: ["Orçamento", "casa de banho"],
                       identifiers: [.ptNIF(cast.plumber.taxID), .ptNIF(cast.maria.nif)], minBand: .review,
                       payload: .xlsx(workbook))
