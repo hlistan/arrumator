@@ -169,9 +169,15 @@ numbered names until reprocessing moves their documents into the tree the logic 
 
 | Profile | Decisions & vision | Embeddings | Disk |
 |---|---|---|---|
-| `standard` (default) | `gemma4:latest` | `bge-m3` | ~11 GB |
-| `balanced` | `qwen3:8b` + `gemma3:4b` | `bge-m3` | ~10 GB |
-| `lowMemory` | `gemma3:4b` | `bge-m3` | ~5 GB |
+| `standard` (default) | `ministral-3:14b` | `bge-m3` | ~10 GB |
+| `balanced` | `ministral-3:8b` | `bge-m3` | ~7 GB |
+| `lowMemory` | `gemma4:e2b-it-qat` | `bge-m3` | ~5.5 GB |
+
+One model makes every decision, describes images and names files, loaded once with one context. The profiles are
+the measured best for their memory: on a 16 GB Mac mini (M5) filing three instances of every kind of document,
+`ministral-3:14b` grouped them best (F1 0.71, precision 0.90, 92% of repeats with their first) at about 25 s per
+document, `ministral-3:8b` nearly as precisely at 16 s, and `gemma4:e2b` fastest at 6 s with more mixing (precision
+0.76). Larger models do not fit such a Mac's memory.
 
 ## Build and run
 
@@ -287,6 +293,9 @@ accuracy, how many were placed without the model, how deep documents were filed,
 by that logic instead of the built-in one, to see how a logic of your own arranges the corpus.
 It also counts sender mix-ups (sender folders holding documents the corpus says come from different senders: the
 misfilings that matter most) and the ordinary documents held for review, which is what keeping them down costs.
+[docs/evaluation.md](docs/evaluation.md) records the measurements behind the current pipeline and model profiles:
+what improved placement, what was tried and dropped, and how each model that fits a 16 GB Mac compares in quality
+and time.
 
 ## Project layout
 

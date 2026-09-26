@@ -68,7 +68,7 @@ struct ClassifyHarness {
     static func make(handler: @escaping MockOllama.ChatHandler) async throws -> ClassifyHarness {
         let env = try await TestEnvironment.make()
         let store = GRDBLearningStore(database: env.database)
-        let mock = MockOllama(installed: ["gemma4:latest", "gemma3:4b", "bge-m3"], handler: handler)
+        let mock = MockOllama(installed: ["ministral-3:14b", "bge-m3"], handler: handler)
         let gate = InferenceGate(api: mock, retryDelays: [])
         let models = ModelManager(api: mock, config: env.config.ollama)
         let library = try PromptLibrary.bundled()

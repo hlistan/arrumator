@@ -165,7 +165,10 @@ import Testing
         let outcome = try await h.classify(Fixtures.content("x.pdf", text: "Some unrelated text"))
         #expect(outcome.decision.folderCode == nil && outcome.decision.proposedNewFolder == nil)
         #expect(outcome.decision.band == .review)
-        #expect(await h.mock.chatCount == (h.env.config.classification.repairAttempts + 1) * 2)
+        let models = try h.env.config.models(for: h.settings.models)
+        let tiers = Set([models.chat, models.fast]).count
+        #expect(await h.mock.chatCount == (h.env.config.classification.repairAttempts + 1) * tiers,
+                "each model the profile falls back to is asked, and repaired, before the document is held")
     }
 
     @Test func usageFormsARuleAndConfidentRulesSkipTheModel() async throws {
