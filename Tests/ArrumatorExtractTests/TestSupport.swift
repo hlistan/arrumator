@@ -1,5 +1,6 @@
 import AppKit
 import ArrumatorCore
+import ArrumatorTesting
 @testable import ArrumatorExtract
 import CoreGraphics
 import CoreText
@@ -177,50 +178,7 @@ enum TestConfig {
 
 // MARK: Ollama mock
 
-/// Records requests and answers `chat` with a canned reply or error.
-actor MockOllama: OllamaAPI {
-    enum Reply: Sendable {
-        case content(String)
-        case failure(OllamaError)
-    }
-
-    private let reply: Reply
-    private let capabilities: [String]
-    private(set) var chatRequests: [OllamaChatRequest] = []
-    private(set) var showCalls = 0
-
-    init(reply: Reply, capabilities: [String] = ["completion", "vision", "thinking"]) {
-        self.reply = reply
-        self.capabilities = capabilities
-    }
-
-    func version() async throws -> String { "mock" }
-    func tags() async throws -> [OllamaModelInfo] { [] }
-    func running() async throws -> [OllamaRunningModel] { [] }
-
-    func show(model: String) async throws -> OllamaShowResponse {
-        showCalls += 1
-        let json = try JSONEncoder().encode(["capabilities": capabilities])
-        return try JSONDecoder().decode(OllamaShowResponse.self, from: json)
-    }
-
-    func chat(_ request: OllamaChatRequest) async throws -> OllamaChatResponse {
-        chatRequests.append(request)
-        switch reply {
-        case let .content(content):
-            let json = try JSONEncoder().encode(["model": JSONValue.string(request.model),
-                                                 "message": ["role": "assistant", "content": .string(content)]])
-            return try JSONDecoder().decode(OllamaChatResponse.self, from: json)
-        case let .failure(error):
-            throw error
-        }
-    }
-
-    func embed(_ request: OllamaEmbedRequest) async throws -> OllamaEmbedResponse { throw OllamaError.emptyResponse }
-
-    nonisolated func pull(model: String) -> AsyncThrowingStream<OllamaPullProgress, any Error> {
-        AsyncThrowingStream { $0.finish() }
-    }
-
-    func unload(model: String) async throws {}
+extension MockOllama {
+    /// What a model that can describe images reports, as the vision extractor checks before asking it.
+    static let visionCapabilities = ["completion", "vision", "thinking"]
 }

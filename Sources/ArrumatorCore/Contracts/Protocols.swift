@@ -55,12 +55,8 @@ public protocol LearningSink: Sendable {
     func documentForgotten(documentID: Int64) async
     /// Folders appeared, were renamed or removed on disk.
     func taxonomyChanged(_ changes: [TaxonomyChange], taxonomy: TaxonomySnapshot) async
-    /// Periodic upkeep: filings left untouched long enough become evidence, which can strengthen or form rules.
-    func settleUntouchedFilings() async
     /// A document's embedding was computed again, as after a rebuilt index: its memories take the new vector.
     func documentReembedded(documentID: Int64, vector: [Float], model: String) async
     /// A rethink moved documents and removed the folders it emptied: rules follow their documents.
     func placementsRearranged(_ moves: [PlacementMove], removedFolderIDs: Set<Int64>) async
-    /// The user asked the app to forget something it learned.
-    func forget(_ fact: LearnedFact) async throws
 }

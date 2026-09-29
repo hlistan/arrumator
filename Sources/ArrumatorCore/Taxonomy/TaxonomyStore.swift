@@ -405,7 +405,7 @@ public actor TaxonomyStore {
     public func snapshot(root: URL) async throws -> TaxonomySnapshot {
         let records = try await records()
         let documents = DocumentStore(database: database)
-        let counts = try await documents.counts(byFolder: true)
+        let counts = try await documents.countsByFolder()
         let senders = try await documents.sendersByFolder()
         let types = try await documents.typesByFolder()
         let titles = try await documents.recentTitles(perFolder: config.recentTitlesPerFolder)

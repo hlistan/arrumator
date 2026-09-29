@@ -1,0 +1,18 @@
+# Keeps the pinned workflow actions and the Swift package dependencies current.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]
+  - package-ecosystem: swift
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7

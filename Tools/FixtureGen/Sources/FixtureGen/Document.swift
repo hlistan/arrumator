@@ -149,4 +149,3 @@ extension Document {
         }.joined(separator: "\n") + (footer.map { "\n" + $0 } ?? "")
     }
 }
-

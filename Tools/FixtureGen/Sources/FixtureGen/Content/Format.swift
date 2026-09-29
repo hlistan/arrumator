@@ -132,6 +132,8 @@ struct Money: Sendable, Hashable, Comparable {
     static let zero = Money(cents: 0)
     static func + (lhs: Money, rhs: Money) -> Money { Money(cents: lhs.cents + rhs.cents) }
     static func - (lhs: Money, rhs: Money) -> Money { Money(cents: lhs.cents - rhs.cents) }
+    static func += (lhs: inout Money, rhs: Money) { lhs = lhs + rhs }
+    static func -= (lhs: inout Money, rhs: Money) { lhs = lhs - rhs }
     static prefix func - (value: Money) -> Money { Money(cents: -value.cents) }
     static func < (lhs: Money, rhs: Money) -> Bool { lhs.cents < rhs.cents }
 

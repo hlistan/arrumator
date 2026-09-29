@@ -76,8 +76,6 @@ public struct ResolvedModels: Sendable, Codable, Hashable {
     public var keepAliveEmbed: String
     public var residentBudgetGB: Double
 
-    public var all: [String] { Array(Set([chat, vision, embed, fast])).sorted() }
-
     /// The context images are described with: that of the role the vision model also plays, so Ollama keeps one
     /// loaded model instead of reloading it with another context for every image (a request without one gets the
     /// server's default, which can be far larger).
@@ -450,6 +448,8 @@ public struct SearchConfig: Sendable, Codable, Hashable {
     public var ftsCandidateLimit: Int
     public var resultLimit: Int
     public var minSemanticQueryChars: Int
+    /// Cosine similarity a document needs to be found by meaning alone, without containing the query's words.
+    public var semanticMinSimilarity: Double
     public var queryCacheSize: Int
     public var bm25Weights: [Double]
     public var snippetTokens: Int

@@ -5,9 +5,6 @@ public enum FolderRole: String, Sendable, Codable {
     case needsReview, duplicates
     /// Hold the record files of what the app learned, its logic and its history; never documents.
     case learned, logic, history
-
-    /// Whether documents are filed into folders with this role.
-    public var holdsDocuments: Bool { self == .needsReview || self == .duplicates }
 }
 
 public enum YearRule: String, Sendable, Codable {
@@ -179,5 +176,4 @@ public struct TaxonomySnapshot: Sendable, Codable {
 
     /// Separates folder names where the model reads a path.
     public static let pathSeparator = " / "
-    public static let empty = TaxonomySnapshot(version: 0, rootPath: "/", folders: [])
 }

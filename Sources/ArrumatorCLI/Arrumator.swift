@@ -5,14 +5,15 @@ import Foundation
 
 @main
 struct Arrumator: AsyncParsableCommand {
-    static let version = "0.1.0"
+    static let version = AppVersion.of(.main)
 
     static let configuration = CommandConfiguration(
         commandName: "arrumator",
         abstract: "Local-only document organiser: watches Incoming, understands files with local models, files them.",
         version: version,
         subcommands: [Doctor.self, Run.self, Ingest.self, Extract.self, Search.self, History.self, Trace.self, Replay.self,
-                      Review.self, Folders.self, Rules.self, Senders.self, Forget.self, Archive.self, Logic.self, Rethink.self, Proposals.self, Funnel.self, Stats.self, Rebuild.self, Logs.self, Models.self,
+                      Review.self, Folders.self, Rules.self, Senders.self, Forget.self, Archive.self, Logic.self,
+                      Rethink.self, Proposals.self, Funnel.self, Stats.self, Rebuild.self, Logs.self, Models.self,
                       Diagnostics.self, Eval.self, Settings.self])
 }
 
@@ -67,7 +68,11 @@ struct Doctor: AsyncParsableCommand {
         options.emit(report) {
             var lines = ["Arrumator \(report.appVersion) on \(report.macOS)", "Ollama: \(report.ollama)", ""]
             lines += report.checks.map { c in
-                let mark = switch c.status { case .ok: "✓"; case .warning: "!"; case .error: "✗" }
+                let mark = switch c.status {
+                case .ok: "✓"
+                case .warning: "!"
+                case .error: "✗"
+                }
                 return "\(mark) \(c.name): \(c.detail)"
             }
             lines.append("")

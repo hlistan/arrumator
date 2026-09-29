@@ -24,8 +24,8 @@ public final class NetworkGuardProtocol: URLProtocol, @unchecked Sendable {
         return state.withLock { $0.allowedHosts.contains(bare) }
     }
 
-    override public class func canInit(with request: URLRequest) -> Bool { !isAllowed(request.url) }
-    override public class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override public static func canInit(with request: URLRequest) -> Bool { !isAllowed(request.url) }
+    override public static func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
     override public func startLoading() {
         let target = request.url?.absoluteString ?? "<nil>"

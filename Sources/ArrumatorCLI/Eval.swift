@@ -57,9 +57,9 @@ struct Eval: AsyncParsableCommand {
         var yearFolderOK: Bool?
         var seconds: Double
         /// Levels from the top of the archive to the folder it was filed in.
-        var depth: Int? = nil
+        var depth: Int?
         /// Who the corpus says the document is from, and whether the folder it was filed in stands for a sender.
-        var expectedCorrespondent: String? = nil
+        var expectedCorrespondent: String?
         var inSenderFolder: Bool = false
         var feedback: String?
     }
@@ -140,7 +140,8 @@ struct Eval: AsyncParsableCommand {
             let summary = await summarize(pass: pass, rows: passRows, runtime: runtime, settings: settings)
             summaries.append(summary)
             rows += passRows
-            print(String(format: "pass %d: grouping F1 %.2f (P %.2f R %.2f) · type %.0f%% · date %.0f%% · correspondent %.0f%% · model-free %d · median %.1fs · %d folders · depth %.1f · sender mix-ups %d · held %d",
+            print(String(format: "pass %d: grouping F1 %.2f (P %.2f R %.2f) · type %.0f%% · date %.0f%% · correspondent %.0f%% · "
+                                 + "model-free %d · median %.1fs · %d folders · depth %.1f · sender mix-ups %d · held %d",
                          pass, summary.groupingF1, summary.groupingPrecision, summary.groupingRecall, summary.docTypeAccuracy * 100,
                          summary.dateAccuracy * 100, summary.correspondentAccuracy * 100, summary.modelFree, summary.medianSeconds,
                          summary.folders, summary.meanDepth ?? 0, summary.senderMixups, summary.heldForReview))

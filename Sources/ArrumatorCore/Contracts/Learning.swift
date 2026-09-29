@@ -264,7 +264,6 @@ public protocol LearningStore: Sendable {
     func correspondents() async throws -> [Correspondent]
     @discardableResult func saveCorrespondent(_ correspondent: Correspondent) async throws -> Correspondent
 
-    @discardableResult func insertCorrection(_ correction: CorrectionEvent) async throws -> Int64
     func linkCorrespondent(documentID: Int64, correspondentID: Int64, name: String) async throws
     /// Correspondents whose trusted filings contain each identifier (an identifier shared by several correspondents,
     /// such as the user's own tax number, identifies none of them).
@@ -273,8 +272,6 @@ public protocol LearningStore: Sendable {
     func folderProfile(folderID: Int64, examples: Int, correspondents: Int) async throws -> LearnedBlock
     /// Removes a sender; its documents and filing examples keep their correspondent's name but lose the link.
     func deleteCorrespondent(id: Int64) async throws
-    /// Which of these facts the app still knows.
-    func known(_ facts: [LearnedFact]) async throws -> Set<LearnedFact>
     /// Filed documents in a folder, optionally only those from one correspondent or of one type.
     func documentCount(folderID: Int64, correspondentID: Int64?, documentType: DocumentType?) async throws -> Int
     /// Short text excerpts of documents (for description refresh prompts).

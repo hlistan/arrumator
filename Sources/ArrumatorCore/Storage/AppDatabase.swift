@@ -1,3 +1,4 @@
+// swiftlint:disable line_length - migration SQL is kept as written when it shipped
 import Foundation
 import GRDB
 
@@ -372,8 +373,8 @@ public struct AppDatabase: Sendable {
             """)
         }
 
-        /// Logic: the prompts the model follows when placing documents, exactly one of them active. Rethink runs:
-        /// processed documents decided again (a trial on a few, or all of them), planned first and applied on request.
+        // Logic: the prompts the model follows when placing documents, exactly one of them active. Rethink runs:
+        // processed documents decided again (a trial on a few, or all of them), planned first and applied on request.
         // Identifiers are the key GRDB stores in `grdb_migrations`, so they are frozen once shipped. Renaming one
         // makes every installed database try to apply it again. `MigrationTests` pins the list.
         m.registerMigration("v3_brainsAndRethink") { db in
@@ -590,3 +591,4 @@ extension AppDatabase {
         }
     }
 }
+// swiftlint:enable line_length

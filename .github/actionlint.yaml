@@ -1,0 +1,5 @@
+# actionlint (https://github.com/rhysd/actionlint) configuration.
+self-hosted-runner:
+  # Not self-hosted: GitHub's Xcode 27 image, in preview, which actionlint does not list yet.
+  labels:
+    - xcode-27

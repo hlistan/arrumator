@@ -41,12 +41,6 @@ public actor ModelManager {
         }
     }
 
-    public func missing(for models: ResolvedModels) async throws -> [String] {
-        Array(Set(try await status(for: models).filter { !$0.installed }.map(\.name))).sorted()
-    }
-
-    public func installed() async throws -> [OllamaModelInfo] { try await api.tags() }
-
     public func capabilities(of model: String) async throws -> OllamaShowResponse {
         if let cached = capabilities[model] { return cached }
         let info = try await api.show(model: model)
@@ -141,10 +135,8 @@ public struct GatedOllama: OllamaAPI {
 
     public func version() async throws -> String { try await gate.client.version() }
     public func tags() async throws -> [OllamaModelInfo] { try await gate.client.tags() }
-    public func running() async throws -> [OllamaRunningModel] { try await gate.client.running() }
     public func show(model: String) async throws -> OllamaShowResponse { try await gate.client.show(model: model) }
     public func chat(_ request: OllamaChatRequest) async throws -> OllamaChatResponse { try await gate.chat(request) }
     public func embed(_ request: OllamaEmbedRequest) async throws -> OllamaEmbedResponse { try await gate.embed(request) }
     public func pull(model: String) -> AsyncThrowingStream<OllamaPullProgress, any Error> { gate.client.pull(model: model) }
-    public func unload(model: String) async throws { try await gate.client.unload(model: model) }
 }

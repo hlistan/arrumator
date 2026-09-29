@@ -94,7 +94,7 @@ public struct DocumentStore: Sendable {
         try await list(DocumentFilter(statuses: Set(DocumentStatus.allCases.filter(\.isReviewable))), limit: 10_000)
     }
 
-    public func counts(byFolder: Bool) async throws -> [Int64: Int] {
+    public func countsByFolder() async throws -> [Int64: Int] {
         try await database.reader.read { db in
             let rows = try Row.fetchAll(db, sql: """
                 SELECT folder_id, COUNT(*) AS n FROM documents

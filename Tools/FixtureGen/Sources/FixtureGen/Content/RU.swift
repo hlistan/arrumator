@@ -216,8 +216,8 @@ enum RussianFixtures {
         var credits = Money.zero
         var debits = Money.zero
         let rows: [[String]] = operations.map { day, category, description, amount in
-            balance = balance + amount
-            if amount < .zero { debits = debits - amount } else { credits = credits + amount }
+            balance += amount
+            if amount < .zero { debits -= amount } else { credits += amount }
             return [Day(2026, 7, day).ruNumeric, category, description, (amount < .zero ? "" : "+") + amount.ru, balance.ru]
         }
         let document = Document(

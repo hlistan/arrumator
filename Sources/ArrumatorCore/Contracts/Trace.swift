@@ -68,6 +68,7 @@ public struct TraceContext: Sendable {
         await record(step)
     }
 
+    // periphery:ignore:parameters isolation - read by the compiler, which runs the body on that actor
     /// Runs `body`, recording duration, output and errors as one step.
     /// Runs on the caller's isolation, so `body` may touch the caller's actor state.
     public func measure<T>(_ stage: TraceStage, input: (any Encodable)? = nil,

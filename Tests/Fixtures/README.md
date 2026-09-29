@@ -21,7 +21,7 @@ expected: it comes from PDFKit probing the deliberately truncated PDF.
 
 ## Layout
 
-```
+```text
 expected.json     ground truth, one entry per file (schema below)
 pt/  01–16        Maria Exemplo's household in Lisbon
 ru/  20–31        Иван Тестов in Moscow

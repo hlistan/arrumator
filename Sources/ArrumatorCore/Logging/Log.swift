@@ -37,9 +37,6 @@ public final class Log: Sendable {
 
     private let state = Mutex(State())
     private static let subsystem = "dev.arrumator"
-    private let loggers: [LogCategory: Logger] = Dictionary(uniqueKeysWithValues: LogCategory.allCases.map {
-        ($0, Logger(subsystem: Log.subsystem, category: $0.rawValue))
-    })
 
     private static let dayFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -73,10 +70,9 @@ public final class Log: Sendable {
     }
 
     public func setMinLevel(_ level: LogLevel) { state.withLock { $0.minLevel = level } }
-    public var minLevel: LogLevel { state.withLock { $0.minLevel } }
 
     public func log(_ level: LogLevel, _ cat: LogCategory, _ msg: String, _ fields: [String: String] = [:]) {
-        let logger = loggers[cat]!
+        let logger = Logger(subsystem: Self.subsystem, category: cat.rawValue)
         let fieldText = fields.isEmpty ? "" : " " + fields.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: " ")
         switch level {
         case .error: logger.error("\(msg, privacy: .public)\(fieldText, privacy: .private)")

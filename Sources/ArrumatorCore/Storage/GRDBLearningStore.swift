@@ -210,6 +210,7 @@ public struct GRDBLearningStore: LearningStore {
         try await database.writer.write { db in _ = try CorrespondentRecord.deleteOne(db, key: id) }
     }
 
+    /// Which of these facts the app still knows.
     public func known(_ facts: [LearnedFact]) async throws -> Set<LearnedFact> {
         try await database.reader.read { db in
             let rules = Set(try Int64.fetchAll(db, sql: "SELECT id FROM rules WHERE forgotten = 0"))

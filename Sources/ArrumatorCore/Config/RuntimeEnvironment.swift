@@ -5,7 +5,7 @@ import Foundation
 public struct RuntimeEnvironment: Sendable {
     /// Relocates all app state (indexes, settings, logs). Used by tests and smoke runs.
     public var home: String?
-    /// Overrides the Ollama endpoint (must still be a loopback host).
+    /// Overrides the Ollama endpoint; like the setting, it must pass `OllamaEndpoint.validated` (this Mac or the local network).
     public var ollamaURL: String?
     public var logLevel: LogLevel?
     /// Extra pipeline override JSON file merged after the user's `pipeline.json`.

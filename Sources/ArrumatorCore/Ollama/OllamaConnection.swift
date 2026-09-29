@@ -24,10 +24,8 @@ public final class OllamaConnection: OllamaAPI, Sendable {
 
     public func version() async throws -> String { try await current.version() }
     public func tags() async throws -> [OllamaModelInfo] { try await current.tags() }
-    public func running() async throws -> [OllamaRunningModel] { try await current.running() }
     public func show(model: String) async throws -> OllamaShowResponse { try await current.show(model: model) }
     public func chat(_ request: OllamaChatRequest) async throws -> OllamaChatResponse { try await current.chat(request) }
     public func embed(_ request: OllamaEmbedRequest) async throws -> OllamaEmbedResponse { try await current.embed(request) }
     public func pull(model: String) -> AsyncThrowingStream<OllamaPullProgress, any Error> { current.pull(model: model) }
-    public func unload(model: String) async throws { try await current.unload(model: model) }
 }

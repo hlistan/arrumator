@@ -1,0 +1,18 @@
+# Periphery (https://github.com/peripheryapp/periphery): finds unused code. scripts/deadcode.sh runs it over the
+# index stores the package, test and app builds leave, passing them with --generic-project-config.
+report_include:
+  - Sources/**
+  - App/**
+  - Tests/**
+# ArgumentParser reaches the commands through `configuration.subcommands`, which Periphery reports as unused, and
+# with them everything only the command line calls. Keeping the command files as roots counts those calls.
+retain_files:
+  - Sources/ArrumatorCLI/**
+# Records, trace payloads and settings are written and read by Codable, not by name.
+retain_codable_properties: true
+# `public` on a type only its own module uses is an access-control choice, not dead code.
+disable_redundant_public_analysis: true
+relative_results: true
+strict: true
+quiet: true
+disable_update_check: true

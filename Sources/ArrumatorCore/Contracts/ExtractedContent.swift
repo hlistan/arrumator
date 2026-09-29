@@ -109,11 +109,6 @@ public struct StableKey: Sendable, Codable, Hashable {
         self.value = value
     }
     public var token: String { "\(kind.rawValue):\(value)" }
-    public init?(token: String) {
-        let parts = token.split(separator: ":", maxSplits: 1).map(String.init)
-        guard parts.count == 2, let kind = StableKeyKind(rawValue: parts[0]) else { return nil }
-        self.init(kind: kind, value: parts[1])
-    }
 }
 
 public struct Entities: Sendable, Codable, Hashable {
@@ -249,13 +244,6 @@ public struct ExtractedContent: Sendable, Codable {
         self.timings = timings
         self.extractorName = extractorName
         self.extractorVersion = extractorVersion
-    }
-
-    /// Content for a file whose bytes could not be understood at all.
-    public static func metadataOnly(_ source: SourceFile, kind: ContentKind = .unknown,
-                                    warnings: [ExtractionWarning] = [], metadata: [String: String] = [:]) -> ExtractedContent {
-        ExtractedContent(source: source, kind: kind, textOrigin: .metadataOnly, text: "",
-                         metadata: metadata, warnings: warnings, extractorName: "metadata-only")
     }
 
     public func hasWarning(_ code: WarningCode) -> Bool { warnings.contains { $0.code == code } }

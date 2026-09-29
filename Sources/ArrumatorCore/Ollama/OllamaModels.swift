@@ -57,22 +57,6 @@ public struct OllamaModelInfo: Sendable, Codable, Hashable {
     }
 }
 
-public struct OllamaRunningModel: Sendable, Codable, Hashable {
-    public var name: String
-    public var model: String?
-    public var size: Int64?
-    public var sizeVram: Int64?
-    public var expiresAt: String?
-
-    public init(name: String, model: String?, size: Int64?, sizeVram: Int64?, expiresAt: String?) {
-        self.name = name
-        self.model = model
-        self.size = size
-        self.sizeVram = sizeVram
-        self.expiresAt = expiresAt
-    }
-}
-
 public struct OllamaShowResponse: Sendable, Codable, Hashable {
     public var capabilities: [String]?
     public var modelInfo: [String: JSONValue]?
@@ -160,7 +144,8 @@ public struct OllamaChatResponse: Sendable, Codable, Hashable {
     public var evalCount: Int?
     public var evalDuration: Int64?
 
-    public init(model: String, message: OllamaMessage, done: Bool?, doneReason: String?, totalDuration: Int64?, loadDuration: Int64?, promptEvalCount: Int?, promptEvalDuration: Int64?, evalCount: Int?, evalDuration: Int64?) {
+    public init(model: String, message: OllamaMessage, done: Bool?, doneReason: String?, totalDuration: Int64?,
+                loadDuration: Int64?, promptEvalCount: Int?, promptEvalDuration: Int64?, evalCount: Int?, evalDuration: Int64?) {
         self.model = model
         self.message = message
         self.done = done
@@ -248,10 +233,8 @@ public struct OllamaPullProgress: Sendable, Codable, Hashable {
 public protocol OllamaAPI: Sendable {
     func version() async throws -> String
     func tags() async throws -> [OllamaModelInfo]
-    func running() async throws -> [OllamaRunningModel]
     func show(model: String) async throws -> OllamaShowResponse
     func chat(_ request: OllamaChatRequest) async throws -> OllamaChatResponse
     func embed(_ request: OllamaEmbedRequest) async throws -> OllamaEmbedResponse
     func pull(model: String) -> AsyncThrowingStream<OllamaPullProgress, any Error>
-    func unload(model: String) async throws
 }

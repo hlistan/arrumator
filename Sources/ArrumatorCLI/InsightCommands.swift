@@ -104,7 +104,10 @@ struct Logs: AsyncParsableCommand {
                         print(String(decoding: line, as: UTF8.self))
                     } else {
                         let fields = entry.fields.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: " ")
-                        print("\(entry.ts.formatted(.iso8601.time(includingFractionalSeconds: false))) \(entry.level.rawValue.padding(toLength: 7, withPad: " ", startingAt: 0)) \(entry.cat.rawValue.padding(toLength: 8, withPad: " ", startingAt: 0)) \(entry.msg) \(fields)")
+                        let time = entry.ts.formatted(.iso8601.time(includingFractionalSeconds: false))
+                        let level = entry.level.rawValue.padding(toLength: 7, withPad: " ", startingAt: 0)
+                        let category = entry.cat.rawValue.padding(toLength: 8, withPad: " ", startingAt: 0)
+                        print("\(time) \(level) \(category) \(entry.msg) \(fields)")
                     }
                 }
             }

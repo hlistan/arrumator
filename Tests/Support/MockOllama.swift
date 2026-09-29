@@ -7,44 +7,33 @@ public actor MockOllama: OllamaAPI {
 
     public private(set) var chatRequests: [OllamaChatRequest] = []
     public private(set) var embedRequests: [OllamaEmbedRequest] = []
-    private var handler: ChatHandler
-    private var installed: [String]
+    private let handler: ChatHandler
+    private let installed: [String]
     private let dimension: Int
-    private var reachable = true
+    private let capabilities: [String]
 
-    public init(installed: [String] = [], dimension: Int = 256, handler: @escaping ChatHandler) {
+    /// `capabilities` are what `show` reports for every model, as Ollama lists them ("completion", "vision", …).
+    public init(installed: [String] = [], dimension: Int = 256, capabilities: [String] = ["completion"],
+                handler: @escaping ChatHandler) {
         self.installed = installed
         self.dimension = dimension
+        self.capabilities = capabilities
         self.handler = handler
     }
 
-    public func setHandler(_ h: @escaping ChatHandler) { handler = h }
-    public func setReachable(_ r: Bool) { reachable = r }
     public var chatCount: Int { chatRequests.count }
 
-    private func ensureReachable() throws {
-        if !reachable { throw OllamaError.unreachable("mock offline") }
-    }
-
-    public func version() async throws -> String {
-        try ensureReachable()
-        return "mock"
-    }
+    public func version() async throws -> String { "mock" }
 
     public func tags() async throws -> [OllamaModelInfo] {
-        try ensureReachable()
-        return installed.map { OllamaModelInfo(name: $0, model: $0, size: 1, digest: nil, modifiedAt: nil, details: nil) }
+        installed.map { OllamaModelInfo(name: $0, model: $0, size: 1, digest: nil, modifiedAt: nil, details: nil) }
     }
 
-    public func running() async throws -> [OllamaRunningModel] { [] }
-
     public func show(model: String) async throws -> OllamaShowResponse {
-        try ensureReachable()
-        return OllamaShowResponse(capabilities: ["completion"], modelInfo: nil, details: nil)
+        OllamaShowResponse(capabilities: capabilities, modelInfo: nil, details: nil)
     }
 
     public func chat(_ request: OllamaChatRequest) async throws -> OllamaChatResponse {
-        try ensureReachable()
         chatRequests.append(request)
         let content = try handler(request)
         return OllamaChatResponse(model: request.model, message: OllamaMessage(role: "assistant", content: content), done: true,
@@ -53,7 +42,6 @@ public actor MockOllama: OllamaAPI {
     }
 
     public func embed(_ request: OllamaEmbedRequest) async throws -> OllamaEmbedResponse {
-        try ensureReachable()
         embedRequests.append(request)
         return OllamaEmbedResponse(model: request.model, embeddings: request.input.map { Self.hashEmbedding($0, dimension: dimension) },
                                    totalDuration: nil, loadDuration: nil, promptEvalCount: nil)
@@ -65,8 +53,6 @@ public actor MockOllama: OllamaAPI {
             c.finish()
         }
     }
-
-    public func unload(model: String) async throws {}
 
     /// Stable FNV-1a hashed bag of words, L2-normalised: similar texts get similar vectors.
     public static func hashEmbedding(_ text: String, dimension: Int) -> [Float] {

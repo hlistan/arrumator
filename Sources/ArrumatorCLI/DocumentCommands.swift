@@ -7,7 +7,7 @@ struct Ingest: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         abstract: "File documents now (moves them into the archive), or show what would happen with --dry-run.")
     @OptionGroup var options: GlobalOptions
-    @Flag(help: "Analyse and decide without moving files or recording anything.") var dryRun = false
+    @Flag(help: "Analyse and decide without moving files or recording a decision.") var dryRun = false
     @Argument(help: "Files to ingest.") var files: [String]
 
     func run() async throws {
@@ -56,7 +56,7 @@ struct Ingest: AsyncParsableCommand {
         \(content.source.originalFilename)
           content:   \(content.kind.rawValue), \(content.textOrigin.rawValue), \(content.text.count) chars, language \(content.language.primary)
           decision:  \(target)
-          file name: \(d.fileName ?? "(template)")
+          file name: \(d.fileName ?? "(keeps its name)")
           metadata:  \(d.documentType.rawValue) · \(d.correspondent ?? "—") · \(d.documentDate ?? "—")
           confidence \(String(format: "%.2f", d.confidence.final)) → \(d.confidence.band.rawValue), decided by \(d.decidedBy.rawValue)
           rationale: \(d.rationale)
@@ -161,9 +161,13 @@ struct Trace: AsyncParsableCommand {
             throw ValidationError("No trace recorded for document \(docID)")
         }
         options.emit(TraceExport(trace: trace, steps: steps)) {
-            var lines = ["Trace #\(id) · \(trace.source) · \(trace.outcome ?? "running") · \(Int(trace.totalMs ?? 0)) ms · models \(trace.modelChat ?? "—") / \(trace.modelEmbed ?? "—")"]
+            var lines = ["Trace #\(id) · \(trace.source) · \(trace.outcome ?? "running") · \(Int(trace.totalMs ?? 0)) ms · "
+                         + "models \(trace.modelChat ?? "—") / \(trace.modelEmbed ?? "—")"]
             for s in steps {
-                lines.append("\(String(s.seq).padding(toLength: 3, withPad: " ", startingAt: 0)) \(s.stage.padding(toLength: 13, withPad: " ", startingAt: 0)) \(s.status.padding(toLength: 7, withPad: " ", startingAt: 0)) \(Int(s.durationMs)) ms")
+                let seq = String(s.seq).padding(toLength: 3, withPad: " ", startingAt: 0)
+                let stage = s.stage.padding(toLength: 13, withPad: " ", startingAt: 0)
+                let status = s.status.padding(toLength: 7, withPad: " ", startingAt: 0)
+                lines.append("\(seq) \(stage) \(status) \(Int(s.durationMs)) ms")
                 if let e = s.error { lines.append("      error: \(e)") }
                 if full {
                     if let i = s.inputJson { lines.append("      in:  \(i)") }
@@ -201,8 +205,10 @@ struct Replay: AsyncParsableCommand {
         let original = try await runtime.services.documents.document(id: docID)?.decision
         options.emit(["original": original, "replay": outcome.decision]) {
             """
-            original: \(original.flatMap { Terminal.target(of: $0, in: taxonomy) } ?? "—") · \(original?.fileName ?? "—") · \(String(format: "%.2f", original?.confidence.final ?? 0))
-            replay:   \(Terminal.target(of: outcome.decision, in: taxonomy) ?? "review") · \(outcome.decision.fileName ?? "—") · \(String(format: "%.2f", outcome.decision.confidence.final)) (\(outcome.decision.decidedBy.rawValue))
+            original: \(original.flatMap { Terminal.target(of: $0, in: taxonomy) } ?? "—") · \(original?.fileName ?? "—") · \
+            \(String(format: "%.2f", original?.confidence.final ?? 0))
+            replay:   \(Terminal.target(of: outcome.decision, in: taxonomy) ?? "review") · \(outcome.decision.fileName ?? "—") · \
+            \(String(format: "%.2f", outcome.decision.confidence.final)) (\(outcome.decision.decidedBy.rawValue))
             trace #\(trace.traceID ?? 0)
             """
         }

@@ -23,8 +23,6 @@ public actor MemoryIndex {
         Log.info(.learn, "Memory index loaded", ["model": model, "memories": String(all.count)])
     }
 
-    public var count: Int { memories.count }
-
     /// Adds or replaces a memory (e.g. after its weight changed).
     public func insert(_ memory: FilingMemory) {
         guard memory.embeddingModel == model else { return }

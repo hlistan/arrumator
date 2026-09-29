@@ -1,5 +1,6 @@
 import ArrumatorCore
 @testable import ArrumatorExtract
+import ArrumatorTesting
 import CoreGraphics
 import Foundation
 import ImageIO
@@ -17,7 +18,9 @@ struct ImageAndVisionTests {
         let url = try scratch.writeImage("recibo.jpg", image, type: .jpeg, properties: [
             kCGImagePropertyExifDictionary: [kCGImagePropertyExifDateTimeOriginal: "2023:07:14 10:31:00"],
         ])
-        let registry = ExtractorRegistry(ollama: MockOllama(reply: .failure(.unreachable("must not be called"))))
+        let registry = ExtractorRegistry(ollama: MockOllama(capabilities: MockOllama.visionCapabilities) { _ in
+            throw OllamaError.unreachable("must not be called")
+        })
         let content = try await registry.extract(url, sha256: "x", context: try TestConfig.context(vision: TestConfig.visionOptions()),
                                                  trace: .disabled)
         #expect(content.kind == .image)
@@ -40,7 +43,7 @@ struct ImageAndVisionTests {
         <think>internal reasoning</think>{"image_kind":"receipt","description":"A supermarket receipt header",
         "visible_text_summary":"CONTINENTE","organisations":["Continente","Acme Corp"],"dates":["2025-01-02"]}
         """
-        let ollama = MockOllama(reply: .content(reply))
+        let ollama = MockOllama(capabilities: MockOllama.visionCapabilities) { _ in reply }
         let vision = try TestConfig.visionOptions()
         let context = try TestConfig.context(vision: vision)
         let sink = MemoryTraceSink()
@@ -86,7 +89,7 @@ struct ImageAndVisionTests {
         let scratch = try Scratch()
         let url = try scratch.writeImage("blank.png", try Scratch.textImage([], width: 800, height: 600))
         let reply = #"{"image_kind":"photo","description":"An empty white surface","visible_text_summary":"","organisations":["Ghost Inc"],"dates":[]}"#
-        let ollama = MockOllama(reply: .content(reply), capabilities: ["completion", "vision"])
+        let ollama = MockOllama(capabilities: ["completion", "vision"]) { _ in reply }
         let content = try await ExtractorRegistry(ollama: ollama).extract(
             url, sha256: "x", context: try TestConfig.context(vision: TestConfig.visionOptions()), trace: .disabled)
         #expect(content.textOrigin == .vlmOnly)
@@ -101,8 +104,11 @@ struct ImageAndVisionTests {
         let scratch = try Scratch()
         let url = try scratch.writeImage("blank.png", try Scratch.textImage([], width: 800, height: 600))
         let context = try TestConfig.context(vision: TestConfig.visionOptions())
-        for reply in [MockOllama.Reply.failure(.unreachable("connection refused")), .content("I cannot answer that")] {
-            let content = try await ExtractorRegistry(ollama: MockOllama(reply: reply)).extract(
+        let failures: [MockOllama.ChatHandler] = [{ _ in throw OllamaError.unreachable("connection refused") },
+                                                  { _ in "I cannot answer that" }]
+        for handler in failures {
+            let ollama = MockOllama(capabilities: MockOllama.visionCapabilities, handler: handler)
+            let content = try await ExtractorRegistry(ollama: ollama).extract(
                 url, sha256: "x", context: context, trace: .disabled)
             #expect(content.hasWarning(.vlmFailed))
             #expect(content.visual == nil)

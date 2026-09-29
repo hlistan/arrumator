@@ -110,17 +110,6 @@ public actor SettingsStore {
         if changed { for c in continuations.values { c.yield(settings) } }
     }
 
-    /// Re-reads the file (e.g. after the CLI changed it).
-    @discardableResult
-    public func reload() throws -> AppSettings {
-        let fresh = try Self.read(url: url)
-        if fresh != cached {
-            cached = fresh
-            for c in continuations.values { c.yield(fresh) }
-        }
-        return cached
-    }
-
     public func changes() -> AsyncStream<AppSettings> {
         let id = UUID()
         let (stream, continuation) = AsyncStream<AppSettings>.makeStream()

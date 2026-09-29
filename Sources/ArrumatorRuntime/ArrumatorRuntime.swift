@@ -180,7 +180,7 @@ public final class ArrumatorRuntime: Sendable {
             database: database, config: config, settings: settings, taxonomy: taxonomy,
             extractor: ExtractorRegistry(ollama: GatedOllama(gate: gate)), classifier: classifier, learner: learner,
             filer: DocumentFiler(database: database, placer: placer, index: IndexStore(database: database), registry: registry),
-            traces: traces, vectors: vectors, appVersion: appVersion)
+            traces: traces, vectors: vectors)
         coordinator = IngestCoordinator(services: services)
         rethink = RethinkCoordinator(services: services, ingest: coordinator)
         review = ReviewActions(services: services, coordinator: coordinator)

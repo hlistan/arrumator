@@ -456,6 +456,7 @@
     "ftsCandidateLimit": 200,
     "resultLimit": 50,
     "minSemanticQueryChars": 3,
+    "semanticMinSimilarity": 0.56,
     "queryCacheSize": 256,
     "bm25Weights": [
       5,

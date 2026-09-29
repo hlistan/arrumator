@@ -135,7 +135,7 @@ import Testing
             extractor: services.extractor, classifier: services.classifier, learner: learner,
             filer: DocumentFiler(database: database, placer: services.filer.placer, index: IndexStore(database: database),
                                  registry: SelfChangeRegistry(ttl: services.config.watcher.selfChangeTTLSeconds)),
-            traces: TraceRecorder(database: database, appVersion: "test"), vectors: VectorIndex(), appVersion: "test")
+            traces: TraceRecorder(database: database, appVersion: "test"), vectors: VectorIndex())
         await IngestCoordinator(services: services).drain()
 
         let index = IndexStore(database: database)
@@ -281,7 +281,7 @@ import Testing
         _ = try await env.taxonomy.ensureSystemFolder(.logic, root: env.archive)
         #expect(ArchiveRecords.mayHoldRecords(archive: env.archive, config: config), "System / Logic, as a new archive has it")
 
-        /// Writes `_about.md` files along a chain of directories under a new root.
+        // Writes `_about.md` files along a chain of directories under a new root.
         func layout(_ levels: [(directory: String, definition: FolderDefinition)]) throws -> URL {
             let root = env.archive.deletingLastPathComponent().appendingPathComponent(UUID().uuidString, isDirectory: true)
             var dir = root

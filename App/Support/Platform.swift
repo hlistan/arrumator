@@ -62,4 +62,3 @@ extension Text {
         self.init(attributed)
     }
 }
-

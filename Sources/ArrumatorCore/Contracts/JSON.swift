@@ -54,12 +54,19 @@ public enum JSONValue: Sendable, Codable, Hashable {
 
     public init(from decoder: any Decoder) throws {
         let c = try decoder.singleValueContainer()
-        if c.decodeNil() { self = .null }
-        else if let b = try? c.decode(Bool.self) { self = .bool(b) }
-        else if let n = try? c.decode(Double.self) { self = .number(n) }
-        else if let s = try? c.decode(String.self) { self = .string(s) }
-        else if let a = try? c.decode([JSONValue].self) { self = .array(a) }
-        else { self = .object(try c.decode([String: JSONValue].self)) }
+        if c.decodeNil() {
+            self = .null
+        } else if let b = try? c.decode(Bool.self) {
+            self = .bool(b)
+        } else if let n = try? c.decode(Double.self) {
+            self = .number(n)
+        } else if let s = try? c.decode(String.self) {
+            self = .string(s)
+        } else if let a = try? c.decode([JSONValue].self) {
+            self = .array(a)
+        } else {
+            self = .object(try c.decode([String: JSONValue].self))
+        }
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -143,13 +150,6 @@ public enum JSONValue: Sendable, Codable, Hashable {
         out += "\""
     }
     public var stringValue: String? { if case let .string(s) = self { s } else { nil } }
-    public var doubleValue: Double? {
-        switch self {
-        case let .number(n): n
-        case let .string(s): Double(s)
-        default: nil
-        }
-    }
     public var arrayValue: [JSONValue]? { if case let .array(a) = self { a } else { nil } }
 }
 

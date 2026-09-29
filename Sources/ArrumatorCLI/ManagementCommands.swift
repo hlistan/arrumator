@@ -39,7 +39,7 @@ struct Review: AsyncParsableCommand {
         static let configuration = CommandConfiguration(abstract: "Move a document to a folder (recorded as a correction).")
         @OptionGroup var options: GlobalOptions
         @Argument var document: String
-        @Argument(help: "Folder code, e.g. 21.") var folder: String
+        @Argument(help: "Folder code, e.g. F12.") var folder: String
         func run() async throws {
             let runtime = try await options.runtime()
             let settings = await runtime.settings.current
@@ -148,7 +148,7 @@ struct Folders: AsyncParsableCommand {
 }
 
 struct Rules: AsyncParsableCommand {
-    static let configuration = CommandConfiguration(abstract: "Rules learned from use (and any you added).",
+    static let configuration = CommandConfiguration(abstract: "Rules learned from use.",
                                                     subcommands: [List.self, Enable.self, Disable.self],
                                                     defaultSubcommand: List.self)
 

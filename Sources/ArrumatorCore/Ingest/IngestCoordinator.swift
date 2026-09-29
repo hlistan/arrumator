@@ -2,7 +2,6 @@ import Foundation
 import GRDB
 
 public struct IngestStatus: Sendable, Hashable {
-    public var paused: Bool
     /// Files waiting to be filed.
     public var queued: Int
     /// Filed documents waiting to have their text read again, after the index was rebuilt from the archive.
@@ -11,10 +10,9 @@ public struct IngestStatus: Sendable, Hashable {
     public var currentStage: JobState?
     public var waitingForOllama: Bool
     public var powerPauseReason: String?
-    public var lastError: String?
 
-    public static let idle = IngestStatus(paused: false, queued: 0, reindexing: 0, currentPath: nil, currentStage: nil,
-                                          waitingForOllama: false, powerPauseReason: nil, lastError: nil)
+    public static let idle = IngestStatus(queued: 0, reindexing: 0, currentPath: nil, currentStage: nil,
+                                          waitingForOllama: false, powerPauseReason: nil)
 }
 
 /// Everything the pipeline needs, assembled by the composition root (app or CLI).
@@ -29,11 +27,10 @@ public struct PipelineServices: Sendable {
     public var filer: DocumentFiler
     public var traces: TraceRecorder
     public var vectors: VectorIndex
-    public var appVersion: String
 
     public init(database: AppDatabase, config: PipelineConfig, settings: SettingsStore, taxonomy: TaxonomyStore,
                 extractor: any ContentExtracting, classifier: any DocumentClassifier, learner: any LearningSink,
-                filer: DocumentFiler, traces: TraceRecorder, vectors: VectorIndex, appVersion: String) {
+                filer: DocumentFiler, traces: TraceRecorder, vectors: VectorIndex) {
         self.database = database
         self.config = config
         self.settings = settings
@@ -44,7 +41,6 @@ public struct PipelineServices: Sendable {
         self.filer = filer
         self.traces = traces
         self.vectors = vectors
-        self.appVersion = appVersion
     }
 
     public var documents: DocumentStore { DocumentStore(database: database) }
@@ -149,7 +145,6 @@ public actor IngestCoordinator {
     private func runLoop() async {
         while !Task.isCancelled {
             let settings = await services.settings.current
-            status.paused = settings.paused
             let powerReason = PowerState.current().pauseReason(settings: settings, config: services.config.power)
             status.powerPauseReason = powerReason
             if !settings.paused, powerReason == nil, FileManager.default.fileExists(atPath: settings.archiveURL.path) {
@@ -229,7 +224,6 @@ public actor IngestCoordinator {
         payload.traceID = trace.traceID
         do {
             try await runStages(&job, payload: &payload, settings: settings, trace: trace)
-            status.lastError = nil
             status.waitingForOllama = false
             await services.traces.finish(trace, outcome: job.state.rawValue, docID: job.docId)
         } catch {
@@ -247,7 +241,10 @@ public actor IngestCoordinator {
 
     private func runStages(_ job: inout JobRecord, payload: inout JobPayload, settings: AppSettings,
                            trace: TraceContext) async throws {
-        if job.kind == .reindex { return try await reindex(&job, payload: payload, settings: settings, trace: trace) }
+        if job.kind == .reindex {
+            try await reindex(&job, payload: payload, settings: settings, trace: trace)
+            return
+        }
         let source = URL(fileURLWithPath: job.sourcePath)
         if job.state == .pending || job.state == .hashing {
             try await save(&job, payload, state: .hashing)
@@ -321,8 +318,9 @@ public actor IngestCoordinator {
         }
         payload.outcome = outcome
         let d = outcome.decision
+        let destination = taxonomy.destination(of: d).map { ($0.isNew ? "new " : "") + $0.path } ?? "review"
         try await services.history.record(.classified, doc: docID, job: job.id, trace: trace.traceID,
-                                          summary: "\(taxonomy.destination(of: d).map { ($0.isNew ? "new " : "") + $0.path } ?? "review") · \(d.band.rawValue) · \(String(format: "%.2f", d.confidence.final))",
+                                          summary: "\(destination) · \(d.band.rawValue) · \(String(format: "%.2f", d.confidence.final))",
                                           payload: d)
         try await save(&job, payload, state: .filing)
         return outcome
@@ -377,10 +375,10 @@ public actor IngestCoordinator {
             let source = SourceFile(path: doc.path, originalFilename: doc.originalFilename,
                                     fileExtension: (doc.originalFilename as NSString).pathExtension, utType: doc.uttype,
                                     byteSize: doc.size, createdAt: nil, modifiedAt: doc.fileMtime, sha256: doc.sha256)
-            let result = try await services.filer.file(doc, source: source, decision: decision, folderCode: folder.code,
+            let filedRecord = try await services.filer.file(doc, source: source, decision: decision, folderCode: folder.code,
                                                        status: .duplicate, userChosen: false, inPlace: false,
                                                        taxonomy: taxonomy, settings: settings, trace: trace)
-            doc = result.document
+            doc = filedRecord
         } else {
             doc = try await services.documents.save(doc)
         }
@@ -470,10 +468,10 @@ public actor IngestCoordinator {
                 throw IngestError.sourceMissing(document.path)
             }
         }
-        let result = try await services.filer.file(document, source: content.source, decision: decision, folderCode: targetCode,
+        let filedRecord = try await services.filer.file(document, source: content.source, decision: decision, folderCode: targetCode,
                                                    status: status, userChosen: userChosen, inPlace: job.kind == .adopt,
                                                    taxonomy: taxonomy, settings: settings, trace: trace)
-        payload.targetPath = result.document.path
+        payload.targetPath = filedRecord.path
         if var doc = try await services.documents.document(id: docID) {
             doc.lastTraceId = trace.traceID
             _ = try await services.documents.save(doc)
@@ -486,19 +484,19 @@ public actor IngestCoordinator {
                 await services.vectors.upsert(docID: docID, vector: embedding, model: model)
             }
         }
-        if status == .filed, let folderID = result.document.folderId {
+        if status == .filed, let folderID = filedRecord.folderId {
             // Every placement is recorded so repeated patterns turn into rules; user confirmations weigh more.
             var learned = outcome
             learned.decision = decision
             var filed = content
-            filed.source.path = result.document.path
+            filed.source.path = filedRecord.path
             await services.learner.documentFiled(documentID: docID, folderID: folderID, outcome: learned, content: filed,
                                                  confirmedByUser: userChosen || job.kind == .adopt, trace: trace)
         }
         try await save(&job, payload, state: status == .needsReview ? .needsReview : .done)
         Log.info(.ingest, status == .needsReview ? "Held for review" : "Filed", [
             "doc": String(docID), "folder": targetCode, "band": decision.band.rawValue,
-            "confidence": String(format: "%.2f", decision.confidence.final), "path": result.document.path,
+            "confidence": String(format: "%.2f", decision.confidence.final), "path": filedRecord.path,
         ])
     }
 
@@ -511,7 +509,6 @@ public actor IngestCoordinator {
             return
         }
         let message = error.localizedDescription
-        status.lastError = message
         let config = services.config.ingest
         let ollamaDown = (error as? OllamaError).map { $0.isTransient } ?? false
         job.lastError = message

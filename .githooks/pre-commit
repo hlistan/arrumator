@@ -1,0 +1,3 @@
+#!/bin/sh
+# Refuses a commit that would add a secret, signing material or a real document. Enabled by scripts/bootstrap.sh.
+exec "$(git rev-parse --show-toplevel)/scripts/check-secrets.sh" --staged

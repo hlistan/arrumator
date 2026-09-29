@@ -13,7 +13,7 @@ final class AppModel {
         case failed(String)
     }
 
-    static let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
+    static let version = AppVersion.of(.main)
 
     var phase: Phase = .starting
     private(set) var runtime: ArrumatorRuntime?

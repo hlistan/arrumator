@@ -47,8 +47,8 @@ comes from `arrumator eval` runs through the live pipeline in a throw-away archi
 | canonicalization | 0.52 | 0.67 | 0.43 | 38 | 54% | 0.36 | 8.3 |
 | **canonicalization + recurring documents join their predecessor** | **0.66** | 0.76 | **0.58** | **27** | **83%** | 0.54 | **5.9** |
 
-- **Canonicalization** (`PlacementGuard`, `placementGuard.offerAbove`, `choices`, `rankFusionK`) maps a folder the
-  model named freely onto the few most alike folders beside it, in one multiple-choice question.
+- **Canonicalization** (`PlacementGuard`; `classification.placementGuard.offerAbove`, `choices`, `rankFusionK`)
+  maps a folder the model named freely onto the few most alike folders beside it, in one multiple-choice question.
 - **Recurring documents join their predecessor.** A document almost identical to a confidently filed one goes to its
   folder without the model deciding (`learning.directPlacement.knnMinNeighbors` 1).
 - **Why this works:** `gemma4:e2b` proposed the same path for only 24 of 66 repeat documents, and the same top-level
@@ -102,7 +102,7 @@ stated.
 | Near-duplicate threshold `knnMinSimilarity` 0.88 / 0.95 (forward + reversed) | 0.645 / 0.582 vs 0.644 at 0.92 | 0.92 is on the plateau |
 | EmbeddingGemma 300M as the embedder, thresholds unchanged | F1 0.46 vs 0.51 | worse without recalibrated thresholds |
 | The model says which of the detected identifiers are the sender's, and only those are learned (plus the contrast rule below) | sender accuracy +2 points, fewer held for review; F1 0.58 vs 0.66 (means of three) | costs grouping consistency |
-| An identifier identifies a sender only once other senders' documents lack it (`stableKeyMinContrast`), without the model attributing identifiers (standard corpus, 2 passes) | F1 0.41/0.30 vs 0.43/0.19; sender 78% vs 81% | no clear gain |
+| An identifier identifies a sender only once other senders' documents lack it (`stableKeyMinContrast`, since removed), without the model attributing identifiers (standard corpus, 2 passes) | F1 0.41/0.30 vs 0.43/0.19; sender 78% vs 81% | no clear gain |
 
 ### Candidate retrieval for the folder question
 
@@ -176,6 +176,32 @@ and a model that decides and describes stays loaded once.
 The corpora don't show this: OCR found enough text in each of their images, so no run described one. With the change,
 the three-instance forward runs took 6.2 s/doc (was 5.9) on `gemma4:e2b` and 23.7 (was 23.5) on `gemma4:12b`, with
 the same grouping. These differences are within run-to-run variation.
+
+## Search
+
+Search lists the documents that contain the query's words first, then documents found by meaning alone, most similar
+first. Cosine similarity gives every query nearest neighbours, so without a floor every search returned the whole
+archive. `search.semanticMinSimilarity` is that floor. It was calibrated on the 36 fixture documents filed into a scratch
+archive, with 51 queries in English, Portuguese and Russian: kinds of document ("electricity bill", "extrato
+bancário", "налоговая декларация"), senders, and six with no relevant document ("banana", "wedding"). A document is
+relevant when the corpus gives it the queried category or sender. Only documents without the query's words count,
+because the floor decides only about those. Query vectors are from `bge-m3`, the embedding model of every profile.
+
+| floor | found by meaning | relevant | precision | recall | F0.5 | queries with an irrelevant hit |
+|---|---|---|---|---|---|---|
+| none (before) | every document | – | 0.04 | 1.00 | – | 51 / 51 |
+| 0.50 | 132 | 52 | 0.39 | 0.73 | 0.43 | 20 / 51 |
+| 0.54 | 64 | 40 | 0.62 | 0.56 | 0.61 | 11 / 51 |
+| **0.56** | 45 | 31 | **0.69** | 0.44 | **0.62** | 7 / 51 |
+| 0.58 | 31 | 22 | 0.71 | 0.31 | 0.56 | 6 / 51 |
+| 0.60 | 17 | 14 | 0.82 | 0.20 | 0.50 | 3 / 51 |
+
+- **The floor maximises F0.5,** which weighs precision twice as much as recall: a document that doesn't belong costs
+  the user more than one that is missed, which a more precise query finds.
+- **Remaining misses are near:** a phone bill for "fatura de eletricidade", an income certificate for "tax return".
+  None of the six queries without a relevant document finds anything by meaning.
+- **For short queries, `bge-m3` similarities are compressed:** relevant documents score 0.37 to 0.67. Another
+  embedding model needs its own floor.
 
 ## Limits of these results
 

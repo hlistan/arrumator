@@ -37,14 +37,12 @@ actor RecordingLearner: LearningSink {
     var filed: [Int64] = []
     var corrections: [CorrectionEvent] = []
     var forgotten: [Int64] = []
-    var settled = 0
     var reembedded: [Int64] = []
     func documentFiled(documentID: Int64, folderID: Int64, outcome: ClassificationOutcome, content: ExtractedContent,
                        confirmedByUser: Bool, trace: TraceContext) async { filed.append(documentID) }
     func correctionRecorded(_ correction: CorrectionEvent, trace: TraceContext) async { corrections.append(correction) }
     func documentForgotten(documentID: Int64) async { forgotten.append(documentID) }
     func taxonomyChanged(_ changes: [TaxonomyChange], taxonomy: TaxonomySnapshot) async {}
-    func settleUntouchedFilings() async { settled += 1 }
     func documentReembedded(documentID: Int64, vector: [Float], model: String) async { reembedded.append(documentID) }
     var rearranged: [PlacementMove] = []
     var removedFolders: Set<Int64> = []
@@ -52,7 +50,6 @@ actor RecordingLearner: LearningSink {
         rearranged += moves
         removedFolders.formUnion(removedFolderIDs)
     }
-    func forget(_ fact: LearnedFact) async throws {}
 }
 
 struct Harness {
@@ -76,7 +73,7 @@ struct Harness {
             database: env.database, config: env.config, settings: env.settings, taxonomy: env.taxonomy,
             extractor: PlainTestExtractor(), classifier: classifier, learner: learner,
             filer: DocumentFiler(database: env.database, placer: placer, index: IndexStore(database: env.database), registry: registry),
-            traces: TraceRecorder(database: env.database, appVersion: "test"), vectors: VectorIndex(), appVersion: "test")
+            traces: TraceRecorder(database: env.database, appVersion: "test"), vectors: VectorIndex())
         return Harness(env: env, services: services, coordinator: IngestCoordinator(services: services), learner: learner)
     }
 
@@ -283,7 +280,7 @@ struct VanishingFolderClassifier: DocumentClassifier {
         let services = PipelineServices(database: h.services.database, config: config, settings: h.services.settings,
                                         taxonomy: h.services.taxonomy, extractor: h.services.extractor,
                                         classifier: h.services.classifier, learner: h.services.learner, filer: h.services.filer,
-                                        traces: h.services.traces, vectors: h.services.vectors, appVersion: "test")
+                                        traces: h.services.traces, vectors: h.services.vectors)
         let coordinator = IngestCoordinator(services: services)
         let url = try h.env.drop("bad.txt", text: "x")
         await coordinator.enqueue(url)

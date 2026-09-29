@@ -78,12 +78,4 @@ public struct FileOperations: Sendable {
         Log.info(.fileops, "Copied across volumes and trashed source", ["from": source.path, "to": destination.path])
         return MoveResult(from: source.path, to: destination.path, crossVolume: true, collisionIndex: collision)
     }
-
-    /// Renames a file in place (e.g. after the user edits a title), keeping it in its folder.
-    public func rename(_ url: URL, to filename: String) throws -> URL {
-        guard url.lastPathComponent != filename else { return url }
-        let (destination, _) = try uniqueDestination(directory: url.deletingLastPathComponent(), filename: filename)
-        try FileManager.default.moveItem(at: url, to: destination)
-        return destination
-    }
 }

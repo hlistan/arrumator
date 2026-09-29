@@ -67,7 +67,8 @@ struct DateScanner: Sendable {
 
     private static let patterns: [Pattern] = [
         // «15» мая 2024 г. | 20 de maio de 2026 | 1st of May 2024 | 15-mai-2024
-        Pattern(regex: regex(#"(?<![\p{L}\p{N}])["«“]?(\d{1,2})(?:st|nd|rd|th|º|°|-?го|-?е)?["»”]?[\s./-]*(?:de\s+|of\s+)?("# + months + #")(?![\p{L}])\.?,?[\s./-]*(?:de\s+)?(\d{4})(?!\d)"#)) { g, _ in
+        Pattern(regex: regex(#"(?<![\p{L}\p{N}])["«“]?(\d{1,2})(?:st|nd|rd|th|º|°|-?го|-?е)?["»”]?[\s./-]*(?:de\s+|of\s+)?("#
+                             + months + #")(?![\p{L}])\.?,?[\s./-]*(?:de\s+)?(\d{4})(?!\d)"#)) { g, _ in
             guard let day = Int(g[0]), let month = MonthNames.month(for: g[1]), let year = Int(g[2]) else { return nil }
             return CalendarDay(year: year, month: month, day: day)
         },

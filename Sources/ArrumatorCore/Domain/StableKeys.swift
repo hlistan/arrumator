@@ -1,3 +1,4 @@
+// swiftlint:disable line_length - each identifier pattern is one regex literal, read whole
 import Foundation
 
 /// Detection, validation and normalisation of stable identifiers used for deterministic correspondent matching:
@@ -288,3 +289,4 @@ public enum StableKeys {
         return Int(ascii) - Int(Character("A").asciiValue ?? 0) + 10
     }
 }
+// swiftlint:enable line_length

@@ -429,9 +429,9 @@ enum PortugueseFixtures {
         var debits = Money.zero
         var credits = Money.zero
         for (day, description, amount) in movements {
-            balance = balance + amount
+            balance += amount
             let date = Day(2026, 8, day).ptShort
-            if amount < .zero { debits = debits - amount } else { credits = credits + amount }
+            if amount < .zero { debits -= amount } else { credits += amount }
             rows.append([date, date, description, amount < .zero ? (-amount).pt : "", amount < .zero ? "" : amount.pt, balance.pt])
         }
         let document = Document(
@@ -808,7 +808,7 @@ enum PortugueseFixtures {
         for (offset, line) in lines.enumerated() {
             let row = firstLine + offset
             let amount = line.3.times(Double(line.1))
-            subtotal = subtotal + amount
+            subtotal += amount
             rows.append([.text(line.0), .integer(line.1), .text(line.2), .money(line.3),
                          .formula("B\(row)*D\(row)", cached: amount)])
         }

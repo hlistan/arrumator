@@ -71,11 +71,11 @@ public struct ReviewActions: Sendable {
         let trace = try await services.startTrace(docID: docID, jobID: nil, attempt: 0, source: .review, settings: settings)
         await trace.record(.review, startedAt: Date(), input: ["action": source.rawValue, "folder": folder.code],
                            output: ["previousFolder": previousFolder.map(String.init) ?? "none"])
-        let result = try await services.filer.file(doc, source: content.source, decision: decision, folderCode: folder.code,
+        let filedRecord = try await services.filer.file(doc, source: content.source, decision: decision, folderCode: folder.code,
                                                    status: .filed, userChosen: true, inPlace: false, taxonomy: taxonomy,
                                                    settings: settings, trace: trace)
         let correction = CorrectionEvent(documentID: docID, source: source, fromFolderID: previousFolder, toFolderID: folder.id,
-                                         fromFilename: doc.filename, toFilename: result.document.filename, proposed: proposed,
+                                         fromFilename: doc.filename, toFilename: filedRecord.filename, proposed: proposed,
                                          traceID: doc.lastTraceId)
         try await recordCorrection(correction, trace: trace)
         let embedModel = try services.config.models(for: settings.models).embed
@@ -83,13 +83,13 @@ public struct ReviewActions: Sendable {
                                             embedding: try await services.index.embedding(docID: docID, model: embedModel),
                                             embeddingModel: embedModel)
         var filed = content
-        filed.source.path = result.document.path
+        filed.source.path = filedRecord.path
         await services.learner.documentFiled(documentID: docID, folderID: folder.id, outcome: outcome, content: filed,
                                              confirmedByUser: true, trace: trace)
         if let previousFolder, previousFolder != folder.id {
             try await removeIfEmptied(previousFolder, settings: settings, move: PlacementMove(
                 documentID: docID, fromFolderID: previousFolder, toFolderID: folder.id,
-                correspondentID: result.document.correspondentId, documentType: decision.documentType))
+                correspondentID: filedRecord.correspondentId, documentType: decision.documentType))
         }
         await services.traces.finish(trace, outcome: "user-filed", docID: docID)
     }

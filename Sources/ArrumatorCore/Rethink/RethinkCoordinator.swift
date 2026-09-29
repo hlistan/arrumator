@@ -2,7 +2,6 @@ import Foundation
 
 /// Where a rethink stands, for the app and the command line.
 public struct RethinkProgress: Sendable, Hashable {
-    public var runID: Int64?
     public var status: RethinkRunStatus?
     public var total: Int
     public var decided: Int
@@ -13,7 +12,7 @@ public struct RethinkProgress: Sendable, Hashable {
     /// Why planning is waiting instead of deciding, when it is.
     public var waiting: String?
 
-    public static let none = RethinkProgress(runID: nil, status: nil, total: 0, decided: 0, moves: 0, choices: 0, waiting: nil)
+    public static let none = RethinkProgress(status: nil, total: 0, decided: 0, moves: 0, choices: 0, waiting: nil)
 
     public var isActive: Bool { status?.isActive ?? false }
 }
@@ -408,11 +407,11 @@ public actor RethinkCoordinator {
                     await trace.record(.review, startedAt: Date(), input: ["action": "rethinkChoice", "folder": folder.code],
                                        output: ["previousFolder": item.fromFolderId.map(String.init) ?? "none"])
                 }
-                let result = try await services.filer.file(
+                let filedRecord = try await services.filer.file(
                     document, source: content.source, decision: decision, folderCode: folder.code, status: .filed, userChosen: chosen,
                     inPlace: false, taxonomy: try await services.taxonomy.snapshot(root: root), settings: settings, trace: trace,
                     event: .rethought)
-                var filed = result.document
+                var filed = filedRecord
                 filed.lastTraceId = item.traceId ?? filed.lastTraceId
                 _ = try await services.documents.save(filed)
                 content.source.path = filed.path
@@ -481,7 +480,7 @@ public actor RethinkCoordinator {
             }
             let items = try await store.items(runID: runID)
             let choices = items.filter(\.canMove)
-            progress = RethinkProgress(runID: runID, status: run.status, total: items.count,
+            progress = RethinkProgress(status: run.status, total: items.count,
                                        decided: items.filter { $0.status != .pending }.count,
                                        moves: choices.filter(\.selected).count, choices: choices.count,
                                        waiting: run.status == .planning ? progress.waiting : nil)

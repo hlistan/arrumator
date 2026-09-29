@@ -1,0 +1,13 @@
+// markdownlint-cli2 (https://github.com/DavidAnson/markdownlint-cli2) rules. scripts/lint.sh passes it the Markdown
+// files Git tracks or would track, so build folders are never walked.
+{
+  "config": {
+    "default": true,
+    // Prose wraps at 120 columns, like the code; tables and code blocks keep their natural width.
+    "MD013": { "line_length": 120, "tables": false, "code_blocks": false },
+    // The same subheading under different sections (for example "Usage") is fine.
+    "MD024": { "siblings_only": true },
+    // Tables are written compactly; padding every cell to align the pipes churns each row on every edit.
+    "MD060": false
+  }
+}

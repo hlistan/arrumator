@@ -1,0 +1,63 @@
+# SwiftLint (https://realm.github.io/SwiftLint/) for the package, the app and the fixture generator.
+# Run by scripts/lint.sh with --strict, so every warning fails the check.
+#
+# The size limits sit just above the largest function, type and file there is today: they stop code growing
+# further without forcing an unrelated rewrite. Lower them when a refactoring brings the largest one down.
+
+included:
+  - Package.swift
+  - Sources
+  - App
+  - Tests
+  - Tools/FixtureGen/Package.swift
+  - Tools/FixtureGen/Sources
+excluded:
+  - Tests/Fixtures
+
+disabled_rules:
+  # Text read from files, tools and mail is decoded leniently on purpose: invalid bytes become U+FFFD instead of
+  # losing the whole text, which is what `String(decoding:as:)` does and this rule forbids.
+  - optional_data_string_conversion
+  # Short names are the house style for closure parameters, loop indices and local decode types (`c`, `db`, `R`).
+  - identifier_name
+  - trailing_comma
+  # SwiftUI's Button { … } label: { … } form.
+  - multiple_closures_with_trailing_closure
+
+opt_in_rules:
+  # AGENTS.md §3: no force unwrap of values that come from disk, Ollama or the model.
+  - force_unwrapping
+  - local_doc_comment
+  - return_value_from_void_function
+  - contains_over_first_not_nil
+  - first_where
+  - last_where
+  - sorted_first_last
+  - toggle_bool
+  - identical_operands
+  - yoda_condition
+  - duplicate_imports
+  - fatal_error_message
+
+line_length:
+  warning: 200
+  ignores_urls: true
+cyclomatic_complexity:
+  warning: 22
+function_body_length:
+  warning: 160
+type_body_length:
+  warning: 531
+file_length:
+  warning: 693
+function_parameter_count:
+  warning: 14
+large_tuple:
+  warning: 4
+nesting:
+  type_level: 2
+type_name:
+  min_length: 1
+  max_length: 50
+
+reporter: xcode

@@ -51,7 +51,6 @@ public enum Xattr {
     public static let documentID = "com.arrumator.docid"
     public static let originalName = "com.arrumator.original-name"
     public static let filedAt = "com.arrumator.filed-at"
-    public static let folderID = "com.arrumator.folderid"
 
     public static func set(_ name: String, _ value: String, on url: URL) throws {
         let data = Array(value.utf8)
@@ -71,9 +70,5 @@ public enum Xattr {
             guard read > 0 else { return nil }
             return String(decoding: buffer.prefix(read), as: UTF8.self)
         }
-    }
-
-    public static func remove(_ name: String, from url: URL) {
-        _ = url.withUnsafeFileSystemRepresentation { path in removexattr(path, name, 0) }
     }
 }

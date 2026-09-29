@@ -37,12 +37,6 @@ public struct OllamaClient: OllamaAPI {
         return r.models
     }
 
-    public func running() async throws -> [OllamaRunningModel] {
-        struct R: Decodable { var models: [OllamaRunningModel] }
-        let r: R = try await get("api/ps", timeout: config.timeouts.meta)
-        return r.models
-    }
-
     public func show(model: String) async throws -> OllamaShowResponse {
         struct Body: Encodable { var model: String }
         return try await post("api/show", body: Body(model: model), timeout: config.timeouts.meta, model: model)
@@ -59,13 +53,6 @@ public struct OllamaClient: OllamaAPI {
 
     public func embed(_ request: OllamaEmbedRequest) async throws -> OllamaEmbedResponse {
         try await post("api/embed", body: request, timeout: config.timeouts.embed, model: request.model)
-    }
-
-    public func unload(model: String) async throws {
-        struct Body: Encodable { var model: String; var keepAlive: Int }
-        struct R: Decodable { var model: String? }
-        let _: R = try await post("api/generate", body: Body(model: model, keepAlive: 0), timeout: config.timeouts.meta,
-                                  model: model)
     }
 
     public func pull(model: String) -> AsyncThrowingStream<OllamaPullProgress, any Error> {

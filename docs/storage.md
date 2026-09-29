@@ -40,7 +40,8 @@ files and restored exactly on a rebuild, so references between records keep work
 
 ## One index per archive
 
-The index of an archive is `~/Library/Application Support/Arrumator/Indexes/<name>.sqlite`, named after the first bytes of
+The index of an archive is `~/Library/Application Support/Arrumator/Indexes/<name>.sqlite`, named after the first
+bytes of
 the SHA-256 of the archive's path. Switching archives stops everything working on the one in use, writes its record
 files, and opens the other archive's index in its place: its folders, documents, logic, what was learned and its
 history. Nothing learned from filing into one archive ever advises another, as rules and filing memories name folders
@@ -96,6 +97,6 @@ text, embeddings and traces stay attached; everything else recorded in files is 
 
 A rebuild reads every folder's `_about.md`, every `_documents.md`, the learned files, the logic file and the history.
 Documents whose file is not where their entry says are looked up by the identifier on the file; files that have no entry,
-in any of your folders at any depth, are taken in as adopted documents of the folder they are in. Then, in the background and giving way to new arrivals, each
-document's text is extracted again and its embedding recomputed. Search by words and by meaning fills in as that
-proceeds; filing works from the start.
+in any of your folders at any depth, are taken in as adopted documents of the folder they are in. Then, in the
+background and giving way to new arrivals, each document's text is extracted again and its embedding recomputed.
+Search by words and by meaning fills in as that proceeds; filing works from the start.

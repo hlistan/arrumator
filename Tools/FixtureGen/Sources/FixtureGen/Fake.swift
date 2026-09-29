@@ -127,7 +127,7 @@ struct Fake: Sendable {
         return (body + [first, second]).map(String.init).joined()
     }
 
-    /// Russian СНИЛС formatted as "XXX-XXX-XXX YY".
+    /// Russian СНИЛС formatted as "NNN-NNN-NNN CC" (nine digits, then two check digits).
     mutating func snils() -> String {
         let body = [int(1...9)] + digits(8)
         let text = body.map(String.init).joined()

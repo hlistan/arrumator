@@ -12,8 +12,6 @@ public actor VectorIndex {
 
     public init() {}
 
-    public var count: Int { ids.count }
-
     public func load(model: String, rows: [(docID: Int64, vector: [Float])]) {
         self.model = model
         ids = []
@@ -63,8 +61,9 @@ public actor VectorIndex {
         var scores = [Float](repeating: 0, count: ids.count)
         matrix.withUnsafeBufferPointer { m in
             query.withUnsafeBufferPointer { q in
+                guard let rows = m.baseAddress, let vector = q.baseAddress else { return }
                 for row in 0..<ids.count {
-                    vDSP_dotpr(m.baseAddress! + row * dimension, 1, q.baseAddress!, 1, &scores[row], vDSP_Length(dimension))
+                    vDSP_dotpr(rows + row * dimension, 1, vector, 1, &scores[row], vDSP_Length(dimension))
                 }
             }
         }

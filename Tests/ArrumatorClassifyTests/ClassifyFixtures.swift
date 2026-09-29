@@ -33,7 +33,10 @@ enum Fixtures {
             return #"{"name":"\#(name)","description":"\#(text)"}"#
         }
         return """
-        {"rationale":"EDP electricity invoice","correspondent":"\(correspondent)","subject":"\(subject)","document_type":"invoice","document_date":"05/07/2026","period_year":"","language":"pt","title":"Fatura eletricidade junho","tags":["energy","Energy"],"ideal_path":[\(levels.joined(separator: ","))],"ideal_year_folder":"\(yearly)","file_name":"\(fileName)","confidence":\(confidence)}
+        {"rationale":"EDP electricity invoice","correspondent":"\(correspondent)","subject":"\(subject)",\
+        "document_type":"invoice","document_date":"05/07/2026","period_year":"","language":"pt",\
+        "title":"Fatura eletricidade junho","tags":["energy","Energy"],"ideal_path":[\(levels.joined(separator: ","))],\
+        "ideal_year_folder":"\(yearly)","file_name":"\(fileName)","confidence":\(confidence)}
         """
     }
 
@@ -60,7 +63,6 @@ struct ClassifyHarness {
     let mock: MockOllama
     let store: GRDBLearningStore
     let logic: LogicStore
-    let memories: MemoryIndex
     let classifier: FilingClassifier
     let learner: Learner
     let settings: AppSettings
@@ -83,7 +85,7 @@ struct ClassifyHarness {
                                                               config: env.config.learning.descriptionRefresh),
                               absorber: FolderAbsorber(store: store, gate: gate, library: library, config: env.config.learning, skip: skip),
                               history: HistoryStore(database: env.database))
-        return ClassifyHarness(env: env, mock: mock, store: store, logic: logic, memories: memories, classifier: classifier, learner: learner,
+        return ClassifyHarness(env: env, mock: mock, store: store, logic: logic, classifier: classifier, learner: learner,
                                settings: await env.settings.current)
     }
 

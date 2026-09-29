@@ -1,12 +1,6 @@
 import Foundation
 import GRDB
 
-public struct FilingResult: Sendable {
-    public var document: DocumentRecord
-    public var move: MoveResult?
-    public var plan: PlacementPlan
-}
-
 /// Moves a document to its folder and records the outcome in one place (used by ingest, review and Move to…).
 public struct DocumentFiler: Sendable {
     public let database: AppDatabase
@@ -26,14 +20,13 @@ public struct DocumentFiler: Sendable {
     ///   - event: the history kind to record; by default it follows `status` (filed, or waiting for review).
     public func file(_ document: DocumentRecord, source: SourceFile, decision: FilingDecision, folderCode: String,
                      status: DocumentStatus, userChosen: Bool, inPlace: Bool, taxonomy: TaxonomySnapshot,
-                     settings: AppSettings, trace: TraceContext, event: EventKind? = nil) async throws -> FilingResult {
+                     settings: AppSettings, trace: TraceContext, event: EventKind? = nil) async throws -> DocumentRecord {
         guard let docID = document.id else { throw IngestError.documentNotPersisted }
         var plan = try await trace.measure(.name, input: ["folder": folderCode, "modelName": decision.fileName ?? ""],
                                            output: { (p: PlacementPlan) in p }) {
             try placer.plan(decision: decision, folderCode: folderCode, source: source, taxonomy: taxonomy,
                             settings: settings, userChosen: userChosen)
         }
-        var move: MoveResult?
         var newPath = document.path
         if inPlace {
             plan.directory = document.url.deletingLastPathComponent().path
@@ -46,7 +39,6 @@ public struct DocumentFiler: Sendable {
                                    originalName: document.originalFilename)
             }
             await registry.expect([result.to])
-            move = result
             newPath = result.to
         }
         if inPlace {
@@ -88,7 +80,7 @@ public struct DocumentFiler: Sendable {
         }
         try await index.updateHeader(docID: docID, title: decision.title, correspondent: decision.correspondent ?? "",
                                      filename: filedName)
-        return FilingResult(document: updated, move: move, plan: finalPlan)
+        return updated
     }
 }
 

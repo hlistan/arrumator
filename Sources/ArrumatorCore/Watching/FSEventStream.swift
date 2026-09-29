@@ -5,7 +5,6 @@ public struct FSEvent: Sendable, Hashable {
     public var path: String
     public var flags: UInt32
     public var id: UInt64
-    public var inode: Int64?
 
     public func has(_ flag: Int) -> Bool { flags & UInt32(flag) != 0 }
     public var isFile: Bool { has(kFSEventStreamEventFlagItemIsFile) }
@@ -47,15 +46,9 @@ public final class FSEventStream: @unchecked Sendable {
             var batch: [FSEvent] = []
             batch.reserveCapacity(count)
             for i in 0..<count {
-                let path: String
-                var inode: Int64?
-                if let dict = array[i] as? NSDictionary {
-                    path = dict[kFSEventStreamEventExtendedDataPathKey] as? String ?? ""
-                    inode = (dict[kFSEventStreamEventExtendedFileIDKey] as? NSNumber)?.int64Value
-                } else {
-                    path = array[i] as? String ?? ""
-                }
-                batch.append(FSEvent(path: path, flags: rawFlags[i], id: rawIDs[i], inode: inode))
+                let path = (array[i] as? NSDictionary)?[kFSEventStreamEventExtendedDataPathKey] as? String
+                    ?? array[i] as? String ?? ""
+                batch.append(FSEvent(path: path, flags: rawFlags[i], id: rawIDs[i]))
             }
             box.continuation.yield(batch)
         }

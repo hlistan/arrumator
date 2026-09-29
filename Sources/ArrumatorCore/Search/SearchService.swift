@@ -49,9 +49,10 @@ public struct SearchQuery: Sendable, Hashable {
 public struct SearchHit: Sendable, Identifiable, Hashable {
     public var id: Int64 { document.id ?? 0 }
     public var document: DocumentRecord
+    /// Orders hits within their group: the fused rank score for a document containing the words (full text only:
+    /// its BM25 relevance), cosine similarity to the query for a document found by meaning alone.
     public var score: Double
     public var snippet: String
-    public var titleHighlighted: String?
     public var sources: Set<HitSource>
 }
 
@@ -187,7 +188,7 @@ public actor SearchService {
             return try await database.reader.read { db in
                 try DocumentRecord.fetchAll(db, sql: "SELECT d.* FROM documents d WHERE 1=1 \(whereSQL) ORDER BY d.added_at DESC LIMIT ?",
                                             arguments: whereArgs + [limit])
-                    .map { SearchHit(document: $0, score: 0, snippet: "", titleHighlighted: nil, sources: []) }
+                    .map { SearchHit(document: $0, score: 0, snippet: "", sources: []) }
             }
         }
         let weights = config.bm25Weights.map { String($0) }.joined(separator: ", ")
@@ -197,51 +198,50 @@ public actor SearchService {
         return try await database.reader.read { db in
             let rows = try Row.fetchAll(db, sql: """
                 SELECT d.*, bm25(document_fts, \(weights)) AS rank,
-                       snippet(document_fts, 3, ?, ?, '…', ?) AS snip,
-                       highlight(document_fts, 0, ?, ?) AS hl
+                       snippet(document_fts, 3, ?, ?, '…', ?) AS snip
                 FROM document_fts JOIN documents d ON d.id = document_fts.rowid
                 WHERE document_fts MATCH ? \(whereSQL)
                 ORDER BY rank LIMIT ?
-                """, arguments: [open, close, tokens, open, close, match] + whereArgs + [limit])
+                """, arguments: [open, close, tokens, match] + whereArgs + [limit])
             return try rows.map { row in
-                let doc = try DocumentRecord(row: row)
-                let hl: String? = row["hl"]
-                return SearchHit(document: doc, score: -(row["rank"] as Double? ?? 0), snippet: row["snip"] ?? "",
-                                 titleHighlighted: (hl?.contains(open) ?? false) ? hl : nil, sources: [.fullText])
+                SearchHit(document: try DocumentRecord(row: row), score: -(row["rank"] as Double? ?? 0),
+                          snippet: row["snip"] ?? "", sources: [.fullText])
             }
         }
     }
 
+    /// Documents that contain the query's words come first, ordered by reciprocal rank fusion (Cormack et al., SIGIR
+    /// 2009) of their full-text rank and, when alike enough, their rank by meaning. Documents found by meaning alone
+    /// follow, most similar first. Similarity is cosine, so every query has nearest neighbours; only those at or above
+    /// `semanticMinSimilarity` are found, which is the similarity floor Elasticsearch's kNN search applies for the same
+    /// reason (its `similarity` parameter).
     private func fuse(fts: [SearchHit], semantic: [(docID: Int64, score: Float)]) async throws -> [SearchHit] {
-        guard !semantic.isEmpty else { return fts }
-        var scores: [Int64: Double] = [:]
-        var byID: [Int64: SearchHit] = [:]
-        for (rank, hit) in fts.enumerated() {
-            scores[hit.id, default: 0] += 1 / (config.rrfK + Double(rank + 1))
-            byID[hit.id] = hit
+        let alike = semantic.filter { Double($0.score) >= config.semanticMinSimilarity }
+        guard !alike.isEmpty else { return fts }
+        let meaningRank = Dictionary(alike.enumerated().map { ($1.docID, $0) }, uniquingKeysWith: min)
+        let reciprocal = { (rank: Int) in 1 / (self.config.rrfK + Double(rank + 1)) }
+        let withWords = fts.enumerated().map { rank, hit in
+            var fused = hit
+            fused.score = reciprocal(rank) + (meaningRank[hit.id].map(reciprocal) ?? 0)
+            if meaningRank[hit.id] != nil { fused.sources.insert(.semantic) }
+            return (rank: rank, hit: fused)
         }
-        let missing = semantic.map(\.docID).filter { byID[$0] == nil }
-        let docs = try await DocumentStore(database: database).documents(ids: missing)
-        let bodies = try await database.reader.read { [missing] db in
+        .sorted { ($0.hit.score, $1.rank) > ($1.hit.score, $0.rank) }
+        .map(\.hit)
+        let found = Set(fts.map(\.id))
+        let meaningOnly = alike.filter { !found.contains($0.docID) }
+        guard !meaningOnly.isEmpty else { return withWords }
+        let ids = meaningOnly.map(\.docID)
+        let docs = try await DocumentStore(database: database).documents(ids: ids)
+        let bodies = try await database.reader.read { [ids] db in
             try Dictionary(uniqueKeysWithValues: Row.fetchAll(db, sql: """
-                SELECT doc_id, substr(body, 1, ?) AS b FROM document_text WHERE doc_id IN (\(missing.map { _ in "?" }.joined(separator: ",")))
-                """, arguments: [config.vectorSnippetChars] + StatementArguments(missing)).map { ($0["doc_id"] as Int64, $0["b"] as String? ?? "") })
+                SELECT doc_id, substr(body, 1, ?) AS b FROM document_text WHERE doc_id IN (\(ids.map { _ in "?" }.joined(separator: ",")))
+                """, arguments: [config.vectorSnippetChars] + StatementArguments(ids)).map { ($0["doc_id"] as Int64, $0["b"] as String? ?? "") })
         }
-        for (rank, item) in semantic.enumerated() {
-            scores[item.docID, default: 0] += 1 / (config.rrfK + Double(rank + 1))
-            if var hit = byID[item.docID] {
-                hit.sources.insert(.semantic)
-                byID[item.docID] = hit
-            } else if let doc = docs[item.docID] {
-                byID[item.docID] = SearchHit(document: doc, score: 0, snippet: bodies[item.docID] ?? "", titleHighlighted: nil,
-                                             sources: [.semantic])
-            }
+        return withWords + meaningOnly.compactMap { item in
+            docs[item.docID].map { SearchHit(document: $0, score: Double(item.score), snippet: bodies[item.docID] ?? "",
+                                             sources: [.semantic]) }
         }
-        return byID.values.map { hit in
-            var h = hit
-            h.score = scores[hit.id] ?? 0
-            return h
-        }.sorted { $0.score > $1.score }
     }
 
     private func allowedIDs(_ filter: DocumentFilter) async throws -> Set<Int64>? {

@@ -1,4 +1,3 @@
-import ArrumatorCore
 import SwiftUI
 
 struct OnboardingView: View {
@@ -40,7 +39,11 @@ struct OnboardingView: View {
     private var welcome: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Welcome to Arrumator").font(.largeTitle.bold())
-            Text("Drop any document into your Incoming folder. Arrumator reads it on this Mac, decides where it belongs, names it, and files it into your archive. The folder structure grows as documents arrive, and it learns from every correction you make.")
+            Text("""
+                Drop any document into your Incoming folder. Arrumator reads it on this Mac, decides where it belongs, \
+                names it, and files it into your archive. The folder structure grows as documents arrive, and it learns \
+                from every correction you make.
+                """)
             Label("Everything runs locally with Ollama. No document ever leaves this computer.", systemImage: "lock.shield")
             Label("Nothing is created in advance: folders appear only when a document needs one.", systemImage: "folder.badge.plus")
             Label("Confident, learned patterns are filed instantly; everything else is decided by the local model and remembered.", systemImage: "brain")

@@ -36,7 +36,7 @@ import Testing
             extractor: PlainTestExtractor(), classifier: h.classifier, learner: h.learner,
             filer: DocumentFiler(database: h.env.database, placer: placer, index: IndexStore(database: h.env.database),
                                  registry: SelfChangeRegistry(ttl: h.env.config.watcher.selfChangeTTLSeconds)),
-            traces: TraceRecorder(database: h.env.database, appVersion: "test"), vectors: VectorIndex(), appVersion: "test"))
+            traces: TraceRecorder(database: h.env.database, appVersion: "test"), vectors: VectorIndex()))
     }
 
     private func directory(of name: String, _ h: ClassifyHarness) async throws -> String {
