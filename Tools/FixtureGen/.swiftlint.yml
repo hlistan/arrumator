@@ -1,0 +1,9 @@
+# The fixture generator is a development tool whose sources are mostly the synthetic documents' text.
+disabled_rules:
+  # Document text is kept one paragraph per literal, and one language's documents per type.
+  - line_length
+  - file_length
+  - type_body_length
+  # Raster and calendar construction on constant input; a failure there is a bug in the generator, found when
+  # the corpus is regenerated, never at a user's.
+  - force_unwrapping

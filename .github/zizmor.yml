@@ -1,0 +1,6 @@
+# zizmor (https://docs.zizmor.sh) configuration.
+rules:
+  # It prefers the newer `$/` form for calling a workflow in this repository; actionlint does not accept that form
+  # yet, and `./` calls the same file at the same commit.
+  self-repository:
+    disable: true

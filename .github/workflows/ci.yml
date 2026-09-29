@@ -1,0 +1,74 @@
+# Checks every pull request, and every merge to main before it is released (release.yml calls this workflow).
+name: CI
+
+on:
+  pull_request:
+  workflow_call:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  # A newer push to a pull request makes the older run moot; a merge to main is always checked in full.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  lint:
+    name: Static checks
+    runs-on: macos-26
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # gitleaks reads every commit
+          persist-credentials: false
+      - name: Install the tools in Brewfile
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+        run: brew bundle --file Brewfile
+      - name: Lint, guideline gates and secrets
+        env:
+          GH_TOKEN: ${{ github.token }} # lets zizmor run its online audits
+        run: scripts/lint.sh
+      - name: New commits hold no secrets and no machine-local identity
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          case $EVENT in
+            pull_request) scripts/check-secrets.sh --range "$PR_BASE..HEAD" ;;
+            push)
+              # A new branch has no previous head, and a rewritten one a previous head the clone does not have:
+              # both check everything they publish.
+              if [ -z "$BEFORE" ] || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+                scripts/check-secrets.sh --range HEAD
+              else
+                scripts/check-secrets.sh --range "$BEFORE..HEAD"
+              fi
+              ;;
+            *) echo "No new commits to check on $EVENT; the static checks scanned the whole history." ;;
+          esac
+
+  build:
+    name: Build, test and look for unused code
+    # Xcode 27 (Swift 6.4) is on its own image; macos-26 carries Xcode 26 only.
+    runs-on: xcode-27
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install XcodeGen and Periphery
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+        run: brew install xcodegen periphery
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+      - name: Build, test, build the app, find unused code
+        run: scripts/verify.sh --app --no-lint

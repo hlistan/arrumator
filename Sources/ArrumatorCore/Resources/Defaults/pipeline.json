@@ -1,0 +1,645 @@
+{
+  "ollama": {
+    "appBundleIdentifier": "com.electron.ollama",
+    "appBinarySubpath": "Contents/Resources/ollama",
+    "binarySearchPaths": [
+      "/Applications/Ollama.app",
+      "~/Applications/Ollama.app",
+      "/opt/homebrew/bin/ollama",
+      "/usr/local/bin/ollama"
+    ],
+    "serveEnvironment": {
+      "OLLAMA_HOST": "127.0.0.1:11434",
+      "OLLAMA_MAX_LOADED_MODELS": "2"
+    },
+    "timeouts": {
+      "meta": 2,
+      "version": 1.5,
+      "chat": 180,
+      "embed": 60,
+      "pull": 0
+    },
+    "retryDelays": [
+      2,
+      8,
+      30
+    ],
+    "healthPollStarting": 0.5,
+    "healthPollSteady": 30,
+    "startTimeout": 30,
+    "restartBackoff": [
+      5,
+      30,
+      120,
+      600
+    ],
+    "maxRestartsPerHour": 5,
+    "requiredFreeDiskGBAfterPull": 5
+  },
+  "modelProfiles": {
+    "standard": {
+      "label": "Standard (ministral-3:14b + bge-m3, ~10 GB)",
+      "chatModel": "ministral-3:14b",
+      "visionModel": "ministral-3:14b",
+      "embedModel": "bge-m3",
+      "fastModel": "ministral-3:14b",
+      "numCtx": 12288,
+      "fastNumCtx": 12288,
+      "keepAliveChat": "10m",
+      "keepAliveEmbed": "30m",
+      "residentBudgetGB": 14
+    },
+    "balanced": {
+      "label": "Balanced (ministral-3:8b + bge-m3, ~7 GB)",
+      "chatModel": "ministral-3:8b",
+      "visionModel": "ministral-3:8b",
+      "embedModel": "bge-m3",
+      "fastModel": "ministral-3:8b",
+      "numCtx": 12288,
+      "fastNumCtx": 12288,
+      "keepAliveChat": "10m",
+      "keepAliveEmbed": "30m",
+      "residentBudgetGB": 14
+    },
+    "lowMemory": {
+      "label": "Low memory (gemma4:e2b + bge-m3, ~5.5 GB)",
+      "chatModel": "gemma4:e2b-it-qat",
+      "visionModel": "gemma4:e2b-it-qat",
+      "embedModel": "bge-m3",
+      "fastModel": "gemma4:e2b-it-qat",
+      "numCtx": 12288,
+      "fastNumCtx": 12288,
+      "keepAliveChat": "10m",
+      "keepAliveEmbed": "30m",
+      "residentBudgetGB": 8
+    }
+  },
+  "watcher": {
+    "fsEventsLatency": 1.0,
+    "stabilityPollInterval": 2.0,
+    "stabilityRequiredPolls": 2,
+    "zeroByteWaitSeconds": 30,
+    "ignoredNamePrefixes": [
+      ".",
+      "~$",
+      "._"
+    ],
+    "ignoredNames": [
+      "Icon\r",
+      ".DS_Store",
+      "desktop.ini",
+      "Thumbs.db"
+    ],
+    "ignoredExtensions": [
+      "crdownload",
+      "part",
+      "download",
+      "tmp",
+      "partial",
+      "opdownload"
+    ],
+    "ignoredNameSubstrings": [
+      ".sb-",
+      ".arrumator-tmp-"
+    ],
+    "managedFilePrefix": "_",
+    "managedFileExtension": "md",
+    "selfChangeTTLSeconds": 30
+  },
+  "taxonomy": {
+    "aboutFileName": "_about.md",
+    "documentsFileName": "_documents.md",
+    "indexFileName": "_INDEX.md",
+    "recentTitlesPerFolder": 5,
+    "embeddingExampleLimit": 8,
+    "embeddingBodyChars": 1200,
+    "learnedExamplesLimit": 8,
+    "systemArea": {
+      "code": "system",
+      "name": "System",
+      "description": "Folders the app manages itself; documents here are waiting for a decision."
+    },
+    "systemFolders": [
+      {
+        "role": "needsReview",
+        "code": "needs-review",
+        "name": "Needs review",
+        "description": "Documents the app could not file confidently. Moving one into a folder teaches the app."
+      },
+      {
+        "role": "duplicates",
+        "code": "duplicates",
+        "name": "Duplicates",
+        "description": "Byte-identical copies of documents that are already filed; the app's history names the original."
+      },
+      {
+        "role": "learned",
+        "code": "learned",
+        "name": "Learned",
+        "description": "What Arrumator has learned from how you file: senders, rules, corrections and filing memories. The app rebuilds its index from these files."
+      },
+      {
+        "role": "logic",
+        "code": "logic",
+        "name": "Logic",
+        "description": "How this archive is organised: the logic the model follows when it files documents here. The prompt is the text of _logic.md; edit it in the app or in any editor."
+      },
+      {
+        "role": "history",
+        "code": "history",
+        "name": "History",
+        "description": "Everything that happened, one file per month."
+      }
+    ],
+    "maxDepth": 8,
+    "learnedCorrespondentsLimit": 5,
+    "prunableLeftovers": [
+      ".DS_Store",
+      ".localized",
+      "Icon\r"
+    ]
+  },
+  "records": {
+    "sendersFileName": "_senders.md",
+    "rulesFileName": "_rules.md",
+    "correctionsFileName": "_corrections.md",
+    "memoriesFileName": "_memories.md",
+    "logicFileName": "_logic.md",
+    "setAsideSuffix": "unreadable"
+  },
+  "ingest": {
+    "maxAttempts": 3,
+    "retryDelays": [
+      2,
+      8,
+      30
+    ],
+    "watchdogMinutes": 10
+  },
+  "extraction": {
+    "languages": [
+      "en",
+      "ru",
+      "pt"
+    ],
+    "languageSampleChars": 4000,
+    "languageMinConfidence": 0.5,
+    "maxIndexChars": 200000,
+    "largeFileBytes": 524288000,
+    "perFileTimeout": 180,
+    "toolTimeout": 30,
+    "toolOutputCapBytes": 20971520,
+    "plainTextReadCapBytes": 10485760,
+    "pdf": {
+      "textLayerHeadPages": 200,
+      "textLayerTailPages": 5,
+      "ocrHeadPages": 5,
+      "ocrAllIfAtMost": 6,
+      "ocrDPI": 200,
+      "ocrDPILargePage": 150,
+      "ocrDPISmallPage": 300,
+      "largePageArea": 1400000,
+      "smallPageArea": 87000,
+      "minPageChars": 40,
+      "minLetterShare": 0.35,
+      "maxReplacementShare": 0.02,
+      "imagePageMaxChars": 200,
+      "orientationRetryBelowConfidence": 0.4,
+      "ocrPageTimeout": 20,
+      "fullPageImageCoverage": 0.85,
+      "ocrMaxPixel": 5000
+    },
+    "image": {
+      "ocrMaxPixel": 2048,
+      "vlmMaxPixel": 1024,
+      "jpegQuality": 0.8,
+      "sparseChars": 80,
+      "sparseWords": 8,
+      "lowConfidence": 0.35,
+      "vlmTimeout": 90
+    },
+    "ocr": {
+      "lowConfidenceLine": 0.5,
+      "lowConfidenceWarning": 0.4,
+      "contrast": 1.3
+    },
+    "csvMaxRows": 200,
+    "xlsx": {
+      "maxSheets": 20,
+      "maxRows": 300,
+      "maxColumns": 30
+    },
+    "pptxMaxSlides": 100,
+    "archiveMaxEntries": 200,
+    "emailBodyCapBytes": 5242880,
+    "quickLookPixel": 2048,
+    "tableSnippetChars": 2000,
+    "maxTables": 3,
+    "candidateEncodings": [
+      "utf8",
+      "windowsCP1251",
+      "koi8R",
+      "macCyrillic",
+      "isoLatin1",
+      "windowsCP1252",
+      "macOSRoman"
+    ],
+    "cyrillicBigramMinShare": 0.1,
+    "toolKillGrace": 2,
+    "zipEntryCapBytes": 20971520,
+    "emailMaxPartDepth": 12,
+    "tracePreviewChars": 200
+  },
+  "entities": {
+    "dateLabels": [
+      "date",
+      "dated",
+      "invoice date",
+      "issue date",
+      "issued",
+      "data",
+      "data de emissão",
+      "emitido em",
+      "data do documento",
+      "дата",
+      "дата документа",
+      "дата выдачи",
+      "от"
+    ],
+    "dueLabels": [
+      "due",
+      "due date",
+      "pay by",
+      "vencimento",
+      "data limite",
+      "pagar até",
+      "data-limite",
+      "срок оплаты",
+      "оплатить до",
+      "оплатить не позднее"
+    ],
+    "birthLabels": [
+      "dob",
+      "date of birth",
+      "birth",
+      "nascimento",
+      "data de nascimento",
+      "дата рождения"
+    ],
+    "labelWindowChars": 120,
+    "yearsBack": 30,
+    "yearsForward": 1,
+    "scores": {
+      "label": 3,
+      "firstPortion": 2,
+      "plausibleYear": 1,
+      "dueLabel": -3,
+      "birthLabel": -3,
+      "crowdedLine": -1,
+      "matchesMetadata": 1
+    },
+    "firstPortionShare": 0.3,
+    "crowdedLineDates": 3,
+    "minTextDateScore": 1,
+    "companySuffixes": [
+      "ООО",
+      "ОАО",
+      "ЗАО",
+      "АО",
+      "ПАО",
+      "ИП",
+      "Lda",
+      "Lda.",
+      "S.A.",
+      "SA",
+      "Unipessoal",
+      "Ltd",
+      "Ltd.",
+      "LLC",
+      "Inc",
+      "Inc.",
+      "GmbH",
+      "B.V.",
+      "S.L."
+    ]
+  },
+  "classification": {
+    "promptVersion": 2,
+    "logicMaxChars": 8000,
+    "excerptChars": 12000,
+    "embeddingSummaryChars": 2000,
+    "embeddingNumCtx": 2048,
+    "promptExamplesPerFolder": 3,
+    "knn": {
+      "k": 24,
+      "maxPerFolder": 4,
+      "halfLifeDays": 180,
+      "recencyFloor": 0.7
+    },
+    "candidateWeights": {
+      "similarity": 0.5,
+      "knn": 0.5
+    },
+    "candidateWeightsNoMemory": {
+      "similarity": 1.0,
+      "knn": 0.0
+    },
+    "correspondentStrength": {
+      "stableKey": 1.0,
+      "domain": 0.9,
+      "alias": 0.7,
+      "ruleMinimum": 0.9
+    },
+    "correspondentScanChars": 3000,
+    "llmOptions": {
+      "temperature": 0,
+      "topK": 1,
+      "topP": 1,
+      "numPredict": 600,
+      "seed": 42
+    },
+    "titleMaxChars": 60,
+    "maxTags": 5,
+    "vlmNumPredict": 300,
+    "promptDatesLimit": 5,
+    "promptIdentifiersLimit": 8,
+    "alternativesCount": 3,
+    "ruleTextScanChars": 20000,
+    "repairAttempts": 1,
+    "placementGuard": {
+      "duplicateAbove": 0.85,
+      "offerAbove": 0.6,
+      "choices": 4,
+      "rankFusionK": 10,
+      "maxJudgements": 2,
+      "partyAbove": 0.8
+    }
+  },
+  "calibration": {
+    "weights": {
+      "llm": 0.45,
+      "knn": 0.25,
+      "similarity": 0.1,
+      "ideal": 0.2
+    },
+    "weightsNoMemory": {
+      "llm": 0.6,
+      "knn": 0.0,
+      "similarity": 0.1,
+      "ideal": 0.3
+    },
+    "ruleAgreeFloor": 0.9,
+    "ruleAgreeBonus": 0.05,
+    "ruleConflictPenalty": -0.3,
+    "metadataOnlyPenalty": -0.2,
+    "metadataOnlyCap": 0.6,
+    "vlmOnlyCap": 0.7,
+    "lowOCRThreshold": 0.5,
+    "lowOCRPenalty": -0.1,
+    "mtimeDatePenalty": -0.05,
+    "unknownLanguagePenalty": -0.05,
+    "newFolderConfidenceScale": 0.9,
+    "similarityFloor": 0.45,
+    "similarityCeiling": 0.8,
+    "idealFloor": 0.5,
+    "idealCeiling": 0.9
+  },
+  "learning": {
+    "memoryWeights": {
+      "auto": 0.5,
+      "approved": 1.0,
+      "corrected": 1.5,
+      "unconfirmed": 0.25
+    },
+    "maxMemoriesPerFolder": 500,
+    "ruleMinSupport": 3,
+    "ruleMaxContradictionShare": 0.2,
+    "ruleStrictBelowSupport": 5,
+    "ruleDisableAfterContradictions": 2,
+    "ruleReenableReliability": 0.9,
+    "ruleInducedPriority": 50,
+    "correspondentRuleMinSupport": 5,
+    "correspondentRulePriority": 80,
+    "stableKeyMinFilings": 2,
+    "defaultFolderMinWins": 3,
+    "descriptionRefresh": {
+      "minNewDocuments": 10,
+      "intervalDays": 7,
+      "sampleSize": 30,
+      "excerptSamples": 10,
+      "excerptChars": 300,
+      "temperature": 0.2,
+      "exampleCount": 3
+    },
+    "absorbSampleFiles": 10,
+    "directPlacement": {
+      "ruleMinReliability": 0.9,
+      "knnMinSimilarity": 0.92,
+      "knnMinNeighbors": 1,
+      "typeEstimateMinNeighbors": 1
+    },
+    "trustedMemoryMinWeight": 0.5,
+    "settleUnconfirmedAfterDays": 14
+  },
+  "naming": {
+    "maxChars": 120,
+    "maxBytes": 250,
+    "forbiddenCharacters": [
+      "/",
+      ":",
+      "\\"
+    ],
+    "collisionFormat": " (%d)"
+  },
+  "search": {
+    "rrfK": 60,
+    "ftsCandidateLimit": 200,
+    "resultLimit": 50,
+    "minSemanticQueryChars": 3,
+    "semanticMinSimilarity": 0.56,
+    "queryCacheSize": 256,
+    "bm25Weights": [
+      5,
+      3,
+      2,
+      1
+    ],
+    "snippetTokens": 24,
+    "debounceMilliseconds": 150,
+    "vectorSnippetChars": 200
+  },
+  "logging": {
+    "keepDays": 14,
+    "maxBytes": 209715200,
+    "bufferLimit": 5000
+  },
+  "power": {
+    "pauseBelowBatteryPercent": 20,
+    "pauseAtThermalState": "serious",
+    "recheckSeconds": 60
+  },
+  "stats": {
+    "windowsDays": [
+      7,
+      30,
+      90
+    ],
+    "whatIfAutoThresholds": [
+      0.6,
+      0.65,
+      0.7,
+      0.75,
+      0.8,
+      0.85,
+      0.9,
+      0.95
+    ],
+    "folderOverlapSimilarity": 0.9,
+    "confusionPairsLimit": 20,
+    "diagnosticsTraceLimit": 200,
+    "funnel": {
+      "trendBuckets": 8,
+      "minimumForShares": 20,
+      "steps": [
+        {
+          "id": "arrived",
+          "title": "Arrived",
+          "detail": "A new file settled in the Incoming folder.",
+          "stages": [
+            "stability",
+            "hash"
+          ],
+          "logCategories": [
+            "watch",
+            "fileops"
+          ],
+          "jobStates": [
+            "pending"
+          ]
+        },
+        {
+          "id": "deduplicated",
+          "title": "Checked for copies",
+          "detail": "Compared against everything already filed.",
+          "stages": [
+            "dedupe"
+          ],
+          "logCategories": [
+            "ingest"
+          ],
+          "jobStates": [
+            "hashing"
+          ]
+        },
+        {
+          "id": "read",
+          "title": "Read",
+          "detail": "Text pulled from the file, scanning pages when there is no text layer.",
+          "stages": [
+            "extract",
+            "ocr",
+            "vlm"
+          ],
+          "logCategories": [
+            "extract"
+          ],
+          "jobStates": [
+            "extracting"
+          ]
+        },
+        {
+          "id": "understood",
+          "title": "Understood",
+          "detail": "Dates, identifiers and the correspondent picked out of the text.",
+          "stages": [
+            "entities",
+            "correspondent"
+          ],
+          "logCategories": [
+            "extract",
+            "classify"
+          ],
+          "jobStates": [
+            "extracting"
+          ]
+        },
+        {
+          "id": "matched",
+          "title": "Matched against what it knows",
+          "detail": "Learned rules, past filings and folder descriptions consulted.",
+          "stages": [
+            "rules",
+            "embed",
+            "candidates"
+          ],
+          "logCategories": [
+            "classify",
+            "learn"
+          ],
+          "jobStates": [
+            "classifying"
+          ]
+        },
+        {
+          "id": "decided",
+          "title": "Decided",
+          "detail": "A folder and a file name chosen, by a learned rule or by the local model.",
+          "stages": [
+            "llm",
+            "judge",
+            "validate",
+            "calibrate"
+          ],
+          "logCategories": [
+            "ollama",
+            "classify"
+          ],
+          "jobStates": [
+            "classifying"
+          ]
+        },
+        {
+          "id": "filed",
+          "title": "Filed",
+          "detail": "Renamed, moved into the archive and added to the search index.",
+          "stages": [
+            "name",
+            "place",
+            "index"
+          ],
+          "logCategories": [
+            "fileops",
+            "index",
+            "taxonomy"
+          ],
+          "jobStates": [
+            "filing"
+          ]
+        },
+        {
+          "id": "learned",
+          "title": "Learned from",
+          "detail": "The placement was remembered so the next similar file needs no model.",
+          "stages": [
+            "learn"
+          ],
+          "logCategories": [
+            "learn"
+          ],
+          "jobStates": []
+        }
+      ]
+    }
+  },
+  "interface": {
+    "recentlyProcessed": 8,
+    "pageSize": 100,
+    "menuBarRecent": 5
+  },
+  "rethink": {
+    "trialSize": 10,
+    "memoryMinWeight": 1.0,
+    "followShare": 0.6,
+    "waitSeconds": 5
+  }
+}

@@ -1,0 +1,23 @@
+.build/
+.swiftpm/
+*.xcodeproj/
+xcuserdata/
+DerivedData/
+build/
+dist/
+.DS_Store
+*.dSYM
+Tests/Fixtures/private/
+.build-*/
+.claude
+
+# Signing material and credentials never belong in the repository (scripts/check-secrets.sh enforces it).
+*.p12
+*.p8
+*.cer
+*.mobileprovision
+*.provisionprofile
+*.keychain-db
+.env
+.env.*
+.vscode

@@ -1,0 +1,66 @@
+name: Arrumator
+options:
+  bundleIdPrefix: dev.arrumator
+  deploymentTarget:
+    macOS: "26.0"
+  createIntermediateGroups: true
+packages:
+  ArrumatorPackages:
+    path: .
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MACOSX_DEPLOYMENT_TARGET: "26.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  Arrumator:
+    type: application
+    platform: macOS
+    sources:
+      - path: App
+    dependencies:
+      - package: ArrumatorPackages
+        product: ArrumatorRuntime
+      - package: ArrumatorPackages
+        product: ArrumatorCore
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: Arrumator
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSUIElement: true
+        LSMinimumSystemVersion: "26.0"
+        LSApplicationCategoryType: public.app-category.productivity
+        NSSupportsSuddenTermination: false
+        NSSupportsAutomaticTermination: false
+        NSDocumentsFolderUsageDescription: Arrumator files documents from your Incoming folder into your archive.
+        NSDesktopFolderUsageDescription: Arrumator files documents from your Incoming folder into your archive.
+        NSDownloadsFolderUsageDescription: Arrumator files documents from your Incoming folder into your archive.
+        NSRemovableVolumesUsageDescription: Arrumator can keep your archive or Incoming folder on an external drive.
+        NSNetworkVolumesUsageDescription: Arrumator can keep your archive or Incoming folder on a network volume.
+        NSLocalNetworkUsageDescription: Arrumator sends documents to your Ollama server on the local network to read and file them, and nowhere else.
+        ITSAppUsesNonExemptEncryption: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.arrumator.Arrumator
+        PRODUCT_NAME: Arrumator
+        SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
+        SWIFT_STRICT_CONCURRENCY: complete
+        ENABLE_HARDENED_RUNTIME: true
+        ENABLE_APP_SANDBOX: false
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "-"
+        DEVELOPMENT_TEAM: ""
+        COMBINE_HIDPI_IMAGES: true
+      configs:
+        Release:
+          CODE_SIGN_IDENTITY: Developer ID Application
+schemes:
+  Arrumator:
+    build:
+      targets:
+        Arrumator: all
+    run:
+      config: Debug

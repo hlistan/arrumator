@@ -1,0 +1,30 @@
+# gitleaks (https://github.com/gitleaks/gitleaks) configuration, used by scripts/lint.sh, the Git hooks and CI.
+# It extends the built-in rules (API keys, tokens, private keys, …) with what this repository must never hold:
+# signing material and paths that name a person's account. Real documents (Tests/Fixtures/private) are kept out
+# by scripts/lint.sh instead: gitleaks skips PDFs and images, which is what they are.
+
+title = "Arrumator"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "signing-material"
+description = "Code-signing certificates, provisioning profiles, notarization API keys and keychains"
+path = '''(?i)\.(p12|pfx|p8|cer|mobileprovision|provisionprofile|keychain(-db)?)$'''
+
+[[rules]]
+id = "environment-file"
+description = "Environment files, which hold credentials"
+path = '''(?i)(^|/)\.env(\.[\w-]+)?$'''
+
+[[rules]]
+id = "home-directory-path"
+description = "An absolute path into a user's home folder names that person's account"
+regex = '''/Users/[A-Za-z0-9._-]+/'''
+keywords = ["/users/"]
+
+[[allowlists]]
+description = "macOS's shared folder and the placeholders documentation uses"
+targetRules = ["home-directory-path"]
+regexes = ['''/Users/(Shared|you|me|name|username|example)/''']
