@@ -80,7 +80,7 @@ final class AppModel {
         }
     }
 
-    /// Files into the archive at `path` from now on. The senders learned there and its history come with it: the
+    /// Files into the archive at `path` from now on. Its history comes with it: the
     /// runtime open on this archive stops and one open on the other takes its place.
     func switchArchive(to path: String) async {
         guard let runtime, !switchingArchive,
@@ -247,8 +247,8 @@ final class AppModel {
 
 /// What the main window shows. The sidebar lists `lists`; history and statistics are reached from the sidebar's menu.
 enum Destination: Hashable {
-    case incoming, review, processed, senders
+    case incoming, review, processed
     case history, statistics
 
-    static let lists: [Destination] = [.incoming, .review, .processed, .senders]
+    static let lists: [Destination] = [.incoming, .review, .processed]
 }

@@ -12,7 +12,6 @@ public struct PipelineConfig: Sendable, Codable, Hashable {
     public var entities: EntityConfig
     public var analysis: AnalysisConfig
     public var labels: LabelsConfig
-    public var senders: SendersConfig
     public var naming: NamingConfig
     public var search: SearchConfig
     public var logging: LoggingConfig
@@ -120,17 +119,14 @@ public struct WatcherConfig: Sendable, Codable, Hashable {
 }
 
 /// The archive's own files: a `_documents.md` beside the documents of each directory, and the `System` folder
-/// holding what the app learned and its history (docs/storage.md). Documents are filed at the top of the archive.
+/// holding its history (docs/storage.md). Documents are filed at the top of the archive.
 public struct RecordsConfig: Sendable, Codable, Hashable {
     /// In every directory holding documents: one entry per document there.
     public var documentsFileName: String
-    /// At the top of the archive; holds the folders below and nothing of the user's.
+    /// At the top of the archive; holds the history and nothing of the user's.
     public var systemFolderName: String
-    /// In the system folder: the senders the app learned.
-    public var learnedFolderName: String
     /// In the system folder: the history, one file per month named with the watcher's managed-file prefix.
     public var historyFolderName: String
-    public var sendersFileName: String
     /// Added to the name of a database that could not be opened when it is moved aside.
     public var setAsideSuffix: String
 }
@@ -242,7 +238,6 @@ public struct EntityConfig: Sendable, Codable, Hashable {
     public var crowdedLineDates: Int
     /// Minimum score for a date found in the text to be chosen over metadata dates.
     public var minTextDateScore: Double
-    public var companySuffixes: [String]
 }
 
 /// Reading a document with the local model: what it sees of it, how it is asked, and what its answer may be.
@@ -254,21 +249,12 @@ public struct AnalysisConfig: Sendable, Codable, Hashable {
         public var numPredict: Int
         public var seed: Int
     }
-    /// How strongly each kind of evidence recognises a known sender.
-    public struct CorrespondentStrength: Sendable, Codable, Hashable {
-        public var stableKey: Double
-        public var domain: Double
-        public var alias: Double
-    }
     /// Stamped on every trace, so a change to the prompt shows in what it recorded.
     public var promptVersion: Int
     public var excerptChars: Int
     public var embeddingSummaryChars: Int
     public var embeddingNumCtx: Int
-    public var correspondentStrength: CorrespondentStrength
-    public var correspondentScanChars: Int
     public var llmOptions: LLMOptions
-    public var titleMaxChars: Int
     public var vlmNumPredict: Int
     public var promptDatesLimit: Int
     public var promptIdentifiersLimit: Int
@@ -281,12 +267,6 @@ public struct LabelsConfig: Sendable, Codable, Hashable {
     public var maxPerKind: Int
     /// Longest a label may be; a longer one is cut at a word boundary.
     public var maxValueChars: Int
-}
-
-/// Learning who documents come from.
-public struct SendersConfig: Sendable, Codable, Hashable {
-    /// An identifier becomes a sender's own once it was on this many of the sender's documents and on no one else's.
-    public var stableKeyMinFilings: Int
 }
 
 public struct NamingConfig: Sendable, Codable, Hashable {
@@ -305,8 +285,8 @@ public struct SearchConfig: Sendable, Codable, Hashable {
     /// Cosine similarity a document needs to be found by meaning alone, without containing the query's words.
     public var semanticMinSimilarity: Double
     public var queryCacheSize: Int
-    /// BM25 weight of each full-text column, in `SearchService.columns` order: title, correspondent, file name, text,
-    /// then one column per `LabelKind`.
+    /// BM25 weight of each full-text column, in `SearchService.columns` order: file name, text, then one column per
+    /// `LabelKind`.
     public var bm25Weights: [Double]
     public var snippetTokens: Int
     public var debounceMilliseconds: Int

@@ -5,14 +5,14 @@ import Foundation
 
 /// Runs a fixture corpus through the full live pipeline in a throw-away home and archive, then scores how each
 /// document was read against `expected.json`: whether it was filed, waited for the user or was taken for a copy; its
-/// type, sender, date and title; and its labels.
+/// type, sender, date and language labels and its file name; and how many labels of each kind documents got.
 struct Eval: AsyncParsableCommand {
     static let configuration = CommandConfiguration(abstract: "Evaluate the live pipeline on a fixture corpus (expected.json).")
     @OptionGroup var options: GlobalOptions
     @Argument(help: "Fixture directory containing expected.json.") var fixtures: String
     @Option(help: "Chat model to use instead of the profile's.") var model: String?
     @Option(help: "Model profile from pipeline.json.") var profile: String?
-    @Option(help: "Passes over the corpus; later passes show what was learned about senders.") var passes = 1
+    @Option(help: "Passes over the corpus; later passes show how consistently the model reads the same documents.") var passes = 1
     @Option(help: "Only the fixtures whose path starts with this, such as \"pt/\", for a quick look.") var only: String?
     @Option(help: "Write the full report as JSON to this path.") var report: String?
     @Option(help: "Fail when the first pass reads fewer than this share of details right (type, sender, date, title).")
@@ -72,6 +72,8 @@ struct Eval: AsyncParsableCommand {
         /// Of the documents that should be filed, those the model labelled.
         var labelled: Double
         var labelsPerDocument: Double
+        /// Of the labelled documents that should be filed, the share with at least one label of each kind.
+        var coverage: [String: Double]
         var medianSeconds: Double
 
         /// The share of details read right: type, sender, date and title together.
@@ -131,6 +133,8 @@ struct Eval: AsyncParsableCommand {
                          pass, summary.statusAccuracy * 100, summary.docTypeAccuracy * 100, summary.correspondentAccuracy * 100,
                          summary.dateAccuracy * 100, summary.titleAccuracy * 100, summary.languageAccuracy * 100,
                          summary.labelled * 100, summary.labelsPerDocument, summary.medianSeconds))
+            print("labels per kind: " + LabelKind.allCases.map { String(format: "%@ %.0f%%", $0.rawValue, (summary.coverage[$0.rawValue] ?? 0) * 100) }
+                .joined(separator: " · "))
         }
         if let report {
             struct Report: Encodable { var rows: [Row]; var summaries: [Summary] }
@@ -157,11 +161,10 @@ struct Eval: AsyncParsableCommand {
         let languages = doc.labels?.filter { $0.kind == .language }.map(\.value)
         return Row(pass: pass, file: fixture.file, status: doc.status.rawValue, statusOK: doc.status == e.status, fileName: doc.filename,
                    labels: doc.labels,
-                   docTypeOK: ordinary && !types.isEmpty ? doc.docType.map(types.contains) ?? false : nil,
-                   correspondentOK: ordinary ? contains(doc.correspondent, anyOf: senders) : nil,
-                   dateOK: ordinary ? e.date.map { $0 == doc.docDate } : nil,
-                   titleOK: ordinary && !e.titleContains.isEmpty
-                       ? e.titleContains.contains { folded(doc.filename + " " + (doc.title ?? "")).contains(folded($0)) } : nil,
+                   docTypeOK: ordinary && !types.isEmpty ? doc.labels(.type).first.map(types.contains) ?? false : nil,
+                   correspondentOK: ordinary && !senders.isEmpty ? doc.labels(.sender).contains { contains($0, anyOf: senders) == true } : nil,
+                   dateOK: ordinary ? e.date.map { $0 == doc.labels(.date).first } : nil,
+                   titleOK: ordinary && !e.titleContains.isEmpty ? e.titleContains.contains { folded(doc.filename).contains(folded($0)) } : nil,
                    languageOK: ordinary && DocumentLabel.languageCode(fixture.lang) != nil ? languages?.contains(fixture.lang) ?? false : nil,
                    seconds: seconds)
     }
@@ -174,12 +177,17 @@ struct Eval: AsyncParsableCommand {
         let ordinary = Set(corpus.filter { $0.expected.status == .filed }.map(\.file))
         let filed = rows.filter { ordinary.contains($0.file) }
         let labelled = filed.filter { $0.labels != nil }
+        let coverage = Dictionary(uniqueKeysWithValues: LabelKind.allCases.map { kind in
+            (kind.rawValue, labelled.isEmpty ? 0 : Double(labelled.filter { $0.labels?.contains { $0.kind == kind } == true }.count)
+                / Double(labelled.count))
+        })
         let seconds = rows.map(\.seconds).sorted()
         return Summary(pass: pass, statusAccuracy: rate(rows.map(\.statusOK)), docTypeAccuracy: rate(rows.map(\.docTypeOK)),
                        correspondentAccuracy: rate(rows.map(\.correspondentOK)), dateAccuracy: rate(rows.map(\.dateOK)),
                        titleAccuracy: rate(rows.map(\.titleOK)), languageAccuracy: rate(rows.map(\.languageOK)),
                        labelled: filed.isEmpty ? 0 : Double(labelled.count) / Double(filed.count),
                        labelsPerDocument: labelled.isEmpty ? 0 : Double(labelled.compactMap(\.labels?.count).reduce(0, +)) / Double(labelled.count),
+                       coverage: coverage,
                        medianSeconds: seconds.isEmpty ? 0 : seconds[seconds.count / 2])
     }
 }

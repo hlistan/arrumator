@@ -109,9 +109,7 @@
   "records": {
     "documentsFileName": "_documents.md",
     "systemFolderName": "System",
-    "learnedFolderName": "Learned",
     "historyFolderName": "History",
-    "sendersFileName": "_senders.md",
     "setAsideSuffix": "unreadable"
   },
   "ingest": {
@@ -247,40 +245,13 @@
     },
     "firstPortionShare": 0.3,
     "crowdedLineDates": 3,
-    "minTextDateScore": 1,
-    "companySuffixes": [
-      "ООО",
-      "ОАО",
-      "ЗАО",
-      "АО",
-      "ПАО",
-      "ИП",
-      "Lda",
-      "Lda.",
-      "S.A.",
-      "SA",
-      "Unipessoal",
-      "Ltd",
-      "Ltd.",
-      "LLC",
-      "Inc",
-      "Inc.",
-      "GmbH",
-      "B.V.",
-      "S.L."
-    ]
+    "minTextDateScore": 1
   },
   "analysis": {
-    "promptVersion": 3,
+    "promptVersion": 4,
     "excerptChars": 12000,
     "embeddingSummaryChars": 2000,
     "embeddingNumCtx": 2048,
-    "correspondentStrength": {
-      "stableKey": 1.0,
-      "domain": 0.9,
-      "alias": 0.7
-    },
-    "correspondentScanChars": 3000,
     "llmOptions": {
       "temperature": 0,
       "topK": 1,
@@ -288,7 +259,6 @@
       "numPredict": 600,
       "seed": 42
     },
-    "titleMaxChars": 60,
     "vlmNumPredict": 300,
     "promptDatesLimit": 5,
     "promptIdentifiersLimit": 8,
@@ -297,9 +267,6 @@
   "labels": {
     "maxPerKind": 5,
     "maxValueChars": 80
-  },
-  "senders": {
-    "stableKeyMinFilings": 2
   },
   "naming": {
     "maxChars": 120,
@@ -319,13 +286,19 @@
     "semanticMinSimilarity": 0.56,
     "queryCacheSize": 256,
     "bm25Weights": [
-      5,
       3,
-      2,
       1,
       4,
+      3,
+      3,
+      3,
       4,
       4,
+      3,
+      2,
+      2,
+      2,
+      3,
       2
     ],
     "snippetTokens": 24,
@@ -401,14 +374,12 @@
         {
           "id": "understood",
           "title": "Understood",
-          "detail": "Dates, identifiers and known senders picked out of the text.",
+          "detail": "Dates and identifiers picked out of the text.",
           "stages": [
-            "entities",
-            "correspondent"
+            "entities"
           ],
           "logCategories": [
-            "extract",
-            "classify"
+            "extract"
           ],
           "jobStates": [
             "extracting"
@@ -417,7 +388,7 @@
         {
           "id": "analysed",
           "title": "Analysed",
-          "detail": "The local model read what it is, whom and what it concerns, where and in which language, and named it.",
+          "detail": "The local model read it and gave it its labels and its name.",
           "stages": [
             "analyse"
           ],
@@ -446,18 +417,6 @@
           "jobStates": [
             "filing"
           ]
-        },
-        {
-          "id": "learned",
-          "title": "Learned from",
-          "detail": "Its sender was recognised or remembered, so the next document from them is named alike.",
-          "stages": [
-            "learn"
-          ],
-          "logCategories": [
-            "learn"
-          ],
-          "jobStates": []
         }
       ]
     }

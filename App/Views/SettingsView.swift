@@ -37,7 +37,7 @@ struct GeneralSettings: View {
             } header: {
                 Text("Folders")
             } footer: {
-                Text("Each archive keeps its own senders and history. Choosing another archive files into it from now on; "
+                Text("Each archive keeps its own history. Choosing another archive files into it from now on; "
                     + "choosing this one again brings everything back.")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }

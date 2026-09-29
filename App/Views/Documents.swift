@@ -28,30 +28,24 @@ struct DocumentList: View {
     }
 }
 
-/// A document opened in place: what the model read it as and its labels, what the app learned from it, and every way
-/// to correct it. Each change goes through `ReviewActions`, which records it; a corrected sender is learned from.
+/// A document opened in place: its labels, all it is described by, who read it, and every way to correct it. Each
+/// change goes through `ReviewActions`, which records it.
 struct DocumentCard: View {
     @Environment(AppModel.self) private var model
     let documentID: Int64
     @State private var document: DocumentRecord?
-    @State private var lessons: [EventRecord] = []
-    /// What the lessons refer to that the app still knows, and can still forget.
-    @State private var known: Set<LearnedFact> = []
     @State private var name = ""
-    @State private var correspondent = ""
-    @State private var date = ""
+    @State private var newKind = LabelKind.topic
+    @State private var newValue = ""
     @State private var showingTrace = false
-    @FocusState private var focus: Field?
-
-    private enum Field { case name, correspondent, date }
+    @FocusState private var editingName: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             if let document {
                 header(document)
-                fields(document)
+                labels(document)
                 reading(document)
-                learned
                 actions(document)
             } else {
                 ProgressView().frame(maxWidth: .infinity)
@@ -63,8 +57,8 @@ struct DocumentCard: View {
         .padding(.vertical, 8)
         .onExitCommand { close() }
         .task(id: model.activity) { await load() }
-        .onChange(of: focus) { previous, _ in
-            if let previous { Task { await commit(previous) } }
+        .onChange(of: editingName) { wasEditing, _ in
+            if wasEditing { Task { await rename() } }
         }
         .sheet(isPresented: $showingTrace) {
             TraceView(documentID: documentID).environment(model).frame(minWidth: 760, minHeight: 560)
@@ -82,9 +76,8 @@ struct DocumentCard: View {
                 TextField("Name", text: $name)
                     .textFieldStyle(.plain)
                     .font(.title3.weight(.semibold))
-                    .focused($focus, equals: .name)
-                    .onSubmit { focus = nil }
-                    .disabled(d.analysis == nil)
+                    .focused($editingName)
+                    .onSubmit { editingName = false }
                 placement(d)
                 Text("Arrived as \(d.originalFilename) · \(d.addedAt.formatted(date: .abbreviated, time: .shortened))")
                     .font(.caption).foregroundStyle(.tertiary)
@@ -104,39 +97,34 @@ struct DocumentCard: View {
         .font(.callout)
     }
 
-    private func fields(_ d: DocumentRecord) -> some View {
-        Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 8) {
-            GridRow {
-                label("From")
-                TextField("Correspondent", text: $correspondent)
-                    .textFieldStyle(.plain).focused($focus, equals: .correspondent).onSubmit { focus = nil }
-            }
-            GridRow {
-                label("Date")
-                TextField("YYYY-MM-DD", text: $date)
-                    .textFieldStyle(.plain).focused($focus, equals: .date).onSubmit { focus = nil }
-            }
-            GridRow {
-                label("Type")
-                Picker("Type", selection: typeBinding(d)) {
-                    ForEach(DocumentType.allCases, id: \.self) { Text($0.label).tag($0) }
-                }
-                .labelsHidden().fixedSize()
-            }
-            labels(d)
-        }
-        .disabled(d.analysis == nil)
-    }
-
-    /// What the model found the document concerns, one row per kind of label it has.
-    @ViewBuilder private func labels(_ d: DocumentRecord) -> some View {
+    /// Every label, one row per kind it has, each removable, and a way to add one.
+    private func labels(_ d: DocumentRecord) -> some View {
         let labels = d.labels ?? []
-        ForEach(LabelKind.allCases.filter { kind in labels.contains { $0.kind == kind } }, id: \.self) { kind in
+        return Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 6) {
+            ForEach(LabelKind.allCases.filter { kind in labels.contains { $0.kind == kind } }, id: \.self) { kind in
+                GridRow(alignment: .firstTextBaseline) {
+                    label(Wording.labelKind(kind))
+                    HStack(spacing: 6) {
+                        ForEach(labels.filter { $0.kind == kind }, id: \.self) { item in
+                            LabelChip(label: item) { save(labels.filter { $0 != item }) }
+                        }
+                    }
+                }
+            }
             GridRow(alignment: .firstTextBaseline) {
-                label(Wording.labelKind(kind))
-                Text(labels.filter { $0.kind == kind }.map(Wording.label).joined(separator: " · "))
-                    .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
+                label(labels.isEmpty ? "Labels" : "")
+                HStack(spacing: 6) {
+                    Picker("Kind", selection: $newKind) {
+                        ForEach(LabelKind.allCases, id: \.self) { Text(Wording.labelKind($0)).tag($0) }
+                    }
+                    .labelsHidden().frame(width: Style.labelKindPickerWidth)
+                    TextField(Wording.labelPrompt(newKind), text: $newValue)
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit { add(to: labels) }
+                    Button("Add") { add(to: labels) }
+                        .disabled(newValue.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+                .controlSize(.small)
             }
         }
     }
@@ -159,21 +147,6 @@ struct DocumentCard: View {
         }
     }
 
-    private var learned: some View {
-        Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 4) {
-            GridRow(alignment: .firstTextBaseline) {
-                label("Learned")
-                VStack(alignment: .leading, spacing: 0) {
-                    if lessons.isEmpty {
-                        Text("Nothing yet. Correcting its sender teaches Arrumator another name for it.")
-                            .foregroundStyle(.secondary)
-                    }
-                    ForEach(lessons) { event in LessonRow(event: event, known: known) }
-                }
-            }
-        }
-    }
-
     private func actions(_ d: DocumentRecord) -> some View {
         HStack(spacing: 14) {
             Button("Open") { model.open(d.path) }
@@ -183,9 +156,9 @@ struct DocumentCard: View {
             switch d.status {
             case .filed:
                 Button("Undo Filing") { run("Undo") { try await $0.review.undo(documentID) } }
-                    .help("Move it back to Incoming and forget what it taught about its sender")
+                    .help("Move it back to Incoming")
                 Button("Looks Right") { run("Confirm") { try await $0.review.confirm(documentID) } }
-                    .help("Confirm its name, details and labels")
+                    .help("Confirm its name and labels")
             case .needsReview, .failed:
                 Button("Leave for Later") { run("Hold") { try await $0.review.hold(documentID) } }
                 Button("Read Again") { run("Read again") { try await $0.review.retry(documentID) } }
@@ -207,32 +180,25 @@ struct DocumentCard: View {
 
     // MARK: Changes
 
-    private func typeBinding(_ d: DocumentRecord) -> Binding<DocumentType> {
-        Binding(get: { d.analysis?.documentType ?? .other }, set: { type in
-            run("Change type") { try await $0.review.edit(documentID, fileName: nil, title: nil, correspondent: nil, date: nil, type: type) }
-        })
+    /// Adds the label being typed; one of a single-valued kind takes the place of the one there.
+    private func add(to labels: [DocumentLabel]) {
+        let value = newValue.trimmingCharacters(in: .whitespaces)
+        guard !value.isEmpty else { return }
+        let kept = newKind.isSingle ? labels.filter { $0.kind != newKind } : labels
+        save(kept + [DocumentLabel(kind: newKind, value: value)])
+        newValue = ""
     }
 
-    /// Saves a field when the user leaves it, as Things does; unchanged fields are left alone.
-    private func commit(_ field: Field) async {
-        guard let d = document, let analysis = d.analysis else { return }
-        switch field {
-        case .name:
-            let value = name.trimmingCharacters(in: .whitespaces)
-            guard !value.isEmpty, value != (d.filename as NSString).deletingPathExtension else { return }
-            await model.perform("Rename") { try await $0.review.edit(documentID, fileName: value, title: nil, correspondent: nil,
-                                                                     date: nil, type: nil) }
-        case .correspondent:
-            let value = correspondent.trimmingCharacters(in: .whitespaces)
-            guard !value.isEmpty, value != (analysis.correspondent ?? "") else { return }
-            await model.perform("Change correspondent") { try await $0.review.edit(documentID, fileName: nil, title: nil,
-                                                                                   correspondent: value, date: nil, type: nil) }
-        case .date:
-            let value = date.trimmingCharacters(in: .whitespaces)
-            guard !value.isEmpty, value != (analysis.documentDate ?? "") else { return }
-            await model.perform("Change date") { try await $0.review.edit(documentID, fileName: nil, title: nil,
-                                                                          correspondent: nil, date: value, type: nil) }
-        }
+    private func save(_ labels: [DocumentLabel]) {
+        run("Change labels") { try await $0.review.edit(documentID, fileName: nil, labels: labels) }
+    }
+
+    /// Renames the file when the user leaves the name, as Things saves a field; an unchanged name is left alone.
+    private func rename() async {
+        guard let d = document else { return }
+        let value = name.trimmingCharacters(in: .whitespaces)
+        guard !value.isEmpty, value != (d.filename as NSString).deletingPathExtension else { return }
+        await model.perform("Rename") { try await $0.review.edit(documentID, fileName: value, labels: nil) }
     }
 
     private func run(_ what: String, _ action: @escaping @Sendable (ArrumatorRuntime) async throws -> Void) {
@@ -245,50 +211,27 @@ struct DocumentCard: View {
 
     private func load() async {
         document = await model.load("Load document") { try await $0.services.documents.document(id: documentID) } ?? nil
-        lessons = await model.load("Load what was learned") {
-            try await $0.services.history.events(limit: $0.config.interface.pageSize, kinds: Wording.lessonKinds, docID: documentID)
-        } ?? []
-        known = await LessonRow.known(lessons, model: model)
-        guard let document, focus == nil else { return }
+        guard let document, !editingName else { return }
         name = (document.filename as NSString).deletingPathExtension
-        correspondent = document.analysis?.correspondent ?? document.correspondent ?? ""
-        date = document.analysis?.documentDate ?? document.docDate ?? ""
     }
 }
 
-/// One thing the app learned. While it still knows it, "Forget" appears under the pointer; once forgotten, the lesson
-/// is struck through.
-struct LessonRow: View {
-    @Environment(AppModel.self) private var model
-    let event: EventRecord
-    let known: Set<LearnedFact>
+/// One label on a card; under the pointer, a × takes it off the document.
+struct LabelChip: View {
+    let label: DocumentLabel
+    let remove: () -> Void
     @State private var hovering = false
 
-    private var fact: LearnedFact? { LearnedFact.recorded(by: event) }
-    private var forgotten: Bool { fact.map { !known.contains($0) } ?? false }
-
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 9) {
-            Image(systemName: EventStyle.symbol(event.kind)).foregroundStyle(EventStyle.color(event.kind)).frame(width: 18)
-            Text(Wording.lesson(event))
-                .strikethrough(forgotten)
-                .foregroundStyle(forgotten ? .secondary : .primary)
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 16)
-            if hovering, let fact, !forgotten {
-                Button("Forget") { Task { await model.perform("Forget") { try await $0.learner.forget(fact) } } }
-                    .buttonStyle(.link)
+        HStack(spacing: 4) {
+            Text(Wording.label(label)).textSelection(.enabled)
+            if hovering {
+                Button(action: remove) { Image(systemName: "xmark.circle.fill") }
+                    .buttonStyle(.plain).foregroundStyle(.secondary).help("Remove this label")
             }
         }
-        .padding(.vertical, 3)
-        .contentShape(.rect)
+        .padding(.horizontal, 7).padding(.vertical, 2)
+        .background(Style.hover, in: .capsule)
         .onHover { hovering = $0 }
-    }
-
-    /// Which of the facts these lessons refer to the app still knows.
-    static func known(_ lessons: [EventRecord], model: AppModel) async -> Set<LearnedFact> {
-        let facts = lessons.compactMap(LearnedFact.recorded(by:))
-        guard !facts.isEmpty else { return [] }
-        return await model.load("Check what is still known") { try await $0.senders.known(facts) } ?? []
     }
 }

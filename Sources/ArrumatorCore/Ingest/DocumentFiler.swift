@@ -50,13 +50,6 @@ public struct DocumentFiler: Sendable {
             d.path = finalPath
             d.status = status
             d.inode = FileFingerprint.inode(of: URL(fileURLWithPath: finalPath))
-            d.correspondent = analysis.correspondent
-            d.correspondentId = analysis.correspondentID
-            d.docType = analysis.documentType.rawValue
-            d.docDate = analysis.documentDate
-            d.periodYear = analysis.periodYear
-            d.title = analysis.title
-            d.language = analysis.language
             d.analysisJson = JSON.string(analysis)
             d.filedAt = now
             d.updatedAt = now
@@ -67,8 +60,7 @@ public struct DocumentFiler: Sendable {
                                     payload: FiledPayload(from: document.path, to: finalPath, problems: analysis.problems))
             return d
         }
-        try await index.updateHeader(docID: docID, title: analysis.title, correspondent: analysis.correspondent ?? "",
-                                     filename: filedName)
+        try await index.updateFilename(docID: docID, filename: filedName)
         return updated
     }
 }

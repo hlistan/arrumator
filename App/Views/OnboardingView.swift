@@ -40,13 +40,14 @@ struct OnboardingView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Welcome to Arrumator").font(.largeTitle.bold())
             Text("""
-                Drop any document into your Incoming folder. Arrumator reads it on this Mac, labels it with whom and \
-                what it concerns, where it applies and its language, names it, and files it into your archive. You find \
-                it again by searching for any of its labels, and every correction you make teaches it.
+                Drop any document into your Incoming folder. Arrumator reads it on this Mac, labels it with who sent it, \
+                what it is and whom it concerns, its dates, amounts and references, where it applies and its language, \
+                names it, and files it into your archive. You find it again by searching for any of its labels.
                 """)
             Label("Everything runs locally with Ollama. No document ever leaves this computer.", systemImage: "lock.shield")
             Label("No folders to keep tidy: every document sits at the top of the archive, found by its labels.", systemImage: "tag")
-            Label("Senders are recognised by what identifies them, so their documents are named alike.", systemImage: "person.2")
+            Label("Labels say who sent it, what it is, its dates, amounts, references and more; correct any of them.",
+                  systemImage: "square.and.pencil")
         }
     }
 

@@ -31,7 +31,6 @@ struct MainWindow: View {
             case .incoming: IncomingPage()
             case .review: ReviewPage()
             case .processed: ProcessedPage()
-            case .senders: SendersPage()
             case .history: HistoryPage()
             case .statistics: StatisticsView()
             }

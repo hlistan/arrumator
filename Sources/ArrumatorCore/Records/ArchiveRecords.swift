@@ -4,7 +4,6 @@ import GRDB
 /// What a rebuild found in the archive.
 public struct RebuildSummary: Sendable, Codable, Hashable {
     public var documents = 0
-    public var senders = 0
     public var events = 0
     /// Documents found somewhere other than where their entry said, by the identifier on the file.
     public var relocated = 0
@@ -16,7 +15,7 @@ public struct RebuildSummary: Sendable, Codable, Hashable {
     public var queued = 0
 
     public var summary: String {
-        "Rebuilt the index from the archive: \(Format.count(documents, "document")), \(Format.count(senders, "sender")), "
+        "Rebuilt the index from the archive: \(Format.count(documents, "document")), "
             + "\(Format.count(events, "history event")); "
             + "\(relocated) found elsewhere, \(missing) missing, \(adopted) taken in"
     }
@@ -105,13 +104,6 @@ public actor ArchiveRecords {
             guard FileManager.default.fileExists(atPath: directory) else { return false }
             return try await write(try FrontMatter.compose(RecordList(entries), body: RecordText.documents(entries, in: dir)),
                                    to: url)
-        case .senders:
-            let url = try directoryMade(for: layout(root).senders)
-            try await readIfEditedByHand(kind, url: url)
-            let entries = try await database.reader.read { db in
-                try CorrespondentRecord.order(Column("canonical_name")).fetchAll(db).map(\.correspondent)
-            }
-            return try await write(try FrontMatter.compose(RecordList(entries), body: RecordText.senders(entries)), to: url)
         case let .history(month):
             let url = try directoryMade(for: layout(root).historyFile(month: month))
             try await readIfEditedByHand(kind, url: url)
@@ -251,13 +243,11 @@ public actor ArchiveRecords {
     /// Record files as parsed from disk, ready to apply in one transaction.
     struct Parsed: Sendable {
         var documents: [(directory: URL, entries: [DocumentEntry])] = []
-        var senders: [Correspondent]?
         var history: [(month: String, entries: [EventEntry])] = []
         var hashes: [String: String] = [:]
 
         mutating func merge(_ other: Parsed) {
             documents += other.documents
-            senders = other.senders ?? senders
             history += other.history
             hashes.merge(other.hashes) { _, new in new }
         }
@@ -280,7 +270,6 @@ public actor ArchiveRecords {
         switch kind {
         case .documents:
             parsed.documents = [(url.deletingLastPathComponent(), try list(DocumentEntry.self, url))]
-        case .senders: parsed.senders = try list(Correspondent.self, url)
         case let .history(month): parsed.history = [(month, try list(EventEntry.self, url))]
         }
         return parsed
@@ -289,14 +278,6 @@ public actor ArchiveRecords {
     /// Puts parsed records into the index. Documents are only ever added or updated here: an entry missing from a
     /// file does not delete a document, whose entry is written back instead. Other files replace their table.
     private static func apply(_ parsed: Parsed, db: Database, replacing: Bool) throws {
-        if let senders = parsed.senders {
-            if replacing { try db.execute(sql: "DELETE FROM correspondents WHERE id NOT IN (\(ids(senders.map(\.id))))") }
-            for sender in senders {
-                var record = CorrespondentRecord(sender)
-                record.id = sender.id
-                try record.save(db)
-            }
-        }
         for (directory, entries) in parsed.documents {
             for entry in entries { try upsert(entry, directory: directory, db: db) }
         }
@@ -347,10 +328,9 @@ public actor ArchiveRecords {
     /// Every record file in the archive with the kind it holds.
     private func recordFiles(root: URL) -> [(RecordKind, URL)] {
         let layout = layout(root)
-        var files: [(RecordKind, URL)] = Self.files(under: root).filter { $0.lastPathComponent == config.records.documentsFileName }.map {
+        let files: [(RecordKind, URL)] = Self.files(under: root).filter { $0.lastPathComponent == config.records.documentsFileName }.map {
             (.documents(directory: $0.deletingLastPathComponent().path), $0)
         }
-        if FileManager.default.fileExists(atPath: layout.senders.path) { files.append((.senders, layout.senders)) }
         return files + historyFiles(layout)
     }
 
@@ -359,7 +339,6 @@ public actor ArchiveRecords {
         let url = URL(fileURLWithPath: path).standardizedFileURL
         let layout = layout(root)
         if url.lastPathComponent == config.records.documentsFileName { return .documents(directory: url.deletingLastPathComponent().path) }
-        if url == layout.senders.standardizedFileURL { return .senders }
         guard url.deletingLastPathComponent().path == layout.history.standardizedFileURL.path else { return nil }
         return layout.month(ofHistoryFile: url.lastPathComponent).map { .history(month: $0) }
     }
@@ -396,7 +375,7 @@ public actor ArchiveRecords {
         return try await rebuild()
     }
 
-    /// Reads the whole archive into the index, replacing what it held: documents, senders and history, in one
+    /// Reads the whole archive into the index, replacing what it held: documents and history, in one
     /// transaction. Then documents are located by the identifier on each file, files without an entry
     /// are taken in, and every document is queued to have its text read and its embedding computed again. Called on a
     /// new or set-aside index, whose tables are empty, and by `rebuildIndex`.
@@ -413,7 +392,6 @@ public actor ArchiveRecords {
             }
         }
         summary.documents = parsed.documents.reduce(0) { $0 + $1.entries.count }
-        summary.senders = parsed.senders?.count ?? 0
         summary.events = parsed.history.reduce(0) { $0 + $1.entries.count }
         let ready = parsed
         try await database.writer.write { db in
@@ -437,7 +415,7 @@ public actor ArchiveRecords {
     /// Tables a rebuild replaces with what the files say, and working state that cannot outlive the old index.
     /// Documents are updated in place instead, never deleted: their numbers come back unchanged, so their cached text,
     /// embeddings and traces stay attached.
-    static let rebuiltTables = ["events", "correspondents"]
+    static let rebuiltTables = ["events"]
 
     /// Finds documents whose file is not where their entry says by the identifier on each file, and takes in files
     /// that no entry describes.

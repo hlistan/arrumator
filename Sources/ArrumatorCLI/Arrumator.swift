@@ -12,7 +12,7 @@ struct Arrumator: AsyncParsableCommand {
         abstract: "Local-only document organiser: watches Incoming, labels files with local models, files them.",
         version: version,
         subcommands: [Doctor.self, Run.self, Ingest.self, Extract.self, Search.self, Labels.self, History.self, Trace.self, Replay.self,
-                      Review.self, Senders.self, Forget.self, Archive.self, Funnel.self, Stats.self, Rebuild.self, Logs.self,
+                      Review.self, Archive.self, Funnel.self, Stats.self, Rebuild.self, Logs.self,
                       Models.self, Diagnostics.self, Eval.self, Settings.self])
 }
 
@@ -44,6 +44,17 @@ enum Terminal {
     static func labels(_ labels: [DocumentLabel]?) -> String {
         guard let labels else { return "not labelled" }
         return labels.isEmpty ? "nothing worth a label" : labels.map(label).joined(separator: " · ")
+    }
+
+    /// Every kind a document has labels of, one per line: "  sender        EDP Comercial".
+    static func labelTable(_ labels: [DocumentLabel]?, indent: Int) -> String {
+        guard let labels, !labels.isEmpty else { return String(repeating: " ", count: indent) + Self.labels(labels) }
+        return LabelKind.allCases.compactMap { kind in
+            let values = labels.filter { $0.kind == kind }.map(label)
+            guard !values.isEmpty else { return nil }
+            return String(repeating: " ", count: indent) + kind.rawValue.padding(toLength: 13, withPad: " ", startingAt: 0)
+                + values.joined(separator: " · ")
+        }.joined(separator: "\n")
     }
 
     static func label(_ label: DocumentLabel) -> String {

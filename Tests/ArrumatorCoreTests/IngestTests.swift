@@ -4,34 +4,20 @@ import Foundation
 import GRDB
 import Testing
 
-actor RecordingLearner: LearningSink {
-    var filed: [Int64] = []
-    var renamed: [(from: String, to: String)] = []
-    var forgotten: [Int64] = []
-    func documentFiled(documentID: Int64, analysis: DocumentAnalysis, content: ExtractedContent, trace: TraceContext) async {
-        filed.append(documentID)
-    }
-    func senderRenamed(documentID: Int64, from: String, to: String) async { renamed.append((from, to)) }
-    func documentForgotten(documentID: Int64) async { forgotten.append(documentID) }
-}
-
 struct Harness {
     let env: TestEnvironment
     let services: PipelineServices
     let coordinator: IngestCoordinator
-    let learner: RecordingLearner
 
     static func make(analyzer: any DocumentAnalyzing = StubAnalyzer()) async throws -> Harness {
         let env = try await TestEnvironment.make()
         let placer = Placer(builder: FilenameBuilder(config: env.config.naming), operations: FileOperations(naming: env.config.naming))
-        let learner = RecordingLearner()
         let services = PipelineServices(
             database: env.database, config: env.config, settings: env.settings, extractor: PlainTestExtractor(), analyzer: analyzer,
-            learner: learner,
             filer: DocumentFiler(database: env.database, placer: placer, index: IndexStore(database: env.database),
                                  registry: SelfChangeRegistry(ttl: env.config.watcher.selfChangeTTLSeconds)),
             traces: TraceRecorder(database: env.database, appVersion: "test"), vectors: VectorIndex())
-        return Harness(env: env, services: services, coordinator: IngestCoordinator(services: services), learner: learner)
+        return Harness(env: env, services: services, coordinator: IngestCoordinator(services: services))
     }
 
     var review: ReviewActions { ReviewActions(services: services, coordinator: coordinator) }
@@ -65,9 +51,8 @@ struct Harness {
         #expect(doc.status == .filed && doc.url.standardizedFileURL == filed, "filed at the top of the archive, named by the model")
         #expect(!FileManager.default.fileExists(atPath: url.path), "Incoming is left empty")
         #expect(Xattr.get(Xattr.documentID, from: filed) == doc.uid, "the file carries its identity, so a move in Finder is followed")
-        #expect(doc.correspondent == "EDP Comercial" && doc.docType == DocumentType.invoice.rawValue && doc.docDate == "2026-07-05")
-        #expect(doc.analysis?.model == "stub" && doc.labels == StubAnalyzer.edpBill)
-        #expect(await h.learner.filed == [try #require(doc.id)], "a filed document teaches who its sender is")
+        #expect(doc.labels == StubAnalyzer.edpBill, "the document is described by its labels")
+        #expect(doc.analysis == DocumentAnalysis(fileName: StubAnalyzer.edpFileName, model: "stub"))
         let contents = try FileManager.default.contentsOfDirectory(atPath: h.env.archive.path)
         #expect(Set(contents) == [filed.lastPathComponent], "no folder is made for it")
         #expect(try await h.jobs().map(\.state) == [.done])
@@ -87,7 +72,6 @@ struct Harness {
         #expect(doc.status == .needsReview && doc.url.deletingLastPathComponent().standardizedFileURL == h.env.archive.standardizedFileURL,
                 "it waits for the user as a status, in the archive, not in a folder")
         #expect(doc.analysis?.problems == ["the model gave no valid answer"] && doc.labels == nil)
-        #expect(await h.learner.filed.isEmpty, "nothing is learned from what the model could not read")
         #expect(try await h.services.documents.reviewQueue().map(\.id) == [doc.id])
     }
 
@@ -179,7 +163,6 @@ struct Harness {
         try await h.review.undo(id)
         let undone = try #require(try await h.services.documents.document(id: id))
         #expect(undone.status == .undone && undone.path == h.env.incoming.appendingPathComponent("bill.txt").path)
-        #expect(await h.learner.forgotten == [id], "what its filing taught about its sender is learned again without it")
         try await h.review.retry(id)
         await h.coordinator.drain()
         let refiled = try #require(try await h.services.documents.document(id: id))
@@ -208,22 +191,28 @@ struct Harness {
         try await h.review.confirm(id)
         let confirmed = try #require(try await h.services.documents.document(id: id))
         #expect(confirmed.status == .filed && confirmed.analysis?.problems == [])
-        #expect(await h.learner.filed == [id], "a confirmed document teaches who its sender is")
         #expect(try await h.services.history.events(limit: 5, kinds: [.markedCorrect], docID: id).count == 1)
     }
 
-    @Test func correctingTheSenderRenamesTheFileAndTeachesAnotherName() async throws {
+    @Test func correctingTheNameAndTheLabelsRenamesTheFileAndKeepsOnlyWhatIsALabel() async throws {
         let h = try await Harness.make()
         defer { h.env.cleanup() }
         let id = try #require(try await h.ingest("bill.txt", text: "EDP electricity July").id)
-        try await h.review.edit(id, fileName: "2026-07-05 EDP - Julho", title: nil, correspondent: "EDP Energia", date: nil, type: .receipt)
+        let corrected = StubAnalyzer.edpBill.filter { $0.kind != .sender && $0.kind != .type } + [
+            DocumentLabel(kind: .sender, value: "  EDP\nEnergia "), DocumentLabel(kind: .type, value: "receipt"),
+            DocumentLabel(kind: .type, value: "invoice"), DocumentLabel(kind: .deadline, value: "tomorrow"),
+            DocumentLabel(kind: .topic, value: "Electricity"),
+        ]
+        try await h.review.edit(id, fileName: "2026-07-05 EDP - Julho", labels: corrected)
         let edited = try #require(try await h.services.documents.document(id: id))
         #expect(edited.filename == "2026-07-05 EDP - Julho.txt" && FileManager.default.fileExists(atPath: edited.path))
-        #expect(edited.correspondent == "EDP Energia" && edited.docType == DocumentType.receipt.rawValue)
-        #expect(edited.analysis?.correspondent == "EDP Energia" && edited.analysis?.documentType == .receipt)
-        let renamed = await h.learner.renamed
-        #expect(renamed.count == 1 && renamed.first?.from == "EDP Comercial" && renamed.first?.to == "EDP Energia")
-        #expect(try await h.services.history.events(limit: 5, kinds: [.corrected], docID: id).first?.summary
-                    == "Corrected correspondent, fileName, type")
+        #expect(edited.analysis?.fileName == "2026-07-05 EDP - Julho")
+        #expect(edited.labels(.sender) == ["EDP Energia"], "a label is kept on one line")
+        #expect(edited.labels(.type) == ["receipt"], "a document has one type")
+        #expect(edited.labels(.deadline) == ["2026-07-25"], "what is no date is no deadline")
+        #expect(edited.labels(.topic) == ["electricity"], "the same topic however written is one")
+        let search = SearchService(database: h.env.database, vectors: VectorIndex(), embedder: nil, config: h.env.config.search)
+        #expect(try await search.fullText(SearchQuery(text: "sender:energia")).hits.map(\.id) == [id], "a corrected label is searchable")
+        #expect(try await h.services.history.events(limit: 5, kinds: [.corrected], docID: id).first?.summary == "Corrected fileName, labels")
     }
 }

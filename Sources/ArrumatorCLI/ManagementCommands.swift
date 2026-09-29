@@ -24,7 +24,7 @@ struct Review: AsyncParsableCommand {
 
     struct Confirm: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
-            abstract: "Confirm a document as it is: its name, details and labels are right. One waiting for you is filed.")
+            abstract: "Confirm a document as it is: its name and labels are right. One waiting for you is filed.")
         @OptionGroup var options: GlobalOptions
         @Argument var document: String
         func run() async throws {
@@ -40,14 +40,13 @@ struct Review: AsyncParsableCommand {
         @Argument(help: "New file name without extension.") var name: String
         func run() async throws {
             let runtime = try await options.runtime()
-            try await runtime.review.edit(try await resolveDocument(document, runtime: runtime), fileName: name, title: nil,
-                                          correspondent: nil, date: nil, type: nil)
+            try await runtime.review.edit(try await resolveDocument(document, runtime: runtime), fileName: name, labels: nil)
         }
     }
 
     struct Retry: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
-            abstract: "Read a document again with the model (after changing models, say): its labels, details and name.")
+            abstract: "Read a document again with the model (after changing models, say): its labels and name.")
         @OptionGroup var options: GlobalOptions
         @Argument var document: String
         func run() async throws {
@@ -69,7 +68,7 @@ struct Review: AsyncParsableCommand {
     }
 
     struct Undo: AsyncParsableCommand {
-        static let configuration = CommandConfiguration(abstract: "Move a filed document back to Incoming and forget what it taught.")
+        static let configuration = CommandConfiguration(abstract: "Move a filed document back to Incoming, held there.")
         @OptionGroup var options: GlobalOptions
         @Argument var document: String
         func run() async throws {
@@ -93,7 +92,7 @@ struct Rebuild: AsyncParsableCommand {
 
 struct Archive: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
-        abstract: "The archive documents are filed into. Each archive keeps its own senders and history, and has an index of its own.",
+        abstract: "The archive documents are filed into. Each archive keeps its own history and has an index of its own.",
         subcommands: [Show.self, Switch.self], defaultSubcommand: Show.self)
 
     struct Show: AsyncParsableCommand {

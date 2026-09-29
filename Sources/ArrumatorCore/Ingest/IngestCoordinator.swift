@@ -22,20 +22,17 @@ public struct PipelineServices: Sendable {
     public var settings: SettingsStore
     public var extractor: any ContentExtracting
     public var analyzer: any DocumentAnalyzing
-    public var learner: any LearningSink
     public var filer: DocumentFiler
     public var traces: TraceRecorder
     public var vectors: VectorIndex
 
     public init(database: AppDatabase, config: PipelineConfig, settings: SettingsStore, extractor: any ContentExtracting,
-                analyzer: any DocumentAnalyzing, learner: any LearningSink, filer: DocumentFiler, traces: TraceRecorder,
-                vectors: VectorIndex) {
+                analyzer: any DocumentAnalyzing, filer: DocumentFiler, traces: TraceRecorder, vectors: VectorIndex) {
         self.database = database
         self.config = config
         self.settings = settings
         self.extractor = extractor
         self.analyzer = analyzer
-        self.learner = learner
         self.filer = filer
         self.traces = traces
         self.vectors = vectors
@@ -45,7 +42,6 @@ public struct PipelineServices: Sendable {
     public var jobs: JobStore { JobStore(database: database) }
     public var history: HistoryStore { HistoryStore(database: database) }
     public var index: IndexStore { IndexStore(database: database) }
-    public var senders: SenderStore { SenderStore(database: database) }
 
     /// Where things are in the archive the settings name.
     public func layout(_ settings: AppSettings) -> ArchiveLayout {
@@ -61,14 +57,14 @@ public struct PipelineServices: Sendable {
     }
 
     /// Asks the model about a document and keeps what it says: the labels on the document and in the search index
-    /// straight away, and a history event saying what the document was read as, or why it was not.
+    /// straight away, and a history event with what it was labelled with, or why it was not.
     public func analyse(docID: Int64, jobID: Int64?, content: ExtractedContent, settings: AppSettings,
                         trace: TraceContext) async throws -> AnalysisOutcome {
         let outcome = try await analyzer.analyse(content, settings: settings, config: config, trace: trace)
         if let labels = outcome.labels {
             try await index.saveLabels(labels, docID: docID)
             try await history.record(.analysed, doc: docID, job: jobID, trace: trace.traceID,
-                                     summary: ([outcome.analysis.title] + labels.map(\.value)).joined(separator: " · "),
+                                     summary: labels.isEmpty ? "Nothing worth a label" : labels.map(\.value).joined(separator: " · "),
                                      payload: outcome.analysis)
         } else {
             try await history.record(.error, doc: docID, job: jobID, trace: trace.traceID,
@@ -346,7 +342,7 @@ public actor IngestCoordinator {
         doc = try await services.documents.save(doc)
         let summary = "\(document.originalFilename) duplicates \(original.filename)"
         if settings.duplicateAction == .fileInArchive {
-            let analysis = DocumentAnalysis(title: document.originalFilename, problems: [summary])
+            let analysis = DocumentAnalysis(problems: [summary])
             _ = try await services.filer.file(doc, source: Self.source(of: doc), analysis: analysis, status: .duplicate,
                                               directory: services.layout(settings).root, inPlace: false, actor: .system,
                                               settings: settings, trace: trace, event: .duplicate)
@@ -378,18 +374,17 @@ public actor IngestCoordinator {
                                         vision: settings.enableVLM ? try visionOptions(settings) : nil)
         let content = try await services.extractor.extract(document.url, sha256: document.sha256, context: context, trace: trace)
         try await storeExtraction(docID: docID, content: content)
-        try await services.index.updateHeader(docID: docID, title: document.title ?? "", correspondent: document.correspondent ?? "",
-                                              filename: document.filename)
-        if let (vector, model) = try await services.analyzer.embedding(for: content, sender: document.correspondent,
-                                                                        settings: settings, config: services.config, trace: trace) {
-            try await index(docID: docID, content: content, sender: document.correspondent, vector: vector, model: model, trace: trace)
+        let senders = document.labels(.sender)
+        if let (vector, model) = try await services.analyzer.embedding(for: content, senders: senders, settings: settings,
+                                                                        config: services.config, trace: trace) {
+            try await index(docID: docID, content: content, senders: senders, vector: vector, model: model, trace: trace)
         }
         try await save(&job, payload, state: .done)
     }
 
-    private func index(docID: Int64, content: ExtractedContent, sender: String?, vector: [Float], model: String,
+    private func index(docID: Int64, content: ExtractedContent, senders: [String], vector: [Float], model: String,
                        trace: TraceContext) async throws {
-        let text = content.embeddingSummary(correspondentHint: sender, maxChars: services.config.analysis.embeddingSummaryChars)
+        let text = content.embeddingSummary(senders: senders, maxChars: services.config.analysis.embeddingSummaryChars)
         try await trace.measure(.index, input: ["model": model]) {
             try await services.index.upsertEmbedding(docID: docID, model: model, vector: vector, sourceText: text)
             await services.vectors.upsert(docID: docID, vector: vector, model: model)
@@ -398,13 +393,11 @@ public actor IngestCoordinator {
 
     private func storeExtraction(docID: Int64, content: ExtractedContent) async throws {
         guard var doc = try await services.documents.document(id: docID) else { throw IngestError.documentNotFound(docID) }
-        doc.language = content.language.primary
         doc.pageCount = content.pageCount
         doc.extractedAt = Date()
         doc.contentJson = DocumentStore.storedContentJSON(content)
         _ = try await services.documents.save(doc)
-        try await services.index.upsertText(docID: docID, title: "", correspondent: "", filename: doc.filename,
-                                            body: content.text, summary: content.visual?.description,
+        try await services.index.upsertText(docID: docID, filename: doc.filename, body: content.text, summary: content.visual?.description,
                                             metadata: content.metadata,
                                             extractorVersion: "\(content.extractorName)/\(content.extractorVersion)",
                                             labels: doc.labels ?? [])
@@ -435,12 +428,8 @@ public actor IngestCoordinator {
             _ = try await services.documents.save(doc)
         }
         if let embedding = outcome.embedding, let model = outcome.embeddingModel {
-            try await index(docID: docID, content: content, sender: analysis.correspondent, vector: embedding, model: model, trace: trace)
-        }
-        if status == .filed {
-            var filed = content
-            filed.source.path = filedRecord.path
-            await services.learner.documentFiled(documentID: docID, analysis: analysis, content: filed, trace: trace)
+            try await index(docID: docID, content: content, senders: outcome.labels?.values(.sender) ?? [], vector: embedding,
+                            model: model, trace: trace)
         }
         try await save(&job, payload, state: status == .needsReview ? .needsReview : .done)
         Log.info(.ingest, status == .needsReview ? "Filed; waiting for the user" : "Filed", ["doc": String(docID), "path": filedRecord.path])
@@ -506,7 +495,7 @@ public actor IngestCoordinator {
                 try await services.history.record(.failed, job: job.id, trace: trace.traceID, summary: message)
                 return
             }
-            let analysis = DocumentAnalysis(title: document.originalFilename, problems: ["Processing failed: \(message)"])
+            let analysis = DocumentAnalysis(problems: ["Processing failed: \(message)"])
             if FileManager.default.fileExists(atPath: document.path), job.kind == .ingest {
                 _ = try await services.filer.file(document, source: Self.source(of: document), analysis: analysis, status: .failed,
                                                   directory: services.layout(settings).root, inPlace: false, actor: .system,

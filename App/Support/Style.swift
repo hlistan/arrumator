@@ -19,6 +19,10 @@ enum Style {
     static let cardShadowRadius: CGFloat = 12
     static let cardShadowOffset: CGFloat = 4
     static let thumbnail = CGSize(width: 66, height: 88)
+    /// Narrowest a figure in a grid of them may be, as Statistics lays out labels by kind.
+    static let figureMinWidth: CGFloat = 92
+    /// Width of the kind chooser where a label is added on a document's card.
+    static let labelKindPickerWidth: CGFloat = 130
 
     static let page = Color(nsColor: .textBackgroundColor)
     static let card = Color(nsColor: .controlBackgroundColor)
@@ -32,7 +36,6 @@ extension Destination {
         case .incoming: "Incoming"
         case .review: "Needs You"
         case .processed: "Processed"
-        case .senders: "Senders"
         case .history: "History"
         case .statistics: "Statistics"
         }
@@ -43,7 +46,6 @@ extension Destination {
         case .incoming: "tray.and.arrow.down.fill"
         case .review: "questionmark.circle.fill"
         case .processed: "checkmark.circle.fill"
-        case .senders: "person.2.fill"
         case .history: "clock.fill"
         case .statistics: "chart.bar.fill"
         }
@@ -55,7 +57,6 @@ extension Destination {
         case .incoming: .blue
         case .review: .orange
         case .processed: .green
-        case .senders: .purple
         case .history, .statistics: .secondary
         }
     }
@@ -98,13 +99,6 @@ enum Wording {
 
     static let managementOnThisMacOnly = "The app starts and stops Ollama only on this Mac."
 
-    /// What recognising a sender is for, under what recognises it.
-    static func recognition(of sender: String) -> String {
-        "A new document showing any of these is taken to be from \(sender), and named as its earlier documents were."
-    }
-
-    static let senderUnrecognised = "Nothing yet. Identifiers that appear only on its documents are learned as they are filed."
-
     /// Where a file sits: the archive, one of its directories, Incoming, or elsewhere.
     static func place(of document: DocumentRecord, archive: URL?, incoming: URL?) -> String {
         let directory = document.url.deletingLastPathComponent().standardizedFileURL.path
@@ -144,32 +138,61 @@ enum Wording {
         analysis.model.map { "Read by \($0)" } ?? "Not read by the model"
     }
 
-    /// A document's labels on one line: "Maria Exemplo · Portugal · Portuguese".
+    /// Kinds a document's row names first, in this order, before the rest of its labels.
+    static let rowKinds: [LabelKind] = [.date, .sender, .type]
+
+    /// How many labels a document's row shows beyond those of `rowKinds`.
+    static let rowExtraLabels = 3
+
+    /// A document's labels on one line, its date, sender and type first: "5 Jul 2026 · EDP · Invoice · Portugal".
     static func labels(_ labels: [DocumentLabel]?) -> String? {
         guard let labels, !labels.isEmpty else { return nil }
-        return labels.map(label).joined(separator: " · ")
+        let first = rowKinds.flatMap { kind in labels.filter { $0.kind == kind } }
+        let rest = labels.filter { !rowKinds.contains($0.kind) }.prefix(rowExtraLabels)
+        return (first + rest).map(label).joined(separator: " · ")
     }
 
-    /// One thing the app learned, from a history event recorded against a document.
-    static func lesson(_ event: EventRecord) -> String { event.summary }
-
-    /// What was learned. Forgetting is recorded in History only: a lesson forgotten shows struck through instead.
-    static let lessonKinds: Set<EventKind> = [.learned]
-
-    /// How a kind of label is introduced on a document's card: "About Maria Exemplo".
+    /// How a kind of label is introduced on a document's card.
     static func labelKind(_ kind: LabelKind) -> String {
         switch kind {
-        case .subject: "About"
+        case .sender: "From"
+        case .party: "About"
+        case .type: "Type"
+        case .topic: "Topic"
         case .object: "Concerns"
+        case .reference: "Reference"
+        case .date: "Date"
+        case .period: "Period"
+        case .deadline: "Deadline"
+        case .amount: "Amount"
         case .jurisdiction: "Jurisdiction"
         case .language: "Language"
         }
     }
 
-    /// A label as the card shows it: a language by its name in the user's language.
+    /// What a new label of a kind looks like, shown in the empty field.
+    static func labelPrompt(_ kind: LabelKind) -> String {
+        switch kind {
+        case .date, .deadline: "YYYY-MM-DD"
+        case .period: "YYYY, YYYY-MM or start/end"
+        case .amount: "54.21 EUR"
+        case .language: "pt, en, ru"
+        case .type: "invoice, receipt, contract"
+        default: "Label"
+        }
+    }
+
+    /// A label as the card shows it: a type by its name, a language by its name in the user's language, a date as a
+    /// date.
     static func label(_ label: DocumentLabel) -> String {
-        guard label.kind == .language else { return label.value }
-        return Locale.current.localizedString(forLanguageCode: label.value) ?? label.value
+        switch label.kind {
+        case .language: return Locale.current.localizedString(forLanguageCode: label.value) ?? label.value
+        case .type: return DocumentType(rawValue: label.value)?.label ?? label.value
+        case .date, .deadline:
+            guard let date = try? Date(label.value, strategy: .iso8601.year().month().day()) else { return label.value }
+            return date.formatted(date: .abbreviated, time: .omitted)
+        default: return label.value
+        }
     }
 
     /// A day heading: Today, Yesterday, or the date.
@@ -200,8 +223,6 @@ enum EventStyle {
         case .retry: "arrow.clockwise"
         case .corrected, .userMoved, .userRenamed, .markedCorrect: "hand.point.up.left"
         case .undone: "arrow.uturn.backward"
-        case .learned: "graduationcap"
-        case .forgot: "eraser"
         default: "circle"
         }
     }
@@ -211,7 +232,6 @@ enum EventStyle {
         case .filed: Palette.progress
         case .needsReview, .retry: Palette.attention
         case .error, .failed: Palette.problem
-        case .learned: .purple
         default: .secondary
         }
     }

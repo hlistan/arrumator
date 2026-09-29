@@ -24,76 +24,61 @@ enum Fixtures {
     Total a pagar: 54,21 €   Data limite de pagamento: 25/07/2026
     """
 
-    static let edpNIF = StableKey(kind: .ptNIF, value: "503504564")
-
-    /// A model answer reading the document as an EDP bill to Maria Exemplo, with its signals; a list passed as nil is
-    /// left out of the answer.
-    static func answer(correspondent: String = "EDP Comercial", subjects: [String]? = ["Maria Exemplo"],
-                       objects: [String]? = ["electricity supply point PT0002000012345678"], jurisdictions: [String]? = ["Portugal"],
-                       languages: [String]? = ["pt"], fileName: String = "2026-07-05 EDP Comercial - Fatura eletricidade julho") -> String {
-        var fields: [String: JSONValue] = [
-            "correspondent": .string(correspondent), "document_type": "invoice", "document_date": "05/07/2026", "period_year": "",
-            "title": "Fatura eletricidade julho", "file_name": .string(fileName),
-        ]
-        for (key, values) in [("subjects", subjects), ("objects", objects), ("jurisdictions", jurisdictions), ("languages", languages)] {
-            if let values { fields[key] = .array(values.map(JSONValue.string)) }
+    /// A model answer reading the document as an EDP electricity bill to Maria Exemplo; the kind `omitting` names is left
+    /// out of the answer, and `overrides` replaces the signals of a kind.
+    static func answer(omitting omitted: LabelKind? = nil, _ overrides: [LabelKind: [String]] = [:],
+                       fileName: String = "2026-07-05 EDP Comercial - Fatura eletricidade julho") -> String {
+        var fields: [String: JSONValue] = ["file_name": .string(fileName)]
+        for kind in LabelKind.allCases where kind != omitted {
+            let values = overrides[kind] ?? edpSignals[kind] ?? []
+            fields[ClassificationSchema.labelsKey(kind)] = .array(values.map(JSONValue.string))
         }
         return JSON.string(fields)
     }
 
-    /// What the answer labels the document with.
+    /// What the model finds in the EDP bill, as it writes it.
+    static let edpSignals: [LabelKind: [String]] = [
+        .sender: ["EDP Comercial"], .party: ["Maria Exemplo"], .type: ["invoice"], .topic: ["utilities", "electricity"],
+        .object: ["electricity supply point PT0002000012345678"], .reference: ["invoice FT 2026/926804564"],
+        .date: ["05/07/2026"], .period: ["2026-06"], .deadline: ["2026-07-25"], .amount: ["54.21 EUR"],
+        .jurisdiction: ["Portugal"], .language: ["pt"],
+    ]
+
+    /// What the answer labels the document with, kinds in their order.
     static let edpLabels = [
-        DocumentLabel(kind: .subject, value: "Maria Exemplo"),
+        DocumentLabel(kind: .sender, value: "EDP Comercial"), DocumentLabel(kind: .party, value: "Maria Exemplo"),
+        DocumentLabel(kind: .type, value: "invoice"), DocumentLabel(kind: .topic, value: "utilities"),
+        DocumentLabel(kind: .topic, value: "electricity"),
         DocumentLabel(kind: .object, value: "electricity supply point PT0002000012345678"),
-        DocumentLabel(kind: .jurisdiction, value: "Portugal"),
+        DocumentLabel(kind: .reference, value: "invoice FT 2026/926804564"), DocumentLabel(kind: .date, value: "2026-07-05"),
+        DocumentLabel(kind: .period, value: "2026-06"), DocumentLabel(kind: .deadline, value: "2026-07-25"),
+        DocumentLabel(kind: .amount, value: "54.21 EUR"), DocumentLabel(kind: .jurisdiction, value: "Portugal"),
         DocumentLabel(kind: .language, value: "pt"),
     ]
 }
 
-/// The analyzer and the sender learner over an empty temporary archive with a mock Ollama.
+/// The analyzer over an empty temporary archive with a mock Ollama.
 struct ClassifyHarness {
     let env: TestEnvironment
     let mock: MockOllama
-    let senders: SenderStore
     let analyzer: DocumentAnalyzer
-    let learner: SenderLearner
     let settings: AppSettings
     let sink = MemoryTraceSink()
 
     static func make(handler: @escaping MockOllama.ChatHandler) async throws -> ClassifyHarness {
         let env = try await TestEnvironment.make()
-        let senders = SenderStore(database: env.database)
         let mock = MockOllama(installed: ["ministral-3:14b", "bge-m3"], handler: handler)
         let prompts = PromptBuilder(library: try PromptLibrary.bundled(), config: env.config.analysis, labels: env.config.labels,
                                     naming: env.config.naming)
-        let analyzer = DocumentAnalyzer(senders: senders, gate: InferenceGate(api: mock, retryDelays: []),
+        let analyzer = DocumentAnalyzer(gate: InferenceGate(api: mock, retryDelays: []),
                                         models: ModelManager(api: mock, config: env.config.ollama), prompts: prompts)
-        let learner = SenderLearner(store: senders, config: env.config.senders, history: HistoryStore(database: env.database))
-        return ClassifyHarness(env: env, mock: mock, senders: senders, analyzer: analyzer, learner: learner,
-                               settings: await env.settings.current)
+        return ClassifyHarness(env: env, mock: mock, analyzer: analyzer, settings: await env.settings.current)
     }
 
     var trace: TraceContext { TraceContext(traceID: 1, sink: sink) }
 
     func analyse(_ content: ExtractedContent) async throws -> AnalysisOutcome {
         try await analyzer.analyse(content, settings: settings, config: env.config, trace: trace)
-    }
-
-    /// Reads the document and files it, as the pipeline does: stored with its content, then learned from.
-    @discardableResult
-    func file(_ content: ExtractedContent) async throws -> (id: Int64, analysis: DocumentAnalysis) {
-        let analysis = try await analyse(content).analysis
-        var record = DocumentRecord.arrived(path: content.source.path, sha256: content.source.sha256, size: 1, uttype: "com.adobe.pdf",
-                                            inode: nil, modified: nil)
-        record.status = .filed
-        record.filedAt = Date()
-        record.correspondent = analysis.correspondent
-        record.correspondentId = analysis.correspondentID
-        record.contentJson = DocumentStore.storedContentJSON(content)
-        record.analysisJson = JSON.string(analysis)
-        let id = try #require(try await DocumentStore(database: env.database).save(record).id)
-        await learner.documentFiled(documentID: id, analysis: analysis, content: content, trace: .disabled)
-        return (id, analysis)
     }
 
     func steps(_ stage: TraceStage) async -> [TraceStep] { await sink.steps.filter { $0.stage == stage } }

@@ -11,7 +11,7 @@ public final class ArrumatorRuntime: Sendable {
     public let paths: AppPaths
     public let config: PipelineConfig
     public let appVersion: String
-    /// The archive this runtime files into, whose index and learned senders it holds.
+    /// The archive this runtime files into, whose index it holds.
     public let archive: URL
     /// Where the archive's index is kept (`AppPaths.indexURL`).
     public let index: URL
@@ -27,10 +27,8 @@ public final class ArrumatorRuntime: Sendable {
     public let gate: InferenceGate
     public let lifecycle: OllamaLifecycle
     public let models: ModelManager
-    public let senders: SenderStore
     public let prompts: PromptBuilder
     public let analyzer: DocumentAnalyzer
-    public let learner: SenderLearner
     public let vectors: VectorIndex
     public let search: SearchService
     public let traces: TraceRecorder
@@ -80,8 +78,8 @@ public final class ArrumatorRuntime: Sendable {
         OllamaEndpoint.isThisMac(url) ? settings.ollamaManagement : .external
     }
 
-    /// Stops this runtime and returns one open on the archive at `path`, with that archive's own index and learned
-    /// senders; the settings name it from then on. Files waiting in Incoming are filed into the new archive.
+    /// Stops this runtime and returns one open on the archive at `path`, with that archive's own index; the settings
+    /// name it from then on. Files waiting in Incoming are filed into the new archive.
     /// Call `openArchive()` and then `start()` on the runtime returned, as after `bootstrap`.
     public func switchArchive(to path: String) async throws -> ArrumatorRuntime {
         let chosen = URL(fileURLWithPath: path.expandingTilde, isDirectory: true).standardizedFileURL
@@ -148,19 +146,17 @@ public final class ArrumatorRuntime: Sendable {
         gate = InferenceGate(api: ollama, retryDelays: config.ollama.retryDelays)
         models = ModelManager(api: ollama, config: config.ollama)
         lifecycle = OllamaLifecycle(api: ollama, config: config.ollama, management: .external, binaryOverride: nil)
-        senders = SenderStore(database: database)
         prompts = PromptBuilder(library: try PromptLibrary.bundled(), config: config.analysis, labels: config.labels,
                                 naming: config.naming)
-        analyzer = DocumentAnalyzer(senders: senders, gate: gate, models: models, prompts: prompts)
+        analyzer = DocumentAnalyzer(gate: gate, models: models, prompts: prompts)
         let skip = SkipRules(watcher: config.watcher)
-        learner = SenderLearner(store: senders, config: config.senders, history: HistoryStore(database: database))
         vectors = VectorIndex()
         search = SearchService(database: database, vectors: vectors, embedder: nil, config: config.search)
         traces = TraceRecorder(database: database, appVersion: appVersion)
         let placer = Placer(builder: FilenameBuilder(config: config.naming), operations: FileOperations(naming: config.naming))
         services = PipelineServices(
             database: database, config: config, settings: settings, extractor: ExtractorRegistry(ollama: GatedOllama(gate: gate)),
-            analyzer: analyzer, learner: learner,
+            analyzer: analyzer,
             filer: DocumentFiler(database: database, placer: placer, index: IndexStore(database: database), registry: registry),
             traces: traces, vectors: vectors)
         coordinator = IngestCoordinator(services: services)

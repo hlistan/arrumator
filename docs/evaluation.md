@@ -12,22 +12,23 @@ the real pipeline and the configured models, in a throw-away home and archive, a
 | Score | What counts as right |
 |---|---|
 | status | Filed, waiting for you or taken for a copy, as the corpus expects: ordinary documents are filed; the encrypted, damaged and blank files wait for you; the byte-identical copy is a duplicate. |
-| type | The document type, or one the corpus also accepts. |
-| sender | The sender's name contains the expected one, or one the corpus also accepts, ignoring case and accents. |
-| date | The issue date, exactly. |
-| title | The file name or title contains one of the words the corpus expects. |
-| language | The language labels include the language the document is written in. |
+| type | The `type` label is the expected type, or one the corpus also accepts. |
+| sender | A `sender` label contains the expected sender, or one the corpus also accepts, ignoring case and accents. |
+| date | The `date` label is the expected issue date, exactly. |
+| title | The file name contains one of the words the corpus expects. |
+| language | The `language` labels include the language the document is written in. |
 | labelled | Of the documents that should be filed, the share the model labelled at all, and how many labels each has. |
+| labels per kind | Of those labelled, the share with at least one label of each kind (`sender`, `party`, `type`, `topic`, `object`, `reference`, `date`, `period`, `deadline`, `amount`, `jurisdiction`, `language`): how much of the label set the prompt draws out. |
 
 Type, sender, date, title and language are scored only for documents the corpus expects to be filed. The median
 time per document is reported too. A second pass files the same documents again with different bytes, which shows
-what was learned about senders in the first. `--min-accuracy <x>` fails the run when the first pass reads fewer than
-that share of type, sender, date and title right.
+how consistently they are read. `--min-accuracy <x>` fails the run when the first pass reads fewer than that share of
+type, sender, date and title right.
 
 **Label quality has not yet been measured with the profile models.** The corpus records the expected sender, type,
-date, title words and language, but not the subjects, objects and jurisdictions a document should be labelled with, so
-the language label is the only label scored against the corpus. Adding expected labels to the generator is the next
-step for this measurement.
+date, title words and language, but not the parties, topics, objects, references, periods, deadlines, amounts and
+jurisdictions a document should be labelled with. Those kinds are measured only by coverage, how often a document gets
+one, not by whether it is right. Adding expected labels to the generator is the next step for this measurement.
 
 ## Image descriptions and the model's context
 
@@ -90,6 +91,7 @@ now takes one model call instead of up to several, so these times are upper boun
 
 - **Synthetic documents.** The corpus is synthetic, 36 documents of 21 kinds in three languages and five edge cases.
   Real archives have more kinds and longer histories.
-- **Labels are scored only by language.** See above.
+- **Most label kinds are measured only by coverage.** Only the sender, type, date and language labels are checked
+  against the corpus; see above.
 - **No image descriptions.** Every image in the corpus has enough text for OCR, so the corpus never tests how well a
   model describes a photo without text.

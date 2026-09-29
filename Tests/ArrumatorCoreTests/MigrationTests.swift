@@ -22,6 +22,7 @@ import Testing
         try AppDatabase.migrator.migrate(queue)
         let columns = try queue.read { db in try db.columns(in: "document_fts").map(\.name) }
         #expect(columns == SearchService.columns, "`column:term` and the BM25 weights address columns by these names, in this order")
+        #expect(columns[SearchService.bodyColumn] == "body", "snippets are cut from the text")
     }
 
     @Test func aDatabaseFromTheBrainsReleaseReachesTodaysSchema() throws {
@@ -45,7 +46,7 @@ import Testing
 
     /// A database as the release that filed into folders left it: a folder, a document filed there with its decision,
     /// what was learned about it, events and a job half way through.
-    @Test func aDatabaseThatFiledIntoFoldersKeepsItsDocumentsAndTheirDetails() throws {
+    @Test func aDatabaseThatFiledIntoFoldersKeepsItsDocumentsWithTheirDetailsAsLabels() throws {
         let queue = try DatabaseQueue()
         try AppDatabase.migrator.migrate(queue, upTo: "v10_folderKinds")
         let decision = #"""
@@ -67,7 +68,8 @@ import Testing
                 INSERT INTO document_text (doc_id, title, correspondent, filename, body) VALUES (1, 'Fatura', 'EDP', 'bill.pdf', 'eletricidade julho');
                 INSERT INTO rules (name, predicates_json, action_json, origin, created_at, updated_at) VALUES ('EDP', '[]', '{}', 'induced', 0, 0);
                 INSERT INTO events (at, kind, actor, summary, payload_json) VALUES (0, 'filed', 'system', 'bill.pdf', '{}'),
-                    (0, 'ruleInduced', 'system', 'EDP', '{}'), (0, 'classified', 'system', 'Home', '{}');
+                    (0, 'ruleInduced', 'system', 'EDP', '{}'), (0, 'classified', 'system', 'Home', '{}'),
+                    (0, 'learned', 'system', 'Remembered EDP', '{}');
                 INSERT INTO jobs (kind, source_path, state, created_at, updated_at) VALUES ('reclassify', '/incoming/a.pdf', 'classifying', 0, 0);
                 INSERT INTO traces (id, doc_id, attempt, source, started_at, app_version, prompt_version, taxonomy_version, settings_json,
                                     logic_version) VALUES (1, 1, 0, 'ingest', 0, 'old', 2, 3, '{}', 'mine-1');
@@ -82,26 +84,28 @@ import Testing
 
         try queue.write { db in
             let doc = try #require(try DocumentRecord.fetchOne(db, key: 1))
-            #expect(doc.path == "/archive/Home/Utilities/bill.pdf" && doc.status == .needsReview && doc.correspondentId == 1,
-                    "a document stays where it is, with its details")
-            let analysis = try #require(doc.analysis, "its decision becomes its analysis")
-            #expect(analysis.fileName == "2026-07-05 EDP - Fatura" && analysis.documentType == .invoice && analysis.model == "ministral-3:14b")
-            #expect(analysis.problems == ["low confidence"], "and what it waits for the user about")
-            #expect(doc.labels == nil, "it is not labelled until the model reads it")
-            for table in ["folders", "rules", "memories", "corrections", "proposals", "logic", "rethink_runs", "folder_embeddings"] {
+            #expect(doc.path == "/archive/Home/Utilities/bill.pdf" && doc.status == .needsReview, "a document stays where it is")
+            #expect(doc.labels == [DocumentLabel(kind: .sender, value: "EDP Comercial"), DocumentLabel(kind: .type, value: "invoice"),
+                                   DocumentLabel(kind: .topic, value: "energy"), DocumentLabel(kind: .date, value: "2026-07-05"),
+                                   DocumentLabel(kind: .language, value: "pt")],
+                    "what its decision said of it becomes its labels")
+            #expect(doc.analysis == DocumentAnalysis(fileName: "2026-07-05 EDP - Fatura", model: "ministral-3:14b", problems: ["low confidence"]),
+                    "and the rest how it was read: its name, the model, what it waits for the user about")
+            for table in ["folders", "rules", "memories", "corrections", "proposals", "logic", "rethink_runs", "folder_embeddings",
+                          "correspondents"] {
                 #expect(try !db.tableExists(table), "\(table) is gone")
             }
-            #expect(try !db.columns(in: "correspondents").contains { $0.name == "default_folder_code" })
             #expect(try !db.columns(in: "traces").contains { $0.name == "logic_version" })
             #expect(try String.fetchAll(db, sql: "SELECT stage FROM trace_steps") == [TraceStage.analyse.rawValue],
                     "an old model exchange is kept out of diagnostics like a new one")
             #expect(try EventRecord.order(Column("id")).fetchAll(db).map(\.kind) == [.filed], "events of kinds that are gone are dropped")
             let job = try #require(try JobRecord.fetchOne(db))
             #expect(job.state == .analysing && job.kind == .reanalyse, "a job half way through is read again")
-            #expect(try Set(String.fetchAll(db, sql: "SELECT key FROM record_dirty")).isSuperset(of: ["documents:/archive/Home/Utilities/", "senders"]),
+            #expect(try String.fetchAll(db, sql: "SELECT key FROM record_dirty WHERE key LIKE 'documents:%'") == ["documents:/archive/Home/Utilities/"],
                     "every record file is written again in today's shape")
             let match = "SELECT rowid FROM document_fts WHERE document_fts MATCH ?"
             #expect(try Int64.fetchAll(db, sql: match, arguments: ["eletricidade"]) == [1], "what was indexed before is still found")
+            #expect(try Int64.fetchAll(db, sql: match, arguments: ["sender : edp"]) == [1], "and its labels are, kind by kind")
             try db.execute(sql: "DELETE FROM record_dirty")
             try db.execute(sql: "UPDATE documents SET labels_json = '[]' WHERE id = 1")
             #expect(try String.fetchAll(db, sql: "SELECT key FROM record_dirty") == ["documents:/archive/Home/Utilities/"],

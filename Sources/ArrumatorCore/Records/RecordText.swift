@@ -10,19 +10,10 @@ enum RecordText {
         var lines = ["# \(directory.lastPathComponent)", "", note, "",
                      "| File | Date | From | Type | Labels | Status |", "|---|---|---|---|---|---|"]
         for e in entries {
-            lines.append("| \(cell(e.file)) | \(cell(e.date)) | \(cell(e.sender)) | \(cell(e.documentType)) | "
-                + "\(cell(e.labels?.map(\.value).joined(separator: ", "))) | \(e.status.rawValue) |")
-        }
-        return lines.joined(separator: "\n") + "\n"
-    }
-
-    static func senders(_ entries: [Correspondent]) -> String {
-        var lines = ["# Senders", "", note, ""]
-        for s in entries {
-            var parts = ["**\(s.canonicalName)**"]
-            if !s.aliases.isEmpty { parts.append("also " + s.aliases.joined(separator: ", ")) }
-            if !s.stableKeys.isEmpty { parts.append("identifiers " + s.stableKeys.joined(separator: ", ")) }
-            lines.append("- " + parts.joined(separator: " · "))
+            let labels = e.labels ?? []
+            let others = labels.filter { ![.date, .sender, .type].contains($0.kind) }.map(\.value)
+            lines.append("| \(cell(e.file)) | \(cell(labels.values(.date).first)) | \(cell(labels.values(.sender).joined(separator: ", "))) | "
+                + "\(cell(labels.values(.type).first)) | \(cell(others.joined(separator: ", "))) | \(e.status.rawValue) |")
         }
         return lines.joined(separator: "\n") + "\n"
     }

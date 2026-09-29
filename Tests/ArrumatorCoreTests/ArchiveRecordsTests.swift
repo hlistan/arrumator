@@ -11,10 +11,9 @@ import Testing
         let h: Harness
         let records: ArchiveRecords
         let documents: [Int64]
-        let sender: Correspondent
     }
 
-    /// Files two documents, teaches a sender, and writes the record files.
+    /// Files two documents and writes the record files.
     private func world() async throws -> World {
         let h = try await Harness.make(analyzer: LabelingTests.PerFileAnalyzer(labels: ["edp_july.txt": StubAnalyzer.edpBill,
                                                                                         "edp_august.txt": StubAnalyzer.edpBill]))
@@ -22,12 +21,9 @@ import Testing
             try await h.ingest(name, text: text)
         }
         let documents = try await h.services.documents.list(DocumentFilter(statuses: [.filed]), limit: 10).compactMap(\.id).sorted()
-        let sender = try await h.services.senders.saveCorrespondent(Correspondent(
-            canonicalName: "EDP Comercial", country: "PT", aliases: ["EDP"], stableKeys: ["ptNIF:503504564"], webDomains: ["edp.pt"],
-            filedCount: 2, origin: .learned))
         let records = ArchiveRecords(database: h.env.database, settings: h.env.settings, config: h.env.config, registry: nil)
         try await records.flush()
-        return World(h: h, records: records, documents: documents, sender: sender)
+        return World(h: h, records: records, documents: documents)
     }
 
     /// A second index over the same archive, as after the database was lost.
@@ -48,12 +44,11 @@ import Testing
         #expect(listing.contains("uid: \(doc.uid)") && listing.contains("file: \(doc.filename)"), "a document's entry sits next to it")
         #expect(listing.contains("kind: jurisdiction") && listing.contains("value: Portugal"), "with its labels")
         #expect(listing.contains("analysis:") && !listing.contains("decision:"), "and what the model read it as")
+        #expect(listing.contains("| edp_july.txt | 2026-07-05 | EDP Comercial | invoice |"), "and, for people, a table of them")
         let layout = w.h.env.layout
-        #expect(try String(contentsOf: layout.senders, encoding: .utf8).contains("EDP Comercial"))
         #expect(try String(contentsOf: layout.historyFile(month: RecordKind.month(of: Date())), encoding: .utf8).contains("filed"))
-        let system = try FileManager.default.contentsOfDirectory(atPath: layout.system.path).sorted()
-        #expect(system == [w.h.env.config.records.historyFolderName, w.h.env.config.records.learnedFolderName].sorted(),
-                "the system folder holds the senders and the history, nothing else")
+        let system = try FileManager.default.contentsOfDirectory(atPath: layout.system.path)
+        #expect(system == [w.h.env.config.records.historyFolderName], "the system folder holds the history, nothing else")
         let pending = try await w.h.env.database.reader.read { db in try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM record_dirty") }
         #expect(pending == 0)
     }
@@ -71,13 +66,10 @@ import Testing
         let after = try await DocumentStore(database: database).list(DocumentFilter(), limit: 100).sorted { ($0.id ?? 0) < ($1.id ?? 0) }
         #expect(after.map(\.id) == before.map(\.id), "documents keep their numbers")
         for (a, b) in zip(after, before) {
-            #expect(a.uid == b.uid && a.path == b.path && a.status == b.status && a.title == b.title && a.docType == b.docType)
+            #expect(a.uid == b.uid && a.path == b.path && a.status == b.status)
             #expect(a.analysis == b.analysis, "what the model read it as comes back")
             #expect(a.labels == StubAnalyzer.edpBill && a.labels == b.labels, "labels come back from the record files")
         }
-        let senders = try await SenderStore(database: database).correspondents()
-        #expect(senders.map(\.canonicalName) == ["EDP Comercial"] && senders.first?.id == w.sender.id)
-        #expect(senders.first?.stableKeys == ["ptNIF:503504564"] && senders.first?.aliases == ["EDP"])
         #expect(try await HistoryStore(database: database).events(limit: 1_000).count == eventsBefore + 1, "plus the rebuild itself")
         let queued = try await JobStore(database: database).active(kinds: [.reindex])
         #expect(Set(queued.compactMap(\.docId)) == Set(w.documents), "every document is read again for search")
@@ -90,11 +82,9 @@ import Testing
         let (database, records) = try freshIndex(w)
         try await records.rebuild()
         let analyzer = StubAnalyzer()
-        let learner = RecordingLearner()
         var services = w.h.services
         services = PipelineServices(
             database: database, config: services.config, settings: services.settings, extractor: services.extractor, analyzer: analyzer,
-            learner: learner,
             filer: DocumentFiler(database: database, placer: services.filer.placer, index: IndexStore(database: database),
                                  registry: SelfChangeRegistry(ttl: services.config.watcher.selfChangeTTLSeconds)),
             traces: TraceRecorder(database: database, appVersion: "test"), vectors: VectorIndex())
@@ -107,9 +97,7 @@ import Testing
         }
         #expect(try await DocumentStore(database: database).list(DocumentFilter(), limit: 100).map(\.path).sorted() == paths,
                 "reading again moves nothing")
-        let read = await analyzer.calls.files
-        let learned = await learner.filed
-        #expect(read.isEmpty && learned.isEmpty, "and asks the model nothing")
+        #expect(await analyzer.calls.files.isEmpty, "and asks the model nothing")
         let search = SearchService(database: database, vectors: VectorIndex(), embedder: nil, config: services.config.search)
         #expect(Set(try await search.fullText(SearchQuery(text: "jurisdiction:portugal")).hits.map(\.id)) == Set(w.documents),
                 "a document is found by its labels again, from its record")
@@ -169,46 +157,51 @@ import Testing
         let summary = try await ArchiveRecords(database: env.database, settings: env.settings, config: env.config, registry: nil).rebuild()
         #expect(summary.documents == 1)
         let doc = try #require(try await DocumentStore(database: env.database).document(id: 7))
-        #expect(doc.path == file.standardizedFileURL.path && doc.status == .filed && doc.title == "Fatura eletricidade",
-                "a document an earlier version filed into a folder stays where it is, with what it was known as")
+        #expect(doc.path == file.standardizedFileURL.path && doc.status == .filed && doc.originalFilename == "fatura.pdf",
+                "a document an earlier version filed into a folder stays where it is")
         let unlabelled = try await DocumentStore(database: env.database).unlabelled()
         #expect(doc.labels == nil && doc.analysis == nil && unlabelled.isEmpty,
                 "it has no labels until it is read again; with no stored text yet, it waits for its text to be read first")
     }
 
+    /// Changes a label of the first document in the top `_documents.md`, as someone editing it by hand would.
+    private func editLabelByHand(_ w: World) throws -> URL {
+        let url = w.h.env.archive.appendingPathComponent(w.h.env.config.records.documentsFileName)
+        let text = try String(contentsOf: url, encoding: .utf8)
+        let edited = try #require(text.range(of: "value: Maria Exemplo").map { text.replacingCharacters(in: $0, with: "value: Maria Silva") })
+        try edited.write(to: url, atomically: true, encoding: .utf8)
+        return url
+    }
+
     @Test func aRecordFileEditedByHandIsReadBack() async throws {
         let w = try await world()
         defer { w.h.env.cleanup() }
-        let url = w.h.env.layout.senders
-        let text = try String(contentsOf: url, encoding: .utf8)
-        try text.replacingOccurrences(of: "canonicalName: EDP Comercial", with: "canonicalName: EDP Energia")
-            .write(to: url, atomically: true, encoding: .utf8)
+        _ = try editLabelByHand(w)
         #expect(try await w.records.reconcile() == 1)
-        #expect(try await w.h.services.senders.correspondents().map(\.canonicalName) == ["EDP Energia"])
+        let parties = try await w.h.services.documents.list(DocumentFilter(), limit: 5).flatMap { $0.labels(.party) }
+        #expect(parties.contains("Maria Silva"), "a label corrected in the file is the document's")
     }
 
     @Test func aChangeNeverOverwritesAnEditMadeByHand() async throws {
         let w = try await world()
         defer { w.h.env.cleanup() }
-        let url = w.h.env.layout.senders
-        let text = try String(contentsOf: url, encoding: .utf8)
-        try text.replacingOccurrences(of: "canonicalName: EDP Comercial", with: "canonicalName: EDP Energia")
-            .write(to: url, atomically: true, encoding: .utf8)
-        // Before the app has read the edit, something else changes the senders.
-        _ = try await w.h.services.senders.saveCorrespondent(Correspondent(canonicalName: "MEO", country: "PT", filedCount: 1, origin: .learned))
+        let url = try editLabelByHand(w)
+        // Before the app has read the edit, another document arrives in the same directory.
+        try await w.h.ingest("edp_september.txt", text: "EDP electricity September")
         try await w.records.flush()
-        #expect(try await w.h.services.senders.correspondents().map(\.canonicalName).sorted() == ["EDP Energia", "MEO"])
-        #expect(try String(contentsOf: url, encoding: .utf8).contains("EDP Energia"))
+        let text = try String(contentsOf: url, encoding: .utf8)
+        #expect(text.contains("value: Maria Silva") && text.contains("file: edp_september.txt"),
+                "the file keeps the edit and gains what the index added")
     }
 
     @Test func aDeletedRecordFileIsWrittenAgain() async throws {
         let w = try await world()
         defer { w.h.env.cleanup() }
-        let url = w.h.env.layout.senders
+        let url = w.h.env.archive.appendingPathComponent(w.h.env.config.records.documentsFileName)
         try FileManager.default.removeItem(at: url)
         try await w.records.reconcile()
-        #expect(try String(contentsOf: url, encoding: .utf8).contains("EDP Comercial"), "deleting a file does not delete what it records")
-        #expect(try await w.h.services.senders.correspondents().count == 1)
+        #expect(try String(contentsOf: url, encoding: .utf8).contains("value: EDP Comercial"), "deleting a file does not delete what it records")
+        #expect(try await w.h.services.documents.list(DocumentFilter(), limit: 5).count == 2)
     }
 
     @Test func aDocumentsEntryFollowsItAndAnEmptiedDirectoryLosesItsFile() async throws {

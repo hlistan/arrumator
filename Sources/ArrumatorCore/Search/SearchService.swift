@@ -131,7 +131,9 @@ public enum FTSQueryBuilder {
 public actor SearchService {
     /// The columns of the full-text index, in its order (`AppDatabase.migrator`): each can be searched on its own as
     /// `column:term`, and `SearchConfig.bm25Weights` weighs them in this order.
-    public static let columns = ["title", "correspondent", "filename", "body"] + LabelKind.allCases.map(\.rawValue)
+    public static let columns = ["filename", "body"] + LabelKind.allCases.map(\.rawValue)
+    /// The column snippets are cut from: the document's text.
+    static let bodyColumn = 1
 
     private let database: AppDatabase
     private let vectors: VectorIndex
@@ -218,7 +220,7 @@ public actor SearchService {
         return try await database.reader.read { db in
             let rows = try Row.fetchAll(db, sql: """
                 SELECT d.*, bm25(document_fts, \(weights)) AS rank,
-                       snippet(document_fts, 3, ?, ?, '…', ?) AS snip
+                       snippet(document_fts, \(Self.bodyColumn), ?, ?, '…', ?) AS snip
                 FROM document_fts JOIN documents d ON d.id = document_fts.rowid
                 WHERE document_fts MATCH ? \(whereSQL)
                 ORDER BY rank LIMIT ?
@@ -280,11 +282,6 @@ public actor SearchService {
             for v in values { _ = args.append(contentsOf: [v]) }
         }
         if let v = f.statuses { inList("status", Set(v.map(\.rawValue))) }
-        if let v = f.docTypes { inList("doc_type", v) }
-        if let v = f.correspondents { inList("correspondent", v) }
-        if let v = f.languages { inList("language", v) }
-        if let v = f.dateFrom { sql += " AND d.doc_date >= ?"; _ = args.append(contentsOf: [v]) }
-        if let v = f.dateTo { sql += " AND d.doc_date <= ?"; _ = args.append(contentsOf: [v]) }
         return (sql, args)
     }
 }

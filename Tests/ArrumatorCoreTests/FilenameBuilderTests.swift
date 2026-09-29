@@ -10,7 +10,7 @@ import Testing
     }
 
     private func decision(named fileName: String?) -> DocumentAnalysis {
-        DocumentAnalysis(title: "Fatura", fileName: fileName)
+        DocumentAnalysis(fileName: fileName)
     }
 
     private let source = SourceFile(path: "/tmp/scan_0001.PDF", originalFilename: "scan_0001.PDF", fileExtension: "PDF",

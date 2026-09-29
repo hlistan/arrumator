@@ -3,36 +3,19 @@ import GRDB
 
 public struct DocumentFilter: Sendable, Hashable {
     public var statuses: Set<DocumentStatus>?
-    public var docTypes: Set<String>?
-    public var correspondents: Set<String>?
-    public var languages: Set<String>?
-    public var dateFrom: String?
-    public var dateTo: String?
 
-    public init(statuses: Set<DocumentStatus>? = nil, docTypes: Set<String>? = nil, correspondents: Set<String>? = nil,
-                languages: Set<String>? = nil, dateFrom: String? = nil, dateTo: String? = nil) {
+    public init(statuses: Set<DocumentStatus>? = nil) {
         self.statuses = statuses
-        self.docTypes = docTypes
-        self.correspondents = correspondents
-        self.languages = languages
-        self.dateFrom = dateFrom
-        self.dateTo = dateTo
     }
 
     func apply(_ request: QueryInterfaceRequest<DocumentRecord>) -> QueryInterfaceRequest<DocumentRecord> {
-        var r = request
-        if let statuses { r = r.filter(statuses.map(\.rawValue).contains(Column("status"))) }
-        if let docTypes { r = r.filter(docTypes.contains(Column("doc_type"))) }
-        if let correspondents { r = r.filter(correspondents.contains(Column("correspondent"))) }
-        if let languages { r = r.filter(languages.contains(Column("language"))) }
-        if let dateFrom { r = r.filter(Column("doc_date") >= dateFrom) }
-        if let dateTo { r = r.filter(Column("doc_date") <= dateTo) }
-        return r
+        guard let statuses else { return request }
+        return request.filter(statuses.map(\.rawValue).contains(Column("status")))
     }
 }
 
 public enum DocumentOrder: String, Sendable, CaseIterable {
-    case recentlyAdded, recentlyFiled, recentlyProcessed, documentDate, title, correspondent
+    case recentlyAdded, recentlyFiled, recentlyProcessed
 
     var terms: [any SQLOrderingTerm] {
         switch self {
@@ -40,9 +23,6 @@ public enum DocumentOrder: String, Sendable, CaseIterable {
         /// When the pipeline finished with it: filed documents by filing time, the rest by arrival.
         case .recentlyProcessed: [(Column("filed_at") ?? Column("added_at")).desc]
         case .recentlyFiled: [Column("filed_at").desc]
-        case .documentDate: [Column("doc_date").desc, Column("added_at").desc]
-        case .title: [Column("title").collating(.localizedCaseInsensitiveCompare)]
-        case .correspondent: [Column("correspondent").collating(.localizedCaseInsensitiveCompare), Column("doc_date").desc]
         }
     }
 }

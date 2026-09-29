@@ -3,14 +3,18 @@ import ArrumatorRuntime
 import Foundation
 import Testing
 
-/// What the app learns belongs to the archive: each keeps its own senders and history, with an index of its own, and
-/// switching archives brings the other archive's with it (docs/storage.md).
+/// Each archive keeps its own documents and history, with an index of its own, and switching archives brings the
+/// other archive's with it (docs/storage.md).
 @Suite struct ArchiveSwitchingTests {
-    @Test func eachArchiveKeepsItsOwnSenders() async throws {
+    private func marks(_ runtime: ArrumatorRuntime) async throws -> [String] {
+        try await runtime.services.history.events(limit: 50, kinds: [.paused]).map(\.summary)
+    }
+
+    @Test func eachArchiveKeepsItsOwnHistory() async throws {
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }
         let first = try await home.open()
-        try await first.senders.saveCorrespondent(Correspondent(canonicalName: "EDP Comercial", origin: .learned))
+        try await first.services.history.record(.paused, summary: "In the first archive")
         try await first.records.flush()
 
         let second = try await first.switchArchive(to: home.folder("Second").path)
@@ -18,17 +22,15 @@ import Testing
         #expect(second.archive == home.folder("Second"))
         #expect(await second.settings.current.archiveURL == home.folder("Second"), "the settings name the archive switched to")
         #expect(second.index != first.index, "each archive has its own index")
-        #expect(try await second.senders.correspondents().isEmpty, "nothing learned in one archive advises another")
-        try await second.senders.saveCorrespondent(Correspondent(canonicalName: "MEO", origin: .learned))
+        #expect(try await marks(second).isEmpty, "one archive's history is not another's")
+        try await second.services.history.record(.paused, summary: "In the second archive")
         try await second.records.flush()
         let layout = second.services.layout(await second.settings.current)
-        #expect(layout.senders.path.hasPrefix(home.folder("Second").path + "/"), "the senders are kept in their archive")
-        #expect(try String(contentsOf: layout.senders, encoding: .utf8).contains("MEO"))
+        #expect(layout.history.path.hasPrefix(home.folder("Second").path + "/"), "the history is kept in its archive")
 
         let back = try await second.switchArchive(to: home.folder("First").path)
         try await back.openArchive()
-        #expect(try await back.senders.correspondents().map(\.canonicalName) == ["EDP Comercial"],
-                "switching back brings the archive's senders back")
+        #expect(try await marks(back) == ["In the first archive"], "switching back brings the archive's history back")
         let switched = try await back.services.history.events(limit: 20, kinds: [.settingsChanged]).map(\.summary)
         #expect(switched.contains("Switched to the archive at \(home.folder("Second").path)"), "the switch is in the archive's history")
 
@@ -36,19 +38,19 @@ import Testing
         #expect(again.archive == home.folder("First"), "the app opens the archive last switched to")
     }
 
-    @Test func theSendersLiveInTheArchiveSoALostIndexGetsThemBack() async throws {
+    @Test func theHistoryLivesInTheArchiveSoALostIndexGetsItBack() async throws {
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }
         do {
             let runtime = try await home.open()
-            try await runtime.senders.saveCorrespondent(Correspondent(canonicalName: "EDP Comercial", aliases: ["EDP"], origin: .learned))
+            try await runtime.services.history.record(.paused, summary: "Kept in the archive")
             try await runtime.records.flush()
         }
         try FileManager.default.removeItem(at: home.paths.indexesDirectory)
 
         let rebuilt = try await home.open()
         #expect(rebuilt.opening == .created)
-        #expect(try await rebuilt.senders.correspondents().map(\.aliases) == [["EDP"]])
+        #expect(try await marks(rebuilt) == ["Kept in the archive"])
     }
 
     @Test func theIndexOfEarlierVersionsBecomesTheArchivesOwn() async throws {
@@ -57,12 +59,12 @@ import Testing
         let single = home.paths.supportDirectory.appendingPathComponent("arrumator.sqlite")
         do {
             let (database, _) = try AppDatabase.open(at: single, setAsideSuffix: "unreadable") { false }
-            try await SenderStore(database: database).saveCorrespondent(Correspondent(canonicalName: "Written before", origin: .learned))
+            try await HistoryStore(database: database).record(.paused, summary: "Written before")
         }
 
         let runtime = try await home.open()
         #expect(runtime.opening == .existing, "the index was moved, not rebuilt")
-        #expect(try await runtime.senders.correspondents().map(\.canonicalName) == ["Written before"])
+        #expect(try await marks(runtime) == ["Written before"])
         #expect(!FileManager.default.fileExists(atPath: single.path))
         #expect(FileManager.default.fileExists(atPath: runtime.index.path))
     }

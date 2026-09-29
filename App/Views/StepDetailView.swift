@@ -56,7 +56,6 @@ struct StepDetail: View {
             case "read": readingQuality(insights)
             case "analysed": labelling(insights)
             case "filed": corrections(insights)
-            case "learned": senders
             default: EmptyView()
             }
         }
@@ -94,11 +93,10 @@ struct StepDetail: View {
             Spacer()
         }
         if !insights.labelsByKind.isEmpty {
-            HStack(spacing: 18) {
-                ForEach(LabelKind.allCases, id: \.self) { kind in
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: Style.figureMinWidth), alignment: .leading)], alignment: .leading) {
+                ForEach(LabelKind.allCases.filter { insights.labelsByKind[$0.rawValue] != nil }, id: \.self) { kind in
                     figure(Wording.labelKind(kind), "\(insights.labelsByKind[kind.rawValue] ?? 0)")
                 }
-                Spacer()
             }
         }
     }
@@ -112,13 +110,6 @@ struct StepDetail: View {
             figure("Confirmed by you", "\(insights.confirmed)")
             Spacer()
         }
-    }
-
-    // MARK: Learned
-
-    @ViewBuilder private var senders: some View {
-        Divider()
-        Button("Open Senders") { model.go(.senders) }.buttonStyle(.link)
     }
 
     // MARK: Pieces

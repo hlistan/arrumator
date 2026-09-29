@@ -55,9 +55,8 @@ struct Ingest: AsyncParsableCommand {
         return """
         \(content.source.originalFilename)
           content:   \(content.kind.rawValue), \(content.textOrigin.rawValue), \(content.text.count) chars, language \(content.language.primary)
-          labels:    \(Terminal.labels(outcome.labels))
+        \(Terminal.labelTable(outcome.labels, indent: 2))
           file name: \(a.fileName ?? "(keeps its name)")
-          document:  \(a.documentType.rawValue) · \(a.correspondent ?? "—") · \(a.documentDate ?? "—") · \(a.title)
           read by:   \(a.model ?? "—")\(a.problems.isEmpty ? "" : "; waits for you: " + a.problems.joined(separator: "; "))
           stages:    \(steps.map { "\($0.stage.rawValue) \(Int($0.durationMs))ms" }.joined(separator: ", "))
         """
@@ -134,21 +133,41 @@ struct Search: AsyncParsableCommand {
 
 struct Labels: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
-        abstract: "Show a document's labels (whom and what it concerns, its jurisdictions and languages), or label every document that has none.")
+        abstract: "Show a document's labels, correct them, or label every document that has none.")
     @OptionGroup var options: GlobalOptions
-    @Flag(help: "Read every document that has no labels yet with the model, such as those filed before documents were labelled.")
+    @Option(help: "Give the document this label, as kind=value, such as sender=EDP or topic=electricity (repeatable).")
+    var add: [String] = []
+    @Option(help: "Take this label, as kind=value, off the document (repeatable).") var remove: [String] = []
+    @Flag(help: "Read every document that has no labels yet with the model, such as one the model gave no answer for.")
     var unlabelled = false
     @Argument(help: "Document id or file path.") var document: String?
 
     func validate() throws {
         guard (document == nil) == unlabelled else { throw ValidationError("Name one document, or pass --unlabelled alone.") }
+        if unlabelled && !(add.isEmpty && remove.isEmpty) { throw ValidationError("--add and --remove apply to one document.") }
+        _ = try (add + remove).map(Self.label)
+    }
+
+    /// `kind=value` as a label.
+    static func label(_ text: String) throws -> DocumentLabel {
+        let parts = text.split(separator: "=", maxSplits: 1).map(String.init)
+        guard parts.count == 2, let kind = LabelKind(rawValue: parts[0].trimmingCharacters(in: .whitespaces)) else {
+            throw ValidationError("“\(text)” is no kind=value; the kinds are " + LabelKind.allCases.map(\.rawValue).joined(separator: ", "))
+        }
+        return DocumentLabel(kind: kind, value: parts[1])
     }
 
     func run() async throws {
         let runtime = try await options.runtime()
         var ids: [Int64]
         if let document {
-            ids = [try await resolveDocument(document, runtime: runtime)]
+            let id = try await resolveDocument(document, runtime: runtime)
+            ids = [id]
+            if !(add.isEmpty && remove.isEmpty) {
+                let removed = Set(try remove.map(Self.label).compactMap { DocumentLabel.normalized($0.value, kind: $0.kind) })
+                let current = try await runtime.services.documents.document(id: id)?.labels ?? []
+                try await runtime.review.edit(id, fileName: nil, labels: current.filter { !removed.contains($0) } + (try add.map(Self.label)))
+            }
         } else {
             _ = await runtime.lifecycle.ensureRunning()
             ids = try await runtime.services.documents.unlabelled()
@@ -171,10 +190,7 @@ struct Labels: AsyncParsableCommand {
                 guard let labels = row.labels else {
                     return "\(row.path)\nNot labelled yet; `arrumatorcli review retry \(row.id)` reads it again."
                 }
-                return ([row.path] + LabelKind.allCases.map { kind in
-                    let values = labels.filter { $0.kind == kind }.map(Terminal.label)
-                    return "  \(kind.rawValue.padding(toLength: 13, withPad: " ", startingAt: 0))\(values.isEmpty ? "—" : values.joined(separator: " · "))"
-                }).joined(separator: "\n")
+                return row.path + "\n" + Terminal.labelTable(labels, indent: 2)
             }
         }
     }

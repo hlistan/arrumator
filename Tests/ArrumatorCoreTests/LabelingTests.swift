@@ -18,12 +18,13 @@ import Testing
             return outcome
         }
 
-        func embedding(for content: ExtractedContent, sender: String?, settings: AppSettings, config: PipelineConfig,
+        func embedding(for content: ExtractedContent, senders: [String], settings: AppSettings, config: PipelineConfig,
                        trace: TraceContext) async throws -> (vector: [Float], model: String)? { nil }
     }
 
-    static let meoContract = [DocumentLabel(kind: .subject, value: "João Silva"), DocumentLabel(kind: .object, value: "mobile line 912345678"),
-                              DocumentLabel(kind: .jurisdiction, value: "Spain"), DocumentLabel(kind: .language, value: "es")]
+    static let meoContract = [DocumentLabel(kind: .sender, value: "MEO"), DocumentLabel(kind: .party, value: "João Silva"),
+                              DocumentLabel(kind: .object, value: "mobile line 912345678"), DocumentLabel(kind: .jurisdiction, value: "Spain"),
+                              DocumentLabel(kind: .language, value: "es")]
 
     @Test func everyDocumentIsReadAndLabelledBeforeItIsFiled() async throws {
         let analyzer = StubAnalyzer()
@@ -40,7 +41,7 @@ import Testing
                     "a document is read before it is filed: \(kinds)")
         }
         let event = try #require(try await h.services.history.events(limit: 20, kinds: [.analysed]).first)
-        #expect(event.summary == "Fatura eletricidade julho · Maria Exemplo · electricity supply point PT0002000012345678 · Portugal · pt")
+        #expect(event.summary == StubAnalyzer.edpBill.map(\.value).joined(separator: " · "), "the history says what it was labelled with")
     }
 
     @Test func aDocumentShowingNothingSignificantIsLabelledWithNothing() async throws {
@@ -87,12 +88,15 @@ import Testing
         func found(_ query: String) async throws -> [Int64] { try await search.fullText(SearchQuery(text: query)).hits.map(\.id) }
 
         #expect(try await found("jurisdiction:portugal") == [byName["edp.txt"]], "a label is found under its kind")
-        #expect(try await found("subject:\"joão silva\"") == [byName["meo.txt"]], "a whole name as a phrase, accents or not")
+        #expect(try await found("party:\"joão silva\"") == [byName["meo.txt"]], "a whole name as a phrase, accents or not")
+        #expect(try await found("sender:edp") == [byName["edp.txt"]], "the sender is a label like any other")
+        #expect(try await found("amount:54.21") == [byName["edp.txt"]])
+        #expect(try await found("deadline:2026-07") == [byName["edp.txt"]], "dates are found by their start")
         #expect(try await found("object:912345678") == [byName["meo.txt"]])
         #expect(try await found("language:portuguese") == [byName["edp.txt"]], "a language by its English name")
         #expect(try await found("language:es") == [byName["meo.txt"]], "and by its code")
         #expect(try await found("spain") == [byName["meo.txt"]], "a label is found without naming its kind too")
-        #expect(try await found("subject:portugal").isEmpty, "a kind matches only labels of that kind")
+        #expect(try await found("party:portugal").isEmpty, "a kind matches only labels of that kind")
     }
 
     @Test func theFunnelShowsWhereDocumentsWereRead() async throws {

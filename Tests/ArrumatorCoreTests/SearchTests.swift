@@ -10,19 +10,16 @@ import Testing
         func embed(_ texts: [String]) async throws -> [[Float]] { texts.map { MockOllama.hashEmbedding($0, dimension: 256) } }
     }
 
-    func insert(_ db: AppDatabase, title: String, body: String, correspondent: String,
-                labels: [DocumentLabel] = []) async throws -> Int64 {
-        var record = DocumentRecord.arrived(path: "/tmp/\(UUID().uuidString).pdf", sha256: UUID().uuidString, size: 1,
+    func insert(_ db: AppDatabase, title: String, body: String, correspondent: String) async throws -> Int64 {
+        let labels = [DocumentLabel(kind: .sender, value: correspondent)]
+        var record = DocumentRecord.arrived(path: "/tmp/\(title).pdf", sha256: UUID().uuidString, size: 1,
                                             uttype: "com.adobe.pdf", inode: nil, modified: nil)
-        record.originalFilename = "\(title).pdf"
-        record.correspondent = correspondent
-        record.title = title
+        record.labelsJson = JSON.string(labels)
         record.status = .filed
         let doc = try await DocumentStore(database: db).save(record)
         let id = try #require(doc.id)
-        try await IndexStore(database: db).upsertText(docID: id, title: title, correspondent: correspondent, filename: doc.filename,
-                                                      body: body, summary: nil, metadata: [:], extractorVersion: "t",
-                                                      labels: labels)
+        try await IndexStore(database: db).upsertText(docID: id, filename: doc.filename, body: body, summary: nil, metadata: [:],
+                                                      extractorVersion: "t", labels: labels)
         return id
     }
 
@@ -39,7 +36,7 @@ import Testing
         let ru = try await search.fullText(SearchQuery(text: "выпис"))
         #expect(ru.hits.map(\.id) == [sber])
         #expect(ru.hits.first?.snippet.contains(SearchHighlight.open) == true)
-        let field = try await search.fullText(SearchQuery(text: "correspondent:edp"))
+        let field = try await search.fullText(SearchQuery(text: "sender:edp"))
         #expect(field.hits.map(\.id) == [edp])
     }
 
@@ -113,13 +110,13 @@ import Testing
     @Test func queryBuilderEscapes() {
         #expect(FTSQueryBuilder.build("  ") == nil)
         #expect(FTSQueryBuilder.build("a\"b") != nil)
-        #expect(FTSQueryBuilder.build("title:fatura edp")?.contains("title :") == true)
+        #expect(FTSQueryBuilder.build("filename:fatura edp")?.contains("filename :") == true)
         #expect(FTSQueryBuilder.build("\"nota de liquidação\"") == "\"nota de liquidação\"")
     }
 
     @Test func aLabelKindIsAFieldAndAFieldTakesAPhrase() {
         #expect(FTSQueryBuilder.build("jurisdiction:\"Costa Rica\"") == "jurisdiction : \"Costa Rica\"")
-        #expect(FTSQueryBuilder.build("Subject:silva") == "subject : \"silva\" *", "a field is named in any case; the last word is a prefix")
+        #expect(FTSQueryBuilder.build("Party:silva") == "party : \"silva\" *", "a field is named in any case; the last word is a prefix")
         #expect(FTSQueryBuilder.build("before\"a phrase\"") == "\"before\" \"a phrase\"", "a word before a phrase is a term of its own")
         #expect(FTSQueryBuilder.build("owner:\"x y\"") == "\"owner\" \"x y\"", "what is no column is a word")
         #expect(FTSQueryBuilder.build("object:\"\"") == nil, "an empty phrase is nothing to search for")

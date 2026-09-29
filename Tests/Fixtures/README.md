@@ -34,7 +34,7 @@ negative/ 90–94   edge cases: a self-made spreadsheet, a copy, a blank scan, a
 Status is what the app should make of the file (`expected.status`): file it, have it wait for you (`needsReview`), or
 take it for a copy (`duplicate`).
 
-| File | Kind | Status | Type | Correspondent | Date | What it exercises |
+| File | Kind | Status | Type | Sender | Date | What it exercises |
 |---|---|---|---|---|---|---|
 | `pt/01-edp-fatura-2026-07.pdf` | pdf-text | filed | invoice | EDP | 2026-08-05 | Baseline invoice; billing-period and due-date distractors; the CPE "PT 0002 …" looks like an IBAN |
 | `pt/02-edp-fatura-2026-08-scan.pdf` | pdf-scan | filed | invoice | EDP | 2026-09-05 | Two-page image-only PDF (OCR path); its PDF creation date is the scan day, which is a distractor |
@@ -44,7 +44,7 @@ take it for a copy (`duplicate`).
 | `pt/06-ss-comprovativo-niss.pdf` | pdf-text | filed | attestation | Segurança Social | 2024-03-12 | Date-of-birth distractor |
 | `pt/07-aima-titulo-residencia-frente.jpg` | image-photo | filed | id-document | AIMA | 2025-02-01 | Card photo; EXIF date ≠ issue date; birth and expiry distractors |
 | `pt/08-millennium-extrato-2026-08.pdf` | pdf-text | filed | statement | Millennium BCP | 2026-08-31 | IBAN as stable key; debits match the EDP, MEO and rent documents |
-| `pt/09-contrato-arrendamento.docx` | docx | filed | contract | João Exemplo | 2025-08-25 | A person (the landlord) as correspondent; mentions the tax authority; start-date distractor |
+| `pt/09-contrato-arrendamento.docx` | docx | filed | contract | João Exemplo | 2025-08-25 | A person (the landlord) as sender; mentions the tax authority; start-date distractor |
 | `pt/10-recibo-renda-2026-09.pdf` | pdf-text | filed | receipt | João Exemplo | 2026-09-05 | Portal das Finanças layout, but it is the landlord's rent receipt, not a tax document |
 | `pt/11-unilabs-analises-2026-06.pdf` | pdf-text | filed | medical-report | Unilabs | 2026-06-18 | SNS user number (9 digits, not a NIF); collection-date distractor |
 | `pt/12-multicare-apolice.pdf` | pdf-text | filed | policy | Multicare | 2025-12-15 | Policy issue date vs start date |
@@ -58,8 +58,8 @@ take it for a copy (`duplicate`).
 | `ru/23-sber-vypiska-2026-07.pdf` | pdf-text | filed | statement | Sberbank | 2026-07-31 | 20-digit account with a valid control key for its БИК |
 | `ru/24-snils.jpg` | image-photo | filed | id-document | SFR | 2015-06-14 | Card photo in Cyrillic; issuer is implicit (ПФР, now СФР) |
 | `ru/25-vypisnoy-epikriz.pdf` | pdf-scan | filed | medical-report | ГКБ № 1 | 2025-11-03 | Serif Cyrillic scan; admission-date distractor |
-| `ru/26-osago-polis.pdf` | pdf-text | filed | policy | Ingosstrakh | 2026-05-14 | Motor insurance policy; the insurer, not the car, is the correspondent |
-| `ru/27-dogovor-kupli-prodazhi.docx` | docx | filed | contract | Пётр Образцов | 2018-11-20 | A private seller as correspondent; old document |
+| `ru/26-osago-polis.pdf` | pdf-text | filed | policy | Ingosstrakh | 2026-05-14 | Motor insurance policy; the insurer, not the car, is the sender |
+| `ru/27-dogovor-kupli-prodazhi.docx` | docx | filed | contract | Пётр Образцов | 2018-11-20 | A private seller as sender; old document |
 | `ru/28-spravka-2ndfl-2025.pdf` | pdf-text | filed | payslip | ООО Ромашка | 2026-02-10 | Annual income statement; type attestation also accepted |
 | `ru/29-egrn-vypiska.pdf` | pdf-text | filed | certificate | Rosreestr | 2018-12-03 | "Выписка" here is a certificate, not a bank statement |
 | `ru/30-rostelecom-schet-koi8r.txt` | text | filed | invoice | Rostelecom | 2026-08-05 | KOI8-R (not valid UTF-8); 12-digit account that fails the ИНН check |
@@ -96,10 +96,10 @@ take it for a copy (`duplicate`).
 | `lang` | `pt`, `ru`, `en`, or `und` (no readable text) |
 | `kind` | `pdf-text`, `pdf-scan`, `image-photo`, `image-screenshot`, `docx`, `xlsx`, `text`, `eml` (the generator has no `pptx` fixture yet) |
 | `expected.status` | `filed` for an ordinary document; `needsReview` for one the app cannot read (blank, encrypted, damaged); `duplicate` for the byte-identical copy |
-| `expected.doc_type` | Value of the app's `document_type` vocabulary; `null` when the file is not classified (duplicate, unreadable) |
-| `expected.correspondent` | Canonical name from `correspondents.yaml` when the organisation is listed there, otherwise the name as the document writes it |
-| `expected.date` | Issue date (never a due, period or birth date) as `YYYY-MM-DD` |
-| `expected.title_contains` | Words the generated title should contain, matched ignoring case and accents. All of them also appear in the document itself |
+| `expected.doc_type` | The expected `type` label, from the app's `DocumentType` vocabulary; `null` when the file is not read (duplicate, unreadable) |
+| `expected.correspondent` | The expected `sender` label: the canonical name from `correspondents.yaml` when the organisation is listed there, otherwise the name as the document writes it |
+| `expected.date` | The expected `date` label: the issue date (never a due, period or birth date) as `YYYY-MM-DD` |
+| `expected.title_contains` | Words the generated file name should contain, matched ignoring case and accents. All of them also appear in the document itself |
 | `expected.identifiers` | Every checksum-valid stable key in the document, as `kind:value` tokens (`ptNIF:…`, `ruINN:…`, `iban:…` without spaces). The list is complete: the generator and `--verify` fail if the text contains a 9-digit mod-11-valid number or a 10/12-digit checksum-valid ИНН that is not listed |
 | `expected.warnings` | Extraction warnings the app should raise (`encrypted`, `corrupted`, `encodingGuessed`, `emptyText`); present only when non-empty |
 | `accept_also` | Alternative answers that still count as a pass, per field (`doc_type`, `correspondent`) |
@@ -160,10 +160,9 @@ corpus again and commit it if `--verify` reports differences.
   - The invalid NIF test value is `123456780`. The often-quoted `123456789` actually passes mod-11.
   - The passport number, MRZ and SPECIMEN overprint are fabricated.
 - **Organisations appear under their real brand names** (EDP, MEO, Autoridade Tributária, AIMA, Сбербанк, ФНС,
-  Ингосстрах, Hetzner, JetBrains, Revolut, TAP…), because recognising the correspondent is part of what is
+  Ингосстрах, Hetzner, JetBrains, Revolut, TAP…), because reading the sender is part of what is
   tested. Public identifiers such as a bank's BIC or a website may appear. Every tax number, account, address and
-  amount attributed to them is invented. The AIMA e-mail uses the sender domain `aima.gov.pt`, so that
-  domain-based correspondent resolution can be tested.
+  amount attributed to them is invented. The AIMA e-mail uses the sender domain `aima.gov.pt`.
 - Every PDF says it is synthetic in its Creator entry ("Arrumator FixtureGen (synthetic test document)"). Every
   photo says so in the TIFF Software tag.
 - Real documents never belong here. Use `Tests/Fixtures/private/`, which is ignored by git.

@@ -9,8 +9,8 @@
 
 Drop any file into your Incoming folder: a PDF, a scan, a photo, a screenshot, a Word, Excel or PowerPoint file, an
 e-mail, plain text. Arrumator reads it, labels it with what it is about, gives it a name that says what it is, files it
-into your archive and indexes it for search. There are no folders to keep in order: you find a document by its labels,
-its sender, its words or its meaning. Documents in English, Russian and Portuguese are supported.
+into your archive and indexes it for search. There are no folders to keep in order: a document is described by its labels
+alone, and you find it by them, its words or its meaning. Documents in English, Russian and Portuguese are supported.
 
 - [Features](#features)
 - [Privacy](#privacy)
@@ -25,19 +25,18 @@ its sender, its words or its meaning. Documents in English, Russian and Portugue
 
 - **Reads anything**: PDF text, Apple Vision OCR for scans and photos, Office files, e-mail, archives, and a local
   vision model for photos without text. It finds the language, dates, and identifiers such as IBANs and tax numbers.
-- **Labels every document by what it is about.** The local model picks out whom and what each document concerns,
-  the jurisdictions it falls under and the languages it is written in, and keeps them as labels you can search by
-  (`jurisdiction:portugal`, `subject:"maria silva"`). It is read once, with a prompt made for this.
+- **Describes every document by labels.** The local model reads each document once, with a prompt made for this,
+  and picks out who sent it, what type it is, its date, whom and what it concerns, its topics, references, period,
+  deadlines, amounts, jurisdictions and languages: twelve kinds of label, drawn from archival metadata standards.
+  Search by any of them (`sender:edp`, `deadline:2026-07`, `jurisdiction:portugal`) and correct any of them.
 - **Names every file** from its date, its sender and what it is, such as `2026-07-05 EDP Comercial - Fatura
   eletricidade julho.pdf`, and files it at the top of the archive. The app makes no folders.
-- **Recognises senders** by their identifiers, not their spelling: a tax number or IBAN seen only on one sender's
-  documents names the next one alike. A name you correct is remembered, and anything learned can be forgotten.
 - **Asks when it cannot read a document.** A file the model gave no answer for, or that is encrypted, damaged or
   blank, waits in Needs You, in the archive, instead of being guessed into shape.
 - **Everything can be audited**: the prompts, the model's answers, timings and a full history, with Statistics
   showing where documents stop and why.
-- **Nothing is lost.** No code path deletes a document. Every move is recorded and can be undone. What the app learned
-  lives in Markdown files inside your archive, and its index can be rebuilt from them.
+- **Nothing is lost.** No code path deletes a document. Every move is recorded and can be undone. Every document's labels
+  live in Markdown files inside your archive, and its index can be rebuilt from them.
 - **A command line tool**, `arrumatorcli`, does everything the app does, with `--json` output for scripts.
 
 ## Privacy
@@ -90,21 +89,21 @@ together; [docs/cli.md](docs/cli.md) explains how to use it. To build from sourc
 
 1. Put a document in `~/Documents/Incoming` (Settings › General changes both folders).
 2. Arrumator reads it, names it and files it at the top of `~/Documents/Archive`, and shows it in **Processed**.
-3. Open the document's row to see its labels and how it was read. Rename it or fix its sender, date or type on its
-   card if it's wrong; a sender you correct is remembered.
+3. Open the document's row to see its labels and how it was read. Rename it, or take off or add a label, on its card
+   if something is wrong.
 4. Documents it could not read wait in **Needs You**. Confirm them as they are, or have them read again.
-5. Search by any word, or by a kind of label: `jurisdiction:portugal`, `subject:"maria silva"`, `language:russian`.
+5. Search by any word, or by a kind of label: `sender:edp`, `party:"maria silva"`, `type:invoice`, `language:russian`.
 
 ## Documentation
 
 | Document | Read it for |
 |---|---|
-| [How Arrumator works](docs/how-it-works.md) | How a document is read, labelled and filed, and how senders are learned. |
+| [How Arrumator works](docs/how-it-works.md) | How a document is read, labelled and filed, and the kinds of label. |
 | [Using Arrumator](docs/using-arrumator.md) | The app's pages, settings and environment variables, the audit trail, where your data lives. |
 | [Command line](docs/cli.md) | Every `arrumatorcli` command and option. |
 | [Storage](docs/storage.md) | The archive's record files, the index, and what a rebuild keeps. |
 | [Evaluation](docs/evaluation.md) | The measurements behind the pipeline and the model profiles. |
-| [Sources](docs/organizing-principles-sources.md) | The research behind labels and sender recognition. |
+| [Sources](docs/organizing-principles-sources.md) | The research behind the kinds of label and how the model is asked. |
 | [Continuous integration and releases](docs/releasing.md) | How changes are checked and released, and how to sign releases. |
 
 ## Contributing

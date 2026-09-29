@@ -35,8 +35,7 @@ public actor ArchiveReconciler {
         doc.inode = FileFingerprint.inode(of: URL(fileURLWithPath: newPath))
         if doc.status == .missing { doc.status = .filed }
         doc = try await services.documents.save(doc)
-        try await services.index.updateHeader(docID: docID, title: doc.title ?? "", correspondent: doc.correspondent ?? "",
-                                              filename: doc.filename)
+        try await services.index.updateFilename(docID: docID, filename: doc.filename)
         let sameDirectory = (from as NSString).deletingLastPathComponent == (newPath as NSString).deletingLastPathComponent
         try await services.history.record(sameDirectory ? .userRenamed : .userMoved, actor: .user, doc: docID,
                                           summary: sameDirectory ? "\(oldName) → \(doc.filename)" : "\(oldName) moved to \(newPath)",

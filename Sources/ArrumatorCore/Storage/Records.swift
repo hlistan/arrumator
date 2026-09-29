@@ -39,13 +39,6 @@ public struct DocumentRecord: ArrumatorRecord, Identifiable, Hashable {
     public var size: Int64
     public var uttype: String
     public var inode: Int64?
-    public var correspondentId: Int64?
-    public var correspondent: String?
-    public var docType: String?
-    public var docDate: String?
-    public var periodYear: Int?
-    public var title: String?
-    public var language: String?
     public var pageCount: Int?
     public var status: DocumentStatus
     /// What the model read the document as (`DocumentAnalysis`) as JSON, with the user's corrections; NULL before.
@@ -69,10 +62,8 @@ public struct DocumentRecord: ArrumatorRecord, Identifiable, Hashable {
     public static func arrived(path: String, sha256: String, size: Int64, uttype: String, inode: Int64?, modified: Date?,
                                now: Date = Date()) -> DocumentRecord {
         DocumentRecord(id: nil, uid: UUID().uuidString, path: path, originalFilename: (path as NSString).lastPathComponent,
-                       sha256: sha256, size: size, uttype: uttype, inode: inode, correspondentId: nil,
-                       correspondent: nil, docType: nil, docDate: nil, periodYear: nil, title: nil, language: nil, pageCount: nil,
-                       status: .processing, analysisJson: nil, contentJson: nil, labelsJson: nil, duplicateOf: nil, lastTraceId: nil,
-                       addedAt: now, filedAt: nil,
+                       sha256: sha256, size: size, uttype: uttype, inode: inode, pageCount: nil, status: .processing, analysisJson: nil,
+                       contentJson: nil, labelsJson: nil, duplicateOf: nil, lastTraceId: nil, addedAt: now, filedAt: nil,
                        extractedAt: nil, embeddedAt: nil, fileMtime: modified, createdAt: now, updatedAt: now)
     }
 
@@ -81,23 +72,8 @@ public struct DocumentRecord: ArrumatorRecord, Identifiable, Hashable {
     public var analysis: DocumentAnalysis? { JSON.decode(DocumentAnalysis.self, from: analysisJson) }
     /// Nil until the model has labelled the document; empty when it found nothing worth a label.
     public var labels: [DocumentLabel]? { JSON.decode([DocumentLabel].self, from: labelsJson) }
-}
-
-public struct DocumentTextRecord: ArrumatorRecord, PersistableRecord, Hashable {
-    public static let databaseTableName = "document_text"
-    public var docId: Int64
-    public var title: String
-    public var correspondent: String
-    public var filename: String
-    public var body: String
-    public var summary: String?
-    public var metadataJson: String?
-    public var extractorVersion: String?
-    /// The document's labels of each `LabelKind`, as `DocumentLabel.searchText` writes them.
-    public var subject: String
-    public var object: String
-    public var jurisdiction: String
-    public var language: String
+    /// The values of the document's labels of `kind`.
+    public func labels(_ kind: LabelKind) -> [String] { labels?.values(kind) ?? [] }
 }
 
 public struct EmbeddingRecord: ArrumatorRecord {
@@ -115,10 +91,9 @@ public struct EmbeddingRecord: ArrumatorRecord {
 
 public enum EventKind: String, Sendable, Codable, CaseIterable {
     case arrived, extracted, analysed, filed, needsReview, duplicate, error, retry, failed
-    /// The user changed a document's name, sender, date or type.
+    /// The user changed a document's name or labels.
     case corrected
     case undone, markedCorrect, userMoved, userRenamed, missing, adopted
-    case learned, forgot
     case settingsChanged, ollamaState, appStarted, paused, resumed
     /// The index was rebuilt from the archive's record files.
     case rebuilt
@@ -140,46 +115,6 @@ public struct EventRecord: ArrumatorRecord, Identifiable, Hashable {
     public var summary: String
     public var payloadJson: String
     public mutating func didInsert(_ inserted: InsertionSuccess) { id = inserted.rowID }
-}
-
-public struct CorrespondentRecord: ArrumatorRecord, Identifiable, Hashable {
-    public static let databaseTableName = "correspondents"
-    public var id: Int64?
-    public var canonicalName: String
-    public var country: String?
-    public var aliasesJson: String
-    public var stableKeysJson: String
-    public var emailDomainsJson: String
-    public var webDomainsJson: String
-    public var filedCount: Int
-    public var origin: String
-    public var createdAt: Date
-    public var updatedAt: Date
-    public mutating func didInsert(_ inserted: InsertionSuccess) { id = inserted.rowID }
-
-    public var correspondent: Correspondent {
-        Correspondent(id: id ?? 0, canonicalName: canonicalName, country: country,
-                      aliases: JSON.decode([String].self, from: aliasesJson) ?? [],
-                      stableKeys: JSON.decode([String].self, from: stableKeysJson) ?? [],
-                      emailDomains: JSON.decode([String].self, from: emailDomainsJson) ?? [],
-                      webDomains: JSON.decode([String].self, from: webDomainsJson) ?? [],
-                      filedCount: filedCount,
-                      origin: CorrespondentOrigin(rawValue: origin) ?? .learned)
-    }
-
-    public init(_ c: Correspondent, now: Date = Date()) {
-        id = c.id == 0 ? nil : c.id
-        canonicalName = c.canonicalName
-        country = c.country
-        aliasesJson = JSON.string(c.aliases)
-        stableKeysJson = JSON.string(c.stableKeys)
-        emailDomainsJson = JSON.string(c.emailDomains)
-        webDomainsJson = JSON.string(c.webDomains)
-        filedCount = c.filedCount
-        origin = c.origin.rawValue
-        createdAt = now
-        updatedAt = now
-    }
 }
 
 public enum JobState: String, Sendable, Codable, CaseIterable {

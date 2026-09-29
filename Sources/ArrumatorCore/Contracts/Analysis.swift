@@ -1,6 +1,6 @@
 import Foundation
 
-/// Controlled vocabulary for the *form* of a document (paperless-ngx style). What it is about lives in its labels.
+/// Controlled vocabulary for the *form* of a document (paperless-ngx style), the values of its `type` label.
 public enum DocumentType: String, Sendable, Codable, CaseIterable {
     case idDocument = "id-document"
     case certificate, attestation, contract, invoice, receipt, statement
@@ -17,46 +17,20 @@ public enum DocumentType: String, Sendable, Codable, CaseIterable {
         default: rawValue.split(separator: "-").map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined(separator: " ")
         }
     }
-
-    public init(lenient raw: String) {
-        let normalized = raw.lowercased().trimmingCharacters(in: .whitespaces)
-            .replacingOccurrences(of: "_", with: "-").replacingOccurrences(of: " ", with: "-")
-        self = DocumentType(rawValue: normalized) ?? .other
-    }
 }
 
-/// What a document is and what it is to be called, as the local model read it; its labels are kept beside it.
-/// Produced by the analyzer, stored with the document and its trace, and corrected by the user on its card.
+/// How the local model read a document, besides the labels it gave it: the name its file is to have, which model
+/// read it, and why it waits for the user, if it does. Stored with the document and its trace.
 public struct DocumentAnalysis: Sendable, Codable, Hashable {
-    public var correspondent: String?
-    public var correspondentID: Int64?
-    public var documentType: DocumentType
-    /// `YYYY-MM-DD`, `YYYY-MM` or `YYYY`.
-    public var documentDate: String?
-    public var dateSource: DateSource
-    /// Fiscal or reporting year when it differs from the document date (tax returns, annual statements).
-    public var periodYear: Int?
-    public var title: String
     /// The file name the model chose, without extension; nil when it gave none, and the file keeps its own.
     public var fileName: String?
-    public var language: String
     /// The model that answered; nil when none did.
     public var model: String?
     /// Why the document waits for the user; empty when it does not.
     public var problems: [String]
 
-    public init(correspondent: String? = nil, correspondentID: Int64? = nil, documentType: DocumentType = .other,
-                documentDate: String? = nil, dateSource: DateSource = .none, periodYear: Int? = nil, title: String,
-                fileName: String? = nil, language: String = "und", model: String? = nil, problems: [String] = []) {
-        self.correspondent = correspondent
-        self.correspondentID = correspondentID
-        self.documentType = documentType
-        self.documentDate = documentDate
-        self.dateSource = dateSource
-        self.periodYear = periodYear
-        self.title = title
+    public init(fileName: String? = nil, model: String? = nil, problems: [String] = []) {
         self.fileName = fileName
-        self.language = language
         self.model = model
         self.problems = problems
     }
