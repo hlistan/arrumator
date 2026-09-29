@@ -39,7 +39,7 @@ struct PDFExtractionTests {
         #expect(stages == [.extract, .entities])
     }
 
-    @Test("Scanned Russian PDF is OCRed and key words are recovered")
+    @Test("Scanned Russian PDF is OCRed and key words are recovered", .enabled(VisionOCR.unavailable) { await VisionOCR.available.value })
     func scannedRussian() async throws {
         let scratch = try Scratch()
         let url = try scratch.writeImagePDF("scan-ru.pdf", pages: [[
@@ -50,7 +50,7 @@ struct PDFExtractionTests {
         let content = try await registry.extract(url, sha256: "x", context: try TestConfig.context(),
                                                  trace: TraceContext(traceID: 7, sink: sink))
         #expect(content.kind == .pdfScanned)
-        #expect(content.textOrigin == .ocr)
+        #expect(content.textOrigin == .ocr, "a scanned page is read by OCR (\(content.warningSummary))")
         #expect(content.pagesOCRed == [1])
         #expect(content.text.contains("Сбербанк"))
         #expect(content.text.contains("оплату"))
@@ -67,7 +67,7 @@ struct PDFExtractionTests {
         #expect(ocrStep.input?.contains("fewCharacters") == true)
     }
 
-    @Test("Scanned Portuguese PDF is OCRed and key words are recovered")
+    @Test("Scanned Portuguese PDF is OCRed and key words are recovered", .enabled(VisionOCR.unavailable) { await VisionOCR.available.value })
     func scannedPortuguese() async throws {
         let scratch = try Scratch()
         let url = try scratch.writeImagePDF("scan-pt.pdf", pages: [[
@@ -76,14 +76,14 @@ struct PDFExtractionTests {
         ]])
         let content = try await registry.extract(url, sha256: "x", context: try TestConfig.context(), trace: .disabled)
         #expect(content.kind == .pdfScanned)
-        #expect(content.text.contains("Tributária"))
+        #expect(content.text.contains("Tributária"), "OCR reads the scanned page (\(content.warningSummary))")
         #expect(content.text.contains("preferência"))
         #expect(content.language.primary == "pt")
         #expect(content.entities.documentDate?.date == "2026-05-20")
         #expect(content.entities.stableKeys.contains(StableKey(kind: .ptNIF, value: "999999990")))
     }
 
-    @Test("Mixed PDF: text page plus scanned page")
+    @Test("Mixed PDF: text page plus scanned page", .enabled(VisionOCR.unavailable) { await VisionOCR.available.value })
     func mixed() async throws {
         let scratch = try Scratch()
         let text = try scratch.writeTextPDF("text.pdf", pages: [[
@@ -94,7 +94,7 @@ struct PDFExtractionTests {
         let merged = try #require(PDFMerge.merge([text, scan], into: scratch.url("mixed.pdf")))
         let content = try await registry.extract(merged, sha256: "x", context: try TestConfig.context(), trace: .disabled)
         #expect(content.kind == .pdfMixed)
-        #expect(content.textOrigin == .mixed)
+        #expect(content.textOrigin == .mixed, "the scanned page is read by OCR, the other from its text (\(content.warningSummary))")
         #expect(content.pagesOCRed == [2])
         #expect(content.text.contains("Relatório anual"))
         #expect(content.text.contains("Anexo digitalizado"))
