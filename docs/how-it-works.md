@@ -25,8 +25,8 @@ new file in Incoming ──► wait until it stops changing ──► hash (exac
    ──► learn: every placement becomes a memory; confirmed/confident ones form rules; folder context is refreshed
 ```
 
-OCR runs on Vision's default device, the Neural Engine or GPU. When that fails, as it does on Macs without a usable
-Neural Engine, the page is read again on the CPU, and so is every later page until the app restarts. The document's
+OCR runs on Vision's default device, the Neural Engine or GPU. When that fails, as it can when the Neural Engine's
+model does not compile, the page is read again on the CPU, and so is every later page until the app restarts. The document's
 trace records which device read each page.
 
 Uncertain documents wait in **Needs review** (created only when first needed). Moving a file in Finder, choosing a

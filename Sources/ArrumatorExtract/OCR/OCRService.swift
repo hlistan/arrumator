@@ -41,11 +41,11 @@ struct OCRRequest: Sendable {
 /// language detection, languages ordered by the caller's hint.
 ///
 /// Vision runs on its default device, the Neural Engine or GPU, until that fails: then the page is read again on the
-/// CPU, and so is every later page. The accelerated path fails where the CPU path works on Macs without a usable
-/// Neural Engine, such as virtual Macs (`TextRecognition.CRImageReaderError` 9 on GitHub's runners), and once its model
-/// fails to compile it keeps failing until the process restarts (E5RT error 13; see
-/// [TRex #95](https://github.com/amebalabs/TRex/pull/95) and
-/// [phone-harness #9](https://github.com/alexbejan/phone-harness/pull/9)).
+/// CPU, and so is every later page. On physical Macs the Neural Engine path can fail when its model does not compile,
+/// and then keeps failing until the process restarts, while the CPU path still reads text (E5RT error 13 in
+/// `CRImageReaderError`; [TRex #95](https://github.com/amebalabs/TRex/pull/95),
+/// [phone-harness #9](https://github.com/alexbejan/phone-harness/pull/9)). Virtual Macs, such as GitHub's runners,
+/// cannot run Vision's text recognition on either device.
 actor OCRService {
     private let recognizer: any TextRecognizing
     private var engineByLanguages: [[String]: OCREngine] = [:]

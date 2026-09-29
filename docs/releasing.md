@@ -15,9 +15,10 @@ Two jobs run side by side:
 The build job needs Xcode 27 (Swift 6.4), which GitHub provides on its own `xcode-27` image, in preview; the
 `macos-26` image carries Xcode 26 only. Each run prints `xcodebuild -version` and `swift --version`.
 
-GitHub's runners are virtual Macs. Vision's accelerated text recognition fails there
-(`TextRecognition.CRImageReaderError` 9), so the OCR tests read their pages through the CPU fallback that `OCRService`
-takes on any Mac where that happens; on a physical Mac they use the Neural Engine. A test for each path runs
+GitHub's runners are virtual Macs, and Vision cannot recognise text on them on any device
+(`TextRecognition.CRImageReaderError` 9, and an unknown error on the CPU). The tests that need real OCR therefore say
+so and are skipped there, with that reason in the log; they run on every physical Mac, which is why the push protocol
+starts with `scripts/verify.sh --app` on your own Mac. How the app handles OCR failing, and its CPU fallback, is tested
 everywhere with a scripted recognizer (`OCRServiceTests`).
 
 ## Releases: `.github/workflows/release.yml`

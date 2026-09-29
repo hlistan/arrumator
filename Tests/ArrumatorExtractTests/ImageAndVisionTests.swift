@@ -8,7 +8,7 @@ import Testing
 
 @Suite("Images, OCR and the vision model")
 struct ImageAndVisionTests {
-    @Test("Image OCR with EXIF capture date as fallback document date")
+    @Test("Image OCR with EXIF capture date as fallback document date", .enabled(VisionOCR.unavailable) { await VisionOCR.available.value })
     func imageOCR() async throws {
         let scratch = try Scratch()
         let image = try Scratch.textImage([
@@ -34,7 +34,7 @@ struct ImageAndVisionTests {
         #expect(content.ocr != nil)
     }
 
-    @Test("Sparse OCR calls the vision model with the schema; organisations are verified against OCR text")
+    @Test("Sparse OCR calls the vision model with the schema; organisations are verified against OCR text", .enabled(VisionOCR.unavailable) { await VisionOCR.available.value })
     func vlmVerification() async throws {
         let scratch = try Scratch()
         let url = try scratch.writeImage("logo.png", try Scratch.textImage(["CONTINENTE"], width: 2400, height: 1600,

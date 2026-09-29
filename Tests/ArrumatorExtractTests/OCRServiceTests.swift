@@ -35,7 +35,7 @@ private actor ScriptedRecognizer: TextRecognizing {
     }
 }
 
-/// What Vision threw on GitHub's virtual Macs, which have no Neural Engine: `TextRecognition.CRImageReaderError` 9.
+/// What Vision throws when its Neural Engine model fails to compile (`CRImageReaderError`, E5RT error 13).
 private struct AcceleratedPathFailed: Error {}
 private struct CPUFailed: Error {}
 
@@ -87,7 +87,8 @@ struct OCRServiceTests {
         #expect(await vision.devices == [.automatic])
     }
 
-    @Test func visionReadsTextWithEveryStageOnTheCPU() async throws {
+    @Test(.enabled(VisionOCR.unavailable) { await VisionOCR.available.value })
+    func visionReadsTextWithEveryStageOnTheCPU() async throws {
         let image = try Scratch.textImage(["Fatura de eletricidade"], width: 1200, height: 300, fontSize: 60)
         let found = try await VisionTextRecognizer().recognize(image, orientation: .up, engine: .recognizeText,
                                                                languages: ["pt"], on: .cpu)

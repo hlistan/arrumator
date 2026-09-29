@@ -39,7 +39,7 @@ struct PDFExtractionTests {
         #expect(stages == [.extract, .entities])
     }
 
-    @Test("Scanned Russian PDF is OCRed and key words are recovered")
+    @Test("Scanned Russian PDF is OCRed and key words are recovered", .enabled(VisionOCR.unavailable) { await VisionOCR.available.value })
     func scannedRussian() async throws {
         let scratch = try Scratch()
         let url = try scratch.writeImagePDF("scan-ru.pdf", pages: [[
@@ -67,7 +67,7 @@ struct PDFExtractionTests {
         #expect(ocrStep.input?.contains("fewCharacters") == true)
     }
 
-    @Test("Scanned Portuguese PDF is OCRed and key words are recovered")
+    @Test("Scanned Portuguese PDF is OCRed and key words are recovered", .enabled(VisionOCR.unavailable) { await VisionOCR.available.value })
     func scannedPortuguese() async throws {
         let scratch = try Scratch()
         let url = try scratch.writeImagePDF("scan-pt.pdf", pages: [[
@@ -83,7 +83,7 @@ struct PDFExtractionTests {
         #expect(content.entities.stableKeys.contains(StableKey(kind: .ptNIF, value: "999999990")))
     }
 
-    @Test("Mixed PDF: text page plus scanned page")
+    @Test("Mixed PDF: text page plus scanned page", .enabled(VisionOCR.unavailable) { await VisionOCR.available.value })
     func mixed() async throws {
         let scratch = try Scratch()
         let text = try scratch.writeTextPDF("text.pdf", pages: [[
