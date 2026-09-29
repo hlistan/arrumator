@@ -3,15 +3,14 @@ import ArrumatorRuntime
 import Foundation
 import Testing
 
-/// Logic belongs to the archive: each archive keeps its own, with an index of its own, and switching archives brings
-/// the other archive's logic with it (docs/storage.md).
+/// What the app learns belongs to the archive: each keeps its own senders and history, with an index of its own, and
+/// switching archives brings the other archive's with it (docs/storage.md).
 @Suite struct ArchiveSwitchingTests {
-    @Test func eachArchiveKeepsItsOwnLogic() async throws {
+    @Test func eachArchiveKeepsItsOwnSenders() async throws {
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }
         let first = try await home.open()
-        #expect(try await first.logic.current()?.followsBuiltin == true, "an archive starts with the built-in logic")
-        try await first.logic.update(body: "First: everything by year.")
+        try await first.senders.saveCorrespondent(Correspondent(canonicalName: "EDP Comercial", origin: .learned))
         try await first.records.flush()
 
         let second = try await first.switchArchive(to: home.folder("Second").path)
@@ -19,16 +18,17 @@ import Testing
         #expect(second.archive == home.folder("Second"))
         #expect(await second.settings.current.archiveURL == home.folder("Second"), "the settings name the archive switched to")
         #expect(second.index != first.index, "each archive has its own index")
-        #expect(try await second.logic.current()?.followsBuiltin == true, "a folder never used as an archive starts with the built-in logic")
-        try await second.logic.update(body: "Second: by sender.")
+        #expect(try await second.senders.correspondents().isEmpty, "nothing learned in one archive advises another")
+        try await second.senders.saveCorrespondent(Correspondent(canonicalName: "MEO", origin: .learned))
         try await second.records.flush()
-        let secondFile = try #require(try await second.records.logicFileURL())
-        #expect(secondFile.path.hasPrefix(home.folder("Second").path + "/"), "the logic is kept in its archive")
-        #expect(try String(contentsOf: secondFile, encoding: .utf8).contains("Second: by sender."))
+        let layout = second.services.layout(await second.settings.current)
+        #expect(layout.senders.path.hasPrefix(home.folder("Second").path + "/"), "the senders are kept in their archive")
+        #expect(try String(contentsOf: layout.senders, encoding: .utf8).contains("MEO"))
 
         let back = try await second.switchArchive(to: home.folder("First").path)
         try await back.openArchive()
-        #expect(try await back.logic.current()?.body == "First: everything by year.", "switching back brings the archive's logic back")
+        #expect(try await back.senders.correspondents().map(\.canonicalName) == ["EDP Comercial"],
+                "switching back brings the archive's senders back")
         let switched = try await back.services.history.events(limit: 20, kinds: [.settingsChanged]).map(\.summary)
         #expect(switched.contains("Switched to the archive at \(home.folder("Second").path)"), "the switch is in the archive's history")
 
@@ -36,20 +36,19 @@ import Testing
         #expect(again.archive == home.folder("First"), "the app opens the archive last switched to")
     }
 
-    @Test func theLogicLivesInTheArchiveSoALostIndexGetsItBack() async throws {
+    @Test func theSendersLiveInTheArchiveSoALostIndexGetsThemBack() async throws {
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }
         do {
             let runtime = try await home.open()
-            try await runtime.logic.update(body: "Kept in the archive.")
+            try await runtime.senders.saveCorrespondent(Correspondent(canonicalName: "EDP Comercial", aliases: ["EDP"], origin: .learned))
             try await runtime.records.flush()
         }
         try FileManager.default.removeItem(at: home.paths.indexesDirectory)
 
         let rebuilt = try await home.open()
         #expect(rebuilt.opening == .created)
-        let logic = try #require(try await rebuilt.logic.current())
-        #expect(logic.body == "Kept in the archive." && !logic.followsBuiltin)
+        #expect(try await rebuilt.senders.correspondents().map(\.aliases) == [["EDP"]])
     }
 
     @Test func theIndexOfEarlierVersionsBecomesTheArchivesOwn() async throws {
@@ -58,12 +57,12 @@ import Testing
         let single = home.paths.supportDirectory.appendingPathComponent("arrumator.sqlite")
         do {
             let (database, _) = try AppDatabase.open(at: single, setAsideSuffix: "unreadable") { false }
-            try await LogicStore(database: database, maxChars: 1_000).update(body: "Written before each archive had an index.")
+            try await SenderStore(database: database).saveCorrespondent(Correspondent(canonicalName: "Written before", origin: .learned))
         }
 
         let runtime = try await home.open()
         #expect(runtime.opening == .existing, "the index was moved, not rebuilt")
-        #expect(try await runtime.logic.current()?.body == "Written before each archive had an index.")
+        #expect(try await runtime.senders.correspondents().map(\.canonicalName) == ["Written before"])
         #expect(!FileManager.default.fileExists(atPath: single.path))
         #expect(FileManager.default.fileExists(atPath: runtime.index.path))
     }

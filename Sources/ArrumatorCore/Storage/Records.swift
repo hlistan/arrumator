@@ -29,35 +29,6 @@ public enum DocumentStatus: String, Sendable, Codable, CaseIterable {
     public static let processed: Set<DocumentStatus> = [.filed, .needsReview, .failed, .duplicate, .undone, .held]
 }
 
-public struct FolderRecord: ArrumatorRecord, Identifiable, Hashable {
-    public static let databaseTableName = "folders"
-    public var id: Int64?
-    public var uid: String
-    public var parentId: Int64?
-    public var code: String
-    public var name: String
-    public var relPath: String
-    public var role: String?
-    public var autoFile: Bool
-    public var yearSubfolders: Bool
-    public var yearRule: String
-    public var origin: String
-    public var levelKind: String?
-    public var logicVersion: String?
-    public var description: String
-    public var aboutJson: String
-    public var descriptionHash: String
-    public var generatedHash: String?
-    public var userEdited: Bool
-    public var inode: Int64?
-    public var sort: Int
-    public var isArchived: Bool
-    public var createdAt: Date
-    public var updatedAt: Date
-
-    public mutating func didInsert(_ inserted: InsertionSuccess) { id = inserted.rowID }
-}
-
 public struct DocumentRecord: ArrumatorRecord, Identifiable, Hashable {
     public static let databaseTableName = "documents"
     public var id: Int64?
@@ -68,7 +39,6 @@ public struct DocumentRecord: ArrumatorRecord, Identifiable, Hashable {
     public var size: Int64
     public var uttype: String
     public var inode: Int64?
-    public var folderId: Int64?
     public var correspondentId: Int64?
     public var correspondent: String?
     public var docType: String?
@@ -78,13 +48,9 @@ public struct DocumentRecord: ArrumatorRecord, Identifiable, Hashable {
     public var language: String?
     public var pageCount: Int?
     public var status: DocumentStatus
-    public var band: String?
-    public var confidence: Double?
-    public var decidedBy: String?
-    public var rationale: String?
-    public var decisionJson: String?
+    /// What the model read the document as (`DocumentAnalysis`) as JSON, with the user's corrections; NULL before.
+    public var analysisJson: String?
     public var contentJson: String?
-    public var tagsJson: String?
     /// The document's labels as JSON; NULL until the model has labelled it.
     public var labelsJson: String?
     public var duplicateOf: Int64?
@@ -103,17 +69,16 @@ public struct DocumentRecord: ArrumatorRecord, Identifiable, Hashable {
     public static func arrived(path: String, sha256: String, size: Int64, uttype: String, inode: Int64?, modified: Date?,
                                now: Date = Date()) -> DocumentRecord {
         DocumentRecord(id: nil, uid: UUID().uuidString, path: path, originalFilename: (path as NSString).lastPathComponent,
-                       sha256: sha256, size: size, uttype: uttype, inode: inode, folderId: nil, correspondentId: nil,
+                       sha256: sha256, size: size, uttype: uttype, inode: inode, correspondentId: nil,
                        correspondent: nil, docType: nil, docDate: nil, periodYear: nil, title: nil, language: nil, pageCount: nil,
-                       status: .processing, band: nil, confidence: nil, decidedBy: nil, rationale: nil, decisionJson: nil,
-                       contentJson: nil, tagsJson: nil, labelsJson: nil, duplicateOf: nil, lastTraceId: nil, addedAt: now, filedAt: nil,
+                       status: .processing, analysisJson: nil, contentJson: nil, labelsJson: nil, duplicateOf: nil, lastTraceId: nil,
+                       addedAt: now, filedAt: nil,
                        extractedAt: nil, embeddedAt: nil, fileMtime: modified, createdAt: now, updatedAt: now)
     }
 
     public var url: URL { URL(fileURLWithPath: path) }
     public var filename: String { (path as NSString).lastPathComponent }
-    public var decision: FilingDecision? { JSON.decode(FilingDecision.self, from: decisionJson) }
-    public var tags: [String] { JSON.decode([String].self, from: tagsJson) ?? [] }
+    public var analysis: DocumentAnalysis? { JSON.decode(DocumentAnalysis.self, from: analysisJson) }
     /// Nil until the model has labelled the document; empty when it found nothing worth a label.
     public var labels: [DocumentLabel]? { JSON.decode([DocumentLabel].self, from: labelsJson) }
 }
@@ -148,21 +113,12 @@ public struct EmbeddingRecord: ArrumatorRecord {
     public mutating func didInsert(_ inserted: InsertionSuccess) { id = inserted.rowID }
 }
 
-public struct FolderEmbeddingRecord: ArrumatorRecord, PersistableRecord {
-    public static let databaseTableName = "folder_embeddings"
-    public var folderId: Int64
-    public var model: String
-    public var descriptionHash: String
-    public var vector: Data
-    public var createdAt: Date
-}
-
 public enum EventKind: String, Sendable, Codable, CaseIterable {
-    case arrived, extracted, labeled, classified, filed, needsReview, duplicate, error, retry, failed
-    case corrected, undone, refiled, markedCorrect, userMoved, userRenamed, missing, adopted
-    case folderCreated, folderRenamed, folderRemoved, descriptionChanged
-    case learned, ruleInduced, ruleDisabled, ruleChanged, proposalCreated, proposalResolved
-    case logicChanged, rethink, rethought, forgot
+    case arrived, extracted, analysed, filed, needsReview, duplicate, error, retry, failed
+    /// The user changed a document's name, sender, date or type.
+    case corrected
+    case undone, markedCorrect, userMoved, userRenamed, missing, adopted
+    case learned, forgot
     case settingsChanged, ollamaState, appStarted, paused, resumed
     /// The index was rebuilt from the archive's record files.
     case rebuilt
@@ -186,99 +142,6 @@ public struct EventRecord: ArrumatorRecord, Identifiable, Hashable {
     public mutating func didInsert(_ inserted: InsertionSuccess) { id = inserted.rowID }
 }
 
-public struct CorrectionRecord: ArrumatorRecord, Identifiable, Hashable {
-    public static let databaseTableName = "corrections"
-    public var id: Int64?
-    public var docId: Int64
-    public var at: Date
-    public var source: String
-    public var fromFolderId: Int64?
-    public var toFolderId: Int64?
-    public var fromFilename: String?
-    public var toFilename: String?
-    public var proposedJson: String?
-    public var editedFieldsJson: String?
-    public var traceId: Int64?
-    public mutating func didInsert(_ inserted: InsertionSuccess) { id = inserted.rowID }
-}
-
-public struct MemoryRecord: ArrumatorRecord, Identifiable {
-    public static let databaseTableName = "memories"
-    public var id: Int64?
-    public var docId: Int64
-    public var folderId: Int64
-    public var folderCode: String
-    public var embedding: Data
-    public var model: String
-    public var summaryLine: String
-    public var correspondentId: Int64?
-    public var docType: String
-    public var language: String
-    public var stableKeysJson: String
-    public var weight: Double
-    public var source: String
-    public var orphaned: Bool
-    public var createdAt: Date
-    public mutating func didInsert(_ inserted: InsertionSuccess) { id = inserted.rowID }
-
-    public var memory: FilingMemory {
-        FilingMemory(id: id ?? 0, documentID: docId, folderID: folderId, folderCode: folderCode,
-                     embedding: VectorCodec.decode(embedding), embeddingModel: model, summaryLine: summaryLine,
-                     correspondentID: correspondentId, documentType: DocumentType(lenient: docType), language: language,
-                     stableKeys: JSON.decode([String].self, from: stableKeysJson) ?? [], weight: weight, source: source,
-                     createdAt: createdAt)
-    }
-}
-
-public struct RuleRecord: ArrumatorRecord, Identifiable, Hashable {
-    public static let databaseTableName = "rules"
-    public var id: Int64?
-    public var name: String
-    public var enabled: Bool
-    public var priority: Int
-    public var origin: String
-    public var confirmed: Bool
-    public var predicatesJson: String
-    public var actionJson: String
-    public var support: Int
-    public var hits: Int
-    public var contradictions: Int
-    public var lastHitAt: Date?
-    public var explanation: String
-    public var forgotten: Bool
-    public var createdAt: Date
-    public var updatedAt: Date
-    public mutating func didInsert(_ inserted: InsertionSuccess) { id = inserted.rowID }
-
-    public var rule: FilingRule? {
-        guard let predicates = JSON.decode([RulePredicate].self, from: predicatesJson),
-              let action = JSON.decode(RuleAction.self, from: actionJson) else { return nil }
-        return FilingRule(id: id ?? 0, name: name, enabled: enabled, priority: priority,
-                          origin: RuleOrigin(rawValue: origin) ?? .user, confirmed: confirmed, predicates: predicates,
-                          action: action, support: support, hits: hits, contradictions: contradictions, lastHitAt: lastHitAt,
-                          explanation: explanation, forgotten: forgotten, createdAt: createdAt)
-    }
-
-    public init(_ rule: FilingRule, now: Date = Date()) {
-        id = rule.id == 0 ? nil : rule.id
-        name = rule.name
-        enabled = rule.enabled
-        priority = rule.priority
-        origin = rule.origin.rawValue
-        confirmed = rule.confirmed
-        predicatesJson = JSON.string(rule.predicates)
-        actionJson = JSON.string(rule.action)
-        support = rule.support
-        hits = rule.hits
-        contradictions = rule.contradictions
-        lastHitAt = rule.lastHitAt
-        explanation = rule.explanation
-        forgotten = rule.forgotten
-        createdAt = rule.createdAt
-        updatedAt = now
-    }
-}
-
 public struct CorrespondentRecord: ArrumatorRecord, Identifiable, Hashable {
     public static let databaseTableName = "correspondents"
     public var id: Int64?
@@ -288,7 +151,6 @@ public struct CorrespondentRecord: ArrumatorRecord, Identifiable, Hashable {
     public var stableKeysJson: String
     public var emailDomainsJson: String
     public var webDomainsJson: String
-    public var defaultFolderCode: String?
     public var filedCount: Int
     public var origin: String
     public var createdAt: Date
@@ -301,7 +163,7 @@ public struct CorrespondentRecord: ArrumatorRecord, Identifiable, Hashable {
                       stableKeys: JSON.decode([String].self, from: stableKeysJson) ?? [],
                       emailDomains: JSON.decode([String].self, from: emailDomainsJson) ?? [],
                       webDomains: JSON.decode([String].self, from: webDomainsJson) ?? [],
-                      defaultFolderCode: defaultFolderCode, filedCount: filedCount,
+                      filedCount: filedCount,
                       origin: CorrespondentOrigin(rawValue: origin) ?? .learned)
     }
 
@@ -313,7 +175,6 @@ public struct CorrespondentRecord: ArrumatorRecord, Identifiable, Hashable {
         stableKeysJson = JSON.string(c.stableKeys)
         emailDomainsJson = JSON.string(c.emailDomains)
         webDomainsJson = JSON.string(c.webDomains)
-        defaultFolderCode = c.defaultFolderCode
         filedCount = c.filedCount
         origin = c.origin.rawValue
         createdAt = now
@@ -321,29 +182,18 @@ public struct CorrespondentRecord: ArrumatorRecord, Identifiable, Hashable {
     }
 }
 
-public struct ProposalRecord: ArrumatorRecord, Identifiable, Hashable {
-    public static let databaseTableName = "proposals"
-    public var id: Int64?
-    public var kind: String
-    public var status: String
-    public var title: String
-    public var folderId: Int64?
-    public var payloadJson: String
-    public var createdAt: Date
-    public var resolvedAt: Date?
-    public mutating func didInsert(_ inserted: InsertionSuccess) { id = inserted.rowID }
-}
-
 public enum JobState: String, Sendable, Codable, CaseIterable {
-    case pending, hashing, extracting, labeling, classifying, filing, done, duplicate, needsReview, failed, held, cancelled
+    case pending, hashing, extracting, analysing, filing, done, duplicate, needsReview, failed, held, cancelled
 
-    public var isActive: Bool { [.pending, .hashing, .extracting, .labeling, .classifying, .filing].contains(self) }
+    public var isActive: Bool { [.pending, .hashing, .extracting, .analysing, .filing].contains(self) }
 }
 
 public enum JobKind: String, Sendable, Codable {
-    case ingest, reclassify, adopt
-    /// Read a filed document's text and compute its embedding again, without deciding or moving anything: what a
-    /// rebuilt index needs for search.
+    case ingest, adopt
+    /// Read a stored document again with the model and file it under the name it gives, where it is.
+    case reanalyse
+    /// Read a filed document's text and compute its embedding again, without asking the model or moving anything:
+    /// what a rebuilt index needs for search.
     case reindex
 }
 
@@ -375,8 +225,6 @@ public struct TraceRecord: ArrumatorRecord, Identifiable, Hashable {
     public var outcome: String?
     public var appVersion: String
     public var promptVersion: Int
-    public var logicVersion: String?
-    public var taxonomyVersion: Int
     public var modelChat: String?
     public var modelVision: String?
     public var modelEmbed: String?
@@ -416,12 +264,5 @@ public enum VectorCodec {
         let norm = sqrt(v.reduce(0) { $0 + $1 * $1 })
         guard norm > 0 else { return v }
         return v.map { $0 / norm }
-    }
-
-    public static func dot(_ a: [Float], _ b: [Float]) -> Float {
-        guard a.count == b.count else { return 0 }
-        var s: Float = 0
-        for i in 0..<a.count { s += a[i] * b[i] }
-        return s
     }
 }

@@ -11,7 +11,7 @@ public final class ArrumatorRuntime: Sendable {
     public let paths: AppPaths
     public let config: PipelineConfig
     public let appVersion: String
-    /// The archive this runtime files into, whose index, logic and learned state it holds.
+    /// The archive this runtime files into, whose index and learned senders it holds.
     public let archive: URL
     /// Where the archive's index is kept (`AppPaths.indexURL`).
     public let index: URL
@@ -22,27 +22,22 @@ public final class ArrumatorRuntime: Sendable {
     public let records: ArchiveRecords
     public let settings: SettingsStore
     public let registry: SelfChangeRegistry
-    public let taxonomy: TaxonomyStore
     /// The Ollama server in use; `useOllama(at:)` points it elsewhere.
     public let ollama: OllamaConnection
     public let gate: InferenceGate
     public let lifecycle: OllamaLifecycle
     public let models: ModelManager
-    public let learningStore: GRDBLearningStore
-    public let memories: MemoryIndex
+    public let senders: SenderStore
     public let prompts: PromptBuilder
-    public let classifier: FilingClassifier
-    public let labeler: LabelExtractor
-    public let learner: Learner
+    public let analyzer: DocumentAnalyzer
+    public let learner: SenderLearner
     public let vectors: VectorIndex
     public let search: SearchService
     public let traces: TraceRecorder
     public let services: PipelineServices
     public let coordinator: IngestCoordinator
-    public let rethink: RethinkCoordinator
     public let review: ReviewActions
     public let reconciler: ArchiveReconciler
-    public let proposals: ProposalActions
     public let incomingWatcher: IncomingWatcher
     public let archiveWatcher: ArchiveWatcher
     public let stats: StatsService
@@ -85,8 +80,8 @@ public final class ArrumatorRuntime: Sendable {
         OllamaEndpoint.isThisMac(url) ? settings.ollamaManagement : .external
     }
 
-    /// Stops this runtime and returns one open on the archive at `path`, with that archive's own index, logic and
-    /// learned state; the settings name it from then on. Files waiting in Incoming are filed into the new archive.
+    /// Stops this runtime and returns one open on the archive at `path`, with that archive's own index and learned
+    /// senders; the settings name it from then on. Files waiting in Incoming are filed into the new archive.
     /// Call `openArchive()` and then `start()` on the runtime returned, as after `bootstrap`.
     public func switchArchive(to path: String) async throws -> ArrumatorRuntime {
         let chosen = URL(fileURLWithPath: path.expandingTilde, isDirectory: true).standardizedFileURL
@@ -105,7 +100,6 @@ public final class ArrumatorRuntime: Sendable {
         let target = chosen.canonicalFolderPath.map { URL(fileURLWithPath: $0, isDirectory: true).standardizedFileURL } ?? chosen
         guard try paths.indexURL(for: target) != index else { throw ArchiveSwitchError.alreadyOpen(target.path) }
         guard !isInsideIncoming(target.path) else { throw ArchiveSwitchError.insideIncoming(archive: target.path, incoming: incoming.path) }
-        if try await RethinkStore(database: database).activeRun()?.status == .applying { throw ArchiveSwitchError.rethinkApplying }
 
         // The new index opens before anything stops, so a failure leaves this runtime as it was.
         let nextSettings = try SettingsStore(paths: paths)
@@ -124,18 +118,15 @@ public final class ArrumatorRuntime: Sendable {
     }
 
     /// Brings the index in line with the archive before anything else uses it: a new or set-aside index is rebuilt
-    /// from the record files, otherwise record files changed on disk are read again; then the archive's logic is
-    /// given the built-in text if it has none, and every stale record file written. Reads the archive, so macOS may
-    /// first ask for access to it.
+    /// from the record files, otherwise record files changed on disk are read again; then every stale record file is
+    /// written. Reads the archive, so macOS may first ask for access to it.
     public func openArchive() async throws {
-        await taxonomy.exclude([await settings.current.incomingURL])
         if opening.needsRebuild, try await records.archiveHasRecords() {
             let summary = try await records.rebuild()
             Log.info(.app, "Index rebuilt from the archive", ["documents": String(summary.documents), "queued": String(summary.queued)])
         } else {
             try await records.reconcile()
         }
-        try await logic.sync(builtin: try prompts.builtinLogic())
         try await records.flush()
     }
 
@@ -152,44 +143,31 @@ public final class ArrumatorRuntime: Sendable {
             ArchiveRecords.mayHoldRecords(archive: archive, config: config)
         }
         registry = SelfChangeRegistry(ttl: config.watcher.selfChangeTTLSeconds)
-        taxonomy = TaxonomyStore(database: database, config: config.taxonomy, registry: registry)
-        records = ArchiveRecords(database: database, settings: settings, taxonomy: taxonomy, config: config, registry: registry)
+        records = ArchiveRecords(database: database, settings: settings, config: config, registry: registry)
         ollama = try OllamaConnection(config: config.ollama, url: ollamaURL)
         gate = InferenceGate(api: ollama, retryDelays: config.ollama.retryDelays)
         models = ModelManager(api: ollama, config: config.ollama)
         lifecycle = OllamaLifecycle(api: ollama, config: config.ollama, management: .external, binaryOverride: nil)
-        learningStore = GRDBLearningStore(database: database)
-        memories = MemoryIndex(store: learningStore)
-        let library = try PromptLibrary.bundled()
-        prompts = PromptBuilder(library: library, config: config.classification, naming: config.naming)
-        classifier = FilingClassifier(store: learningStore,
-                                      logic: LogicStore(database: database, maxChars: config.classification.logicMaxChars),
-                                      memories: memories, gate: gate, models: models, prompts: prompts)
-        labeler = LabelExtractor(gate: gate, models: models, prompts: prompts)
-        let skip = SkipRules(watcher: config.watcher, taxonomy: config.taxonomy)
-        let history = HistoryStore(database: database)
-        learner = Learner(store: learningStore, memories: memories, settings: settings, config: config, taxonomy: taxonomy,
-                          refresher: DescriptionRefresher(store: learningStore, gate: gate, library: library,
-                                                          config: config.learning.descriptionRefresh),
-                          absorber: FolderAbsorber(store: learningStore, gate: gate, library: library, config: config.learning,
-                                                   skip: skip),
-                          history: history)
+        senders = SenderStore(database: database)
+        prompts = PromptBuilder(library: try PromptLibrary.bundled(), config: config.analysis, labels: config.labels,
+                                naming: config.naming)
+        analyzer = DocumentAnalyzer(senders: senders, gate: gate, models: models, prompts: prompts)
+        let skip = SkipRules(watcher: config.watcher)
+        learner = SenderLearner(store: senders, config: config.senders, history: HistoryStore(database: database))
         vectors = VectorIndex()
         search = SearchService(database: database, vectors: vectors, embedder: nil, config: config.search)
         traces = TraceRecorder(database: database, appVersion: appVersion)
         let placer = Placer(builder: FilenameBuilder(config: config.naming), operations: FileOperations(naming: config.naming))
         services = PipelineServices(
-            database: database, config: config, settings: settings, taxonomy: taxonomy,
-            extractor: ExtractorRegistry(ollama: GatedOllama(gate: gate)), labeler: labeler, classifier: classifier, learner: learner,
+            database: database, config: config, settings: settings, extractor: ExtractorRegistry(ollama: GatedOllama(gate: gate)),
+            analyzer: analyzer, learner: learner,
             filer: DocumentFiler(database: database, placer: placer, index: IndexStore(database: database), registry: registry),
             traces: traces, vectors: vectors)
         coordinator = IngestCoordinator(services: services)
-        rethink = RethinkCoordinator(services: services, ingest: coordinator)
         review = ReviewActions(services: services, coordinator: coordinator)
         reconciler = ArchiveReconciler(services: services, coordinator: coordinator)
-        proposals = ProposalActions(database: database, taxonomy: taxonomy, settings: settings)
         incomingWatcher = IncomingWatcher(config: config.watcher, skip: skip)
-        archiveWatcher = ArchiveWatcher(config: config.watcher, taxonomy: config.taxonomy, skip: skip, registry: registry,
+        archiveWatcher = ArchiveWatcher(config: config.watcher, records: config.records, skip: skip, registry: registry,
                                         database: database)
         stats = StatsService(database: database, config: config.stats)
         doctor = Doctor(database: database, paths: paths, appVersion: appVersion)
@@ -208,7 +186,6 @@ public final class ArrumatorRuntime: Sendable {
             await lifecycle.startMonitoring()
         }
         await coordinator.start()
-        await rethink.start()
         await tasks.run("incoming-pump") { [incomingWatcher, coordinator] in
             for await url in incomingWatcher.stableFiles { await coordinator.enqueue(url) }
         }
@@ -262,7 +239,6 @@ public final class ArrumatorRuntime: Sendable {
             Log.error(.db, "Could not write record files before stopping", ["error": error.localizedDescription])
         }
         await coordinator.stop()
-        await rethink.stop()
         await incomingWatcher.stop()
         await archiveWatcher.stop()
         await lifecycle.shutdown()
@@ -277,9 +253,7 @@ public final class ArrumatorRuntime: Sendable {
             try await prepareSearch(current)
             try FileManager.default.createDirectory(at: current.archiveURL, withIntermediateDirectories: true)
             try await incomingWatcher.start(root: current.incomingURL)
-            await taxonomy.exclude([current.incomingURL])
             try await archiveWatcher.start(root: current.archiveURL, excluding: [current.incomingURL])
-            _ = try await taxonomy.sync(root: current.archiveURL)
         } catch {
             Log.error(.app, "Could not apply settings", ["error": error.localizedDescription])
         }
@@ -290,7 +264,7 @@ public final class ArrumatorRuntime: Sendable {
     public func prepareSearch(_ current: AppSettings) async throws {
         let resolved = try config.models(for: current.models)
         await search.setEmbedder(OllamaEmbedder(gate: gate, model: resolved.embed, keepAlive: resolved.keepAliveEmbed,
-                                                numCtx: config.classification.embeddingNumCtx))
+                                                numCtx: config.analysis.embeddingNumCtx))
         if await vectors.model != resolved.embed {
             await vectors.load(model: resolved.embed, rows: try await IndexStore(database: database).embeddings(model: resolved.embed))
         }
@@ -311,30 +285,15 @@ public final class ArrumatorRuntime: Sendable {
         } catch {
             Log.error(.app, "Maintenance failed", ["error": error.localizedDescription])
         }
-        await learner.settleUntouchedFilings()
         do { try await records.flush() } catch {
             Log.error(.db, "Could not write record files", ["error": error.localizedDescription])
         }
         await coordinator.wake()
     }
 
-    // MARK: Logic
-
-    /// The logic of this archive.
-    public var logic: LogicStore { services.logic }
-
-    /// Restores the archive's logic to the text that ships with this version of the app.
-    @discardableResult
-    public func resetLogic() async throws -> LogicRecord {
-        try await logic.reset(to: try prompts.builtinLogic())
-    }
-
-    /// Where this archive is kept, where its index is, and the state of its logic.
-    public func summary() async throws -> ArchiveSummary {
-        let logic = try await logic.current()
-        return ArchiveSummary(archive: archive.path, index: index.path,
-                              logicFile: try await records.logicFileURL()?.path, logicVersion: LogicStore.version(of: logic),
-                              logicFollowsBuiltin: logic?.followsBuiltin ?? false)
+    /// Where this archive is kept and where its index is.
+    public func summary() -> ArchiveSummary {
+        ArchiveSummary(archive: archive.path, index: index.path)
     }
 
     public func runDoctor() async -> DoctorReport {

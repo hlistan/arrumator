@@ -2,7 +2,6 @@ import Foundation
 import GRDB
 
 public struct DocumentFilter: Sendable, Hashable {
-    public var folderIDs: Set<Int64>?
     public var statuses: Set<DocumentStatus>?
     public var docTypes: Set<String>?
     public var correspondents: Set<String>?
@@ -10,9 +9,8 @@ public struct DocumentFilter: Sendable, Hashable {
     public var dateFrom: String?
     public var dateTo: String?
 
-    public init(folderIDs: Set<Int64>? = nil, statuses: Set<DocumentStatus>? = nil, docTypes: Set<String>? = nil,
-                correspondents: Set<String>? = nil, languages: Set<String>? = nil, dateFrom: String? = nil, dateTo: String? = nil) {
-        self.folderIDs = folderIDs
+    public init(statuses: Set<DocumentStatus>? = nil, docTypes: Set<String>? = nil, correspondents: Set<String>? = nil,
+                languages: Set<String>? = nil, dateFrom: String? = nil, dateTo: String? = nil) {
         self.statuses = statuses
         self.docTypes = docTypes
         self.correspondents = correspondents
@@ -23,7 +21,6 @@ public struct DocumentFilter: Sendable, Hashable {
 
     func apply(_ request: QueryInterfaceRequest<DocumentRecord>) -> QueryInterfaceRequest<DocumentRecord> {
         var r = request
-        if let folderIDs { r = r.filter(folderIDs.contains(Column("folder_id"))) }
         if let statuses { r = r.filter(statuses.map(\.rawValue).contains(Column("status"))) }
         if let docTypes { r = r.filter(docTypes.contains(Column("doc_type"))) }
         if let correspondents { r = r.filter(correspondents.contains(Column("correspondent"))) }
@@ -92,56 +89,6 @@ public struct DocumentStore: Sendable {
 
     public func reviewQueue() async throws -> [DocumentRecord] {
         try await list(DocumentFilter(statuses: Set(DocumentStatus.allCases.filter(\.isReviewable))), limit: 10_000)
-    }
-
-    public func countsByFolder() async throws -> [Int64: Int] {
-        try await database.reader.read { db in
-            let rows = try Row.fetchAll(db, sql: """
-                SELECT folder_id, COUNT(*) AS n FROM documents
-                WHERE folder_id IS NOT NULL AND status IN ('filed','needsReview','duplicate') GROUP BY folder_id
-                """)
-            return Dictionary(uniqueKeysWithValues: rows.map { ($0["folder_id"] as Int64, $0["n"] as Int) })
-        }
-    }
-
-    /// The senders of the documents filed in each folder, by the folder's id.
-    public func sendersByFolder() async throws -> [Int64: Set<Int64>] {
-        try await database.reader.read { db in
-            let rows = try Row.fetchAll(db, sql: """
-                SELECT DISTINCT folder_id, correspondent_id FROM documents
-                WHERE folder_id IS NOT NULL AND correspondent_id IS NOT NULL AND status = ?
-                """, arguments: [DocumentStatus.filed.rawValue])
-            return rows.reduce(into: [Int64: Set<Int64>]()) { $0[$1["folder_id"], default: []].insert($1["correspondent_id"]) }
-        }
-    }
-
-    /// The types of the documents filed in each folder, by the folder's id.
-    public func typesByFolder() async throws -> [Int64: Set<DocumentType>] {
-        try await database.reader.read { db in
-            let rows = try Row.fetchAll(db, sql: """
-                SELECT DISTINCT folder_id, doc_type FROM documents
-                WHERE folder_id IS NOT NULL AND doc_type IS NOT NULL AND status = ?
-                """, arguments: [DocumentStatus.filed.rawValue])
-            return rows.reduce(into: [Int64: Set<DocumentType>]()) { out, row in
-                if let type = DocumentType(rawValue: row["doc_type"]) { out[row["folder_id"], default: []].insert(type) }
-            }
-        }
-    }
-
-    public func recentTitles(perFolder limit: Int) async throws -> [Int64: [String]] {
-        try await database.reader.read { db in
-            let rows = try Row.fetchAll(db, sql: """
-                SELECT folder_id, path FROM (
-                  SELECT folder_id, path, ROW_NUMBER() OVER (PARTITION BY folder_id ORDER BY filed_at DESC) AS rn
-                  FROM documents WHERE status = 'filed' AND folder_id IS NOT NULL)
-                WHERE rn <= ?
-                """, arguments: [limit])
-            var out: [Int64: [String]] = [:]
-            for row in rows {
-                out[row["folder_id"], default: []].append(((row["path"] as String) as NSString).lastPathComponent)
-            }
-            return out
-        }
     }
 
     /// Documents the model has not labelled yet whose text was read, oldest first: those filed before documents were

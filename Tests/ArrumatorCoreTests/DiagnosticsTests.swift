@@ -12,11 +12,11 @@ import Testing
                         outputJson: #"[{"user":"\#(documentText)","response":"{\"subjects\":[\"Maria Exemplo\"]}"}]"#, error: nil)
     }
 
-    static let steps = [step(.extract, seq: 0), step(.label, seq: 1), step(.llm, seq: 2), step(.vlm, seq: 3), step(.place, seq: 4)]
+    static let steps = [step(.extract, seq: 0), step(.analyse, seq: 1), step(.vlm, seq: 2), step(.place, seq: 3)]
 
     @Test func withoutConsentNoModelExchangeLeavesTheMac() {
         let shared = DiagnosticsExporter.shareable(Self.steps, includeDocumentText: false)
-        for step in shared where [TraceStage.label.rawValue, TraceStage.llm.rawValue, TraceStage.vlm.rawValue].contains(step.stage) {
+        for step in shared where [TraceStage.analyse.rawValue, TraceStage.vlm.rawValue].contains(step.stage) {
             #expect(step.inputJson == nil && step.outputJson == nil,
                     "\(step.stage) sent the document to the model and got answers drawn from it; both stay out")
         }

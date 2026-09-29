@@ -2,6 +2,7 @@
 import ArrumatorCore
 import ArrumatorTesting
 import Foundation
+import Testing
 
 enum Fixtures {
     static func content(_ name: String, text: String, keys: [StableKey] = [], language: String = "pt",
@@ -23,124 +24,77 @@ enum Fixtures {
     Total a pagar: 54,21 €   Data limite de pagamento: 25/07/2026
     """
 
-    /// A model answer placing the document at `path`, from the top of the archive; the last folder is described as
-    /// `description`, the others by their name. `subject` is whom the document is about.
-    static func answer(path: [String] = ["Home", "Utilities"], description: String = "Electricity, gas and water bills.",
-                       correspondent: String = "EDP Comercial", subject: String = "", yearly: String = "yes", confidence: Double = 0.93,
-                       fileName: String = "2026-07-05 EDP - Fatura eletricidade junho") -> String {
-        let levels = path.enumerated().map { index, name in
-            let text = index == path.count - 1 ? description : "\(name) documents."
-            return #"{"name":"\#(name)","description":"\#(text)"}"#
+    static let edpNIF = StableKey(kind: .ptNIF, value: "503504564")
+
+    /// A model answer reading the document as an EDP bill to Maria Exemplo, with its signals; a list passed as nil is
+    /// left out of the answer.
+    static func answer(correspondent: String = "EDP Comercial", subjects: [String]? = ["Maria Exemplo"],
+                       objects: [String]? = ["electricity supply point PT0002000012345678"], jurisdictions: [String]? = ["Portugal"],
+                       languages: [String]? = ["pt"], fileName: String = "2026-07-05 EDP Comercial - Fatura eletricidade julho") -> String {
+        var fields: [String: JSONValue] = [
+            "correspondent": .string(correspondent), "document_type": "invoice", "document_date": "05/07/2026", "period_year": "",
+            "title": "Fatura eletricidade julho", "file_name": .string(fileName),
+        ]
+        for (key, values) in [("subjects", subjects), ("objects", objects), ("jurisdictions", jurisdictions), ("languages", languages)] {
+            if let values { fields[key] = .array(values.map(JSONValue.string)) }
         }
-        return """
-        {"rationale":"EDP electricity invoice","correspondent":"\(correspondent)","subject":"\(subject)",\
-        "document_type":"invoice","document_date":"05/07/2026","period_year":"","language":"pt",\
-        "title":"Fatura eletricidade junho","tags":["energy","Energy"],"ideal_path":[\(levels.joined(separator: ","))],\
-        "ideal_year_folder":"\(yearly)","file_name":"\(fileName)","confidence":\(confidence)}
-        """
+        return JSON.string(fields)
     }
 
-    /// Answers every request as `answer(path:)` does: the model always decides the same home, and cannot tell which
-    /// folder beside it a decided one is.
-    static func answering(path: [String] = ["Home", "Utilities"]) -> MockOllama.ChatHandler {
-        { request in isJudge(request) ? choice("unsure") : answer(path: path) }
-    }
-
-    /// The request asking which folder beside it, if any, a decided folder is.
-    static func isJudge(_ request: OllamaChatRequest) -> Bool { request.format?["properties"]?["choice"] != nil }
-
-    /// An answer to that request: an offered folder's number, "none" or "unsure".
-    static func choice(_ value: String) -> String { #"{"choice":"\#(value)"}"# }
-
-    /// The request that decides a document's path from the logic.
-    static func isDecision(_ request: OllamaChatRequest) -> Bool { request.format?["properties"]?["ideal_path"] != nil }
-
+    /// What the answer labels the document with.
+    static let edpLabels = [
+        DocumentLabel(kind: .subject, value: "Maria Exemplo"),
+        DocumentLabel(kind: .object, value: "electricity supply point PT0002000012345678"),
+        DocumentLabel(kind: .jurisdiction, value: "Portugal"),
+        DocumentLabel(kind: .language, value: "pt"),
+    ]
 }
 
-/// Classifier and learner over an empty temporary archive with a mock Ollama.
+/// The analyzer and the sender learner over an empty temporary archive with a mock Ollama.
 struct ClassifyHarness {
     let env: TestEnvironment
     let mock: MockOllama
-    let store: GRDBLearningStore
-    let logic: LogicStore
-    let classifier: FilingClassifier
-    let learner: Learner
+    let senders: SenderStore
+    let analyzer: DocumentAnalyzer
+    let learner: SenderLearner
     let settings: AppSettings
+    let sink = MemoryTraceSink()
 
     static func make(handler: @escaping MockOllama.ChatHandler) async throws -> ClassifyHarness {
         let env = try await TestEnvironment.make()
-        let store = GRDBLearningStore(database: env.database)
+        let senders = SenderStore(database: env.database)
         let mock = MockOllama(installed: ["ministral-3:14b", "bge-m3"], handler: handler)
-        let gate = InferenceGate(api: mock, retryDelays: [])
-        let models = ModelManager(api: mock, config: env.config.ollama)
-        let library = try PromptLibrary.bundled()
-        let prompts = PromptBuilder(library: library, config: env.config.classification, naming: env.config.naming)
-        let logic = LogicStore(database: env.database, maxChars: env.config.classification.logicMaxChars)
-        try await logic.sync(builtin: try prompts.builtinLogic())
-        let memories = MemoryIndex(store: store)
-        let classifier = FilingClassifier(store: store, logic: logic, memories: memories, gate: gate, models: models, prompts: prompts)
-        let skip = SkipRules(watcher: env.config.watcher, taxonomy: env.config.taxonomy)
-        let learner = Learner(store: store, memories: memories, settings: env.settings, config: env.config, taxonomy: env.taxonomy,
-                              refresher: DescriptionRefresher(store: store, gate: gate, library: library,
-                                                              config: env.config.learning.descriptionRefresh),
-                              absorber: FolderAbsorber(store: store, gate: gate, library: library, config: env.config.learning, skip: skip),
-                              history: HistoryStore(database: env.database))
-        return ClassifyHarness(env: env, mock: mock, store: store, logic: logic, classifier: classifier, learner: learner,
+        let prompts = PromptBuilder(library: try PromptLibrary.bundled(), config: env.config.analysis, labels: env.config.labels,
+                                    naming: env.config.naming)
+        let analyzer = DocumentAnalyzer(senders: senders, gate: InferenceGate(api: mock, retryDelays: []),
+                                        models: ModelManager(api: mock, config: env.config.ollama), prompts: prompts)
+        let learner = SenderLearner(store: senders, config: env.config.senders, history: HistoryStore(database: env.database))
+        return ClassifyHarness(env: env, mock: mock, senders: senders, analyzer: analyzer, learner: learner,
                                settings: await env.settings.current)
     }
 
-    func taxonomy() async throws -> TaxonomySnapshot { try await env.taxonomy.snapshot(root: env.archive) }
+    var trace: TraceContext { TraceContext(traceID: 1, sink: sink) }
 
-    func document(_ name: String, folderID: Int64? = nil, correspondent: String? = nil) async throws -> Int64 {
-        var record = DocumentRecord.arrived(path: "/tmp/\(name)", sha256: UUID().uuidString, size: 1, uttype: "com.adobe.pdf",
-                                            inode: nil, modified: nil)
-        record.folderId = folderID
-        record.correspondent = correspondent
-        if folderID != nil { record.status = .filed; record.filedAt = Date() }
-        return try await DocumentStore(database: env.database).save(record).id ?? 0
+    func analyse(_ content: ExtractedContent) async throws -> AnalysisOutcome {
+        try await analyzer.analyse(content, settings: settings, config: env.config, trace: trace)
     }
 
-    /// A document from `sender` filed into `folder`.
-    func filed(_ name: String, into folder: TaxonomyFolder, from sender: Int64) async throws {
-        var record = DocumentRecord.arrived(path: "/tmp/\(name)", sha256: UUID().uuidString, size: 1, uttype: "com.adobe.pdf",
+    /// Reads the document and files it, as the pipeline does: stored with its content, then learned from.
+    @discardableResult
+    func file(_ content: ExtractedContent) async throws -> (id: Int64, analysis: DocumentAnalysis) {
+        let analysis = try await analyse(content).analysis
+        var record = DocumentRecord.arrived(path: content.source.path, sha256: content.source.sha256, size: 1, uttype: "com.adobe.pdf",
                                             inode: nil, modified: nil)
-        record.folderId = folder.id
         record.status = .filed
         record.filedAt = Date()
-        record.correspondentId = sender
-        _ = try await DocumentStore(database: env.database).save(record)
+        record.correspondent = analysis.correspondent
+        record.correspondentId = analysis.correspondentID
+        record.contentJson = DocumentStore.storedContentJSON(content)
+        record.analysisJson = JSON.string(analysis)
+        let id = try #require(try await DocumentStore(database: env.database).save(record).id)
+        await learner.documentFiled(documentID: id, analysis: analysis, content: content, trace: .disabled)
+        return (id, analysis)
     }
 
-    func classify(_ content: ExtractedContent, mode: ClassificationMode = .arrival,
-                  trace: TraceContext = .disabled) async throws -> ClassificationOutcome {
-        try await classifier.classify(content, taxonomy: try await taxonomy(), settings: settings, config: env.config, mode: mode,
-                                      trace: trace)
-    }
-
-    /// Files without the user saying anything, the way an uncertain automatic placement happens.
-    func fileUnconfirmed(_ content: ExtractedContent, into folder: TaxonomyFolder, band: Band = .check) async throws {
-        var outcome = try await classify(content)
-        outcome.decision.folderCode = folder.code
-        outcome.decision.confidence.band = band
-        let docID = try await document(content.source.originalFilename, folderID: folder.id, correspondent: "EDP")
-        await learner.documentFiled(documentID: docID, folderID: folder.id, outcome: outcome, content: content,
-                                    confirmedByUser: false, trace: .disabled)
-    }
-
-    /// Pretends the memories were written some days ago, so settling can be exercised without waiting.
-    func ageMemories(byDays days: Int) async throws {
-        let cutoff = Date().addingTimeInterval(-Double(days) * 86_400).unixSeconds
-        try await env.database.writer.write { db in
-            try db.execute(sql: "UPDATE memories SET created_at = ?", arguments: [cutoff])
-        }
-    }
-
-    /// Classifies and records the filing as the ingest pipeline would.
-    func fileConfirmed(_ content: ExtractedContent, into folder: TaxonomyFolder) async throws {
-        var outcome = try await classify(content)
-        outcome.decision.folderCode = folder.code
-        let docID = try await document(content.source.originalFilename, folderID: folder.id, correspondent: "EDP")
-        await learner.documentFiled(documentID: docID, folderID: folder.id, outcome: outcome, content: content,
-                                    confirmedByUser: true, trace: .disabled)
-    }
+    func steps(_ stage: TraceStage) async -> [TraceStep] { await sink.steps.filter { $0.stage == stage } }
 }

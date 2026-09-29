@@ -279,7 +279,6 @@ public actor SearchService {
             sql += " AND d.\(column) IN (\(values.map { _ in "?" }.joined(separator: ",")))"
             for v in values { _ = args.append(contentsOf: [v]) }
         }
-        if let v = f.folderIDs { inList("folder_id", v) }
         if let v = f.statuses { inList("status", Set(v.map(\.rawValue))) }
         if let v = f.docTypes { inList("doc_type", v) }
         if let v = f.correspondents { inList("correspondent", v) }

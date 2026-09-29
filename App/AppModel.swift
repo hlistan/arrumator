@@ -19,13 +19,9 @@ final class AppModel {
     private(set) var runtime: ArrumatorRuntime?
     var settings: AppSettings?
     var ingest = IngestStatus.idle
-    var rethink = RethinkProgress.none
     var ollama = OllamaState.unknown
     var recent: [EventRecord] = []
     var reviewCount = 0
-    var pendingProposals = 0
-    /// The archive's folders, for the sidebar and for naming where documents went.
-    var taxonomy: TaxonomySnapshot?
     /// Bumped on every database change, and when another archive is opened; views reload with `.task(id:)`.
     var activity: Int64 = 0
     var destination: Destination = .incoming
@@ -84,7 +80,7 @@ final class AppModel {
         }
     }
 
-    /// Files into the archive at `path` from now on. Its logic, folders and what was learned there come with it: the
+    /// Files into the archive at `path` from now on. The senders learned there and its history come with it: the
     /// runtime open on this archive stops and one open on the other takes its place.
     func switchArchive(to path: String) async {
         guard let runtime, !switchingArchive,
@@ -100,9 +96,7 @@ final class AppModel {
             self.runtime = next
             settings = await next.settings.current
             ingest = .idle
-            rethink = .none
             openDocument = nil
-            if case .folder = destination { destination = .incoming }
             observe(next)
             activity &+= 1
             lastError = nil
@@ -124,9 +118,6 @@ final class AppModel {
                 for await state in await runtime.lifecycle.states() { self?.ollama = state }
             },
             Task { [weak self] in
-                for await progress in await runtime.rethink.progressUpdates() { self?.rethink = progress }
-            },
-            Task { [weak self] in
                 for await changed in await runtime.settings.changes() { self?.settings = changed }
             },
             Task { [weak self] in
@@ -143,12 +134,10 @@ final class AppModel {
         guard let runtime else { return }
         do {
             let events = try await runtime.services.history.events(
-                limit: 12, kinds: [.filed, .needsReview, .duplicate, .failed, .folderCreated, .ruleInduced, .userMoved])
+                limit: 12, kinds: [.filed, .needsReview, .duplicate, .failed, .userMoved])
             await notifications.announce(events, previous: recent, settings: settings)
             recent = events
             reviewCount = try await runtime.services.documents.reviewQueue().count
-            pendingProposals = try await runtime.proposals.pending().count
-            if let archive = settings?.archiveURL { taxonomy = try await runtime.taxonomy.snapshot(root: archive) }
         } catch {
             Log.error(.ui, "Refresh failed", ["error": error.localizedDescription])
         }
@@ -199,14 +188,6 @@ final class AppModel {
             lastError = "\(what): \(error.localizedDescription)"
             Log.error(.ui, what, ["error": error.localizedDescription])
             return nil
-        }
-    }
-
-    /// Starts deciding processed documents again with the archive's logic — a trial on a few, or all of them. The
-    /// plan forms on the Logic page, where it was started.
-    func startRethink(_ scope: RethinkScope, includeUserPlaced: Bool) async {
-        await perform(scope == .trial ? "Try the logic" : "Reprocess documents") {
-            try await $0.rethink.begin(scope, includeUserPlaced: includeUserPlaced)
         }
     }
 
@@ -264,12 +245,10 @@ final class AppModel {
     }
 }
 
-/// What the main window shows. The sidebar lists `lists` and the archive's folders; history and statistics are
-/// reached from the sidebar's menu.
+/// What the main window shows. The sidebar lists `lists`; history and statistics are reached from the sidebar's menu.
 enum Destination: Hashable {
-    case incoming, review, processed, learned, logic
-    case folder(Int64)
+    case incoming, review, processed, senders
     case history, statistics
 
-    static let lists: [Destination] = [.incoming, .review, .processed, .learned, .logic]
+    static let lists: [Destination] = [.incoming, .review, .processed, .senders]
 }

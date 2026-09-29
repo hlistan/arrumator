@@ -8,11 +8,9 @@ public struct JobPayload: Sendable, Codable, Hashable {
     public var mtime: Date?
     public var inode: Int64?
     public var content: ExtractedContent?
-    public var outcome: ClassificationOutcome?
+    public var outcome: AnalysisOutcome?
     public var targetPath: String?
     public var traceID: Int64?
-    /// Folder chosen by the user in Review (overrides the classifier).
-    public var userFolderID: Int64?
 
     public init() {}
 }
@@ -27,11 +25,11 @@ extension ExtractedContent: Hashable {
     }
 }
 
-extension ClassificationOutcome: Hashable {
-    public static func == (lhs: ClassificationOutcome, rhs: ClassificationOutcome) -> Bool {
-        lhs.decision == rhs.decision && lhs.embeddingModel == rhs.embeddingModel
+extension AnalysisOutcome: Hashable {
+    public static func == (lhs: AnalysisOutcome, rhs: AnalysisOutcome) -> Bool {
+        lhs.analysis == rhs.analysis && lhs.labels == rhs.labels && lhs.embeddingModel == rhs.embeddingModel
     }
-    public func hash(into hasher: inout Hasher) { hasher.combine(decision) }
+    public func hash(into hasher: inout Hasher) { hasher.combine(analysis) }
 }
 
 public struct JobStore: Sendable {

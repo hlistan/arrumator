@@ -6,22 +6,19 @@ public struct PipelineConfig: Sendable, Codable, Hashable {
     public var ollama: OllamaConfig
     public var modelProfiles: [String: ModelProfile]
     public var watcher: WatcherConfig
-    public var taxonomy: TaxonomyConfig
     public var records: RecordsConfig
     public var ingest: IngestConfig
     public var extraction: ExtractionConfig
     public var entities: EntityConfig
-    public var classification: ClassificationConfig
+    public var analysis: AnalysisConfig
     public var labels: LabelsConfig
-    public var calibration: CalibrationConfig
-    public var learning: LearningConfig
+    public var senders: SendersConfig
     public var naming: NamingConfig
     public var search: SearchConfig
     public var logging: LoggingConfig
     public var power: PowerConfig
     public var stats: StatsConfig
     public var interface: InterfaceConfig
-    public var rethink: RethinkConfig
 
     public static func load(paths: AppPaths, environment: RuntimeEnvironment = .current) throws -> PipelineConfig {
         var overrides: [JSONValue] = []
@@ -122,51 +119,20 @@ public struct WatcherConfig: Sendable, Codable, Hashable {
     public var selfChangeTTLSeconds: Double
 }
 
-public struct TaxonomyConfig: Sendable, Codable, Hashable {
-    /// Per-folder description file (visible, sorts first in Finder).
-    public var aboutFileName: String
-    /// In every directory holding filed documents: one entry per document there. See docs/storage.md.
-    public var documentsFileName: String
-    /// Machine-owned index at the archive root.
-    public var indexFileName: String
-    public var recentTitlesPerFolder: Int
-    /// Characters of the `_about.md` body included in a folder's embedding.
-    public var embeddingBodyChars: Int
-    public var embeddingExampleLimit: Int
-    /// Recent file names kept in each folder's learned block.
-    public var learnedExamplesLimit: Int
-    /// Most frequent correspondents kept in each folder's learned block.
-    public var learnedCorrespondentsLimit: Int
-    /// App-managed area holding the system folders; created only when first needed.
-    public var systemArea: SystemFolderSpec
-    public var systemFolders: [SystemFolderSpec]
-    /// The deepest a folder can be, counted from the top of the archive; year folders do not count. The logic decides
-    /// how deep the tree goes, up to this.
-    public var maxDepth: Int
-    /// Files the app or macOS leave in a folder that do not stop it counting as empty (besides `_about.md`).
-    public var prunableLeftovers: [String]
-
-    public func systemFolder(_ role: FolderRole) -> SystemFolderSpec? { systemFolders.first { $0.role == role } }
-}
-
-/// The files in the system area that hold what the app learned and the archive's logic; see docs/storage.md. History
-/// files are named per month, with the watcher's managed-file prefix so nothing ingests them.
+/// The archive's own files: a `_documents.md` beside the documents of each directory, and the `System` folder
+/// holding what the app learned and its history (docs/storage.md). Documents are filed at the top of the archive.
 public struct RecordsConfig: Sendable, Codable, Hashable {
+    /// In every directory holding documents: one entry per document there.
+    public var documentsFileName: String
+    /// At the top of the archive; holds the folders below and nothing of the user's.
+    public var systemFolderName: String
+    /// In the system folder: the senders the app learned.
+    public var learnedFolderName: String
+    /// In the system folder: the history, one file per month named with the watcher's managed-file prefix.
+    public var historyFolderName: String
     public var sendersFileName: String
-    public var rulesFileName: String
-    public var correctionsFileName: String
-    public var memoriesFileName: String
-    /// The archive's logic, in the Logic system folder: the prompt is the file's text.
-    public var logicFileName: String
     /// Added to the name of a database that could not be opened when it is moved aside.
     public var setAsideSuffix: String
-}
-
-public struct SystemFolderSpec: Sendable, Codable, Hashable {
-    public var role: FolderRole?
-    public var code: String
-    public var name: String
-    public var description: String
 }
 
 public struct IngestConfig: Sendable, Codable, Hashable {
@@ -279,47 +245,8 @@ public struct EntityConfig: Sendable, Codable, Hashable {
     public var companySuffixes: [String]
 }
 
-public struct CandidateWeights: Sendable, Codable, Hashable {
-    public var similarity: Double
-    public var knn: Double
-}
-
-public struct CalibrationWeights: Sendable, Codable, Hashable {
-    public var llm: Double
-    public var knn: Double
-    /// Document ↔ chosen folder description similarity.
-    public var similarity: Double
-    /// Last level of the model's ideal path ↔ chosen folder similarity.
-    public var ideal: Double
-}
-
-public struct ClassificationConfig: Sendable, Codable, Hashable {
-    /// Maps the model's ideal path onto the actual folder tree. A level that may be a folder already there under another
-    /// name is canonicalized: the folders beside it are ranked by embedding and the model picks which one it is, if any.
-    public struct PlacementGuard: Sendable, Codable, Hashable {
-        /// A level of the model's path whose name is at least this similar to a folder in the same place is that
-        /// folder, rather than a new one beside it, without asking the model.
-        public var duplicateAbove: Double
-        /// A folder beside the level is offered to the model as the one it may be only when its name, or its name with
-        /// its description, is at least this similar to the level's.
-        public var offerAbove: Double
-        /// Folders offered to the model in one question, the most alike first.
-        public var choices: Int
-        /// The k of reciprocal rank fusion, 1 / (k + rank), which merges the ranking by names with the ranking by names
-        /// with descriptions.
-        public var rankFusionK: Double
-        /// Questions put to the model for one document at most.
-        public var maxJudgements: Int
-        /// A level whose name is at least this similar to the document's sender (or subject), when the two are not
-        /// written alike, stands for that party: the same name in another language.
-        public var partyAbove: Double
-    }
-    public struct KNN: Sendable, Codable, Hashable {
-        public var k: Int
-        public var maxPerFolder: Int
-        public var halfLifeDays: Double
-        public var recencyFloor: Double
-    }
+/// Reading a document with the local model: what it sees of it, how it is asked, and what its answer may be.
+public struct AnalysisConfig: Sendable, Codable, Hashable {
     public struct LLMOptions: Sendable, Codable, Hashable {
         public var temperature: Double
         public var topK: Int
@@ -327,38 +254,28 @@ public struct ClassificationConfig: Sendable, Codable, Hashable {
         public var numPredict: Int
         public var seed: Int
     }
+    /// How strongly each kind of evidence recognises a known sender.
     public struct CorrespondentStrength: Sendable, Codable, Hashable {
         public var stableKey: Double
         public var domain: Double
         public var alias: Double
-        public var ruleMinimum: Double
     }
+    /// Stamped on every trace, so a change to the prompt shows in what it recorded.
     public var promptVersion: Int
-    /// Longest text the logic may have, so the instructions leave room for the document in the model's context.
-    public var logicMaxChars: Int
     public var excerptChars: Int
     public var embeddingSummaryChars: Int
     public var embeddingNumCtx: Int
-    public var promptExamplesPerFolder: Int
-    public var knn: KNN
-    public var candidateWeights: CandidateWeights
-    public var candidateWeightsNoMemory: CandidateWeights
     public var correspondentStrength: CorrespondentStrength
     public var correspondentScanChars: Int
     public var llmOptions: LLMOptions
     public var titleMaxChars: Int
-    public var maxTags: Int
     public var vlmNumPredict: Int
     public var promptDatesLimit: Int
     public var promptIdentifiersLimit: Int
-    public var alternativesCount: Int
-    public var ruleTextScanChars: Int
-    /// Re-asks after an invalid answer before falling back to the fast model.
+    /// Re-asks after an invalid answer before falling back to the other model.
     public var repairAttempts: Int
-    public var placementGuard: PlacementGuard
 }
 
-/// The labels the local model gives every document: the signals it picks out of the text (`LabelKind`).
 public struct LabelsConfig: Sendable, Codable, Hashable {
     /// Labels of one kind a document keeps at most, the most significant first.
     public var maxPerKind: Int
@@ -366,82 +283,10 @@ public struct LabelsConfig: Sendable, Codable, Hashable {
     public var maxValueChars: Int
 }
 
-public struct CalibrationConfig: Sendable, Codable, Hashable {
-    public var weights: CalibrationWeights
-    public var weightsNoMemory: CalibrationWeights
-    /// Cosine similarities are mapped linearly from [floor, ceiling] to [0, 1].
-    public var similarityFloor: Double
-    public var similarityCeiling: Double
-    /// Ideal-path ↔ folder name similarities are mapped linearly from [idealFloor, idealCeiling] to [0, 1].
-    public var idealFloor: Double
-    public var idealCeiling: Double
-    public var ruleAgreeFloor: Double
-    public var ruleAgreeBonus: Double
-    public var ruleConflictPenalty: Double
-    /// Confidence multiplier for decisions that create a new folder (no past evidence can back them yet).
-    public var newFolderConfidenceScale: Double
-    public var metadataOnlyPenalty: Double
-    public var metadataOnlyCap: Double
-    public var vlmOnlyCap: Double
-    public var lowOCRThreshold: Double
-    public var lowOCRPenalty: Double
-    public var mtimeDatePenalty: Double
-    public var unknownLanguagePenalty: Double
-}
-
-public struct LearningConfig: Sendable, Codable, Hashable {
-    public struct MemoryWeights: Sendable, Codable, Hashable {
-        /// Confident model decision.
-        public var auto: Double
-        public var approved: Double
-        public var corrected: Double
-        /// Uncertain model decision, or a placement derived from existing rules/filings (adds no new evidence).
-        public var unconfirmed: Double
-    }
-    public struct DescriptionRefresh: Sendable, Codable, Hashable {
-        public var minNewDocuments: Int
-        public var intervalDays: Double
-        public var sampleSize: Int
-        public var excerptSamples: Int
-        public var excerptChars: Int
-        public var exampleCount: Int
-        public var temperature: Double
-    }
-    public var memoryWeights: MemoryWeights
-    /// Only memories at least this heavy count as evidence for rules and direct placement.
-    public var trustedMemoryMinWeight: Double
-    /// A filing nobody moved for this many days counts as evidence, so the app keeps learning without being asked.
-    /// Zero switches implicit confirmation off.
-    public var settleUnconfirmedAfterDays: Int
-    public var maxMemoriesPerFolder: Int
-    public var ruleMinSupport: Int
-    public var ruleMaxContradictionShare: Double
-    public var ruleStrictBelowSupport: Int
-    public var ruleDisableAfterContradictions: Int
-    /// Reliability an automatically disabled rule must regain from fresh filings before it is switched back on.
-    public var ruleReenableReliability: Double
-    public var ruleInducedPriority: Int
-    public var correspondentRuleMinSupport: Int
-    public var correspondentRulePriority: Int
+/// Learning who documents come from.
+public struct SendersConfig: Sendable, Codable, Hashable {
+    /// An identifier becomes a sender's own once it was on this many of the sender's documents and on no one else's.
     public var stableKeyMinFilings: Int
-    public var defaultFolderMinWins: Int
-    public var descriptionRefresh: DescriptionRefresh
-    public var absorbSampleFiles: Int
-    public var directPlacement: DirectPlacement
-
-    /// When learned evidence is strong enough to place a document without asking the model.
-    public struct DirectPlacement: Sendable, Codable, Hashable {
-        /// Minimum rule reliability (agreeing filings vs. contradictions; uses of the rule do not count as evidence).
-        public var ruleMinReliability: Double
-        /// Past filings at least this similar, all in one folder, place the document directly.
-        public var knnMinSimilarity: Double
-        /// Such trusted filings needed. One is enough: a model, a small one especially, decides a recurring document
-        /// under different names from one month to the next, and its predecessor's folder keeps it with the rest
-        /// (kNN classification over the user's own filings; see docs/organizing-principles-sources.md).
-        public var knnMinNeighbors: Int
-        /// Near-identical past filings that must agree on a document type before rules may rely on it.
-        public var typeEstimateMinNeighbors: Int
-    }
 }
 
 public struct NamingConfig: Sendable, Codable, Hashable {
@@ -497,25 +342,10 @@ public struct PowerConfig: Sendable, Codable, Hashable {
 }
 
 public struct StatsConfig: Sendable, Codable, Hashable {
+    /// The periods, in days, Statistics offers to look back over.
     public var windowsDays: [Int]
-    public var whatIfAutoThresholds: [Double]
-    public var folderOverlapSimilarity: Double
-    public var confusionPairsLimit: Int
     public var diagnosticsTraceLimit: Int
     public var funnel: FunnelConfig
-}
-
-/// Rethinking placement: processed documents are decided again from the archive's logic.
-public struct RethinkConfig: Sendable, Codable, Hashable {
-    /// Documents a trial of new logic decides, taken from across the archive's folders.
-    public var trialSize: Int
-    /// Past filings shown to the model while rethinking must weigh at least this much (user-confirmed ones), so the
-    /// old arrangement does not simply repeat itself.
-    public var memoryMinWeight: Double
-    /// A rule follows its documents to a new folder when at least this share of them moved there together.
-    public var followShare: Double
-    /// How often planning checks again whether it may continue while new arrivals, a pause or the power state hold it.
-    public var waitSeconds: Double
 }
 
 /// How much the app and the menu bar list at once.
@@ -541,8 +371,6 @@ public struct FunnelStepConfig: Sendable, Codable, Hashable, Identifiable {
 }
 
 public struct FunnelConfig: Sendable, Codable, Hashable {
-    /// How many periods the "documents placed without the model" trend is split into.
-    public var trendBuckets: Int
     /// Below this many documents in the window, percentages are noise, so only counts are shown.
     public var minimumForShares: Int
     public var steps: [FunnelStepConfig]

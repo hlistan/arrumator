@@ -16,13 +16,13 @@ public struct CorrespondentMatch: Sendable, Codable, Hashable {
 /// promoted after repeated filings), then e-mail/web domains, then names seen before.
 public struct CorrespondentResolver: Sendable {
     public let correspondents: [Correspondent]
-    public let strength: ClassificationConfig.CorrespondentStrength
+    public let strength: AnalysisConfig.CorrespondentStrength
     public let scanChars: Int
     public let companySuffixes: [String]
     /// Identifiers currently seen with more than one correspondent; they identify none of them.
     public let ambiguousKeys: Set<String>
 
-    public init(correspondents: [Correspondent], config: ClassificationConfig, entities: EntityConfig,
+    public init(correspondents: [Correspondent], config: AnalysisConfig, entities: EntityConfig,
                 ambiguousKeys: Set<String> = []) {
         self.correspondents = correspondents
         self.ambiguousKeys = ambiguousKeys

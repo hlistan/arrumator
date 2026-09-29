@@ -34,9 +34,9 @@ public enum ModelAnswerError: Error, LocalizedError {
 public struct LLMClassifier: Sendable {
     public let gate: InferenceGate
     public let models: ModelManager
-    public let config: ClassificationConfig
+    public let config: AnalysisConfig
 
-    public init(gate: InferenceGate, models: ModelManager, config: ClassificationConfig) {
+    public init(gate: InferenceGate, models: ModelManager, config: AnalysisConfig) {
         self.gate = gate
         self.models = models
         self.config = config

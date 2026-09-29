@@ -2,20 +2,11 @@ import ArrumatorCore
 import ArrumatorRuntime
 import SwiftUI
 
-/// What a document row says at its end.
-enum RowDetail {
-    /// Where it went, or what happened to it, and who decided.
-    case decision
-    /// Its date and correspondent, for lists that are already about one folder.
-    case document
-}
-
-/// Documents the way Things lists to-dos: one line each, the decision at the end, and a click opens the document in
-/// place as a card.
+/// Documents the way Things lists to-dos: one line each, what happened to it at the end, its labels beneath, and a
+/// click opens the document in place as a card.
 struct DocumentList: View {
     @Environment(AppModel.self) private var model
     let documents: [DocumentRecord]
-    var detail: RowDetail = .decision
     var snippets: [Int64: String] = [:]
 
     var body: some View {
@@ -30,21 +21,15 @@ struct DocumentList: View {
     }
 
     private func row(_ d: DocumentRecord) -> some View {
-        let subtitle = d.id.flatMap { snippets[$0] }?.replacingOccurrences(of: "\n", with: " ")
-        return switch detail {
-        case .decision:
-            ListRow(symbol: d.status.symbol, tint: d.status.tint, title: d.filename,
-                    detail: Wording.outcome(of: d, in: model.taxonomy, incoming: model.settings?.incomingURL),
-                    tag: d.status == .filed ? Wording.deciderTag(d.decision) : nil, subtitle: subtitle)
-        case .document:
-            ListRow(symbol: d.status.symbol, tint: d.status.tint, title: d.filename,
-                    detail: [d.correspondent, d.docDate].compactMap { $0 }.joined(separator: " · "), subtitle: subtitle)
-        }
+        let subtitle = d.id.flatMap { snippets[$0] }?.replacingOccurrences(of: "\n", with: " ") ?? Wording.labels(d.labels)
+        return ListRow(symbol: d.status.symbol, tint: d.status.tint, title: d.filename,
+                       detail: Wording.outcome(of: d, archive: model.settings?.archiveURL, incoming: model.settings?.incomingURL),
+                       subtitle: subtitle)
     }
 }
 
-/// A document opened in place: what was decided and why, what the app learned from it, and every way to change the
-/// decision. Each change goes through `ReviewActions`, which records it as a correction the app learns from.
+/// A document opened in place: what the model read it as and its labels, what the app learned from it, and every way
+/// to correct it. Each change goes through `ReviewActions`, which records it; a corrected sender is learned from.
 struct DocumentCard: View {
     @Environment(AppModel.self) private var model
     let documentID: Int64
@@ -55,7 +40,6 @@ struct DocumentCard: View {
     @State private var name = ""
     @State private var correspondent = ""
     @State private var date = ""
-    @State private var choosingFolder = false
     @State private var showingTrace = false
     @FocusState private var focus: Field?
 
@@ -66,7 +50,7 @@ struct DocumentCard: View {
             if let document {
                 header(document)
                 fields(document)
-                why(document)
+                reading(document)
                 learned
                 actions(document)
             } else {
@@ -81,14 +65,6 @@ struct DocumentCard: View {
         .task(id: model.activity) { await load() }
         .onChange(of: focus) { previous, _ in
             if let previous { Task { await commit(previous) } }
-        }
-        .sheet(isPresented: $choosingFolder) {
-            FolderChooser(title: document?.status == .filed ? "Move to" : "File into") { choice in
-                choosingFolder = false
-                guard let choice else { return }
-                Task { await file(into: choice) }
-            }
-            .environment(model)
         }
         .sheet(isPresented: $showingTrace) {
             TraceView(documentID: documentID).environment(model).frame(minWidth: 760, minHeight: 560)
@@ -108,7 +84,7 @@ struct DocumentCard: View {
                     .font(.title3.weight(.semibold))
                     .focused($focus, equals: .name)
                     .onSubmit { focus = nil }
-                    .disabled(d.decision == nil)
+                    .disabled(d.analysis == nil)
                 placement(d)
                 Text("Arrived as \(d.originalFilename) · \(d.addedAt.formatted(date: .abbreviated, time: .shortened))")
                     .font(.caption).foregroundStyle(.tertiary)
@@ -119,26 +95,11 @@ struct DocumentCard: View {
         }
     }
 
-    /// Where it is, or where the app suggests it goes, with the way to change that.
-    @ViewBuilder private func placement(_ d: DocumentRecord) -> some View {
+    /// Where it is, or what happened to it.
+    private func placement(_ d: DocumentRecord) -> some View {
         HStack(spacing: 8) {
             Image(systemName: d.status.symbol).foregroundStyle(d.status.tint)
-            switch d.status {
-            case .filed:
-                Text(Wording.outcome(of: d, in: model.taxonomy, incoming: model.settings?.incomingURL))
-                Button("Move…") { choosingFolder = true }.buttonStyle(.link)
-            case .needsReview, .held, .undone, .failed:
-                Text(Wording.outcome(of: d, in: model.taxonomy, incoming: model.settings?.incomingURL))
-                if let target = Wording.target(of: d.decision, in: model.taxonomy) {
-                    Button(d.status == .needsReview ? "File There" : "File in \(target)") {
-                        run("File") { try await $0.review.approve(documentID) }
-                    }
-                    .buttonStyle(.borderedProminent).controlSize(.small)
-                }
-                Button("Choose Folder…") { choosingFolder = true }.buttonStyle(.link)
-            default:
-                Text(Wording.outcome(of: d, in: model.taxonomy, incoming: model.settings?.incomingURL))
-            }
+            Text(Wording.outcome(of: d, archive: model.settings?.archiveURL, incoming: model.settings?.incomingURL))
         }
         .font(.callout)
     }
@@ -164,7 +125,7 @@ struct DocumentCard: View {
             }
             labels(d)
         }
-        .disabled(d.decision == nil)
+        .disabled(d.analysis == nil)
     }
 
     /// What the model found the document concerns, one row per kind of label it has.
@@ -180,18 +141,16 @@ struct DocumentCard: View {
         }
     }
 
-    @ViewBuilder private func why(_ d: DocumentRecord) -> some View {
-        if let decision = d.decision {
+    /// Who read the document, and anything that keeps it waiting for the user.
+    @ViewBuilder private func reading(_ d: DocumentRecord) -> some View {
+        if let analysis = d.analysis {
             Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 4) {
                 GridRow(alignment: .firstTextBaseline) {
-                    label("Why")
+                    label("Read")
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(Wording.decider(decision))
-                        if !decision.rationale.isEmpty {
-                            Text(decision.rationale).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                        }
-                        ForEach(decision.reviewReasons, id: \.self) { reason in
-                            Text(reason).foregroundStyle(Palette.attention).fixedSize(horizontal: false, vertical: true)
+                        Text(Wording.reader(analysis))
+                        ForEach(analysis.problems, id: \.self) { problem in
+                            Text(problem).foregroundStyle(Palette.attention).fixedSize(horizontal: false, vertical: true)
                         }
                     }
                     .textSelection(.enabled)
@@ -206,7 +165,7 @@ struct DocumentCard: View {
                 label("Learned")
                 VStack(alignment: .leading, spacing: 0) {
                     if lessons.isEmpty {
-                        Text("Nothing yet. Moving, renaming or confirming this document teaches Arrumator.")
+                        Text("Nothing yet. Correcting its sender teaches Arrumator another name for it.")
                             .foregroundStyle(.secondary)
                     }
                     ForEach(lessons) { event in LessonRow(event: event, known: known) }
@@ -219,19 +178,21 @@ struct DocumentCard: View {
         HStack(spacing: 14) {
             Button("Open") { model.open(d.path) }
             Button("Show in Finder") { model.reveal(d.path) }
-            Button("How Was This Decided?") { showingTrace = true }
+            Button("How Was This Read?") { showingTrace = true }
             Spacer()
             switch d.status {
             case .filed:
                 Button("Undo Filing") { run("Undo") { try await $0.review.undo(documentID) } }
-                    .help("Move it back to Incoming and forget what was learned from it")
-                Button("Looks Right") { run("Confirm") { try await $0.review.markCorrect(documentID) } }
-                    .help("Confirm the folder and name, so similar documents are filed the same way")
-            case .needsReview, .failed, .undone:
+                    .help("Move it back to Incoming and forget what it taught about its sender")
+                Button("Looks Right") { run("Confirm") { try await $0.review.confirm(documentID) } }
+                    .help("Confirm its name, details and labels")
+            case .needsReview, .failed:
                 Button("Leave for Later") { run("Hold") { try await $0.review.hold(documentID) } }
-                Button("Decide Again") { run("Retry") { try await $0.review.refile(documentID) } }
-            case .held:
-                Button("Decide Again") { run("Retry") { try await $0.review.refile(documentID) } }
+                Button("Read Again") { run("Read again") { try await $0.review.retry(documentID) } }
+                Button("Looks Right") { run("Confirm") { try await $0.review.confirm(documentID) } }
+                    .help("Keep it in the archive as it is")
+            case .held, .undone:
+                Button("Read Again") { run("Read again") { try await $0.review.retry(documentID) } }
             default:
                 EmptyView()
             }
@@ -247,14 +208,14 @@ struct DocumentCard: View {
     // MARK: Changes
 
     private func typeBinding(_ d: DocumentRecord) -> Binding<DocumentType> {
-        Binding(get: { d.decision?.documentType ?? .other }, set: { type in
+        Binding(get: { d.analysis?.documentType ?? .other }, set: { type in
             run("Change type") { try await $0.review.edit(documentID, fileName: nil, title: nil, correspondent: nil, date: nil, type: type) }
         })
     }
 
     /// Saves a field when the user leaves it, as Things does; unchanged fields are left alone.
     private func commit(_ field: Field) async {
-        guard let d = document, let decision = d.decision else { return }
+        guard let d = document, let analysis = d.analysis else { return }
         switch field {
         case .name:
             let value = name.trimmingCharacters(in: .whitespaces)
@@ -263,23 +224,14 @@ struct DocumentCard: View {
                                                                      date: nil, type: nil) }
         case .correspondent:
             let value = correspondent.trimmingCharacters(in: .whitespaces)
-            guard !value.isEmpty, value != (decision.correspondent ?? "") else { return }
+            guard !value.isEmpty, value != (analysis.correspondent ?? "") else { return }
             await model.perform("Change correspondent") { try await $0.review.edit(documentID, fileName: nil, title: nil,
                                                                                    correspondent: value, date: nil, type: nil) }
         case .date:
             let value = date.trimmingCharacters(in: .whitespaces)
-            guard !value.isEmpty, value != (decision.documentDate ?? "") else { return }
+            guard !value.isEmpty, value != (analysis.documentDate ?? "") else { return }
             await model.perform("Change date") { try await $0.review.edit(documentID, fileName: nil, title: nil,
                                                                           correspondent: nil, date: value, type: nil) }
-        }
-    }
-
-    private func file(into choice: FolderChoice) async {
-        switch choice {
-        case let .existing(folderID):
-            await model.perform("Move") { try await $0.review.move(documentID, toFolder: folderID) }
-        case let .new(spec):
-            await model.perform("Create folder") { try await $0.review.createFolderAndFile(documentID, spec: spec) }
         }
     }
 
@@ -299,8 +251,8 @@ struct DocumentCard: View {
         known = await LessonRow.known(lessons, model: model)
         guard let document, focus == nil else { return }
         name = (document.filename as NSString).deletingPathExtension
-        correspondent = document.decision?.correspondent ?? document.correspondent ?? ""
-        date = document.decision?.documentDate ?? document.docDate ?? ""
+        correspondent = document.analysis?.correspondent ?? document.correspondent ?? ""
+        date = document.analysis?.documentDate ?? document.docDate ?? ""
     }
 }
 
@@ -337,6 +289,6 @@ struct LessonRow: View {
     static func known(_ lessons: [EventRecord], model: AppModel) async -> Set<LearnedFact> {
         let facts = lessons.compactMap(LearnedFact.recorded(by:))
         guard !facts.isEmpty else { return [] }
-        return await model.load("Check what is still known") { try await $0.learningStore.known(facts) } ?? []
+        return await model.load("Check what is still known") { try await $0.senders.known(facts) } ?? []
     }
 }

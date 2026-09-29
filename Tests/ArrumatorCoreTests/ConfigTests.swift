@@ -94,30 +94,12 @@ import Testing
 
     @Test func chatBodyPutsSchemaPropertiesInOrder() throws {
         let schema: JSONValue = .orderedObject([JSONEntry("type", "object"), JSONEntry("properties",
-            .orderedObject([JSONEntry("rationale", ["type": "string"]), JSONEntry("ideal_path", ["type": "array"])]))])
+            .orderedObject([JSONEntry("correspondent", ["type": "string"]), JSONEntry("file_name", ["type": "string"])]))])
         let body = OllamaChatRequest(model: "m", messages: [.user("hi")], format: schema, options: [:], keepAlive: "1m", think: false)
             .body.serialized()
-        let r = try #require(body.range(of: "rationale"))
-        let f = try #require(body.range(of: "ideal_path"))
+        let r = try #require(body.range(of: "correspondent"))
+        let f = try #require(body.range(of: "file_name"))
         #expect(r.lowerBound < f.lowerBound)
         #expect(body.contains(#""think":false"#))
-    }
-}
-
-@Suite struct FolderCodeTests {
-    @Test func codesCountUpPastEveryCodeEverUsed() {
-        #expect(FolderCode.next(after: []) == "F1")
-        #expect(FolderCode.next(after: ["F1", "F7", "11", "10-19", "needs-review"]) == "F8", "codes of earlier versions are no part of the count")
-    }
-
-    @Test func yearFolders() {
-        #expect(YearFolder.matches("2025") && !YearFolder.matches("25") && !YearFolder.matches("2025 Taxes"))
-    }
-
-    @Test func aFolderReadsItsNameFromItsDirectory() {
-        let definition = FolderDefinition(code: "11", name: "Utilities", description: "", yearSubfolders: false, yearRule: nil,
-                                          autoFile: true, origin: .learned)
-        #expect(definition.name(fromDirectory: "11 Utilities") == "Utilities", "a directory an earlier version numbered")
-        #expect(definition.name(fromDirectory: "Energy and Water") == "Energy and Water", "renamed in Finder")
     }
 }

@@ -78,7 +78,7 @@ enum RussianFixtures {
                 ]),
                 .paragraph("Показания счётчика передавайте с 15 по 26 число месяца в личном кабинете на сайте mosenergosbyt.ru или в мобильном приложении."),
             ])
-        return .filed(file, .ru, .pdfScan, core: true, category: "energy-bills", year: 2026, type: .invoice,
+        return .filed(file, .ru, .pdfScan, type: .invoice,
                       correspondent: "Mosenergosbyt", date: formed,
                       titleContains: ["электроэнергию", "август"], identifiers: [.ruINN(cast.mosenergosbyt.taxID)],
                       payload: .pdfScan(.document(document)))
@@ -137,7 +137,7 @@ enum RussianFixtures {
                 ]),
                 .note("Достоверность и полноту сведений, указанных в настоящей декларации, подтверждаю. \(ivan.shortName), \(filed.ruNumeric)."),
             ])
-        return .filed(file, .ru, .pdfText, core: true, category: "taxes-russia", year: 2025, type: .taxReturn,
+        return .filed(file, .ru, .pdfText, type: .taxReturn,
                       correspondent: "FNS", date: filed,
                       titleContains: ["3-НДФЛ", "2025"], identifiers: [.ruINN(ivan.inn)],
                       acceptAlso: AcceptAlso(correspondent: ["ФНС", "ИФНС России № 28 по г. Москве"]),
@@ -186,7 +186,7 @@ enum RussianFixtures {
                 ]),
                 .note("Налоговое уведомление размещено в личном кабинете налогоплательщика и считается полученным со дня, следующего за днём его размещения."),
             ])
-        return .filed(file, .ru, .pdfText, core: true, category: "taxes-russia", year: 2025, type: .taxAssessment,
+        return .filed(file, .ru, .pdfText, type: .taxAssessment,
                       correspondent: "FNS", date: issued,
                       titleContains: ["Налоговое уведомление", "2025"],
                       identifiers: [.ruINN(ivan.inn), .ruINN(cast.treasury.taxID)],
@@ -257,7 +257,7 @@ enum RussianFixtures {
                 ]),
                 .note("Выписка сформирована в СберБанк Онлайн. Документ подписан электронной подписью банка и не требует печати."),
             ])
-        return .filed(file, .ru, .pdfText, core: true, category: "bank-accounts", year: 2026, type: .statement,
+        return .filed(file, .ru, .pdfText, type: .statement,
                       correspondent: "Sberbank", date: formed,
                       titleContains: ["Выписка", "июль"], identifiers: [.ruINN(cast.sberbank.taxID)],
                       payload: .pdfText(document))
@@ -295,9 +295,9 @@ enum RussianFixtures {
             ])
         let photo = Photo(subject: .card(card), format: .jpeg,
                           taken: DateTimeStamp(Day(2026, 2, 10), hour: 20, minute: 14, second: 55, utcOffsetMinutes: 180))
-        return .filed(file, .ru, .imagePhoto, core: true, category: "identity-documents", year: nil, type: .idDocument,
+        return .filed(file, .ru, .imagePhoto, type: .idDocument,
                       correspondent: "SFR", date: registered,
-                      titleContains: ["Страховое", "свидетельство"], minBand: .review,
+                      titleContains: ["Страховое", "свидетельство"],
                       acceptAlso: AcceptAlso(correspondent: ["ПФР", "СФР", "Пенсионный фонд Российской Федерации"]),
                       payload: .photo(photo))
     }
@@ -334,7 +334,7 @@ enum RussianFixtures {
                 .fields([Field("Дата выписки", discharged.ruNumeric)]),
                 .columns(left: ["Лечащий врач", "Петрова А. В. __________"], right: ["Заведующий отделением", "Сидоров К. Л. __________"]),
             ])
-        return .filed(file, .ru, .pdfScan, core: true, category: "medical-records", year: 2025, type: .medicalReport,
+        return .filed(file, .ru, .pdfScan, type: .medicalReport,
                       correspondent: "ГКБ № 1", date: discharged,
                       titleContains: ["Выписной", "эпикриз"],
                       acceptAlso: AcceptAlso(correspondent: ["Городская клиническая больница № 1", "GKB 1"]),
@@ -385,7 +385,7 @@ enum RussianFixtures {
                 .paragraph("Страховая сумма по риску причинения вреда имуществу – 400 000 руб., вреда жизни и здоровью – 500 000 руб. При ДТП оформите извещение о дорожно-транспортном происшествии и сообщите страховщику."),
                 .note("Полис оформлен в электронном виде и подписан усиленной квалифицированной электронной подписью страховщика."),
             ])
-        return .filed(file, .ru, .pdfText, core: true, category: "vehicle-insurance", year: nil, type: .policy,
+        return .filed(file, .ru, .pdfText, type: .policy,
                       correspondent: "Ingosstrakh", date: concluded,
                       titleContains: ["ОСАГО"], identifiers: [.ruINN(cast.ingosstrakh.taxID)],
                       payload: .pdfText(document))
@@ -422,10 +422,10 @@ enum RussianFixtures {
                 .heading("Подписи сторон"),
                 .columns(left: ["Продавец", "", "____________ \(seller.shortName)"], right: ["Покупатель", "", "____________ \(buyer.shortName)"]),
             ])
-        return .filed(file, .ru, .docx, core: false, category: "property", year: nil, type: .contract,
+        return .filed(file, .ru, .docx, type: .contract,
                       correspondent: "Пётр Образцов", date: signed,
                       titleContains: ["купли-продажи", "квартиры"],
-                      identifiers: [.ruINN(seller.inn), .ruINN(buyer.inn)], minBand: .review,
+                      identifiers: [.ruINN(seller.inn), .ruINN(buyer.inn)],
                       acceptAlso: AcceptAlso(correspondent: [seller.fullName, "Petr Obraztsov"]),
                       payload: .docx(document))
     }
@@ -476,11 +476,11 @@ enum RussianFixtures {
                 ]),
                 .columns(left: ["Налоговый агент", "Генеральный директор"], right: ["", "____________ Ромашкин А. А."]),
             ])
-        return .filed(file, .ru, .pdfText, core: false, category: "income-and-payslips", year: 2026, type: .payslip,
+        return .filed(file, .ru, .pdfText, type: .payslip,
                       correspondent: "ООО Ромашка", date: issued,
                       titleContains: ["доходах", "2025"],
                       identifiers: [.ruINN(cast.romashka.taxID), .ruINN(ivan.inn)],
-                      acceptAlso: AcceptAlso(yearFolder: ["2025"], docType: [.attestation],
+                      acceptAlso: AcceptAlso(docType: [.attestation],
                                              correspondent: ["ООО «Ромашка»", "OOO Romashka"]),
                       payload: .pdfText(document))
     }
@@ -527,9 +527,9 @@ enum RussianFixtures {
                 ]),
                 .note("Выписка выдана Филиалом ФГБУ «ФКП Росреестра» по Москве. Государственный регистратор: Иванова Е. П."),
             ])
-        return .filed(file, .ru, .pdfText, core: false, category: "property", year: nil, type: .certificate,
+        return .filed(file, .ru, .pdfText, type: .certificate,
                       correspondent: "Rosreestr", date: issued,
-                      titleContains: ["Выписка", "ЕГРН"], minBand: .check,
+                      titleContains: ["Выписка", "ЕГРН"],
                       acceptAlso: AcceptAlso(correspondent: ["Росреестр", "ФКП Росреестра"]),
                       payload: .pdfText(document))
     }
@@ -574,9 +574,9 @@ enum RussianFixtures {
             Это письмо сформировано автоматически, отвечать на него не нужно.
 
             """
-        return .filed(file, .ru, .text, core: false, category: "telecom-bills", year: 2026, type: .invoice,
+        return .filed(file, .ru, .text, type: .invoice,
                       correspondent: "Rostelecom", date: issued,
-                      titleContains: ["Счет", "июль"], identifiers: [.ruINN(cast.rostelecom.taxID)], minBand: .review,
+                      titleContains: ["Счет", "июль"], identifiers: [.ruINN(cast.rostelecom.taxID)],
                       invalidIdentifiers: [.ruINN(account)], warnings: [.encodingGuessed], encoding: .koi8r,
                       payload: .text(text, .koi8r))
     }
@@ -610,10 +610,9 @@ enum RussianFixtures {
             М. П.
 
             """
-        return .filed(file, .ru, .text, core: false, category: "employment", year: nil, type: .attestation,
+        return .filed(file, .ru, .text, type: .attestation,
                       correspondent: "ООО Ромашка", date: issued,
-                      titleContains: ["Справка", "места работы"], identifiers: [.ruINN(cast.romashka.taxID)],
-                      minBand: .review, acceptAlso: AcceptAlso(correspondent: ["ООО «Ромашка»", "OOO Romashka"]),
+                      titleContains: ["Справка", "места работы"], identifiers: [.ruINN(cast.romashka.taxID)], acceptAlso: AcceptAlso(correspondent: ["ООО «Ромашка»", "OOO Romashka"]),
                       encoding: .utf8, payload: .text(text, .utf8))
     }
 }

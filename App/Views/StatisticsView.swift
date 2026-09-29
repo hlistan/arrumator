@@ -1,5 +1,4 @@
 import ArrumatorCore
-import Charts
 import SwiftUI
 
 /// Everything about how the pipeline is doing, organised as the path a file takes. Each step carries the statistics
@@ -30,15 +29,9 @@ struct StatisticsView: View {
                         FunnelSteps(funnel: funnel, selected: $selected,
                                     showsShares: funnel.showsShares(minimum: minimumForShares))
                         if let selected, let step = funnel.steps.first(where: { $0.id == selected }) {
-                            StepDetail(step: step, insights: insights,
-                                       showsShares: funnel.showsShares(minimum: minimumForShares))
+                            StepDetail(step: step, insights: insights)
                         }
-                        HStack(alignment: .top, spacing: 14) {
-                            EndedUp(steps: funnel.steps, documents: funnel.documents)
-                            DecidedBySummary(funnel: funnel)
-                        }
-                        .fixedSize(horizontal: false, vertical: true)
-                        LearningTrend(funnel: funnel)
+                        EndedUp(steps: funnel.steps, documents: funnel.documents)
                     }
                 } else {
                     ProgressView().frame(maxWidth: .infinity).padding(40)
@@ -49,7 +42,7 @@ struct StatisticsView: View {
         .safeAreaInset(edge: .top) { header }
         .task(id: "\(days)|\(model.activity)") {
             funnel = await model.load("Load statistics") { try await $0.stats.funnel(days: days) }
-            insights = await model.load("Load accuracy") { try await $0.stats.insights() }
+            insights = await model.load("Load statistics") { try await $0.stats.insights() }
         }
     }
 
@@ -226,75 +219,6 @@ private struct EndedUp: View {
                     Text("\(slice.count)").monospacedDigit().foregroundStyle(.secondary)
                 }
                 .font(.callout)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(.quaternary.opacity(0.3), in: .rect(cornerRadius: 10))
-    }
-}
-
-/// Who chose the folder, and how much of it needed no model call.
-private struct DecidedBySummary: View {
-    let funnel: ProcessingFunnel
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Who chose the folder").font(.headline)
-            if funnel.decisions.isEmpty {
-                Text("Nothing filed in this period.").font(.callout).foregroundStyle(.secondary)
-            } else {
-                ForEach(funnel.decisions) { source in
-                    HStack(spacing: 8) {
-                        Circle().fill(source.learned ? Palette.progress : Palette.expected)
-                            .frame(width: 9, height: 9)
-                        Text(source.id).lineLimit(1)
-                        Spacer()
-                        Text("\(source.count)").monospacedDigit().foregroundStyle(.secondary)
-                    }
-                    .font(.callout)
-                }
-                Divider()
-                HStack {
-                    Text("Needed no model call")
-                    Spacer()
-                    Text("\(funnel.decidedWithoutModel) of \(funnel.decidedTotal)").monospacedDigit()
-                }
-                .font(.callout)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(.quaternary.opacity(0.3), in: .rect(cornerRadius: 10))
-    }
-}
-
-/// The app's own story: is it needing the model less over time?
-private struct LearningTrend: View {
-    let funnel: ProcessingFunnel
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Learning to file on its own").font(.headline)
-            Text("Share of filings decided from a learned rule or a near-identical past filing, with no model call.")
-                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            if funnel.trend.contains(where: { $0.decided > 0 }) {
-                Chart(funnel.trend.filter { $0.decided > 0 }) { point in
-                    LineMark(x: .value("When", point.start), y: .value("Without the model", point.share ?? 0))
-                        .foregroundStyle(Palette.progress)
-                    PointMark(x: .value("When", point.start), y: .value("Without the model", point.share ?? 0))
-                        .foregroundStyle(Palette.progress)
-                }
-                .chartYScale(domain: 0...1)
-                .chartYAxis { AxisMarks(format: Decimal.FormatStyle.Percent.percent.precision(.fractionLength(0))) }
-                .frame(height: 130)
-            } else {
-                Text("Nothing filed in this period yet.").font(.callout).foregroundStyle(.secondary)
-            }
-            if funnel.decidedWithoutModel == 0, funnel.decidedTotal > 0 {
-                Text("Still asking the model every time. Approving or correcting filings in Review teaches it, and "
-                     + "filings you leave alone start counting on their own after a while.")
-                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

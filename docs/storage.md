@@ -6,51 +6,38 @@ corrupting an index costs time, never information: the app rebuilds it from the 
 
 This is the pattern of plain-text vaults such as Obsidian, whose notes are the source of truth and whose metadata cache
 is disposable and rebuilt from the files ([Obsidian help: how Obsidian stores data](https://help.obsidian.md/Files+and+folders/How+Obsidian+stores+data)).
-The app's own files sit together in one `System` folder at the top of the archive, apart from the user's folders.
-It is known by its `_about.md`, whatever it is called: archives started by earlier versions have it as `00-09 System`,
-with `05 Learned`, `06 Logic` and `07 History` inside.
+Documents are filed at the top of the archive, each directory holding documents lists them beside them, and the app's
+other files sit together in one `System` folder at the top of the archive. The app makes no other folders.
 
 ## What lives where
 
 | What | File | Contents |
 |---|---|---|
-| A folder | `<folder>/_about.md` | Code, name, description, year folders, what it stands for in the logic that made it (`kind`: sender, subject or topic) and which logic that was (`logic`), what the app learned about it. |
-| The documents in a directory | `<directory>/_documents.md` | One entry per file in that directory: identity, original name, checksum, sender, type, date, title, language, tags, labels (absent until the model has labelled it), status, and the decision (who decided, how sure, why, with which logic). |
-| Senders | `System/Learned/_senders.md` | Names, other names, identifiers, e-mail and web domains, usual folder. |
-| Rules | `System/Learned/_rules.md` | Conditions, target folder, evidence, whether on, confirmed or forgotten. |
-| Corrections | `System/Learned/_corrections.md` | Every time you moved, renamed, approved or confirmed a document. |
-| Filing memories | `System/Learned/_memories.md` | Which document taught what about which folder, and how much it counts. |
-| Logic | `System/Logic/_logic.md` | The archive's one logic. The prompt is the file's body, so it can be edited in any editor. The front matter holds the checksum of the built-in text the logic follows, if it follows one. |
+| The documents in a directory | `<directory>/_documents.md` | One entry per file in that directory: identity, original name, checksum, sender, type, date, title, language, labels (absent until the model has labelled it), status, and the analysis: what the model read it as (sender, type, dates, title, file name, the model that read it, and why it waits for you, if it does), with your corrections. |
+| Senders | `System/Learned/_senders.md` | Names, other names, identifiers, e-mail and web domains, how many documents are theirs. |
 | History | `System/History/_<year>-<month>.md` | One line per event, newest last. |
 
 Every file starts with YAML front matter holding the exact data, followed by a Markdown rendering for people. The front
-matter is what the app reads; the rendering is regenerated on every write. The logic file is the exception: its body is
-the prompt itself. A logic file with no front matter at all is read as a prompt the user wrote.
-
-Logic that still has the checksum of the built-in text it was set from follows that text: each new version of the app
-brings its own. Any edit, in the app or in the file, changes the checksum, so the app never writes over it; editing it
-back to the text it came from, or resetting it, makes it follow the app again.
+matter is what the app reads; the rendering is regenerated on every write.
 
 A document's entry sits next to the document: `_documents.md` lists the files in its own directory by name. Renaming or
-moving a folder therefore never touches a record, and a file moved in Finder is found again by the identifier Arrumator
-stores on it as an extended attribute.
+moving a directory of yours therefore never touches a record, and a file moved in Finder is found again by the
+identifier Arrumator stores on it as an extended attribute.
 
-Identifiers in the records are the database's own: document, sender, rule and memory numbers are written into the
-files and restored exactly on a rebuild, so references between records keep working.
+Identifiers in the records are the database's own: document and sender numbers are written into the files and
+restored exactly on a rebuild, so references between records keep working.
 
 ## One index per archive
 
 The index of an archive is `~/Library/Application Support/Arrumator/Indexes/<name>.sqlite`, named after the first
-bytes of
-the SHA-256 of the archive's path. Switching archives stops everything working on the one in use, writes its record
-files, and opens the other archive's index in its place: its folders, documents, logic, what was learned and its
-history. Nothing learned from filing into one archive ever advises another, as rules and filing memories name folders
-that only exist in their own archive. Files waiting in Incoming are taken off the old archive's queue and filed into
-the new one.
+bytes of the SHA-256 of the archive's path. Switching archives stops everything working on the one in use, writes its
+record files, and opens the other archive's index in its place: its documents, senders and history. Nothing learned
+from filing into one archive ever advises another. Files waiting in Incoming are taken off the old archive's queue and
+filed into the new one.
 
-A folder that has never been an archive gets a new index. If it already holds record files, such as a `_logic.md`, the
-index is rebuilt from them; otherwise it starts with the built-in logic. An archive moved to another path is the same
-case: its new index is rebuilt from its records.
+A folder that has never been an archive gets a new index. If it already holds record files, such as a `System` folder
+or a `_documents.md` at its top, the index is rebuilt from them; otherwise it starts empty. An archive moved to another
+path is the same case: its new index is rebuilt from its records.
 
 Earlier versions kept one index, `arrumator.sqlite`, for whichever archive the settings named. The first start of this
 version moves it into place as that archive's index, so nothing it held is lost.
@@ -59,16 +46,14 @@ version moves it into place as that archive's index, so nothing it held is lost.
 
 - **Text and search**: extracted text and the full-text index are extracted again from the documents; the labels'
   columns of the full-text index are filled from the entries, without asking the model again.
-- **Embeddings** of documents, memories and folder descriptions are computed again with the embedding model.
+- **Embeddings** of documents are computed again with the embedding model.
 - **The job queue** is rebuilt by looking at the Incoming folder.
 - **Positions in the file-system event stream** and similar bookkeeping.
 
 Some working state is deliberately not kept in files and does not survive a rebuild:
 
-- **Traces**, the full exchange with the model for each decision. The decision itself, with who made it, how sure it
-  was and why, is in the document's entry.
-- **An open rethink plan.** Nothing has moved while a plan is open; start the trial again.
-- **Pending suggestions**, which the app makes again as it learns.
+- **Traces**, the full exchange with the model for each document. What the model read the document as, and its
+  labels, are in the document's entry.
 
 ## Keeping files and index together
 
@@ -96,8 +81,21 @@ the app stops and says why, rather than starting with an empty index. A rebuild 
 not yet in the files. Documents are then updated in place from their entries and keep their numbers, so their cached
 text, embeddings and traces stay attached; everything else recorded in files is replaced by what the files say.
 
-A rebuild reads every folder's `_about.md`, every `_documents.md`, the learned files, the logic file and the history.
-Documents whose file is not where their entry says are looked up by the identifier on the file; files that have no entry,
-in any of your folders at any depth, are taken in as adopted documents of the folder they are in. Then, in the
-background and giving way to new arrivals, each document's text is extracted again and its embedding recomputed.
-Search by words and by meaning fills in as that proceeds; filing works from the start.
+A rebuild reads every `_documents.md`, the senders and the history. Documents whose file is not where their entry says
+are looked up by the identifier on the file. Files that have no entry, at the top of the archive or in a folder of
+yours at any depth, are taken in where they are and read by the model; the `System` folder and an Incoming folder kept
+inside the archive are left out. Then, in the background and giving way to new arrivals, each document's text is
+extracted again and its embedding recomputed. The model is not asked again: labels come back from the entries. Search
+by words and by meaning fills in as that proceeds; filing works from the start.
+
+## Archives from earlier versions
+
+Earlier versions filed documents into folders, kept a `_about.md` in each and an `_INDEX.md` at the top, and kept the
+archive's logic, rules, corrections and filing memories in the `System` folder. The first start of this version
+migrates the index: documents stay where they are with their details, the decision recorded for each becomes its
+analysis, and the tables of folders, rules, filing memories, corrections, proposals, logic and rethink plans are
+dropped, as are history events of kinds that no longer exist. Every record file is written again in the new shape.
+Those older files are left alone in the archive and no longer read; `_documents.md` entries written by an earlier
+version are still read, without labels. An archive whose system folder an early version named `00-09 System` keeps its
+senders there, unread; the app learns them again as it files. Documents are labelled when they are read again
+(`arrumatorcli labels --unlabelled`).

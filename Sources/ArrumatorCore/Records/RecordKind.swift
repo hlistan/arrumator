@@ -5,26 +5,19 @@ import Foundation
 public enum RecordKind: Hashable, Sendable {
     /// The `_documents.md` of a directory, by its absolute path.
     case documents(directory: String)
-    case senders, rules, corrections, memories
-    /// Every logic file at once: renaming one changes which file it lives in.
-    case logic
+    case senders
     /// The history of one month, `yyyy-MM` in UTC.
     case history(month: String)
 
     static let documentsPrefix = "documents:"
     static let historyPrefix = "history:"
-    static let singles: [String: RecordKind] = ["senders": .senders, "rules": .rules, "corrections": .corrections,
-                                                "memories": .memories, "logic": .logic]
+    static let sendersKey = "senders"
 
     /// Documents keys end with a slash, as SQL derives the directory from a path.
     public var key: String {
         switch self {
         case let .documents(directory): Self.documentsPrefix + directory + "/"
-        case .senders: "senders"
-        case .rules: "rules"
-        case .corrections: "corrections"
-        case .memories: "memories"
-        case .logic: "logic"
+        case .senders: Self.sendersKey
         case let .history(month): Self.historyPrefix + month
         }
     }
@@ -37,8 +30,8 @@ public enum RecordKind: Hashable, Sendable {
             self = .documents(directory: directory)
         } else if key.hasPrefix(Self.historyPrefix) {
             self = .history(month: String(key.dropFirst(Self.historyPrefix.count)))
-        } else if let single = Self.singles[key] {
-            self = single
+        } else if key == Self.sendersKey {
+            self = .senders
         } else {
             return nil
         }

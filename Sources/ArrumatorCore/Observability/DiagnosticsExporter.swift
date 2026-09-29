@@ -7,7 +7,7 @@ public struct DiagnosticsContents: Sendable, Codable, Hashable {
     public var includesDocumentText: Bool
 }
 
-/// Writes a zip with logs, recent traces, the doctor report, settings and the taxonomy snapshot.
+/// Writes a zip with logs, recent traces, the doctor report and settings.
 /// Document text is included only when explicitly requested.
 public struct DiagnosticsExporter: Sendable {
     public let database: AppDatabase
@@ -20,7 +20,7 @@ public struct DiagnosticsExporter: Sendable {
         self.config = config
     }
 
-    public func export(to zipURL: URL, doctor: DoctorReport, settings: AppSettings, taxonomy: TaxonomySnapshot,
+    public func export(to zipURL: URL, doctor: DoctorReport, settings: AppSettings,
                        includeDocumentText: Bool) async throws -> DiagnosticsContents {
         let fm = FileManager.default
         let staging = fm.temporaryDirectory.appendingPathComponent("arrumator-diagnostics-\(UUID().uuidString)", isDirectory: true)
@@ -29,7 +29,6 @@ public struct DiagnosticsExporter: Sendable {
         defer { try? fm.removeItem(at: staging.deletingLastPathComponent()) }
         try JSON.prettyEncoder.encode(doctor).write(to: staging.appendingPathComponent("doctor.json"))
         try JSON.prettyEncoder.encode(settings).write(to: staging.appendingPathComponent("settings.json"))
-        try JSON.prettyEncoder.encode(taxonomy).write(to: staging.appendingPathComponent("taxonomy.json"))
         var logFiles: [String] = []
         let logsDir = staging.appendingPathComponent("logs", isDirectory: true)
         try fm.createDirectory(at: logsDir, withIntermediateDirectories: true)

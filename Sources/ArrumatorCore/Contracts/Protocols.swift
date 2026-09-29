@@ -11,60 +11,24 @@ public protocol Embedder: Sendable {
     func embed(_ texts: [String]) async throws -> [[Float]]
 }
 
-/// Why a document is being classified.
-public enum ClassificationMode: Sendable, Hashable {
-    /// A new arrival: confident learned evidence may place it without asking the model.
-    case arrival
-    /// Deciding a filed document again: the model always decides from the archive's logic, learned evidence only
-    /// advises, and the document's own past filing is not offered as evidence.
-    case rethink(documentID: Int64)
-}
-
-/// Decides where a document goes. Implemented by `ArrumatorClassify.FilingClassifier`.
-public protocol DocumentClassifier: Sendable {
-    func classify(_ content: ExtractedContent, taxonomy: TaxonomySnapshot, settings: AppSettings,
-                  config: PipelineConfig, mode: ClassificationMode, trace: TraceContext) async throws -> ClassificationOutcome
-    /// The vector the document is compared with others by, computed as filing computes it, and the model that made
-    /// it; nil when no embedding can be made.
+/// Reads a document with the local model: what it is, its labels and the name it is filed under. Implemented by
+/// `ArrumatorClassify.DocumentAnalyzer`.
+public protocol DocumentAnalyzing: Sendable {
+    /// Without a valid answer from the model the outcome says why, and has no labels; a model that cannot be reached
+    /// or is missing throws, so the document waits.
+    func analyse(_ content: ExtractedContent, settings: AppSettings, config: PipelineConfig,
+                 trace: TraceContext) async throws -> AnalysisOutcome
+    /// The vector the document is searched by meaning with, and the model that made it; nil when none can be made.
     func embedding(for content: ExtractedContent, sender: String?, settings: AppSettings, config: PipelineConfig,
                    trace: TraceContext) async throws -> (vector: [Float], model: String)?
 }
 
-/// Assigns labels to documents. Implemented by `ArrumatorClassify.LabelExtractor`.
-public protocol DocumentLabeler: Sendable {
-    /// The document's labels, or nil when the model gave no valid answer. An empty list means the document shows
-    /// nothing worth a label. Throws when the model cannot be reached or is missing, so the document waits.
-    func labels(for content: ExtractedContent, settings: AppSettings, config: PipelineConfig,
-                trace: TraceContext) async throws -> [DocumentLabel]?
-}
-
-/// A filed document that a rethink moved from one folder to another.
-public struct PlacementMove: Sendable, Codable, Hashable {
-    public var documentID: Int64
-    public var fromFolderID: Int64
-    public var toFolderID: Int64
-    public var correspondentID: Int64?
-    public var documentType: DocumentType?
-
-    public init(documentID: Int64, fromFolderID: Int64, toFolderID: Int64, correspondentID: Int64?, documentType: DocumentType?) {
-        self.documentID = documentID
-        self.fromFolderID = fromFolderID
-        self.toFolderID = toFolderID
-        self.correspondentID = correspondentID
-        self.documentType = documentType
-    }
-}
-
-/// Receives filings and corrections to learn from. Implemented by `ArrumatorClassify.Learner`.
+/// Learns who documents come from. Implemented by `ArrumatorClassify.SenderLearner`.
 public protocol LearningSink: Sendable {
-    func documentFiled(documentID: Int64, folderID: Int64, outcome: ClassificationOutcome, content: ExtractedContent,
-                       confirmedByUser: Bool, trace: TraceContext) async
-    func correctionRecorded(_ correction: CorrectionEvent, trace: TraceContext) async
+    /// A document was analysed and filed: it is linked to its sender, and what identifies the sender is learned.
+    func documentFiled(documentID: Int64, analysis: DocumentAnalysis, content: ExtractedContent, trace: TraceContext) async
+    /// The user named a document's sender `to` where the model read `from`: `from` becomes another name for `to`.
+    func senderRenamed(documentID: Int64, from: String, to: String) async
+    /// A filing was undone: what it taught about its sender is learned again without it.
     func documentForgotten(documentID: Int64) async
-    /// Folders appeared, were renamed or removed on disk.
-    func taxonomyChanged(_ changes: [TaxonomyChange], taxonomy: TaxonomySnapshot) async
-    /// A document's embedding was computed again, as after a rebuilt index: its memories take the new vector.
-    func documentReembedded(documentID: Int64, vector: [Float], model: String) async
-    /// A rethink moved documents and removed the folders it emptied: rules follow their documents.
-    func placementsRearranged(_ moves: [PlacementMove], removedFolderIDs: Set<Int64>) async
 }

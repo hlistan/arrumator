@@ -3,7 +3,7 @@ import os
 import Synchronization
 
 public enum LogCategory: String, Sendable, Codable, CaseIterable {
-    case app, watch, ingest, extract, classify, fileops, ollama, index, search, taxonomy, learn, ui, cli, db, power
+    case app, watch, ingest, extract, classify, fileops, ollama, index, search, learn, ui, cli, db, power
 }
 
 public struct LogEntry: Sendable, Codable, Identifiable, Hashable {

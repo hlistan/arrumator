@@ -8,9 +8,9 @@
 **A macOS menu-bar app that files your documents for you, entirely on your Mac.**
 
 Drop any file into your Incoming folder: a PDF, a scan, a photo, a screenshot, a Word, Excel or PowerPoint file, an
-e-mail, plain text. Arrumator reads it, decides where it belongs and what it should be called, files it into your
-archive, indexes it for search, and learns from every correction you make. Documents in English, Russian and
-Portuguese are supported.
+e-mail, plain text. Arrumator reads it, labels it with what it is about, gives it a name that says what it is, files it
+into your archive and indexes it for search. There are no folders to keep in order: you find a document by its labels,
+its sender, its words or its meaning. Documents in English, Russian and Portuguese are supported.
 
 - [Features](#features)
 - [Privacy](#privacy)
@@ -27,17 +27,14 @@ Portuguese are supported.
   vision model for photos without text. It finds the language, dates, and identifiers such as IBANs and tax numbers.
 - **Labels every document by what it is about.** The local model picks out whom and what each document concerns,
   the jurisdictions it falls under and the languages it is written in, and keeps them as labels you can search by
-  (`jurisdiction:portugal`, `subject:"maria silva"`), wherever the document is filed.
-- **You decide how the archive is organised.** The archive's *logic* is a prompt you can edit. The built-in one
-  condenses records-management practice. Try a change on a few documents, then reprocess the whole archive, reviewing
-  every move before it happens.
-- **The folder tree grows with your documents**, as deep as the logic asks, with nothing created in advance. Senders
-  are recognised by their identifiers, not their spelling, so a bank's documents stay together.
-- **It learns from you.** Every move, rename or confirmation becomes a correction. Rules form from repeated filings,
-  and next month's bill joins last month's. Anything learned can be forgotten.
-- **Asks when unsure.** By default, uncertain documents wait in Needs You with a suggestion instead of being guessed
-  into place.
-- **Every decision can be audited**: the prompts, the model's answers, timings and a full history, with Statistics
+  (`jurisdiction:portugal`, `subject:"maria silva"`). It is read once, with a prompt made for this.
+- **Names every file** from its date, its sender and what it is, such as `2026-07-05 EDP Comercial - Fatura
+  eletricidade julho.pdf`, and files it at the top of the archive. The app makes no folders.
+- **Recognises senders** by their identifiers, not their spelling: a tax number or IBAN seen only on one sender's
+  documents names the next one alike. A name you correct is remembered, and anything learned can be forgotten.
+- **Asks when it cannot read a document.** A file the model gave no answer for, or that is encrypted, damaged or
+  blank, waits in Needs You, in the archive, instead of being guessed into shape.
+- **Everything can be audited**: the prompts, the model's answers, timings and a full history, with Statistics
   showing where documents stop and why.
 - **Nothing is lost.** No code path deletes a document. Every move is recorded and can be undone. What the app learned
   lives in Markdown files inside your archive, and its index can be rebuilt from them.
@@ -58,21 +55,16 @@ reporting or update check.
 - [Ollama](https://ollama.com), on this Mac or on your local network, with the models of one profile. Arrumator
   starts Ollama when needed and downloads the models when you ask.
 
-| Profile | Decisions, images and names | Embeddings | Memory |
+| Profile | Reading, images and names | Embeddings | Memory |
 |---|---|---|---|
 | `standard` (default) | `ministral-3:14b` | `bge-m3` | ~10 GB |
 | `balanced` | `ministral-3:8b` | `bge-m3` | ~7 GB |
 | `lowMemory` | `gemma4:e2b-it-qat` | `bge-m3` | ~5.5 GB |
 
-One model makes every decision, describes images and names files. The profiles are the measured best for their
-memory on a 16 GB Mac mini (M5), filing three instances of every kind of document:
-
-- `ministral-3:14b` grouped them best (F1 0.71, precision 0.90, 92% of repeats filed with their first) at about 25 s
-  per document.
-- `ministral-3:8b` grouped a little worse (F1 0.65) but as precisely (0.92) at 16 s.
-- `gemma4:e2b` was fastest at 6 s, with more mixing (precision 0.76).
-
-Larger models do not fit such a Mac's memory. The measurements are in [docs/evaluation.md](docs/evaluation.md).
+One model reads every document, describes images and names files. The profiles were chosen as the best for their
+memory on a 16 GB Mac mini (M5) when Arrumator still filed documents into folders; how well each labels documents
+has not been measured yet. Larger models do not fit such a Mac's memory. The measurements are in
+[docs/evaluation.md](docs/evaluation.md).
 
 ## Install
 
@@ -97,25 +89,22 @@ together; [docs/cli.md](docs/cli.md) explains how to use it. To build from sourc
 ## Getting started
 
 1. Put a document in `~/Documents/Incoming` (Settings › General changes both folders).
-2. Arrumator files it under `~/Documents/Archive`, in a folder its logic describes, and shows it in **Processed**.
-3. Open the document's row to see why it went there. Move or rename it on its card if it's wrong: the correction is
-   learned, and the next document like it goes where you put this one.
-4. Documents it was unsure about wait in **Needs You**. Accept its suggestion, or choose another folder.
-
-To change how the archive is organised, edit the logic on the **Logic** page, try it on a few documents, then
-reprocess everything. [How Arrumator works](docs/how-it-works.md#logic-you-decide-how-the-archive-is-organised)
-walks through it.
+2. Arrumator reads it, names it and files it at the top of `~/Documents/Archive`, and shows it in **Processed**.
+3. Open the document's row to see its labels and how it was read. Rename it or fix its sender, date or type on its
+   card if it's wrong; a sender you correct is remembered.
+4. Documents it could not read wait in **Needs You**. Confirm them as they are, or have them read again.
+5. Search by any word, or by a kind of label: `jurisdiction:portugal`, `subject:"maria silva"`, `language:russian`.
 
 ## Documentation
 
 | Document | Read it for |
 |---|---|
-| [How Arrumator works](docs/how-it-works.md) | How a document is decided and filed: senders, rules, the logic, the folder tree. |
+| [How Arrumator works](docs/how-it-works.md) | How a document is read, labelled and filed, and how senders are learned. |
 | [Using Arrumator](docs/using-arrumator.md) | The app's pages, settings and environment variables, the audit trail, where your data lives. |
 | [Command line](docs/cli.md) | Every `arrumatorcli` command and option. |
 | [Storage](docs/storage.md) | The archive's record files, the index, and what a rebuild keeps. |
 | [Evaluation](docs/evaluation.md) | The measurements behind the pipeline and the model profiles. |
-| [Sources](docs/organizing-principles-sources.md) | The research behind the built-in logic and the placement design. |
+| [Sources](docs/organizing-principles-sources.md) | The research behind labels and sender recognition. |
 | [Continuous integration and releases](docs/releasing.md) | How changes are checked and released, and how to sign releases. |
 
 ## Contributing

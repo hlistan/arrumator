@@ -9,10 +9,8 @@ import Testing
         builder = FilenameBuilder(config: try PipelineConfig.bundledDefaults().naming)
     }
 
-    private func decision(named fileName: String?) -> FilingDecision {
-        FilingDecision(folderCode: "11", title: "Fatura", fileName: fileName,
-                       confidence: ConfidenceReport(final: 1, band: .auto, thresholds: Thresholds(auto: 0.85, review: 0.5)),
-                       decidedBy: .llm, rationale: "")
+    private func decision(named fileName: String?) -> DocumentAnalysis {
+        DocumentAnalysis(title: "Fatura", fileName: fileName)
     }
 
     private let source = SourceFile(path: "/tmp/scan_0001.PDF", originalFilename: "scan_0001.PDF", fileExtension: "PDF",

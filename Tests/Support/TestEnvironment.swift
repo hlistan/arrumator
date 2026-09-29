@@ -10,7 +10,6 @@ public struct TestEnvironment: Sendable {
     public let database: AppDatabase
     public let config: PipelineConfig
     public let settings: SettingsStore
-    public let taxonomy: TaxonomyStore
 
     public static func make() async throws -> TestEnvironment {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("arrumator-test-\(UUID().uuidString)", isDirectory: true)
@@ -25,9 +24,8 @@ public struct TestEnvironment: Sendable {
             $0.incomingPath = incoming.path
         }
         let database = try AppDatabase.inMemory()
-        let taxonomy = TaxonomyStore(database: database, config: config.taxonomy, registry: nil)
         return TestEnvironment(root: root, paths: paths, archive: archive, incoming: incoming, database: database, config: config,
-                               settings: settings, taxonomy: taxonomy)
+                               settings: settings)
     }
 
     public func cleanup() {
@@ -43,24 +41,16 @@ public struct TestEnvironment: Sendable {
         return url
     }
 
-    /// Creates a folder inside a top-level one named `area`, the way the app does on demand.
-    @discardableResult
-    public func folder(_ name: String, area: String, yearly: Bool = false, description: String? = nil) async throws -> TaxonomyFolder {
-        try await folder(path: [area, name], yearly: yearly, description: description)
-    }
+    /// Where things are in the archive.
+    public var layout: ArchiveLayout { ArchiveLayout(root: archive, records: config.records, watcher: config.watcher) }
 
-    /// Creates the folders along `path`, outermost first, reusing those that exist, and returns the last.
+    /// Writes a text file into the archive at `path`, below its top, as the user would put one there.
     @discardableResult
-    /// `kinds` says, level by level, what the folders stand for in the logic with `LogicStore.version` `logic`.
-    public func folder(path: [String], yearly: Bool = false, description: String? = nil, kinds: [LevelKind] = [],
-                       logic: String? = nil) async throws -> TaxonomyFolder {
-        let levels = path.enumerated().map { index, name in
-            FolderLevel(name: name, description: index == path.count - 1 ? (description ?? "\(name) documents.") : "\(name) documents.",
-                        kind: kinds.indices.contains(index) ? kinds[index] : nil)
-        }
-        return try await taxonomy.materialize(FolderSpec(parentCode: nil, levels: levels, yearSubfolders: yearly,
-                                                         yearRule: yearly ? .documentDate : nil, logic: logic),
-                                              root: archive, origin: .learned)
+    public func put(_ path: String, text: String) throws -> URL {
+        let url = archive.appendingPathComponent(path)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(text.utf8).write(to: url)
+        return url.standardizedFileURL
     }
 }
 
