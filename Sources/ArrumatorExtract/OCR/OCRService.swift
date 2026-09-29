@@ -1,7 +1,7 @@
+import ArrumatorCore
 import CoreGraphics
 import Foundation
 import ImageIO
-import Vision
 
 /// Text recognised on one image.
 struct OCRPageResult: Sendable {
@@ -15,6 +15,7 @@ struct OCRPageResult: Sendable {
     var lowConfidenceShare: Double
     var lineCount: Int
     var engine: OCREngine
+    var device: OCRDevice
     /// Orientation that produced the result (`up` unless the orientation retry won).
     var orientation: String
     /// Recognition languages in the order given to Vision.
@@ -38,8 +39,21 @@ struct OCRRequest: Sendable {
 /// On-device OCR with Vision. Uses `RecognizeDocumentsRequest` (paragraphs, tables) when it supports every
 /// configured language, else `RecognizeTextRequest`; always accurate, with language correction and automatic
 /// language detection, languages ordered by the caller's hint.
+///
+/// Vision runs on its default device, the Neural Engine or GPU, until that fails: then the page is read again on the
+/// CPU, and so is every later page. The accelerated path fails where the CPU path works on Macs without a usable
+/// Neural Engine, such as virtual Macs (`TextRecognition.CRImageReaderError` 9 on GitHub's runners), and once its model
+/// fails to compile it keeps failing until the process restarts (E5RT error 13; see
+/// [TRex #95](https://github.com/amebalabs/TRex/pull/95) and
+/// [phone-harness #9](https://github.com/alexbejan/phone-harness/pull/9)).
 actor OCRService {
+    private let recognizer: any TextRecognizing
     private var engineByLanguages: [[String]: OCREngine] = [:]
+    private var device = OCRDevice.automatic
+
+    init(recognizer: any TextRecognizing) {
+        self.recognizer = recognizer
+    }
 
     func recognize(_ image: CGImage, request: OCRRequest) async throws -> OCRPageResult {
         let engine = engine(for: request.languages)
@@ -54,72 +68,47 @@ actor OCRService {
         return best
     }
 
-    // MARK: Engines
+    // MARK: Engines and devices
 
     private func engine(for languages: [String]) -> OCREngine {
         let key = languages.sorted()
         if let cached = engineByLanguages[key] { return cached }
-        let supported = Set(RecognizeDocumentsRequest().supportedRecognitionLanguages.compactMap(\.languageCode?.identifier))
-        let engine: OCREngine = languages.allSatisfy(supported.contains) ? .recognizeDocuments : .recognizeText
+        let engine: OCREngine = recognizer.documentsSupport(languages) ? .recognizeDocuments : .recognizeText
         engineByLanguages[key] = engine
         return engine
     }
 
     private func perform(_ image: CGImage, orientation: CGImagePropertyOrientation, engine: OCREngine,
                          request: OCRRequest) async throws -> OCRPageResult {
-        switch engine {
-        case .recognizeDocuments:
-            var vision = RecognizeDocumentsRequest()
-            let languages = Self.locales(request.languages, supported: vision.supportedRecognitionLanguages)
-            vision.textRecognitionOptions.recognitionLanguages = languages
-            vision.textRecognitionOptions.automaticallyDetectLanguage = true
-            vision.textRecognitionOptions.useLanguageCorrection = true
-            let documents = try await vision.perform(on: image, orientation: orientation)
-            let lines = documents.flatMap(\.document.text.lines)
-            let paragraphs = documents.flatMap(\.document.paragraphs).map(\.transcript)
-            let tables = documents.flatMap(\.document.tables).map { table in
-                table.rows.map { row in
-                    row.map { $0.content.text.transcript.replacingOccurrences(of: "\n", with: " ") }.joined(separator: "\t")
-                }
-                .joined(separator: "\n")
-            }
-            let text = documents.map(\.document.text.transcript).joined(separator: "\n")
-            return Self.result(text: text, paragraphs: paragraphs, tables: tables,
-                               lines: lines.map { ($0.transcript, Double($0.confidence)) }, engine: engine,
-                               orientation: orientation, languages: languages, request: request)
-        case .recognizeText:
-            var vision = RecognizeTextRequest()
-            let languages = Self.locales(request.languages, supported: vision.supportedRecognitionLanguages)
-            vision.recognitionLevel = .accurate
-            vision.recognitionLanguages = languages
-            vision.automaticallyDetectsLanguage = true
-            vision.usesLanguageCorrection = true
-            let observations = try await vision.perform(on: image, orientation: orientation)
-            let lines = observations.map { ($0.transcript, Double($0.confidence)) }
-            let text = lines.map(\.0).joined(separator: "\n")
-            return Self.result(text: text, paragraphs: lines.map(\.0), tables: [], lines: lines, engine: engine,
-                               orientation: orientation, languages: languages, request: request)
+        let device = device
+        do {
+            let found = try await recognizer.recognize(image, orientation: orientation, engine: engine,
+                                                       languages: request.languages, on: device)
+            return Self.result(found, engine: engine, device: device, orientation: orientation, request: request)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch where device == .automatic {
+            Log.warning(.extract, "OCR failed on Vision's default device; reading on the CPU from now on",
+                        ["engine": engine.rawValue, "error": error.localizedDescription])
+            self.device = .cpu
+            let found = try await recognizer.recognize(image, orientation: orientation, engine: engine,
+                                                       languages: request.languages, on: .cpu)
+            return Self.result(found, engine: engine, device: .cpu, orientation: orientation, request: request)
         }
     }
 
     // MARK: Helpers
 
-    /// Supported Vision locales for each configured language code, in the caller's order.
-    private static func locales(_ codes: [String], supported: [Locale.Language]) -> [Locale.Language] {
-        codes.flatMap { code in supported.filter { $0.languageCode?.identifier == code } }
-    }
-
-    private static func result(text: String, paragraphs: [String], tables: [String], lines: [(String, Double)],
-                               engine: OCREngine, orientation: CGImagePropertyOrientation,
-                               languages: [Locale.Language], request: OCRRequest) -> OCRPageResult {
-        let weights = lines.map { Double(max(1, $0.0.count)) }
+    private static func result(_ found: RecognizedText, engine: OCREngine, device: OCRDevice,
+                               orientation: CGImagePropertyOrientation, request: OCRRequest) -> OCRPageResult {
+        let lines = found.lines
+        let weights = lines.map { Double(max(1, $0.text.count)) }
         let totalWeight = weights.reduce(0, +)
-        let mean = totalWeight > 0 ? zip(lines, weights).reduce(0) { $0 + $1.0.1 * $1.1 } / totalWeight : 0
-        let low = lines.isEmpty ? 0 : Double(lines.count { $0.1 < request.lowConfidenceLine }) / Double(lines.count)
-        return OCRPageResult(text: text, paragraphs: paragraphs, tables: tables, meanConfidence: mean,
-                             lowConfidenceShare: low, lineCount: lines.count, engine: engine,
-                             orientation: orientationName(orientation),
-                             languages: languages.map(\.minimalIdentifier))
+        let mean = totalWeight > 0 ? zip(lines, weights).reduce(0) { $0 + $1.0.confidence * $1.1 } / totalWeight : 0
+        let low = lines.isEmpty ? 0 : Double(lines.count { $0.confidence < request.lowConfidenceLine }) / Double(lines.count)
+        return OCRPageResult(text: found.text, paragraphs: found.paragraphs, tables: found.tables, meanConfidence: mean,
+                             lowConfidenceShare: low, lineCount: lines.count, engine: engine, device: device,
+                             orientation: orientationName(orientation), languages: found.languages)
     }
 
     private static func orientationName(_ orientation: CGImagePropertyOrientation) -> String {

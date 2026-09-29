@@ -12,6 +12,8 @@ struct OCRPageTrace: Sendable, Encodable {
     var orientation: String?
     var languages: [String]
     var engine: String?
+    /// Where Vision ran: `automatic` (the Neural Engine or GPU) or `cpu`, after the default device failed.
+    var device: String?
     var durationMs: Double
     var error: String?
 }
@@ -48,6 +50,7 @@ struct OCRPass {
                                       meanConfidence: result.meanConfidence,
                                       lowConfidenceShare: result.lowConfidenceShare, orientation: result.orientation,
                                       languages: result.languages, engine: result.engine.rawValue,
+                                      device: result.device.rawValue,
                                       durationMs: started.elapsedMs, error: nil))
             return result
         } catch is CancellationError {
@@ -65,7 +68,7 @@ struct OCRPass {
     private mutating func fail(page: Int, languages: [String], started: Date, warning: ExtractionWarning) {
         warnings.append(warning)
         pages.append(OCRPageTrace(page: page, chars: 0, lines: 0, meanConfidence: 0, lowConfidenceShare: 0,
-                                  orientation: nil, languages: languages, engine: nil,
+                                  orientation: nil, languages: languages, engine: nil, device: nil,
                                   durationMs: started.elapsedMs, error: warning.detail))
     }
 
