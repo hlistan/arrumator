@@ -1,0 +1,45 @@
+import Foundation
+
+/// Produces safe, bounded file names. The name is the model's, chosen by the logic; a document the model gave no name
+/// keeps its own.
+public struct FilenameBuilder: Sendable {
+    public let config: NamingConfig
+
+    public init(config: NamingConfig) {
+        self.config = config
+    }
+
+    /// Name for a filed document: the decision's `fileName`, or else the name it arrived with.
+    public func name(for decision: FilingDecision, source: SourceFile, transliterate: Bool) -> String {
+        let chosen = decision.fileName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = chosen.flatMap { $0.isEmpty ? nil : $0 } ?? source.stem
+        return bounded(transliterate ? Self.transliterated(name) : name, fileExtension: source.fileExtension)
+    }
+
+    /// Sanitises a free-form name and trims it to the character and byte limits, keeping the extension.
+    public func bounded(_ name: String, fileExtension: String) -> String {
+        let ext = fileExtension.lowercased()
+        let suffix = ext.isEmpty ? "" : "." + ext
+        var base = sanitize(name)
+        if base.lowercased().hasSuffix(suffix), !suffix.isEmpty { base = String(base.dropLast(suffix.count)) }
+        while !fits(base + suffix), !base.isEmpty { base.removeLast() }
+        base = base.trimmingCharacters(in: CharacterSet(charactersIn: " .-"))
+        return (base.isEmpty ? sanitize(fileExtension) : base) + suffix
+    }
+
+    private func fits(_ s: String) -> Bool { s.count <= config.maxChars && s.utf8.count <= config.maxBytes }
+
+    /// NFC, forbidden and control characters replaced, no leading dots, collapsed whitespace.
+    public func sanitize(_ s: String) -> String {
+        var out = s.precomposedStringWithCanonicalMapping
+        for c in config.forbiddenCharacters { out = out.replacingOccurrences(of: c, with: "-") }
+        out = String(out.unicodeScalars.map { CharacterSet.controlCharacters.contains($0) ? " " : Character($0) })
+        out = out.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+        while out.hasPrefix(".") { out.removeFirst() }
+        return out.trimmingCharacters(in: CharacterSet(charactersIn: " ."))
+    }
+
+    static func transliterated(_ s: String) -> String {
+        (s.applyingTransform(.toLatin, reverse: false) ?? s).applyingTransform(.stripDiacritics, reverse: false) ?? s
+    }
+}

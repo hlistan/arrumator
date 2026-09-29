@@ -1,0 +1,38 @@
+name: Bug report
+description: Something Arrumator did wrong, or a document it filed where it should not.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: >
+        Never attach real documents or their text: issues are public. Describe the document instead
+        (kind, language, format), or reproduce it with a fixture from Tests/Fixtures.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what Arrumator did, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: decision
+    attributes:
+      label: How it was decided
+      description: >
+        For a filing decision, the output of `arrumator trace <document>` (without --full, which contains document
+        text) helps most.
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: "`arrumator --version`, or the version in the Arrumator.app's Finder info"
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Mac, macOS and model profile
+      description: For example "MacBook Air M3 16 GB, macOS 26.1, standard profile, Ollama on this Mac"
+    validations:
+      required: true

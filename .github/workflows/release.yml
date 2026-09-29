@@ -1,0 +1,94 @@
+# Every merge to main is checked, built and published as a GitHub release: the app, the command and SHA256SUMS,
+# with a build-provenance attestation. scripts/release.sh does the building; docs/releasing.md explains signing.
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions: {}
+
+concurrency:
+  group: release
+  cancel-in-progress: false # releases go out one after another, never half-way
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  release:
+    name: Build and publish
+    needs: ci
+    runs-on: xcode-27
+    environment: release
+    permissions:
+      contents: write # the release and its tag
+      id-token: write # signs the provenance attestation
+      attestations: write
+    env:
+      # Signing is optional: without these secrets the release is signed ad hoc (see docs/releasing.md).
+      SIGNED: ${{ secrets.DEVELOPER_ID_CERTIFICATE_P12 != '' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the patch number counts the commits on main
+          persist-credentials: false
+      - name: Install XcodeGen
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+        run: brew install xcodegen
+      - name: Import the Developer ID certificate and the notarization key
+        if: env.SIGNED == 'true'
+        env:
+          CERTIFICATE_P12: ${{ secrets.DEVELOPER_ID_CERTIFICATE_P12 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+          IDENTITY: ${{ secrets.DEVELOPER_ID }}
+          NOTARY_KEY_P8: ${{ secrets.NOTARY_KEY_P8 }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER: ${{ secrets.NOTARY_ISSUER }}
+        run: |
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password=$(uuidgen)
+          echo "$CERTIFICATE_P12" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$RUNNER_TEMP/certificate.p12" -P "$CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$keychain"
+          security set-key-partition-list -S apple-tool:,apple: -k "$password" "$keychain" > /dev/null
+          security list-keychain -d user -s "$keychain"
+          rm "$RUNNER_TEMP/certificate.p12"
+          echo "$NOTARY_KEY_P8" > "$RUNNER_TEMP/notary-key.p8"
+          {
+            echo "DEVELOPER_ID=$IDENTITY"
+            echo "NOTARY_KEY=$RUNNER_TEMP/notary-key.p8"
+            echo "NOTARY_KEY_ID=$NOTARY_KEY_ID"
+            echo "NOTARY_ISSUER=$NOTARY_ISSUER"
+          } >> "$GITHUB_ENV"
+      - name: Build the release
+        id: build
+        run: scripts/release.sh
+      - name: Attest build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/*.zip
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.build.outputs.version }}
+        run: |
+          if [ "$SIGNED" = true ]; then
+            install="Signed with a Developer ID and notarized by Apple: unzip and move Arrumator to Applications."
+          else
+            install="Signed ad hoc, not notarized: the first time, macOS blocks it. Open it once, then choose"
+            install="$install **Open Anyway** in System Settings › Privacy & Security. See the README › Install."
+          fi
+          gh release create "v$VERSION" dist/*.zip dist/SHA256SUMS --target "$GITHUB_SHA" \
+            --title "Arrumator $VERSION" --generate-notes \
+            --notes "$install Check a download with \`shasum -a 256 -c SHA256SUMS\` or \`gh attestation verify <file> --repo $GITHUB_REPOSITORY\`."
+      - name: Remove the signing keychain
+        if: always() && env.SIGNED == 'true'
+        run: |
+          security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true
+          rm -f "$RUNNER_TEMP/notary-key.p8"

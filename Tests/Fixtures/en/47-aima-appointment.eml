@@ -1,0 +1,94 @@
+Return-Path: <agendamentos@aima.gov.pt>
+MIME-Version: 1.0
+Date: Wed, 04 Mar 2026 10:12:44 +0000
+From: =?UTF-8?B?QUlNQSDigJMgQWdlbmRhbWVudG9z?= <agendamentos@aima.gov.pt>
+To: "Alex Sample" <alex.sample@example.com>
+Message-ID: <20260304101244.30d9ed339845@notificacoes.aima.gov.pt>
+Subject: =?UTF-8?B?Q29uZmlybWHDp8OjbyBkZSBhZ2VuZGFtZW50byAvIEFwcG9pbnRtZW50IGNv?=
+ =?UTF-8?B?bmZpcm1hdGlvbiDigJMgUmVub3Zhw6fDo28gZGUgYXV0b3JpemHDp8OjbyBk?=
+ =?UTF-8?B?ZSByZXNpZMOqbmNpYQ==?=
+Content-Type: multipart/mixed; boundary="=_arrumator_fixture_mixed"
+
+This is a multi-part message in MIME format.
+
+--=_arrumator_fixture_mixed
+Content-Type: multipart/alternative; boundary="=_arrumator_fixture_alternative"
+
+--=_arrumator_fixture_alternative
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Dear Alex Sample,
+
+Your appointment with AIMA – Agência para a Integração, Migrações e Asilo has been confirmed.
+
+Service: Renewal of residence permit (Renovação de autorização de residência)
+Appointment date: 16 April 2026
+Time: 10:30
+Location: Loja AIMA Lisboa – Atendimento Exemplo, Avenida Exemplo 20, 1050-000 Lisboa
+Booking reference: AG-2026-5114424
+Residence permit number: S61271191
+
+Please bring:
+ - your valid passport;
+ - your current residence permit card;
+ - proof of accommodation (lease contract or atestado de residência);
+ - proof of means of subsistence;
+ - your NIF and NISS numbers.
+
+If you cannot attend, cancel the appointment at least 48 hours in advance through the AIMA portal. Missed appointments can only be rescheduled after 30 days.
+
+This message was sent automatically. Please do not reply.
+
+AIMA, I.P.
+Agência para a Integração, Migrações e Asilo
+
+--=_arrumator_fixture_alternative
+Content-Type: text/html; charset=UTF-8
+Content-Transfer-Encoding: quoted-printable
+
+<html><body>
+<p>Dear Alex Sample,</p>
+<p>Your appointment with AIMA =E2=80=93 Ag=C3=AAncia para a Integra=C3=A7=
+=C3=A3o, Migra=C3=A7=C3=B5es e Asilo has been confirmed.</p>
+<table>
+<tr><td><b>Service</b></td><td>Renewal of residence permit (Renova=C3=A7=C3=
+=A3o de autoriza=C3=A7=C3=A3o de resid=C3=AAncia)</td></tr>
+<tr><td><b>Appointment date</b></td><td>16 April 2026</td></tr>
+<tr><td><b>Time</b></td><td>10:30</td></tr>
+<tr><td><b>Location</b></td><td>Loja AIMA Lisboa =E2=80=93 Atendimento Exem=
+plo, Avenida Exemplo 20, 1050-000 Lisboa</td></tr>
+<tr><td><b>Booking reference</b></td><td>AG-2026-5114424</td></tr>
+<tr><td><b>Residence permit number</b></td><td>S61271191</td></tr>
+</table>
+<p>Please bring:</p>
+<ul>
+<li>your valid passport;</li>
+<li>your current residence permit card;</li>
+<li>proof of accommodation (lease contract or atestado de resid=C3=AAncia);=
+</li>
+<li>proof of means of subsistence;</li>
+<li>your NIF and NISS numbers.</li>
+</ul>
+<p>If you cannot attend, cancel the appointment at least 48 hours in advanc=
+e through the AIMA portal. Missed appointments can only be rescheduled afte=
+r 30 days.</p>
+<p>AIMA, I.P. =E2=80=93 Ag=C3=AAncia para a Integra=C3=A7=C3=A3o, Migra=C3=
+=A7=C3=B5es e Asilo</p>
+</body></html>
+
+--=_arrumator_fixture_alternative--
+
+--=_arrumator_fixture_mixed
+Content-Type: text/calendar; charset=UTF-8; method=PUBLISH; name="agendamento.ics"
+Content-Disposition: attachment; filename="agendamento.ics"
+Content-Transfer-Encoding: base64
+
+QkVHSU46VkNBTEVOREFSDQpWRVJTSU9OOjIuMA0KUFJPRElEOi0vL0FJTUEvL0FnZW5kYW1lbnRv
+cy8vUFQNCk1FVEhPRDpQVUJMSVNIDQpCRUdJTjpWRVZFTlQNClVJRDpBRy0yMDI2LTUxMTQ0MjRA
+YWltYS5nb3YucHQNCkRUU1RBTVA6MjAyNjAzMDRUMTAxMjQ0Wg0KRFRTVEFSVDoyMDI2MDQxNlQw
+OTMwMDBaDQpEVEVORDoyMDI2MDQxNlQxMDAwMDBaDQpTVU1NQVJZOkFJTUEg4oCTIFJlbm92YcOn
+w6NvIGRlIGF1dG9yaXphw6fDo28gZGUgcmVzaWTDqm5jaWENCkxPQ0FUSU9OOkxvamEgQUlNQSBM
+aXNib2ENCkVORDpWRVZFTlQNCkVORDpWQ0FMRU5EQVINCg==
+
+--=_arrumator_fixture_mixed--
