@@ -6,7 +6,9 @@ import CoreGraphics
 import CoreText
 import Foundation
 import ImageIO
+import Testing
 import UniformTypeIdentifiers
+import Vision
 
 /// Test inputs generated at runtime into a private temporary directory.
 struct Scratch {
@@ -173,6 +175,28 @@ enum TestConfig {
         let pipeline = try pipeline()
         return VisionModelOptions(model: "gemma-test", keepAlive: "1m", numPredict: pipeline.classification.vlmNumPredict, numCtx: 12288,
                                   options: pipeline.classification.llmOptions)
+    }
+}
+
+/// Whether Vision can read text on this machine at all. GitHub's runners are virtual Macs where every text recognition
+/// throws (`TextRecognition.CRImageReaderError` 9 on the default device, an unknown error on the CPU), so the tests that
+/// need real OCR are skipped there, with this reason, and run on every physical Mac: before each push (AGENTS.md §8).
+/// The probe asks Vision directly, not `OCRService`, so a defect in Arrumator's own OCR fails those tests instead of
+/// skipping them.
+enum VisionOCR {
+    static let unavailable: Comment = "needs Vision text recognition, which this machine cannot run (virtual Macs cannot)"
+    static let available = Task<Bool, Never> {
+        guard let image = try? Scratch.textImage(["Arrumator"], width: 800, height: 200, fontSize: 60),
+              let lines = try? await RecognizeTextRequest().perform(on: image) else { return false }
+        return !lines.isEmpty
+    }
+}
+
+extension ExtractedContent {
+    /// What went wrong while reading, for expectation messages: an OCR failure shows its error here, which tells
+    /// Vision failing on a machine apart from Vision finding no text.
+    var warningSummary: String {
+        warnings.isEmpty ? "no warnings" : warnings.map { "\($0.code.rawValue): \($0.detail)" }.joined(separator: "; ")
     }
 }
 

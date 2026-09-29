@@ -8,7 +8,7 @@ import Testing
 
 @Suite("Images, OCR and the vision model")
 struct ImageAndVisionTests {
-    @Test("Image OCR with EXIF capture date as fallback document date")
+    @Test("Image OCR with EXIF capture date as fallback document date", .enabled(VisionOCR.unavailable) { await VisionOCR.available.value })
     func imageOCR() async throws {
         let scratch = try Scratch()
         let image = try Scratch.textImage([
@@ -24,7 +24,7 @@ struct ImageAndVisionTests {
         let content = try await registry.extract(url, sha256: "x", context: try TestConfig.context(vision: TestConfig.visionOptions()),
                                                  trace: .disabled)
         #expect(content.kind == .image)
-        #expect(content.textOrigin == .ocr)
+        #expect(content.textOrigin == .ocr, "a photo with text is read by OCR (\(content.warningSummary))")
         #expect(content.text.contains("Farmácia Central"))
         #expect(content.language.primary == "pt")
         #expect(content.visual == nil)
@@ -34,7 +34,7 @@ struct ImageAndVisionTests {
         #expect(content.ocr != nil)
     }
 
-    @Test("Sparse OCR calls the vision model with the schema; organisations are verified against OCR text")
+    @Test("Sparse OCR calls the vision model with the schema; organisations are verified against OCR text", .enabled(VisionOCR.unavailable) { await VisionOCR.available.value })
     func vlmVerification() async throws {
         let scratch = try Scratch()
         let url = try scratch.writeImage("logo.png", try Scratch.textImage(["CONTINENTE"], width: 2400, height: 1600,
@@ -54,7 +54,7 @@ struct ImageAndVisionTests {
         #expect(visual.organisations == ["Continente"])
         #expect(visual.unverifiedOrganisations == ["Acme Corp"])
         #expect(visual.dates == ["2025-01-02"])
-        #expect(content.textOrigin == .ocr)
+        #expect(content.textOrigin == .ocr, "sparse text is still read by OCR (\(content.warningSummary))")
         #expect(!content.hasWarning(.vlmFailed))
 
         let requests = await ollama.chatRequests

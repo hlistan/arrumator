@@ -18,7 +18,7 @@ public struct ExtractorRegistry: ContentExtracting {
     /// - Parameter ollama: local Ollama client used to describe images with sparse text; without it such images
     ///   get a `vlmSkipped` warning.
     public init(ollama: (any OllamaAPI)? = nil) {
-        let ocr = OCRService()
+        let ocr = OCRService(recognizer: VisionTextRecognizer())
         let vision = ollama.map { VisionDescriber(ollama: $0) }
         previewer = QuickLookExtractor(ocr: ocr, metadataOnly: metadataOnly)
         extractors = [
