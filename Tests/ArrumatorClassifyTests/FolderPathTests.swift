@@ -33,7 +33,7 @@ import Testing
         let placer = Placer(builder: FilenameBuilder(config: naming), operations: FileOperations(naming: naming))
         return IngestCoordinator(services: PipelineServices(
             database: h.env.database, config: h.env.config, settings: h.env.settings, taxonomy: h.env.taxonomy,
-            extractor: PlainTestExtractor(), classifier: h.classifier, learner: h.learner,
+            extractor: PlainTestExtractor(), labeler: StubLabeler(), classifier: h.classifier, learner: h.learner,
             filer: DocumentFiler(database: h.env.database, placer: placer, index: IndexStore(database: h.env.database),
                                  registry: SelfChangeRegistry(ttl: h.env.config.watcher.selfChangeTTLSeconds)),
             traces: TraceRecorder(database: h.env.database, appVersion: "test"), vectors: VectorIndex()))

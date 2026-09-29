@@ -30,6 +30,14 @@ public protocol DocumentClassifier: Sendable {
                    trace: TraceContext) async throws -> (vector: [Float], model: String)?
 }
 
+/// Assigns labels to documents. Implemented by `ArrumatorClassify.LabelExtractor`.
+public protocol DocumentLabeler: Sendable {
+    /// The document's labels, or nil when the model gave no valid answer. An empty list means the document shows
+    /// nothing worth a label. Throws when the model cannot be reached or is missing, so the document waits.
+    func labels(for content: ExtractedContent, settings: AppSettings, config: PipelineConfig,
+                trace: TraceContext) async throws -> [DocumentLabel]?
+}
+
 /// A filed document that a rethink moved from one folder to another.
 public struct PlacementMove: Sendable, Codable, Hashable {
     public var documentID: Int64

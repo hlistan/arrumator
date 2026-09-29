@@ -25,10 +25,11 @@ import Testing
         let queue = try DatabaseQueue()
         try AppDatabase.migrator.migrate(queue, upTo: "v1_initial")
         try queue.write { db in
-            var doc = DocumentRecord.arrived(path: "/tmp/b.pdf", sha256: "h", size: 1, uttype: "pdf", inode: nil, modified: nil)
-            try doc.insert(db)
-            // What GRDB's default strategy wrote before the fix.
-            try db.execute(sql: "UPDATE documents SET added_at = '2026-09-22 18:23:10.902', filed_at = '2026-09-22 18:23:32.667'")
+            // A row as that release wrote it, with dates as GRDB's default strategy wrote them before the fix.
+            try db.execute(sql: """
+                INSERT INTO documents (uid, path, original_filename, sha256, size, uttype, status, added_at, filed_at, created_at, updated_at)
+                VALUES ('b', '/tmp/b.pdf', 'b.pdf', 'h', 1, 'pdf', 'filed', '2026-09-22 18:23:10.902', '2026-09-22 18:23:32.667', 0, 0)
+                """)
         }
         try AppDatabase.migrator.migrate(queue)
         try queue.read { db in

@@ -533,6 +533,36 @@ public struct AppDatabase: Sendable {
             """)
         }
 
+        /// Every document is labelled by the local model with what it concerns (docs/how-it-works.md). The labels are
+        /// part of a document's record, so a change to them rewrites its `_documents.md`, and each kind is a column of
+        /// the full-text index. A job can now wait at the new labelling stage. Documents filed before keep no labels
+        /// (NULL) until they are labelled.
+        m.registerMigration("v11_documentLabels") { db in
+            try db.execute(sql: """
+            ALTER TABLE documents ADD COLUMN labels_json TEXT;
+            DROP TRIGGER documents_record_update;
+            CREATE TRIGGER documents_record_update AFTER UPDATE OF path, original_filename, sha256, size, uttype, status, correspondent_id, correspondent, doc_type, doc_date, period_year, title, language, page_count, band, confidence, decided_by, rationale, decision_json, tags_json, labels_json, duplicate_of, added_at, filed_at, uid ON documents BEGIN INSERT INTO record_dirty(key, version) VALUES ('documents:' || rtrim(OLD.path, replace(OLD.path, '/', '')), 1) ON CONFLICT(key) DO UPDATE SET version = version + 1; INSERT INTO record_dirty(key, version) VALUES ('documents:' || rtrim(NEW.path, replace(NEW.path, '/', '')), 1) ON CONFLICT(key) DO UPDATE SET version = version + 1; END;
+            DROP INDEX jobs_active_path;
+            CREATE UNIQUE INDEX jobs_active_path ON jobs(source_path)
+              WHERE state IN ('pending','hashing','extracting','labeling','classifying','filing');
+            ALTER TABLE document_text ADD COLUMN subject TEXT NOT NULL DEFAULT '';
+            ALTER TABLE document_text ADD COLUMN object TEXT NOT NULL DEFAULT '';
+            ALTER TABLE document_text ADD COLUMN jurisdiction TEXT NOT NULL DEFAULT '';
+            ALTER TABLE document_text ADD COLUMN language TEXT NOT NULL DEFAULT '';
+            """)
+            // FTS5 cannot add a column: the index is made again with them, and fills itself from document_text.
+            try db.dropFTS5SynchronizationTriggers(forTable: "document_fts")
+            try db.drop(table: "document_fts")
+            try db.create(virtualTable: "document_fts", using: FTS5()) { t in
+                t.synchronize(withTable: "document_text")
+                t.tokenizer = .unicode61(diacritics: .remove)
+                t.prefixes = [2, 3]
+                for column in ["title", "correspondent", "filename", "body", "subject", "object", "jurisdiction", "language"] {
+                    t.column(column)
+                }
+            }
+        }
+
         return m
     }
 

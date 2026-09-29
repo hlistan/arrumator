@@ -10,6 +10,8 @@ everything is kept, and [Evaluation](evaluation.md) the measurements behind thes
 new file in Incoming ──► wait until it stops changing ──► hash (exact duplicates → Duplicates)
    ──► extract: PDFKit text, Apple Vision OCR (en/ru/pt), textutil (doc/docx/rtf/odt/html), CoreXLSX, PPTX, e-mail,
        archives, media metadata, Quick Look previews, local vision model for photos; language, dates, identifiers
+   ──► label: the local model picks out the document's signals (whom and what it concerns, its jurisdictions and
+       languages) with a prompt of its own; they become the document's searchable labels (below)
    ──► learned evidence: known senders (by learned identifiers, e-mail/web domains, names),
        similar past filings (bge-m3 embeddings), rules formed from usage
    ──► confident?  ── yes ─► place directly; the model is only asked for the file name, as the logic says
@@ -32,6 +34,41 @@ trace records which device read each page.
 Uncertain documents wait in **Needs review** (created only when first needed). Moving a file in Finder, choosing a
 folder in the app, renaming, undoing: all are recorded as corrections and change future decisions. Senders gain
 other names, and folders' learned context updates.
+
+## Labels: what a document is about
+
+Folders hold a document in one place; labels let it be found from every side. Every document that arrives is read by
+the local model a first time, before anything is decided about it, with a prompt written for this alone
+(`labels-system.md`). The model picks out the document's *signals*, the few facts someone looking for it later would
+search by, and each one becomes a label of one of four kinds:
+
+- **Subject**: a person or organisation the document concerns: whom it is addressed to, whose it is, or whom it is
+  about (a customer, a patient, a taxpayer, a company), named as the document names them.
+- **Object**: a specific thing it concerns, with what identifies it: an apartment and its address, a car and its
+  plate, a supply point, an account, a policy.
+- **Jurisdiction**: the countries, and regions or cities where they matter, whose law, authority or administration the
+  document falls under: where a tax is due, a contract is governed, an ID was issued.
+- **Language**: the languages it is written in, as ISO 639-1 codes (`pt`, `ru`, `en`).
+
+The kinds follow the metadata records keep in archival practice: the parties a record concerns, its coverage in the
+sense of the jurisdiction it belongs to, and its language ([sources](organizing-principles-sources.md#sources-for-labels)).
+
+The model answers in a fixed schema; the app checks the answer the way it checks every model answer. A label is kept on
+one line and cut to `labels.maxValueChars`, repeats are dropped however they are written, each kind keeps its first
+`labels.maxPerKind`, and a language becomes its ISO 639-1 code, whether the model wrote `pt`, `por` or `Portuguese`.
+An answer that cannot be read goes back to the model once, as for decisions. The archive's logic plays no part:
+labels say what a document is about, however the archive is arranged, so changing the logic never changes them.
+
+Labels are the document's. They sit in its entry in `_documents.md` and survive a rebuild, and each kind is a field of
+the search: `jurisdiction:portugal`, `subject:"maria silva"`, `object:AA-12-BB`, `language:portuguese` (a language is
+found by its code and by its English name). A plain search finds labels too. A document's card lists them.
+
+When the model gives no valid answer, the document is filed anyway, without labels, and the history says so; when it
+finds nothing worth a label, the document is labelled with nothing, which is not the same thing. While Ollama cannot
+be reached the document waits at this step, and a missing model holds it, as for deciding. An exact copy of a filed
+document is not read again, so it is not labelled either. A document without labels (one filed before documents were
+labelled, or one the model gave no answer for) is labelled when it is decided again (`arrumatorcli review retry`), or
+with `arrumatorcli labels <document> --again`; `arrumatorcli labels --unlabelled` labels all of them.
 
 ## Senders and rules
 

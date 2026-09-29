@@ -15,7 +15,7 @@ with `05 Learned`, `06 Logic` and `07 History` inside.
 | What | File | Contents |
 |---|---|---|
 | A folder | `<folder>/_about.md` | Code, name, description, year folders, what it stands for in the logic that made it (`kind`: sender, subject or topic) and which logic that was (`logic`), what the app learned about it. |
-| The documents in a directory | `<directory>/_documents.md` | One entry per file in that directory: identity, original name, checksum, sender, type, date, title, language, tags, status, and the decision (who decided, how sure, why, with which logic). |
+| The documents in a directory | `<directory>/_documents.md` | One entry per file in that directory: identity, original name, checksum, sender, type, date, title, language, tags, labels (absent until the model has labelled it), status, and the decision (who decided, how sure, why, with which logic). |
 | Senders | `System/Learned/_senders.md` | Names, other names, identifiers, e-mail and web domains, usual folder. |
 | Rules | `System/Learned/_rules.md` | Conditions, target folder, evidence, whether on, confirmed or forgotten. |
 | Corrections | `System/Learned/_corrections.md` | Every time you moved, renamed, approved or confirmed a document. |
@@ -57,7 +57,8 @@ version moves it into place as that archive's index, so nothing it held is lost.
 
 ## What the database only indexes or caches
 
-- **Text and search**: extracted text and the full-text index are extracted again from the documents.
+- **Text and search**: extracted text and the full-text index are extracted again from the documents; the labels'
+  columns of the full-text index are filled from the entries, without asking the model again.
 - **Embeddings** of documents, memories and folder descriptions are computed again with the embedding model.
 - **The job queue** is rebuilt by looking at the Incoming folder.
 - **Positions in the file-system event stream** and similar bookkeeping.

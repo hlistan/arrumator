@@ -1,0 +1,31 @@
+@testable import ArrumatorCore
+import Foundation
+import Testing
+
+/// Document text goes into a diagnostics export only when the user says so (AGENTS.md §4.1).
+@Suite struct DiagnosticsTests {
+    static let documentText = "Cliente: Maria Exemplo, NIF 503504564"
+
+    static func step(_ stage: TraceStage, seq: Int) -> TraceStepRecord {
+        TraceStepRecord(id: nil, traceId: 1, seq: seq, stage: stage.rawValue, status: TraceStatus.ok.rawValue, startedAt: Date(),
+                        durationMs: 1, inputJson: #"{"tiers":"ministral-3:14b"}"#,
+                        outputJson: #"[{"user":"\#(documentText)","response":"{\"subjects\":[\"Maria Exemplo\"]}"}]"#, error: nil)
+    }
+
+    static let steps = [step(.extract, seq: 0), step(.label, seq: 1), step(.llm, seq: 2), step(.vlm, seq: 3), step(.place, seq: 4)]
+
+    @Test func withoutConsentNoModelExchangeLeavesTheMac() {
+        let shared = DiagnosticsExporter.shareable(Self.steps, includeDocumentText: false)
+        for step in shared where [TraceStage.label.rawValue, TraceStage.llm.rawValue, TraceStage.vlm.rawValue].contains(step.stage) {
+            #expect(step.inputJson == nil && step.outputJson == nil,
+                    "\(step.stage) sent the document to the model and got answers drawn from it; both stay out")
+        }
+        #expect(shared.map(\.stage) == Self.steps.map(\.stage) && shared.map(\.durationMs) == Self.steps.map(\.durationMs),
+                "every step is still there, with its timing")
+        #expect(shared.first { $0.stage == TraceStage.place.rawValue }?.outputJson != nil, "steps without a model exchange are kept whole")
+    }
+
+    @Test func withConsentTheExchangesAreKept() {
+        #expect(DiagnosticsExporter.shareable(Self.steps, includeDocumentText: true) == Self.steps)
+    }
+}

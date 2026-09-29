@@ -7,9 +7,11 @@ enum RecordText {
         + "it rebuilds its index from it, so a correction made there is picked up. This list is regenerated."
 
     static func documents(_ entries: [DocumentEntry], in directory: URL) -> String {
-        var lines = ["# \(directory.lastPathComponent)", "", note, "", "| File | Date | From | Type | Decided by |", "|---|---|---|---|---|"]
+        var lines = ["# \(directory.lastPathComponent)", "", note, "",
+                     "| File | Date | From | Type | Labels | Decided by |", "|---|---|---|---|---|---|"]
         for e in entries {
-            lines.append("| \(cell(e.file)) | \(cell(e.date)) | \(cell(e.sender)) | \(cell(e.documentType)) | \(cell(decider(e))) |")
+            lines.append("| \(cell(e.file)) | \(cell(e.date)) | \(cell(e.sender)) | \(cell(e.documentType)) | "
+                + "\(cell(e.labels?.map(\.value).joined(separator: ", "))) | \(cell(decider(e))) |")
         }
         return lines.joined(separator: "\n") + "\n"
     }

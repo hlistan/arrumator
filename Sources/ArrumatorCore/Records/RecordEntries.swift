@@ -26,6 +26,8 @@ public struct DocumentEntry: Codable, Sendable, Hashable {
     public var language: String?
     public var pages: Int?
     public var tags: [String]
+    /// Absent until the model has labelled the document, as for one filed before documents were labelled.
+    public var labels: [DocumentLabel]?
     public var duplicateOf: Int64?
     public var decidedBy: String?
     public var confidence: Double?
@@ -44,7 +46,7 @@ public struct DocumentEntry: Codable, Sendable, Hashable {
         case documentType = "document_type"
         case date
         case periodYear = "period_year"
-        case title, language, pages, tags
+        case title, language, pages, tags, labels
         case duplicateOf = "duplicate_of"
         case decidedBy = "decided_by"
         case confidence, band, rationale
@@ -71,6 +73,7 @@ public struct DocumentEntry: Codable, Sendable, Hashable {
         language = record.language
         pages = record.pageCount
         tags = record.tags
+        labels = record.labels
         duplicateOf = record.duplicateOf
         decidedBy = record.decidedBy
         confidence = record.confidence
@@ -89,7 +92,8 @@ public struct DocumentEntry: Codable, Sendable, Hashable {
                        correspondent: sender, docType: documentType, docDate: date, periodYear: periodYear, title: title,
                        language: language, pageCount: pages, status: status, band: band, confidence: confidence,
                        decidedBy: decidedBy, rationale: rationale, decisionJson: decision.map { JSON.string($0) },
-                       contentJson: nil, tagsJson: JSON.string(tags), duplicateOf: duplicateOf, lastTraceId: nil, addedAt: added,
+                       contentJson: nil, tagsJson: JSON.string(tags), labelsJson: labels.map { JSON.string($0) }, duplicateOf: duplicateOf,
+                       lastTraceId: nil, addedAt: added,
                        filedAt: filed, extractedAt: nil, embeddedAt: nil, fileMtime: nil, createdAt: added, updatedAt: now)
     }
 }

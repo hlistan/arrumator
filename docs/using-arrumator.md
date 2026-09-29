@@ -10,7 +10,9 @@ and, below them, your archive's folders. Each list is one page under a large tit
 document row shows the decision at its end. That is the folder it went to, or what happened to it and where the file
 is now ("Could not be processed · in System › Needs review", "Undone by you · back in Incoming"), and who decided (a
 learned rule, past filings, the model and how sure it was, or you). Clicking a row opens the document in place as a
-card with the full decision, the reason, and what Arrumator learned from it. Everything on the card can be changed
+card with the full decision, the reason, the labels the model gave it (whom and what it is about, its jurisdictions
+and languages; [labels](how-it-works.md#labels-what-a-document-is-about)), and what Arrumator learned from it.
+Everything on the card can be changed
 there: move it, rename it, fix the sender, date or type, confirm it, undo it. Each change is recorded as a correction
 and learned from, and the lesson appears on the card.
 
@@ -30,7 +32,10 @@ Below the lists, **Archive** holds the folder tree at any depth; each folder ope
 subfolders and its documents.
 
 Search sits at the top of the sidebar. It lists the documents that contain your words first, then those alike in
-meaning, such as the same kind of document in another language, most similar first. A document found by meaning
+meaning, such as the same kind of document in another language, most similar first. Words are looked for in the
+title, sender, file name, text and labels; `field:word` or `field:"a phrase"` looks in one of them only: `title`,
+`correspondent`, `filename`, `body`, or a kind of label, `subject`, `object`, `jurisdiction` or `language`. Each field
+counts as much as its weight in `search.bm25Weights`, in that order. A document found by meaning
 alone must reach `search.semanticMinSimilarity` (calibrated in [Evaluation › Search](evaluation.md#search)).
 **Statistics** and **History** are in the menu at its foot.
 
@@ -41,6 +46,7 @@ and why, how long each step takes, and how much of the filing now happens from l
 Every statistic sits under the step it describes:
 
 - **Read** shows scan quality and the files it could not read.
+- **Labelled** shows how long the model took to label documents, and the ones it gave no labels for.
 - **Matched against what it knows** shows the rules and how often past filings agreed.
 - **Decided** shows how sure it was and whether it was right, with the automatic-filing threshold you can move to see
   what it would have done.
@@ -52,7 +58,7 @@ colours rather than the system accent, which macOS greys out whenever the window
 
 ## Audit, logs and tuning
 
-- **History**: every arrival, extraction, decision, filing, folder creation, correction, undo, lesson learned
+- **History**: every arrival, extraction, labelling, decision, filing, folder creation, correction, undo, lesson learned
   (recorded against the document it came from), rule change, settings change and Ollama availability change
   (`events` table; History view; `arrumatorcli history`).
 - **Traces**: for every document, each stage's inputs, outputs and timing, including the exact prompts and raw model
@@ -65,7 +71,8 @@ colours rather than the system accent, which macOS greys out whenever the window
 - **Statistics**: accuracy (documents you did not move later), most frequent corrections, what-if thresholds, latency
   per stage, rules, OCR quality, look-alike folders (`arrumatorcli stats`).
 - **Diagnostics**: one zip with logs, recent traces, doctor report, settings and folder tree; document text is
-  excluded unless you ask for it (`arrumatorcli diagnostics <zip> [--include-document-text]`).
+  excluded unless you ask for it: the steps that exchanged it with the model (deciding, labelling, describing images)
+  keep their timings but not their prompts and answers (`arrumatorcli diagnostics <zip> [--include-document-text]`).
 
 ## Configuration
 
@@ -74,8 +81,9 @@ No tunable lives in code. Defaults are bundled in `Sources/ArrumatorCore/Resourc
 - `settings.json`: your preferences (folders, Ollama server, thresholds, model profile, folder-name language, …).
   The app stores only your changes, in `~/Library/Application Support/Arrumator/settings.json`. Change them in
   Settings or with `arrumatorcli settings`.
-- `pipeline.json`: every pipeline tunable (Ollama timeouts, model profiles, OCR and extraction limits, learning and
-  direct-placement thresholds, calibration weights, search, logging). Override any subset in
+- `pipeline.json`: every pipeline tunable (Ollama timeouts, model profiles, OCR and extraction limits, labels
+  (`labels.maxPerKind`, `labels.maxValueChars`), learning and direct-placement thresholds, calibration weights,
+  search, logging). Override any subset in
   `~/Library/Application Support/Arrumator/pipeline.json`.
 
 The Ollama server is set under Settings › Models › Ollama › Server, or with `arrumatorcli settings --ollama-url`. It must

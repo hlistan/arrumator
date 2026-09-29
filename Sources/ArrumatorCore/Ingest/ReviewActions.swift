@@ -123,15 +123,34 @@ public struct ReviewActions: Sendable {
         try await recordCorrection(correction, trace: .disabled)
     }
 
-    /// Runs classification again (e.g. after models or descriptions changed).
+    /// Runs classification again (e.g. after models or descriptions changed), labelling the document first when it
+    /// has no labels yet.
     public func retry(_ docID: Int64) async throws {
         let doc = try await document(docID)
         var payload = JobPayload()
         payload.sha256 = doc.sha256
         payload.content = try await services.documents.content(docID: docID)
-        let state: JobState = payload.content == nil ? .extracting : .classifying
+        let state: JobState = payload.content == nil ? .extracting : (doc.labels == nil ? .labeling : .classifying)
         try await services.jobs.enqueue(path: doc.path, kind: .reclassify, docID: docID, payload: payload, state: state)
         await coordinator.wake()
+    }
+
+    /// Asks the model for a document's labels again, from the text read when it arrived, and makes them the document's.
+    /// Nil when the model gave no valid answer; the document then keeps the labels it had.
+    @discardableResult
+    public func relabel(_ docID: Int64) async throws -> [DocumentLabel]? {
+        _ = try await document(docID)
+        guard let content = try await services.documents.content(docID: docID) else { throw IngestError.contentUnavailable(docID) }
+        let settings = await services.settings.current
+        let trace = try await services.startTrace(docID: docID, jobID: nil, attempt: 0, source: .review, settings: settings)
+        do {
+            let labels = try await services.label(docID: docID, jobID: nil, content: content, settings: settings, trace: trace)
+            await services.traces.finish(trace, outcome: labels == nil ? "unlabelled" : "labelled", docID: docID)
+            return labels
+        } catch {
+            await services.traces.finish(trace, outcome: "failed", docID: docID)
+            throw error
+        }
     }
 
     /// Keeps the document where it is; the watcher and queue leave it alone.

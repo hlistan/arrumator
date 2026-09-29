@@ -85,6 +85,8 @@ public struct DocumentRecord: ArrumatorRecord, Identifiable, Hashable {
     public var decisionJson: String?
     public var contentJson: String?
     public var tagsJson: String?
+    /// The document's labels as JSON; NULL until the model has labelled it.
+    public var labelsJson: String?
     public var duplicateOf: Int64?
     public var lastTraceId: Int64?
     public var addedAt: Date
@@ -104,7 +106,7 @@ public struct DocumentRecord: ArrumatorRecord, Identifiable, Hashable {
                        sha256: sha256, size: size, uttype: uttype, inode: inode, folderId: nil, correspondentId: nil,
                        correspondent: nil, docType: nil, docDate: nil, periodYear: nil, title: nil, language: nil, pageCount: nil,
                        status: .processing, band: nil, confidence: nil, decidedBy: nil, rationale: nil, decisionJson: nil,
-                       contentJson: nil, tagsJson: nil, duplicateOf: nil, lastTraceId: nil, addedAt: now, filedAt: nil,
+                       contentJson: nil, tagsJson: nil, labelsJson: nil, duplicateOf: nil, lastTraceId: nil, addedAt: now, filedAt: nil,
                        extractedAt: nil, embeddedAt: nil, fileMtime: modified, createdAt: now, updatedAt: now)
     }
 
@@ -112,6 +114,8 @@ public struct DocumentRecord: ArrumatorRecord, Identifiable, Hashable {
     public var filename: String { (path as NSString).lastPathComponent }
     public var decision: FilingDecision? { JSON.decode(FilingDecision.self, from: decisionJson) }
     public var tags: [String] { JSON.decode([String].self, from: tagsJson) ?? [] }
+    /// Nil until the model has labelled the document; empty when it found nothing worth a label.
+    public var labels: [DocumentLabel]? { JSON.decode([DocumentLabel].self, from: labelsJson) }
 }
 
 public struct DocumentTextRecord: ArrumatorRecord, PersistableRecord, Hashable {
@@ -124,6 +128,11 @@ public struct DocumentTextRecord: ArrumatorRecord, PersistableRecord, Hashable {
     public var summary: String?
     public var metadataJson: String?
     public var extractorVersion: String?
+    /// The document's labels of each `LabelKind`, as `DocumentLabel.searchText` writes them.
+    public var subject: String
+    public var object: String
+    public var jurisdiction: String
+    public var language: String
 }
 
 public struct EmbeddingRecord: ArrumatorRecord {
@@ -149,7 +158,7 @@ public struct FolderEmbeddingRecord: ArrumatorRecord, PersistableRecord {
 }
 
 public enum EventKind: String, Sendable, Codable, CaseIterable {
-    case arrived, extracted, classified, filed, needsReview, duplicate, error, retry, failed
+    case arrived, extracted, labeled, classified, filed, needsReview, duplicate, error, retry, failed
     case corrected, undone, refiled, markedCorrect, userMoved, userRenamed, missing, adopted
     case folderCreated, folderRenamed, folderRemoved, descriptionChanged
     case learned, ruleInduced, ruleDisabled, ruleChanged, proposalCreated, proposalResolved
@@ -326,9 +335,9 @@ public struct ProposalRecord: ArrumatorRecord, Identifiable, Hashable {
 }
 
 public enum JobState: String, Sendable, Codable, CaseIterable {
-    case pending, hashing, extracting, classifying, filing, done, duplicate, needsReview, failed, held, cancelled
+    case pending, hashing, extracting, labeling, classifying, filing, done, duplicate, needsReview, failed, held, cancelled
 
-    public var isActive: Bool { [.pending, .hashing, .extracting, .classifying, .filing].contains(self) }
+    public var isActive: Bool { [.pending, .hashing, .extracting, .labeling, .classifying, .filing].contains(self) }
 }
 
 public enum JobKind: String, Sendable, Codable {

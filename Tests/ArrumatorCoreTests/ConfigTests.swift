@@ -28,6 +28,12 @@ import Testing
         #expect(models.visionNumCtx == 12288, "an image model of its own is asked with the decision context")
     }
 
+    @Test func everyFullTextColumnHasItsWeight() throws {
+        let weights = try PipelineConfig.bundledDefaults().search.bm25Weights
+        #expect(weights.count == SearchService.columns.count,
+                "bm25() weighs columns by position; a column without a weight counts as 1 and a label would outrank the title")
+    }
+
     @Test func deepMergeOverridesNestedKeysOnly() throws {
         let base: JSONValue = ["a": ["x": 1, "y": 2], "b": "keep"]
         let merged = ConfigLoader.deepMerge(base, ["a": ["y": 3]])

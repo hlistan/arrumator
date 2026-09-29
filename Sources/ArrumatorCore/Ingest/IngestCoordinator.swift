@@ -22,6 +22,7 @@ public struct PipelineServices: Sendable {
     public var settings: SettingsStore
     public var taxonomy: TaxonomyStore
     public var extractor: any ContentExtracting
+    public var labeler: any DocumentLabeler
     public var classifier: any DocumentClassifier
     public var learner: any LearningSink
     public var filer: DocumentFiler
@@ -29,13 +30,14 @@ public struct PipelineServices: Sendable {
     public var vectors: VectorIndex
 
     public init(database: AppDatabase, config: PipelineConfig, settings: SettingsStore, taxonomy: TaxonomyStore,
-                extractor: any ContentExtracting, classifier: any DocumentClassifier, learner: any LearningSink,
-                filer: DocumentFiler, traces: TraceRecorder, vectors: VectorIndex) {
+                extractor: any ContentExtracting, labeler: any DocumentLabeler, classifier: any DocumentClassifier,
+                learner: any LearningSink, filer: DocumentFiler, traces: TraceRecorder, vectors: VectorIndex) {
         self.database = database
         self.config = config
         self.settings = settings
         self.taxonomy = taxonomy
         self.extractor = extractor
+        self.labeler = labeler
         self.classifier = classifier
         self.learner = learner
         self.filer = filer
@@ -57,9 +59,27 @@ public struct PipelineServices: Sendable {
             logicVersion: LogicStore.version(of: try await logic.current()), taxonomyVersion: try await taxonomy.version(),
             models: try? config.models(for: settings.models), settings: settings))
     }
+
+    /// Asks the model for a document's labels and makes them the document's. Without a valid answer the document
+    /// stays unlabelled, which the history records, and nil is returned; a model that cannot be reached or is missing
+    /// throws.
+    @discardableResult
+    public func label(docID: Int64, jobID: Int64?, content: ExtractedContent, settings: AppSettings,
+                      trace: TraceContext) async throws -> [DocumentLabel]? {
+        guard let labels = try await labeler.labels(for: content, settings: settings, config: config, trace: trace) else {
+            try await history.record(.error, doc: docID, job: jobID, trace: trace.traceID,
+                                     summary: "Not labelled: the model gave no valid answer")
+            return nil
+        }
+        try await index.saveLabels(labels, docID: docID)
+        try await history.record(.labeled, doc: docID, job: jobID, trace: trace.traceID,
+                                 summary: labels.isEmpty ? "Nothing worth a label" : labels.map(\.value).joined(separator: " · "),
+                                 payload: labels)
+        return labels
+    }
 }
 
-/// Runs ingest jobs one at a time through hashing → extracting → classifying → filing.
+/// Runs ingest jobs one at a time through hashing → extracting → labeling → classifying → filing.
 /// Every transition is persisted, so a crash or restart resumes from the last completed stage.
 public actor IngestCoordinator {
     private let services: PipelineServices
@@ -280,9 +300,14 @@ public actor IngestCoordinator {
             try await services.history.record(.extracted, doc: docID, job: job.id, trace: trace.traceID,
                                               summary: "\(content.kind.rawValue), \(content.text.count) chars, \(content.language.primary)",
                                               payload: ["warnings": content.warnings.map(\.code.rawValue).joined(separator: ",")])
-            try await save(&job, payload, state: .classifying)
+            try await save(&job, payload, state: .labeling)
         }
         guard let content = payload.content else { throw IngestError.contentUnavailable(docID) }
+
+        if job.state == .labeling {
+            try await services.label(docID: docID, jobID: job.id, content: content, settings: settings, trace: trace)
+            try await save(&job, payload, state: .classifying)
+        }
 
         if job.state == .classifying {
             try await decide(&job, payload: &payload, docID: docID, content: content, settings: settings, trace: trace)
@@ -427,7 +452,8 @@ public actor IngestCoordinator {
         try await services.index.upsertText(docID: docID, title: "", correspondent: "", filename: doc.filename,
                                             body: content.text, summary: content.visual?.description,
                                             metadata: content.metadata,
-                                            extractorVersion: "\(content.extractorName)/\(content.extractorVersion)")
+                                            extractorVersion: "\(content.extractorName)/\(content.extractorVersion)",
+                                            labels: doc.labels ?? [])
     }
 
     private func fileDocument(_ job: inout JobRecord, payload: inout JobPayload, docID: Int64, content: ExtractedContent,

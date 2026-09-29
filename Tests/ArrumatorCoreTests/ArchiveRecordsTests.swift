@@ -70,6 +70,7 @@ import Testing
             .appendingPathComponent(w.h.env.config.taxonomy.documentsFileName), encoding: .utf8)
         #expect(listing.contains("uid: \(doc.uid)") && listing.contains("file: \(doc.filename)"),
                 "a document's entry sits next to it")
+        #expect(listing.contains("kind: jurisdiction") && listing.contains("value: Portugal"), "with its labels")
         #expect(try String(contentsOf: try await learned(w, w.h.env.config.records.sendersFileName), encoding: .utf8).contains("EDP Comercial"))
         #expect(try String(contentsOf: try await learned(w, w.h.env.config.records.rulesFileName), encoding: .utf8).contains(w.rule.name))
         #expect(FileManager.default.fileExists(atPath: try await learned(w, w.h.env.config.records.correctionsFileName).path))
@@ -101,6 +102,7 @@ import Testing
         let rebuilt = try await taxonomy.snapshot(root: w.h.env.archive)
         for (a, b) in zip(after, before) {
             #expect(a.uid == b.uid && a.path == b.path && a.status == b.status && a.title == b.title && a.docType == b.docType)
+            #expect(a.labels == StubLabeler.edpBill && a.labels == b.labels, "labels come back from the record files")
             #expect(a.decision?.decidedBy == b.decision?.decidedBy && a.confidence == b.confidence)
             let folder = try #require(a.folderId.flatMap { rebuilt.folder(id: $0) })
             #expect(folder.code == w.folder.code, "the folder comes from where the entry sits")
@@ -129,10 +131,11 @@ import Testing
         let (database, taxonomy, records) = try freshIndex(w)
         try await records.rebuild()
         let learner = RecordingLearner()
+        let labeler = StubLabeler()
         var services = w.h.services
         services = PipelineServices(
             database: database, config: services.config, settings: services.settings, taxonomy: taxonomy,
-            extractor: services.extractor, classifier: services.classifier, learner: learner,
+            extractor: services.extractor, labeler: labeler, classifier: services.classifier, learner: learner,
             filer: DocumentFiler(database: database, placer: services.filer.placer, index: IndexStore(database: database),
                                  registry: SelfChangeRegistry(ttl: services.config.watcher.selfChangeTTLSeconds)),
             traces: TraceRecorder(database: database, appVersion: "test"), vectors: VectorIndex())
@@ -147,6 +150,34 @@ import Testing
         #expect(try await DocumentStore(database: database).list(DocumentFilter(), limit: 100).map(\.path).sorted() == paths,
                 "reading again moves nothing")
         #expect(await learner.filed.isEmpty, "and decides nothing")
+        #expect(await labeler.calls.files.isEmpty, "labels come from the record files, not from the model again")
+        let search = SearchService(database: database, vectors: VectorIndex(), embedder: nil, config: services.config.search)
+        #expect(Set(try await search.fullText(SearchQuery(text: "jurisdiction:portugal")).hits.map(\.id)) == Set(w.documents),
+                "and a document is found by its labels again")
+    }
+
+    @Test func aDocumentNotYetLabelledStaysSoThroughARebuild() async throws {
+        let h = try await Harness.make(classifier: StubClassifier(newFolder: StubClassifier.utilities, band: .auto),
+                                       labeler: StubLabeler(labels: nil))
+        defer { h.env.cleanup() }
+        await h.coordinator.enqueue(try h.env.drop("bill.txt", text: "EDP electricity"))
+        await h.coordinator.drain()
+        let records = ArchiveRecords(database: h.env.database, settings: h.env.settings, taxonomy: h.env.taxonomy, config: h.env.config,
+                                     registry: nil)
+        try await records.flush()
+        let doc = try #require(try await h.services.documents.list(DocumentFilter(statuses: [.filed]), limit: 1).first)
+        let listing = try String(contentsOf: doc.url.deletingLastPathComponent()
+            .appendingPathComponent(h.env.config.taxonomy.documentsFileName), encoding: .utf8)
+        #expect(!listing.contains("labels:"), "an entry has no labels until the model has given some, as entries written before")
+
+        let database = try AppDatabase.inMemory()
+        let rebuilt = ArchiveRecords(database: database, settings: h.env.settings,
+                                     taxonomy: TaxonomyStore(database: database, config: h.env.config.taxonomy, registry: nil),
+                                     config: h.env.config, registry: nil)
+        try await rebuilt.rebuild()
+        let id = try #require(doc.id)
+        let back = try #require(try await DocumentStore(database: database).document(id: id))
+        #expect(back.labels == nil, "read back as not labelled, never as labelled with nothing")
     }
 
     @Test func aRecordFileEditedByHandIsReadBack() async throws {

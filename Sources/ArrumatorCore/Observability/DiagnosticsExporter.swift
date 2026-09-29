@@ -42,15 +42,8 @@ public struct DiagnosticsExporter: Sendable {
         let traces = try await database.reader.read { db -> [String] in
             let traces = try TraceRecord.order(Column("started_at").desc).limit(limit).fetchAll(db)
             return try traces.map { t in
-                var steps = try TraceStepRecord.filter(Column("trace_id") == t.id).order(Column("seq")).fetchAll(db)
-                if !includeDocumentText {
-                    steps = steps.map { s in
-                        var s = s
-                        if s.stage == TraceStage.llm.rawValue || s.stage == TraceStage.vlm.rawValue { s.inputJson = nil }
-                        return s
-                    }
-                }
-                return JSON.string(TraceExport(trace: t, steps: steps))
+                let steps = try TraceStepRecord.filter(Column("trace_id") == t.id).order(Column("seq")).fetchAll(db)
+                return JSON.string(TraceExport(trace: t, steps: Self.shareable(steps, includeDocumentText: includeDocumentText)))
             }
         }
         try Data(traces.joined(separator: "\n").utf8).write(to: staging.appendingPathComponent("traces.jsonl"))
@@ -64,6 +57,21 @@ public struct DiagnosticsExporter: Sendable {
         }
         Log.info(.app, "Diagnostics exported", ["path": zipURL.path, "traces": String(traces.count)])
         return DiagnosticsContents(logFiles: logFiles, traces: traces.count, includesDocumentText: includeDocumentText)
+    }
+}
+
+extension DiagnosticsExporter {
+    /// Trace steps as a diagnostics export may hold them: without the user's consent, a step that exchanged the
+    /// document's text with a model keeps neither what it sent nor what came back, since both carry the document.
+    public static func shareable(_ steps: [TraceStepRecord], includeDocumentText: Bool) -> [TraceStepRecord] {
+        guard !includeDocumentText else { return steps }
+        return steps.map { step in
+            guard TraceStage(rawValue: step.stage)?.exchangesDocumentText == true else { return step }
+            var shared = step
+            shared.inputJson = nil
+            shared.outputJson = nil
+            return shared
+        }
     }
 }
 

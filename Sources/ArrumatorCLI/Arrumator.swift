@@ -11,7 +11,7 @@ struct Arrumator: AsyncParsableCommand {
         commandName: "arrumatorcli",
         abstract: "Local-only document organiser: watches Incoming, understands files with local models, files them.",
         version: version,
-        subcommands: [Doctor.self, Run.self, Ingest.self, Extract.self, Search.self, History.self, Trace.self, Replay.self,
+        subcommands: [Doctor.self, Run.self, Ingest.self, Extract.self, Search.self, Labels.self, History.self, Trace.self, Replay.self,
                       Review.self, Folders.self, Rules.self, Senders.self, Forget.self, Archive.self, Logic.self,
                       Rethink.self, Proposals.self, Funnel.self, Stats.self, Rebuild.self, Logs.self, Models.self,
                       Diagnostics.self, Eval.self, Settings.self])
@@ -47,6 +47,17 @@ enum Terminal {
             guard destination.isNew else { return destination.path }
             return "NEW \(destination.path)" + (decision.proposedNewFolder?.yearSubfolders == true ? " (by year)" : "")
         }
+    }
+
+    /// A document's labels on one line, "Maria Exemplo · Portugal · pt (Portuguese)", or why there are none.
+    static func labels(_ labels: [DocumentLabel]?) -> String {
+        guard let labels else { return "not labelled" }
+        return labels.isEmpty ? "nothing worth a label" : labels.map(label).joined(separator: " · ")
+    }
+
+    static func label(_ label: DocumentLabel) -> String {
+        guard label.kind == .language, let name = DocumentLabel.languageName(label.value) else { return label.value }
+        return "\(label.value) (\(name))"
     }
 
     static func table(_ rows: [[String]]) -> String {

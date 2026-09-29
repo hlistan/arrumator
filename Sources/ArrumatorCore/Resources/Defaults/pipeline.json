@@ -375,6 +375,10 @@
       "partyAbove": 0.8
     }
   },
+  "labels": {
+    "maxPerKind": 5,
+    "maxValueChars": 80
+  },
   "calibration": {
     "weights": {
       "llm": 0.45,
@@ -462,7 +466,11 @@
       5,
       3,
       2,
-      1
+      1,
+      4,
+      4,
+      4,
+      2
     ],
     "snippetTokens": 24,
     "debounceMilliseconds": 150,
@@ -561,6 +569,21 @@
           ],
           "jobStates": [
             "extracting"
+          ]
+        },
+        {
+          "id": "labelled",
+          "title": "Labelled",
+          "detail": "The local model picked out whom and what it concerns, where, and in which language.",
+          "stages": [
+            "label"
+          ],
+          "logCategories": [
+            "ollama",
+            "classify"
+          ],
+          "jobStates": [
+            "labeling"
           ]
         },
         {

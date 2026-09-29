@@ -65,6 +65,14 @@ public enum ClassificationSchema {
     public static func fileName() -> JSONValue {
         object([JSONEntry("file_name", string())])
     }
+
+    /// The signals in a document, one list per `LabelKind`, the most significant first.
+    public static func labels(maxPerKind: Int) -> JSONValue {
+        object(LabelKind.allCases.map { JSONEntry(labelsKey($0), stringArray(maxItems: maxPerKind)) })
+    }
+
+    /// The answer's key for the labels of `kind`: "subjects", "objects", "jurisdictions", "languages".
+    static func labelsKey(_ kind: LabelKind) -> String { kind.rawValue + "s" }
 }
 
 /// The model's answer when it only names a document.

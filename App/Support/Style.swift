@@ -261,6 +261,22 @@ enum Wording {
     /// What was learned. Forgetting is recorded in History only: a lesson forgotten shows struck through instead.
     static let lessonKinds: Set<EventKind> = [.learned, .ruleInduced, .ruleChanged, .ruleDisabled]
 
+    /// How a kind of label is introduced on a document's card: "About Maria Exemplo".
+    static func labelKind(_ kind: LabelKind) -> String {
+        switch kind {
+        case .subject: "About"
+        case .object: "Concerns"
+        case .jurisdiction: "Jurisdiction"
+        case .language: "Language"
+        }
+    }
+
+    /// A label as the card shows it: a language by its name in the user's language.
+    static func label(_ label: DocumentLabel) -> String {
+        guard label.kind == .language else { return label.value }
+        return Locale.current.localizedString(forLanguageCode: label.value) ?? label.value
+    }
+
     /// A day heading: Today, Yesterday, or the date.
     static func day(_ date: Date, now: Date = Date()) -> String {
         let calendar = Calendar.current
@@ -281,6 +297,7 @@ enum EventStyle {
         switch kind {
         case .arrived: "tray.and.arrow.down"
         case .extracted: "doc.text.magnifyingglass"
+        case .labeled: "tag"
         case .classified: "sparkles"
         case .filed: "checkmark.circle"
         case .needsReview: "questionmark.circle"

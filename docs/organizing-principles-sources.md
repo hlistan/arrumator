@@ -12,6 +12,18 @@ the logic a new archive starts with: the archive's own logic decides the shape o
 | Document type, correspondent and date as metadata rather than folders | paperless-ngx documentation — <https://docs.paperless-ngx.com/usage/> |
 | Tax records kept together per year (supports retention) | IRS Topic 305, *Recordkeeping* — <https://www.irs.gov/taxtopics/tc305> |
 
+## Sources for labels
+
+Every document is labelled by the kinds of metadata archival description keeps for a record, whatever its place in a
+classification scheme (`labels-system.md`, `LabelKind`).
+
+| Choice | Sources |
+|---|---|
+| Label a document by the parties it concerns, the jurisdiction it belongs to and its language, apart from where it is filed | DCMI Metadata Terms: *subject*, *coverage* ("the spatial or temporal topic of the resource, spatial applicability of the resource, or jurisdiction under which the resource is relevant") and *language* — <https://www.dublincore.org/specifications/dublin-core/dcmi-terms/> ; ISO 23081-1:2017, *Metadata for records*, which describes records together with the agents and business they relate to — <https://www.iso.org/standard/73172.html> |
+| Languages as ISO 639-1 codes | ISO 639 language codes, as DCMI recommends a controlled vocabulary for *language* — <https://www.loc.gov/standards/iso639-2/php/code_list.php> ; `Locale.LanguageCode` — <https://developer.apple.com/documentation/foundation/locale/languagecode> |
+| Labels beside folders, so a document is found from every side | paperless-ngx tags, which a document can carry many of, next to one storage path — <https://docs.paperless-ngx.com/usage/> |
+| The model answers in a fixed JSON schema, checked and repaired like every other answer | Ollama structured outputs — <https://ollama.com/blog/structured-outputs> |
+
 ## Sources for how the app places a decided path
 
 The model identifies a document and decides its path from the logic; the app, not the model, puts that path onto the

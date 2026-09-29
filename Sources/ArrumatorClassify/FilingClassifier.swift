@@ -109,9 +109,9 @@ public struct FilingClassifier: DocumentClassifier {
             CandidateGenerator(config: cc).generate(documentVector: vector, folderVectors: folderVectors, memories: neighbors,
                                                    taxonomy: taxonomy)
         }
-        let tiers = [LLMClassifier.Tier(model: resolved.chat, numCtx: resolved.numCtx, keepAlive: resolved.keepAliveChat),
-                     LLMClassifier.Tier(model: resolved.fast, numCtx: resolved.fastNumCtx, keepAlive: resolved.keepAliveChat)]
-            .reduce(into: [LLMClassifier.Tier]()) { acc, t in if !acc.contains(where: { $0.model == t.model }) { acc.append(t) } }
+        let tiers = LLMClassifier.Tier.distinct([
+            LLMClassifier.Tier(model: resolved.chat, numCtx: resolved.numCtx, keepAlive: resolved.keepAliveChat),
+            LLMClassifier.Tier(model: resolved.fast, numCtx: resolved.fastNumCtx, keepAlive: resolved.keepAliveChat)])
         let currentLogic = try await logic.current()
         let version = LogicStore.version(of: currentLogic)
         let system = try prompts.classifySystem(folderLanguage: settings.folderNamingLanguage, logic: currentLogic)
@@ -319,9 +319,9 @@ public struct FilingClassifier: DocumentClassifier {
                        trace: TraceContext) async throws -> FilingDecision {
         guard settings.renameFiles else { return decision }
         let resolved = try config.models(for: settings.models)
-        let tiers = [LLMClassifier.Tier(model: resolved.fast, numCtx: resolved.fastNumCtx, keepAlive: resolved.keepAliveChat),
-                     LLMClassifier.Tier(model: resolved.chat, numCtx: resolved.numCtx, keepAlive: resolved.keepAliveChat)]
-            .reduce(into: [LLMClassifier.Tier]()) { acc, t in if !acc.contains(where: { $0.model == t.model }) { acc.append(t) } }
+        let tiers = LLMClassifier.Tier.distinct([
+            LLMClassifier.Tier(model: resolved.fast, numCtx: resolved.fastNumCtx, keepAlive: resolved.keepAliveChat),
+            LLMClassifier.Tier(model: resolved.chat, numCtx: resolved.numCtx, keepAlive: resolved.keepAliveChat)])
         let system = try prompts.nameSystem(folderLanguage: settings.folderNamingLanguage, logic: try await logic.current())
         let user = try prompts.nameUser(content: content, decision: decision, folder: folder, taxonomy: taxonomy, correspondents: matches)
         let prompts = prompts

@@ -58,12 +58,13 @@ struct Harness {
     let coordinator: IngestCoordinator
     let learner: RecordingLearner
 
-    static func make(classifier: any DocumentClassifier) async throws -> Harness {
-        try await make { _ in classifier }
+    static func make(classifier: any DocumentClassifier, labeler: any DocumentLabeler = StubLabeler()) async throws -> Harness {
+        try await make(labeler: labeler) { _ in classifier }
     }
 
     /// For a classifier that needs the environment, such as its folder tree.
-    static func make(classifier make: (TestEnvironment) -> any DocumentClassifier) async throws -> Harness {
+    static func make(labeler: any DocumentLabeler = StubLabeler(),
+                     classifier make: (TestEnvironment) -> any DocumentClassifier) async throws -> Harness {
         let env = try await TestEnvironment.make()
         let classifier = make(env)
         let placer = Placer(builder: FilenameBuilder(config: env.config.naming), operations: FileOperations(naming: env.config.naming))
@@ -71,7 +72,7 @@ struct Harness {
         let registry = SelfChangeRegistry(ttl: env.config.watcher.selfChangeTTLSeconds)
         let services = PipelineServices(
             database: env.database, config: env.config, settings: env.settings, taxonomy: env.taxonomy,
-            extractor: PlainTestExtractor(), classifier: classifier, learner: learner,
+            extractor: PlainTestExtractor(), labeler: labeler, classifier: classifier, learner: learner,
             filer: DocumentFiler(database: env.database, placer: placer, index: IndexStore(database: env.database), registry: registry),
             traces: TraceRecorder(database: env.database, appVersion: "test"), vectors: VectorIndex())
         return Harness(env: env, services: services, coordinator: IngestCoordinator(services: services), learner: learner)
@@ -279,7 +280,7 @@ struct VanishingFolderClassifier: DocumentClassifier {
         config.ingest.retryDelays = [0, 0, 0]
         let services = PipelineServices(database: h.services.database, config: config, settings: h.services.settings,
                                         taxonomy: h.services.taxonomy, extractor: h.services.extractor,
-                                        classifier: h.services.classifier, learner: h.services.learner, filer: h.services.filer,
+                                        labeler: h.services.labeler, classifier: h.services.classifier, learner: h.services.learner, filer: h.services.filer,
                                         traces: h.services.traces, vectors: h.services.vectors)
         let coordinator = IngestCoordinator(services: services)
         let url = try h.env.drop("bad.txt", text: "x")

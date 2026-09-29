@@ -141,7 +141,7 @@ make something compile. Instead, move the code to the module that owns it.
 |---|---|---|
 | `Sources/ArrumatorCore` | Contracts, configuration, SQLite storage, taxonomy and `_about.md`, watchers, file operations, the ingest state machine, the Ollama client, lifecycle and network guard, search, observability. | GRDB, Yams, Apple frameworks. Never Extract, Classify or Runtime. |
 | `Sources/ArrumatorExtract` | Turning any file into `ExtractedContent`: format extractors, OCR, vision description, language, dates, identifiers. | Core, CoreXLSX, ZIPFoundation, Apple frameworks. |
-| `Sources/ArrumatorClassify` | Filing decisions and learning: evidence, rules, prompts, model calls, the placement guard, calibration. | Core |
+| `Sources/ArrumatorClassify` | Filing decisions, labels and learning: evidence, rules, prompts, model calls, the placement guard, calibration, label extraction. | Core |
 | `Sources/ArrumatorRuntime` | The composition root: builds and wires the concrete services and starts the background tasks. | Core, Extract, Classify |
 | `Sources/ArrumatorCLI` | `arrumatorcli` commands: argument parsing and output only. | Runtime, Core, Classify |
 | `App/` | The SwiftUI menu-bar app: `AppModel`, pages and the shared row and card views, presentation only. | Runtime, Core |

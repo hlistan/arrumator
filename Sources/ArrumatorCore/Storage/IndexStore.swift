@@ -8,12 +8,28 @@ public struct IndexStore: Sendable {
     public init(database: AppDatabase) { self.database = database }
 
     public func upsertText(docID: Int64, title: String, correspondent: String, filename: String, body: String,
-                           summary: String?, metadata: [String: String], extractorVersion: String) async throws {
+                           summary: String?, metadata: [String: String], extractorVersion: String,
+                           labels: [DocumentLabel]) async throws {
         try await database.writer.write { db in
+            let text = { (kind: LabelKind) in DocumentLabel.searchText(labels, kind: kind) }
             let record = DocumentTextRecord(docId: docID, title: title, correspondent: correspondent, filename: filename,
                                             body: body, summary: summary, metadataJson: JSON.string(metadata),
-                                            extractorVersion: extractorVersion)
+                                            extractorVersion: extractorVersion, subject: text(.subject), object: text(.object),
+                                            jurisdiction: text(.jurisdiction), language: text(.language))
             try record.upsert(db)
+        }
+    }
+
+    /// Makes a document's labels its own: on its row, which writes them into its record file, and in the full-text
+    /// index, in one transaction.
+    public func saveLabels(_ labels: [DocumentLabel], docID: Int64) async throws {
+        try await database.writer.write { db in
+            try db.execute(sql: "UPDATE documents SET labels_json = ?, updated_at = ? WHERE id = ?",
+                           arguments: [JSON.string(labels), Date().unixSeconds, docID])
+            try db.execute(sql: "UPDATE document_text SET subject = ?, object = ?, jurisdiction = ?, language = ? WHERE doc_id = ?",
+                           arguments: [DocumentLabel.searchText(labels, kind: .subject), DocumentLabel.searchText(labels, kind: .object),
+                                       DocumentLabel.searchText(labels, kind: .jurisdiction),
+                                       DocumentLabel.searchText(labels, kind: .language), docID])
         }
     }
 

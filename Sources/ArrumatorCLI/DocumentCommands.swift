@@ -24,12 +24,13 @@ struct Ingest: AsyncParsableCommand {
                     context: ExtractionContext(config: runtime.config.extraction, entities: runtime.config.entities,
                                                vision: settings.enableVLM ? try visionOptions(runtime, settings) : nil),
                     trace: trace)
+                let labels = try await runtime.labeler.labels(for: content, settings: settings, config: runtime.config, trace: trace)
                 let taxonomy = try await runtime.taxonomy.snapshot(root: settings.archiveURL)
                 let outcome = try await runtime.classifier.classify(content, taxonomy: taxonomy, settings: settings,
                                                                     config: runtime.config, mode: .arrival, trace: trace)
                 let steps = await sink.steps
-                options.emit(DryRun(content: content, decision: outcome.decision, steps: steps)) {
-                    describe(outcome.decision, content: content, steps: steps, taxonomy: taxonomy)
+                options.emit(DryRun(content: content, labels: labels, decision: outcome.decision, steps: steps)) {
+                    describe(outcome.decision, labels: labels, content: content, steps: steps, taxonomy: taxonomy)
                 }
             } else {
                 await runtime.coordinator.enqueue(url)
@@ -46,15 +47,19 @@ struct Ingest: AsyncParsableCommand {
 
     struct DryRun: Encodable {
         var content: ExtractedContent
+        /// Nil when the model gave no valid answer.
+        var labels: [DocumentLabel]?
         var decision: FilingDecision
         var steps: [TraceStep]
     }
 
-    func describe(_ d: FilingDecision, content: ExtractedContent, steps: [TraceStep], taxonomy: TaxonomySnapshot) -> String {
+    func describe(_ d: FilingDecision, labels: [DocumentLabel]?, content: ExtractedContent, steps: [TraceStep],
+                  taxonomy: TaxonomySnapshot) -> String {
         let target = Terminal.target(of: d, in: taxonomy) ?? "Needs review"
         return """
         \(content.source.originalFilename)
           content:   \(content.kind.rawValue), \(content.textOrigin.rawValue), \(content.text.count) chars, language \(content.language.primary)
+          labels:    \(Terminal.labels(labels))
           decision:  \(target)
           file name: \(d.fileName ?? "(keeps its name)")
           metadata:  \(d.documentType.rawValue) · \(d.correspondent ?? "—") · \(d.documentDate ?? "—")
@@ -112,9 +117,10 @@ struct Search: AsyncParsableCommand {
         try await runtime.prepareSearch(await runtime.settings.current)
         let results = try await runtime.search.search(SearchQuery(text: query.joined(separator: " "), semantic: !noSemantic))
         options.emit(results.hits.map { SearchRow(id: $0.id, path: $0.document.path, score: $0.score, snippet: SearchHighlight.plain($0.snippet),
-                                                   sources: $0.sources.map(\.rawValue).sorted()) }) {
+                                                   sources: $0.sources.map(\.rawValue).sorted(), labels: $0.document.labels) }) {
             var lines = results.hits.map { hit in
                 "\(hit.document.path)\n    \(Terminal.highlight(hit.snippet).replacingOccurrences(of: "\n", with: " "))"
+                    + (hit.document.labels?.isEmpty == false ? "\n    \(Terminal.labels(hit.document.labels))" : "")
             }
             lines.append(String(format: "%d results in %.0f ms%@", results.hits.count, results.elapsedMs,
                                 results.semanticUsed ? " (hybrid)" : " (full text: \(results.semanticUnavailableReason ?? ""))"))
@@ -128,6 +134,59 @@ struct Search: AsyncParsableCommand {
         var score: Double
         var snippet: String
         var sources: [String]
+        var labels: [DocumentLabel]?
+    }
+}
+
+struct Labels: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Show a document's labels (whom and what it concerns, its jurisdictions and languages), or ask the local model again.")
+    @OptionGroup var options: GlobalOptions
+    @Flag(help: "Ask the model for the document's labels again and keep its answer.") var again = false
+    @Flag(help: "Label every document that has none yet, such as those filed before documents were labelled.") var unlabelled = false
+    @Argument(help: "Document id or file path.") var document: String?
+
+    func validate() throws {
+        guard (document == nil) == unlabelled else { throw ValidationError("Name one document, or pass --unlabelled alone.") }
+        if unlabelled && again { throw ValidationError("--again applies to one document; --unlabelled labels every unlabelled one.") }
+    }
+
+    func run() async throws {
+        let runtime = try await options.runtime()
+        if again || unlabelled { _ = await runtime.lifecycle.ensureRunning() }
+        let ids = if let document { [try await resolveDocument(document, runtime: runtime)] } else {
+            try await runtime.services.documents.unlabelled()
+        }
+        var rows: [Row] = []
+        for id in ids {
+            if again || unlabelled { try await runtime.review.relabel(id) }
+            guard let doc = try await runtime.services.documents.document(id: id) else { throw ValidationError("No document \(id)") }
+            rows.append(Row(id: id, path: doc.path, labels: doc.labels))
+        }
+        if unlabelled {
+            options.emit(rows) {
+                (rows.map { "#\($0.id) \($0.path)\n    \(Terminal.labels($0.labels))" }
+                    + ["Labelled \(rows.filter { $0.labels != nil }.count) of \(Format.count(rows.count, "document"))"])
+                    .joined(separator: "\n")
+            }
+        } else if let row = rows.first {
+            options.emit(row) {
+                guard let labels = row.labels else {
+                    return "\(row.path)\nNot labelled yet; `arrumatorcli labels \(row.id) --again` asks the model."
+                }
+                return ([row.path] + LabelKind.allCases.map { kind in
+                    let values = labels.filter { $0.kind == kind }.map(Terminal.label)
+                    return "  \(kind.rawValue.padding(toLength: 13, withPad: " ", startingAt: 0))\(values.isEmpty ? "—" : values.joined(separator: " · "))"
+                }).joined(separator: "\n")
+            }
+        }
+    }
+
+    struct Row: Encodable {
+        var id: Int64
+        var path: String
+        /// Nil until the model has labelled the document.
+        var labels: [DocumentLabel]?
     }
 }
 

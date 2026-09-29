@@ -162,8 +162,22 @@ struct DocumentCard: View {
                 }
                 .labelsHidden().fixedSize()
             }
+            labels(d)
         }
         .disabled(d.decision == nil)
+    }
+
+    /// What the model found the document concerns, one row per kind of label it has.
+    @ViewBuilder private func labels(_ d: DocumentRecord) -> some View {
+        let labels = d.labels ?? []
+        ForEach(LabelKind.allCases.filter { kind in labels.contains { $0.kind == kind } }, id: \.self) { kind in
+            GridRow(alignment: .firstTextBaseline) {
+                label(Wording.labelKind(kind))
+                Text(labels.filter { $0.kind == kind }.map(Wording.label).joined(separator: " · "))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            }
+        }
     }
 
     @ViewBuilder private func why(_ d: DocumentRecord) -> some View {

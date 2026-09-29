@@ -12,6 +12,7 @@ public struct PipelineConfig: Sendable, Codable, Hashable {
     public var extraction: ExtractionConfig
     public var entities: EntityConfig
     public var classification: ClassificationConfig
+    public var labels: LabelsConfig
     public var calibration: CalibrationConfig
     public var learning: LearningConfig
     public var naming: NamingConfig
@@ -357,6 +358,14 @@ public struct ClassificationConfig: Sendable, Codable, Hashable {
     public var placementGuard: PlacementGuard
 }
 
+/// The labels the local model gives every document: the signals it picks out of the text (`LabelKind`).
+public struct LabelsConfig: Sendable, Codable, Hashable {
+    /// Labels of one kind a document keeps at most, the most significant first.
+    public var maxPerKind: Int
+    /// Longest a label may be; a longer one is cut at a word boundary.
+    public var maxValueChars: Int
+}
+
 public struct CalibrationConfig: Sendable, Codable, Hashable {
     public var weights: CalibrationWeights
     public var weightsNoMemory: CalibrationWeights
@@ -451,6 +460,8 @@ public struct SearchConfig: Sendable, Codable, Hashable {
     /// Cosine similarity a document needs to be found by meaning alone, without containing the query's words.
     public var semanticMinSimilarity: Double
     public var queryCacheSize: Int
+    /// BM25 weight of each full-text column, in `SearchService.columns` order: title, correspondent, file name, text,
+    /// then one column per `LabelKind`.
     public var bm25Weights: [Double]
     public var snippetTokens: Int
     public var debounceMilliseconds: Int

@@ -51,6 +51,11 @@ public struct LLMClassifier: Sendable {
             self.numCtx = numCtx
             self.keepAlive = keepAlive
         }
+
+        /// The tiers in order, each model once: a profile may use one model for every role.
+        public static func distinct(_ tiers: [Tier]) -> [Tier] {
+            tiers.reduce(into: []) { acc, t in if !acc.contains(where: { $0.model == t.model }) { acc.append(t) } }
+        }
     }
 
     public func ask<Answer: Sendable & Hashable>(system: String, user: String, schema: JSONValue, tiers: [Tier],

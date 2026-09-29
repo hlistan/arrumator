@@ -70,7 +70,19 @@ public struct PromptBuilder: Sendable {
 
     /// Deciding the path: only the document. Shown any folder, a model copies it whether it fits or not.
     public func classifyUser(content: ExtractedContent, correspondents: [CorrespondentMatch]) throws -> String {
-        try library.render("classify-user", ["document": documentBlock(content, correspondents: correspondents)])
+        try library.render("document-user", ["document": documentBlock(content, correspondents: correspondents)])
+    }
+
+    /// Picking out a document's signals, which become its labels. The archive's logic plays no part: labels say what
+    /// the document concerns, whatever folder it is filed in.
+    public func labelsSystem(maxPerKind: Int) throws -> String {
+        try library.render("labels-system", ["max_per_kind": String(maxPerKind)])
+    }
+
+    /// The document whose signals are picked out, as the model deciding its path sees it, less the senders the app
+    /// recognised: those say who sent it, not what it concerns.
+    public func labelsUser(content: ExtractedContent) throws -> String {
+        try library.render("document-user", ["document": documentBlock(content, correspondents: [])])
     }
 
     /// Asking which of the folders beside a decided one, if any, it is.

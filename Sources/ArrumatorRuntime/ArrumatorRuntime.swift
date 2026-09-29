@@ -32,6 +32,7 @@ public final class ArrumatorRuntime: Sendable {
     public let memories: MemoryIndex
     public let prompts: PromptBuilder
     public let classifier: FilingClassifier
+    public let labeler: LabelExtractor
     public let learner: Learner
     public let vectors: VectorIndex
     public let search: SearchService
@@ -164,6 +165,7 @@ public final class ArrumatorRuntime: Sendable {
         classifier = FilingClassifier(store: learningStore,
                                       logic: LogicStore(database: database, maxChars: config.classification.logicMaxChars),
                                       memories: memories, gate: gate, models: models, prompts: prompts)
+        labeler = LabelExtractor(gate: gate, models: models, prompts: prompts)
         let skip = SkipRules(watcher: config.watcher, taxonomy: config.taxonomy)
         let history = HistoryStore(database: database)
         learner = Learner(store: learningStore, memories: memories, settings: settings, config: config, taxonomy: taxonomy,
@@ -178,7 +180,7 @@ public final class ArrumatorRuntime: Sendable {
         let placer = Placer(builder: FilenameBuilder(config: config.naming), operations: FileOperations(naming: config.naming))
         services = PipelineServices(
             database: database, config: config, settings: settings, taxonomy: taxonomy,
-            extractor: ExtractorRegistry(ollama: GatedOllama(gate: gate)), classifier: classifier, learner: learner,
+            extractor: ExtractorRegistry(ollama: GatedOllama(gate: gate)), labeler: labeler, classifier: classifier, learner: learner,
             filer: DocumentFiler(database: database, placer: placer, index: IndexStore(database: database), registry: registry),
             traces: traces, vectors: vectors)
         coordinator = IngestCoordinator(services: services)

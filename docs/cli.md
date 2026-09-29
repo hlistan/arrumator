@@ -23,7 +23,7 @@ the listing commands (`senders`, `rules`, `proposals`, `rethink plan`).
 |---|---|
 | `arrumatorcli doctor` | Check the environment: folders, database, Ollama, models, disk, network. Exits with 1 when a check fails. |
 | `arrumatorcli run` | Run headless: watch Incoming and file documents until interrupted. |
-| `arrumatorcli ingest <files>… [--dry-run]` | File documents now (moves them into the archive). `--dry-run` analyses and decides without moving files or recording a decision. |
+| `arrumatorcli ingest <files>… [--dry-run]` | File documents now (moves them into the archive). `--dry-run` analyses, labels and decides without moving files or recording anything, and shows the labels with the decision. |
 | `arrumatorcli settings [--incoming <folder>] [--profile <profile>] [--folder-language <language>] [--auto-create-folders true\|false] [--ollama launchApp\|spawnServe\|external] [--ollama-url <url>] [--paused true\|false]` | Show or change settings. `--profile` is a model profile from `pipeline.json` (`standard`, `balanced`, `lowMemory`); `--ollama-url` must be this Mac or a machine on the local network, such as `http://192.168.1.20:11434`. Switch archives with `arrumatorcli archive switch`. |
 | `arrumatorcli models [status]` | Status of the configured models. |
 | `arrumatorcli models pull <model>` | Download a model. This needs the internet; recognition never does. |
@@ -32,7 +32,8 @@ the listing commands (`senders`, `rules`, `proposals`, `rethink plan`).
 
 | Command | What it does |
 |---|---|
-| `arrumatorcli search <query>… [--no-semantic]` | Search the archive: documents containing the words first, then documents alike in meaning. `--no-semantic` searches the words only. |
+| `arrumatorcli search <query>… [--no-semantic]` | Search the archive: documents containing the words first, then documents alike in meaning, each with its labels. `field:word` and `field:"a phrase"` search one field: `title`, `correspondent`, `filename`, `body`, `subject`, `object`, `jurisdiction` or `language`. `--no-semantic` searches the words only. |
+| `arrumatorcli labels <document> [--again]` / `arrumatorcli labels --unlabelled` | A document's labels by kind: whom and what it concerns, its jurisdictions and languages. `--again` asks the local model for them again from the document's text and keeps its answer; `--unlabelled` labels every document that has none yet, such as those filed before documents were labelled. |
 | `arrumatorcli extract <file>` | Show what the extractors read from a file, with no model decisions. |
 | `arrumatorcli history [--limit <n>] [--doc <document>]` | Recent events: arrivals, filings, corrections, rules, folders (50 unless `--limit`), optionally of one document. |
 | `arrumatorcli trace <document> [--full]` | How a document was processed: every stage, its inputs, outputs and timing. `--full` adds the prompts and raw model responses. |
@@ -47,7 +48,7 @@ the listing commands (`senders`, `rules`, `proposals`, `rethink plan`).
 | `arrumatorcli review move <document> <folder>` | Move a document to a folder, given by its code such as `F12` (recorded as a correction). |
 | `arrumatorcli review rename <document> <name>` | Give a document a new file name, without extension (recorded as a correction). |
 | `arrumatorcli review undo <document>` | Move a filed document back to Incoming and forget what was learned from it. |
-| `arrumatorcli review retry <document>` | Decide again, for example after changing models, and file. |
+| `arrumatorcli review retry <document>` | Decide again, for example after changing models, and file; a document without labels is labelled first. |
 | `arrumatorcli review hold <document>` | Leave a document where it is for later. |
 | `arrumatorcli review mark-correct <document>` | Confirm an automatic filing was right. |
 | `arrumatorcli folders [tree]` | The folder tree as it has grown. |
@@ -94,5 +95,5 @@ the listing commands (`senders`, `rules`, `proposals`, `rethink plan`).
 | `arrumatorcli funnel [--days <n>]` | How far documents got through the pipeline and where they stopped, for those that arrived in the last 30 days unless `--days`. |
 | `arrumatorcli stats` | Where the pipeline needs tuning: accuracy, confusions, calibration, latency. |
 | `arrumatorcli logs [--category <category>] [--level <level>] [--minutes <n>] [--follow]` | Read the structured logs (JSONL, one file per day). `--category` is one of app, watch, ingest, extract, classify, fileops, ollama, index, search, taxonomy, learn, ui, cli, db, power; `--level` the lowest level shown (error, warning, info, debug, trace; info unless set); `--minutes` only newer lines; `--follow` keeps printing new ones. |
-| `arrumatorcli diagnostics <output> [--include-document-text]` | Write a zip with logs, recent traces, doctor report, settings and folder tree. `--include-document-text` also includes prompts that contain document text. |
+| `arrumatorcli diagnostics <output> [--include-document-text]` | Write a zip with logs, recent traces, doctor report, settings and folder tree. `--include-document-text` also includes the prompts and model answers that contain document text. |
 | `arrumatorcli eval <fixtures> [--model <model>] [--profile <profile>] [--passes <n>] [--logic <file>] [--only <prefix>] [--report <path>] [--min-f1 <x>] [--feedback]` | Measure placement quality on a fixture corpus (a folder with `expected.json`) in a throw-away archive, as described in [Evaluation](evaluation.md). `--passes` runs the corpus again to show what was learned; `--only pt/` runs part of it; `--logic` files by another logic; `--report` writes the full report as JSON; `--min-f1` fails below that grouping F1; `--feedback` simulates a user who confirms consistent placements and moves inconsistent ones. |

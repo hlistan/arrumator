@@ -63,9 +63,10 @@ public struct SearchResults: Sendable, Hashable {
     public var elapsedMs: Double
 }
 
-/// Builds safe FTS5 MATCH expressions from user input: quoted terms, `"phrases"`, `field:term`, prefix on the last term.
+/// Builds safe FTS5 MATCH expressions from user input: quoted terms, `"phrases"`, `field:term`, `field:"phrase"`, prefix
+/// on the last term. The fields are the full-text columns (`SearchService.columns`), a label's kind among them.
 public enum FTSQueryBuilder {
-    static let fields: Set<String> = ["title", "correspondent", "filename", "body"]
+    static let fields = Set(SearchService.columns)
 
     public static func build(_ input: String) -> String? {
         var tokens: [String] = []
@@ -74,8 +75,15 @@ public enum FTSQueryBuilder {
         for ch in input {
             if ch == "\"" {
                 if inQuotes {
-                    if !current.isEmpty { tokens.append("\"" + current + "\"") }
+                    tokens.append(current + "\"")
                     current = ""
+                } else {
+                    // A phrase starts. A word before it is a term of its own, unless it names the phrase's field.
+                    if !current.isEmpty && !isField(current) {
+                        tokens.append(current)
+                        current = ""
+                    }
+                    current.append(ch)
                 }
                 inQuotes.toggle()
             } else if ch.isWhitespace && !inQuotes {
@@ -85,20 +93,23 @@ public enum FTSQueryBuilder {
                 current.append(ch)
             }
         }
-        if !current.isEmpty { tokens.append(inQuotes ? "\"" + current + "\"" : current) }
+        if !current.isEmpty { tokens.append(inQuotes ? current + "\"" : current) }
         guard !tokens.isEmpty else { return nil }
         var parts: [String] = []
         for (i, token) in tokens.enumerated() {
             let isLast = i == tokens.count - 1
-            if token.hasPrefix("\"") {
-                parts.append("\"" + token.dropFirst().dropLast().replacingOccurrences(of: "\"", with: "\"\"") + "\"")
-                continue
-            }
             var column: String?
             var term = token
             if let colon = token.firstIndex(of: ":"), fields.contains(String(token[..<colon]).lowercased()) {
                 column = String(token[..<colon]).lowercased()
                 term = String(token[token.index(after: colon)...])
+            }
+            if term.hasPrefix("\"") {
+                let phrase = term.dropFirst().dropLast()
+                guard !phrase.trimmingCharacters(in: .whitespaces).isEmpty else { continue }
+                let expr = "\"" + phrase.replacingOccurrences(of: "\"", with: "\"\"") + "\""
+                parts.append(column.map { "\($0) : \(expr)" } ?? expr)
+                continue
             }
             let cleaned = term.unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) || $0 == "-" || $0 == "." }
             let word = String(String.UnicodeScalarView(cleaned))
@@ -109,10 +120,19 @@ public enum FTSQueryBuilder {
         }
         return parts.isEmpty ? nil : parts.joined(separator: " ")
     }
+
+    /// `jurisdiction:`, a field's name and the colon that ends it.
+    private static func isField(_ word: String) -> Bool {
+        word.hasSuffix(":") && fields.contains(String(word.dropLast()).lowercased())
+    }
 }
 
 /// Hybrid search: FTS5 BM25 (instant) fused with embedding similarity via Reciprocal Rank Fusion.
 public actor SearchService {
+    /// The columns of the full-text index, in its order (`AppDatabase.migrator`): each can be searched on its own as
+    /// `column:term`, and `SearchConfig.bm25Weights` weighs them in this order.
+    public static let columns = ["title", "correspondent", "filename", "body"] + LabelKind.allCases.map(\.rawValue)
+
     private let database: AppDatabase
     private let vectors: VectorIndex
     private var embedder: (any Embedder)?

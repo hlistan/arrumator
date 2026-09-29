@@ -1,8 +1,11 @@
 import Foundation
 
 public enum TraceStage: String, Sendable, Codable, CaseIterable {
-    case stability, hash, dedupe, extract, ocr, vlm, entities, correspondent, rules, embed, candidates
+    case stability, hash, dedupe, extract, ocr, vlm, entities, label, correspondent, rules, embed, candidates
     case llm, judge, validate, calibrate, name, place, index, learn, review, undo
+
+    /// The step records a model exchange: prompts holding the document's text, and answers drawn from it.
+    public var exchangesDocumentText: Bool { [.llm, .vlm, .label].contains(self) }
 }
 
 public enum TraceStatus: String, Sendable, Codable {

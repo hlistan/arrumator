@@ -144,6 +144,14 @@ public struct DocumentStore: Sendable {
         }
     }
 
+    /// Documents the model has not labelled yet whose text was read, oldest first: those filed before documents were
+    /// labelled, and those it gave no valid answer for.
+    public func unlabelled() async throws -> [Int64] {
+        try await database.reader.read { db in
+            try Int64.fetchAll(db, sql: "SELECT id FROM documents WHERE labels_json IS NULL AND content_json IS NOT NULL ORDER BY id")
+        }
+    }
+
     @discardableResult
     public func save(_ document: DocumentRecord) async throws -> DocumentRecord {
         try await database.writer.write { db in

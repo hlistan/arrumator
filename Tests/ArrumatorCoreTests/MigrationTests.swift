@@ -9,12 +9,53 @@ import Testing
     /// Every identifier that has ever shipped, in order. Append new migrations; never rename or remove one.
     static let shipped = ["v1_initial", "v2_datesAsUnixSeconds", "v3_brainsAndRethink", "v4_renameBrainsToLogic",
                           "v5_logicEvents", "v6_archiveRecords", "v7_oneLogicPerArchive",
-                          "v8_undoForgets", "v9_foldersOfAnyDepth", "v10_folderKinds"]
+                          "v8_undoForgets", "v9_foldersOfAnyDepth", "v10_folderKinds", "v11_documentLabels"]
 
     @Test func shippedIdentifiersNeverChange() {
         let registered = AppDatabase.migrator.migrations
         #expect(Array(registered.prefix(Self.shipped.count)) == Self.shipped,
                 "a shipped migration was renamed, removed or reordered; installed databases would re-run it and fail")
+    }
+
+    @Test func theFullTextIndexHasTheColumnsSearchNames() throws {
+        let queue = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(queue)
+        let columns = try queue.read { db in try db.columns(in: "document_fts").map(\.name) }
+        #expect(columns == SearchService.columns, "`column:term` and the BM25 weights address columns by these names, in this order")
+    }
+
+    @Test func aDatabaseFromBeforeLabelsKeepsWhatItIndexedAndTakesLabels() throws {
+        let queue = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(queue, upTo: "v10_folderKinds")
+        try queue.write { db in
+            try db.execute(sql: """
+                INSERT INTO documents (id, uid, path, original_filename, sha256, size, uttype, status, added_at, created_at, updated_at)
+                VALUES (1, 'u1', '/archive/Home/bill.pdf', 'bill.pdf', 'h', 1, 'com.adobe.pdf', 'filed', 0, 0, 0);
+                INSERT INTO document_text (doc_id, title, correspondent, filename, body)
+                VALUES (1, 'Fatura', 'EDP', 'bill.pdf', 'eletricidade julho');
+                INSERT INTO jobs (kind, source_path, state, created_at, updated_at) VALUES ('ingest', '/incoming/a.pdf', 'pending', 0, 0);
+                DELETE FROM record_dirty;
+                """)
+        }
+
+        // What the app does at launch.
+        try AppDatabase.migrator.migrate(queue)
+
+        try queue.write { db in
+            let match = "SELECT rowid FROM document_fts WHERE document_fts MATCH ?"
+            #expect(try Int64.fetchAll(db, sql: match, arguments: ["eletricidade"]) == [1], "what was indexed before is still found")
+            #expect(try DocumentRecord.fetchOne(db, key: 1)?.labels == nil,
+                    "a document filed before labels is unlabelled, not labelled with nothing")
+            try db.execute(sql: "UPDATE documents SET labels_json = '[]' WHERE id = 1")
+            #expect(try String.fetchAll(db, sql: "SELECT key FROM record_dirty") == ["documents:/archive/Home/"],
+                    "a change to the labels rewrites the document's record file")
+            try db.execute(sql: "UPDATE document_text SET jurisdiction = 'Portugal' WHERE doc_id = 1")
+            #expect(try Int64.fetchAll(db, sql: match, arguments: ["jurisdiction : portugal"]) == [1], "labels are indexed by kind")
+            try db.execute(sql: "UPDATE jobs SET state = 'labeling'")
+            #expect(throws: DatabaseError.self, "a file has one active job, while it is labelled too") {
+                try db.execute(sql: "INSERT INTO jobs (kind, source_path, state, created_at, updated_at) VALUES ('ingest', '/incoming/a.pdf', 'pending', 0, 0)")
+            }
+        }
     }
 
     @Test func aDatabaseFromTheBrainsReleaseOpensWithItsDataIntact() throws {

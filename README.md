@@ -25,6 +25,9 @@ Portuguese are supported.
 
 - **Reads anything**: PDF text, Apple Vision OCR for scans and photos, Office files, e-mail, archives, and a local
   vision model for photos without text. It finds the language, dates, and identifiers such as IBANs and tax numbers.
+- **Labels every document by what it is about.** The local model picks out whom and what each document concerns,
+  the jurisdictions it falls under and the languages it is written in, and keeps them as labels you can search by
+  (`jurisdiction:portugal`, `subject:"maria silva"`), wherever the document is filed.
 - **You decide how the archive is organised.** The archive's *logic* is a prompt you can edit. The built-in one
   condenses records-management practice. Try a change on a few documents, then reprocess the whole archive, reviewing
   every move before it happens.
