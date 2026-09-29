@@ -1,6 +1,7 @@
 # Continuous integration and releases
 
-Every pull request is checked, and every merge to `main` is checked again and published as a
+Every pull request is checked, and every merge to `main` (always a squash merge, as the
+[push protocol](../AGENTS.md#8-push-protocol) requires) is checked again and published as a
 [GitHub release](https://github.com/hlistan/arrumator/releases) that anyone can download.
 
 ## Pull requests: `.github/workflows/ci.yml`

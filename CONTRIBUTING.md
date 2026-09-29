@@ -21,7 +21,8 @@ scripts/bootstrap.sh
 - **pre-commit** runs `scripts/check-secrets.sh --staged`. It refuses a commit that adds a secret, signing material
   (`.p12`, `.p8`, …), an `.env` file, a path into someone's home folder, or a real document from
   `Tests/Fixtures/private`.
-- **pre-push** runs `scripts/check-secrets.sh --range` over the commits being pushed. It also refuses commits whose
+- **pre-push** refuses a direct push to `main` (see [the push protocol](#pull-requests-the-push-protocol)) and runs
+  `scripts/check-secrets.sh --range` over the commits being pushed. It also refuses commits whose
   author or committer address names a machine, such as `you@MacBook-Pro.local`. Set
   `git config user.email <id>+<user>@users.noreply.github.com` to publish your GitHub no-reply address instead.
 
@@ -72,18 +73,28 @@ document:
 | [docs/storage.md](docs/storage.md) | The archive's record files and the index. |
 | [docs/evaluation.md](docs/evaluation.md) | Measurements behind the pipeline and the model profiles. |
 | [docs/releasing.md](docs/releasing.md) | CI, releases, versions, signing. |
-| [docs/repository-settings.md](docs/repository-settings.md) | The GitHub repository's security settings. |
+| [docs/repository-settings.md](docs/repository-settings.md) | The GitHub repository's security settings and the rules that enforce the push protocol. |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | This file: setting up, checking, the scripts. |
 
 `scripts/check-docs.sh` catches a command, option, variable, configuration key or script that the documents miss or
 that no longer exists. Behaviour it cannot compare mechanically is up to you and the review.
 
-## Pull requests
+## Pull requests: the push protocol
 
-1. Branch from `main`, and keep a pull request to one change.
-2. Start a fix or a feature with a test that fails for the stated reason, then make it pass (AGENTS.md §3).
-3. Run `scripts/verify.sh` (with `--app` if needed) and fill in the pull request template.
-4. CI must pass. After review the pull request is merged into `main`, which releases it.
+Every change reaches `main` the same way ([AGENTS.md §8](AGENTS.md#8-push-protocol)), because each merge to `main` is
+released:
+
+1. **Green gates locally.** Work on a branch named for the change (`fix/…`, `feat/…`, `docs/…`, …), never on `main`.
+   Start a fix or a feature with a test that fails for the stated reason, then make it pass (AGENTS.md §2 and §3).
+   Push only when `scripts/verify.sh --app` ends with `All checks passed`.
+2. **Push the branch and get it green on the remote runners.** `git push -u origin <branch>`, open a pull request to
+   `main` with the template filled in (`gh pr create`), and wait for CI (`gh pr checks --watch`). Fix any failure on
+   the same branch and push again. A red pull request is never merged.
+3. **Squash-merge to `main` and remove the branch.** `gh pr merge --squash --delete-branch`, then
+   `git switch main && git pull --ff-only`.
+
+The pre-push hook refuses a direct push to `main`, and the repository's settings enforce the same on GitHub
+([docs/repository-settings.md](docs/repository-settings.md)).
 
 Report bugs and ideas as [issues](https://github.com/hlistan/arrumator/issues/new/choose); report security problems
 privately, as [SECURITY.md](SECURITY.md) describes. Everyone taking part follows the

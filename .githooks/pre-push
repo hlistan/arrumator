@@ -1,14 +1,22 @@
 #!/bin/sh
-# Refuses a push whose new commits hold a secret, signing material or a real document, or were made under a
-# machine-local identity. Enabled by scripts/bootstrap.sh. Git passes "<local ref> <local sha> <remote ref> <remote sha>"
-# for each ref being pushed.
+# Enforces the push protocol (AGENTS.md §8) and keeps sensitive information out of what is pushed. It refuses:
+#   - a direct push to main, which only ever receives squash merges of pull requests whose checks passed;
+#   - new commits that hold a secret, signing material or a real document, or were made under a machine-local
+#     identity (scripts/check-secrets.sh --range).
+# Enabled by scripts/bootstrap.sh. Git passes "<local ref> <local sha> <remote ref> <remote sha>" for each ref.
 set -u
 
 check=$(git rev-parse --show-toplevel)/scripts/check-secrets.sh
 zero=0000000000000000000000000000000000000000
 remote=$1
 status=0
-while read -r _ local_sha _ remote_sha; do
+while read -r _ local_sha remote_ref remote_sha; do
+  if [ "$remote_ref" = refs/heads/main ]; then
+    echo "pre-push: main only takes squash merges of pull requests (AGENTS.md §8)." >&2
+    echo "Push a branch instead, open a pull request, and merge it with: gh pr merge --squash --delete-branch" >&2
+    status=1
+    continue
+  fi
   [ "$local_sha" = "$zero" ] && continue # deleting a branch publishes nothing
   if [ "$remote_sha" = "$zero" ]; then
     range="$local_sha --not --remotes=$remote" # a new branch: whatever the remote does not have yet
