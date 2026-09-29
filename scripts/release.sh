@@ -1,10 +1,10 @@
 #!/bin/sh
 # Builds a release into dist/: Arrumator.app zipped twice, universal (Apple silicon and Intel) and for Apple silicon
 # alone, the `arrumatorcli` command for Apple silicon with its resource bundles zipped, and SHA256SUMS. CI runs it on
-# every merge to main (.github/workflows/release.yml); it runs the same way on a Mac.
+# every merge to main that changes code (.github/workflows/release.yml); it runs the same way on a Mac.
 #
 # The version is MAJOR.MINOR from MARKETING_VERSION in project.yml, and a patch number that counts the commits on
-# the branch being released, so every merge to main gets the next one. It is printed last, and written to
+# the branch being released, so it grows with every merge to main, released or not. It is printed last, and written to
 # $GITHUB_OUTPUT as `version` when that is set.
 #
 # Signing, chosen by what the environment provides:

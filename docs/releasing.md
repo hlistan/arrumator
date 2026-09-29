@@ -1,17 +1,36 @@
 # Continuous integration and releases
 
-Every pull request is checked, and every merge to `main` (always a squash merge, as the
-[push protocol](../AGENTS.md#8-push-protocol) requires) is checked again and published as a
+Every pull request is checked, and so is every merge to `main` (always a squash merge, as the
+[push protocol](../AGENTS.md#8-push-protocol) requires). Only a merge that changes code is built into a
 [GitHub release](https://github.com/hlistan/arrumator/releases) that anyone can download.
+
+## What a change needs: `scripts/change-scope.sh`
+
+Building the app, running every test and looking for unused code take most of a run, and a release adds signing,
+notarization and a tag. A change needs them only when it can change what they check or produce.
+`scripts/change-scope.sh <base>` reads which files a change touches and says which of three scopes it falls in:
+
+| Scope | The change touches | What runs |
+|---|---|---|
+| `release` | Code, meaning what goes into the downloads: `Sources/` (the modules, with their bundled defaults and prompts), `App/`, `Package.swift`, `Package.resolved`, `project.yml`, `scripts/release.sh`. | Every check, the build and every test; once merged, the release. |
+| `build` | No code, but what builds and tests it: `Tests/` (with the fixtures), `Tools/`, `scripts/verify.sh`, `scripts/deadcode.sh`, `.periphery.yml`, `.github/workflows/ci.yml`. | Every check, the build and every test. Never released. |
+| `checks` | Anything else: the documentation, the other scripts and workflows, the lint and secrets settings, `Brewfile`. | The static checks and the documentation check (`scripts/verify.sh --checks-only`), which builds only `arrumatorcli` to read its commands. |
+
+The widest scope any file calls for wins. When Git cannot compare the change with its base, the scope is `release`,
+so a change is never checked less than it needs. Run it before pushing to see which verify command applies:
+`scripts/change-scope.sh main`.
 
 ## Pull requests: `.github/workflows/ci.yml`
 
-Two jobs run side by side:
+A Scope job runs `scripts/change-scope.sh` against the pull request's base, and two jobs check the change:
 
 | Job | Runner | What it runs |
 |---|---|---|
-| Static checks | `macos-26` | `scripts/lint.sh` (guideline gates, secrets across the whole history, SwiftLint, ShellCheck, actionlint, zizmor, markdownlint, links), then `scripts/check-secrets.sh --range` over the pull request's commits, which also refuses machine-local commit identities. |
-| Build, test and look for unused code | `xcode-27` | `scripts/verify.sh --app --no-lint`: the package build, the documentation check, every test, the app build and Periphery. |
+| Static checks | `macos-26` | `scripts/lint.sh` (guideline gates, secrets across the whole history, SwiftLint, ShellCheck, actionlint, zizmor, markdownlint, links), then `scripts/check-secrets.sh --range` over the pull request's commits, which also refuses machine-local commit identities. Every scope. |
+| Build, test and look for unused code | `xcode-27` | For `release` and `build`: `scripts/verify.sh --app --no-lint`, the package build, the documentation check, every test, the app build and Periphery. For `checks`: `scripts/verify.sh --checks-only --no-lint`, the documentation check alone. |
+
+The repository's settings require both checks by name, so the build job always runs and reports, whatever the scope.
+When the Scope job fails, the build job checks in full.
 
 The build job needs Xcode 27 (Swift 6.4), which GitHub provides on its own `xcode-27` image, in preview; the
 `macos-26` image carries Xcode 26 only. Each run prints `xcodebuild -version` and `swift --version`.
@@ -24,13 +43,13 @@ everywhere with a scripted recognizer (`OCRServiceTests`).
 
 ## Releases: `.github/workflows/release.yml`
 
-On every push to `main` the workflow:
+On every push to `main` the workflow runs the CI workflow above on the merged commit, with the scope of the merge
+(the change from the previous head of `main`). Only when the scope is `release` does it go on to:
 
-1. runs the CI workflow above on the merged commit;
-2. builds the release with `scripts/release.sh`;
-3. attests the build's provenance with [`actions/attest`](https://github.com/actions/attest), so anyone can check a
+1. build the release with `scripts/release.sh`;
+2. attest the build's provenance with [`actions/attest`](https://github.com/actions/attest), so anyone can check a
    download came from this repository's workflow: `gh attestation verify <file> --repo hlistan/arrumator`;
-4. publishes `v<version>` with generated release notes and these files:
+3. publish `v<version>` with generated release notes and these files:
 
 | File | Contents |
 |---|---|
@@ -39,15 +58,19 @@ On every push to `main` the workflow:
 | `arrumatorcli-<version>-apple-silicon.zip` | The command line tool and the resource bundles it reads, for Apple silicon. |
 | `SHA256SUMS` | Checksums of all three: `shasum -a 256 -c SHA256SUMS`. |
 
+A merge scoped `build` or `checks` is checked and not released; it goes out with the next release that changes code,
+whose generated notes list it too. A change to this workflow takes effect with the next merge to `main`.
+
 Releases run one after another (`concurrency: release`), never cancelled half-way.
 
 ### Versions
 
 `MARKETING_VERSION` in `project.yml` sets the major and minor version. The patch number is the number of commits on
-`main`, so each merge is released as the next one: with `0.1.0` in `project.yml`, the 42nd commit on `main` is
-`0.1.42`. To start a new series, change the major or minor number in `project.yml`. The app shows the version as
-`CFBundleShortVersionString`, with the patch number also as `CFBundleVersion`. The command reads it from an
-Info.plist linked into its executable (`AppVersion`), and a development build reports `dev`.
+`main`: with `0.1.0` in `project.yml`, the 42nd commit on `main` is `0.1.42`. Merges that change no code count too, so
+patch numbers can skip: `0.1.42` may follow `0.1.39`. To start a new series, change the major or minor number in
+`project.yml`. The app shows the version as `CFBundleShortVersionString`, with the patch number also as
+`CFBundleVersion`. The command reads it from an Info.plist linked into its executable (`AppVersion`), and a development
+build reports `dev`.
 
 ### Signing
 

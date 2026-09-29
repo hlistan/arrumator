@@ -29,12 +29,17 @@ state (§4.2).
 
 ## 2. Start of every task
 
-1. Read this file, [README.md](README.md) and [docs/how-it-works.md](docs/how-it-works.md).
-2. Use §5 to find the modules the change touches. Read their code and tests, and only those. If the change affects where
+1. **Get off `main` before anything changes.** Run `git branch --show-current`. On `main`, run `git pull --ff-only`,
+   then `git switch -c <prefix>/<change>` with a prefix from §8 (`fix/`, `feat/`, `refactor/`, `test/`, `docs/`,
+   `ci/`), before you edit a file, regenerate fixtures or run a command that writes into the repository. On another
+   branch, continue only if it is this task's branch; otherwise ask. No change is ever made on `main`, and the
+   pre-commit hook refuses a commit there.
+2. Read this file, [README.md](README.md) and [docs/how-it-works.md](docs/how-it-works.md).
+3. Use §5 to find the modules the change touches. Read their code and tests, and only those. If the change affects where
    or how documents are filed, also read the built-in logic,
    [organizing-principles.md](Sources/ArrumatorClassify/Prompts/organizing-principles.md), and the placement prompt,
    [classify-system.md](Sources/ArrumatorClassify/Prompts/classify-system.md).
-3. Before you write code, state the acceptance criteria and the exact command that will prove them: a test, an
+4. Before you write code, state the acceptance criteria and the exact command that will prove them: a test, an
    `arrumatorcli` command or an eval run.
 
 Then, for a QA issue, a defect or an architectural task:
@@ -103,14 +108,15 @@ These are rules you can check, not aspirations. Each row says how it is checked.
    never hardcode them.
 8. **Ask before irreversible or outward-facing actions:**
    - committing or pushing when the user has not asked for the change to be delivered (a delivered change follows §8
-     to the end, including its squash merge, which publishes a release);
+     to the end, including its squash merge, which publishes a release when it changes code);
    - rewriting history that has been pushed; pushing to `main` other than by §8's squash merge is never done;
    - deleting or rewriting anything in the user's real archive, Incoming folder, `~/Library/Application
      Support/Arrumator` or `~/Library/Logs/Arrumator`, including applying a rethink there;
    - pulling or deleting Ollama models (pulls are several GB, and the app itself never deletes models);
    - running `scripts/release.sh`, which signs and notarizes with the user's Apple account.
 9. **Verify before you say it's done.** Run `scripts/verify.sh`, adding `--app` when `App/` or `project.yml` changed,
-   and quote its result. If a step fails or you skipped it, say so plainly.
+   or `scripts/verify.sh --checks-only` when `scripts/change-scope.sh main` says `checks`, and quote its result. If a
+   step fails or you skipped it, say so plainly.
 10. **Documentation changes with the code, every time.** A change is not done until every document that describes what
     it touched says what the code now does, in the same change. Where each thing is documented: [README.md](README.md)
     for what users see first, installing and getting started; [docs/how-it-works.md](docs/how-it-works.md) for how
@@ -154,6 +160,8 @@ make something compile. Instead, move the code to the module that owns it.
 | `scripts/check-secrets.sh [--staged \| --range <revs>…]` | Secrets, signing material, real documents and, with `--range`, machine-local commit identities. The Git hooks run it. |
 | `scripts/bootstrap.sh` | Installs the tools in `Brewfile` and enables the Git hooks. |
 | `scripts/verify.sh --app` | Also regenerates the Xcode project, builds `Arrumator.app` and looks for unused code (`scripts/deadcode.sh`). Required when `App/` or `project.yml` changes. |
+| `scripts/change-scope.sh main` | What the branch's change needs (§8): `release` for code, `build` for what builds and tests it, `checks` for anything else. |
+| `scripts/verify.sh --checks-only` | The static checks and the documentation check alone, with no tests: the done check for a change scoped `checks`. |
 | `swift test --filter <Suite>` | Runs one suite while you iterate. |
 | `swift run arrumatorcli doctor` | Checks the environment: Ollama, models, folders. |
 | `swift run arrumatorcli ingest --dry-run <file>` | Shows what the pipeline would decide, without moving the file or recording a decision. It still opens the archive, so only in a scratch `ARRUMATOR_HOME` (§4.3). |
@@ -172,8 +180,8 @@ Every `arrumatorcli` command accepts `--json`. [docs/cli.md](docs/cli.md) lists 
       was shown.
 - [ ] The report has a Test Coverage and Verification Summary: happy paths, boundary cases and failure modes covered,
       and what is not covered.
-- [ ] `scripts/verify.sh` passes, with `--app` when `App/` or `project.yml` changed. Before and after eval numbers are
-      included when placement behavior changed.
+- [ ] `scripts/verify.sh` passes, with `--app` when `App/` or `project.yml` changed, or `--checks-only` for a change
+      scoped `checks`. Before and after eval numbers are included when placement behavior changed.
 - [ ] The change adds no environment reads outside `RuntimeEnvironment`, no tunables written as literals, and no
       defaults outside `Defaults/*.json`.
 - [ ] Superseded code, config keys, prompts, tests and dependencies are deleted. No TODO markers and no new warnings.
@@ -184,19 +192,31 @@ Every `arrumatorcli` command accepts `--json`. [docs/cli.md](docs/cli.md) lists 
 
 ## 8. Push protocol
 
-Every change reaches `main` the same way. `main` is released on every merge, so it only ever receives changes that
-are green twice: on your machine and on GitHub's runners.
+Every change reaches `main` the same way. `main` is released on every merge that changes code, so it only ever
+receives changes that are green twice: on your machine and on GitHub's runners. How much is built and checked follows
+what the change touches, which `scripts/change-scope.sh` decides for your Mac and for CI alike
+([docs/releasing.md](docs/releasing.md#what-a-change-needs-scriptschange-scopesh)):
+
+| Scope | The change touches | Verify with | Released |
+|---|---|---|---|
+| `release` | Code: `Sources/`, `App/`, `Package.swift`, `Package.resolved`, `project.yml`, `scripts/release.sh`. | `scripts/verify.sh --app` | Yes |
+| `build` | What builds and tests the code: `Tests/`, `Tools/`, `scripts/verify.sh`, `scripts/deadcode.sh`, `.periphery.yml`, the CI workflow. | `scripts/verify.sh --app` | No |
+| `checks` | Anything else: documentation, the other scripts and workflows, settings. | `scripts/verify.sh --checks-only` | No |
 
 1. **Green gates locally.** Work on a branch named for the change (`fix/…`, `feat/…`, `refactor/…`, `test/…`,
-   `docs/…`, `ci/…`), never on `main`. Before pushing, run `scripts/verify.sh --app`, the same checks CI runs, and
-   push only when it ends with `All checks passed`.
+   `docs/…`, `ci/…`), never on `main`. Before pushing, run `scripts/change-scope.sh main` and the verify command its
+   scope calls for, the same checks CI runs, and push only when it ends with `All checks passed`.
 2. **Push the branch and get it green on the remote runners.** `git push -u origin <branch>`, then open a pull request
    to `main` (`gh pr create`) with the template filled in. CI runs both of its jobs on it; wait for them with
    `gh pr checks --watch`. When a check fails, fix it on the same branch and push again, until every check is green.
    A red pull request is never merged, and a check is never skipped or retried until it passes by chance.
 3. **Squash-merge to `main` and remove the branch.** `gh pr merge --squash --delete-branch` puts the whole change on
-   `main` as one commit titled after the pull request, deletes the branch on GitHub and here, and starts the release.
-   Then `git switch main && git pull --ff-only`.
+   `main` as one commit titled after the pull request and deletes the branch on GitHub and here. Then
+   `git switch main && git pull --ff-only`.
+4. **Release only code.** The merge is checked on `main` and released only when its scope is `release`. A merge
+   scoped `build` or `checks` is not built into a release, packaged, signed or tagged; it goes out with the next
+   release that changes code. Never start a release for it by other means, and never run the full build for a change
+   scoped `checks` just to be safe: the scope already errs toward more.
 
 The pre-push hook refuses a direct push to `main`, and [docs/repository-settings.md](docs/repository-settings.md)
 describes the GitHub settings that enforce the same on the server: squash merges only, branches deleted on merge,

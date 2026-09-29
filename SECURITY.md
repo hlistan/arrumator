@@ -6,7 +6,7 @@ their content never leaves the machines the user runs, and that no document is e
 ## Supported versions
 
 Only the [latest release](https://github.com/hlistan/arrumator/releases/latest) receives fixes. Each merge to `main`
-is released, so a fix ships as soon as it is merged.
+that changes code is released, so a fix ships as soon as it is merged.
 
 ## Reporting a vulnerability
 
