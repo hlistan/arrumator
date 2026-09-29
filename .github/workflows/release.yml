@@ -1,5 +1,6 @@
-# Every merge to main is checked, built and published as a GitHub release: the app, the command and SHA256SUMS,
-# with a build-provenance attestation. scripts/release.sh does the building; docs/releasing.md explains signing.
+# Every merge to main is checked. A merge that changes code (scripts/change-scope.sh says `release`) is then built and
+# published as a GitHub release: the app, the command and SHA256SUMS, with a build-provenance attestation. Any other
+# merge is not released. scripts/release.sh does the building; docs/releasing.md explains signing.
 name: Release
 
 on:
@@ -21,6 +22,7 @@ jobs:
   release:
     name: Build and publish
     needs: ci
+    if: needs.ci.outputs.scope == 'release'
     runs-on: xcode-27
     environment: release
     permissions:

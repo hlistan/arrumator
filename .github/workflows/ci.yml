@@ -1,9 +1,15 @@
-# Checks every pull request, and every merge to main before it is released (release.yml calls this workflow).
+# Checks every pull request and every merge to main (release.yml calls this workflow). How much it builds follows
+# scripts/change-scope.sh: a change to code or to what builds and tests it is built and tested in full, and any other
+# change gets the static checks and the documentation check alone.
 name: CI
 
 on:
   pull_request:
   workflow_call:
+    outputs:
+      scope:
+        description: What the change needs, from scripts/change-scope.sh; release.yml releases only `release`.
+        value: ${{ jobs.scope.outputs.scope }}
   workflow_dispatch:
 
 permissions: {}
@@ -14,6 +20,35 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  scope:
+    name: Scope
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      scope: ${{ steps.scope.outputs.scope }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the base the change is compared with
+          persist-credentials: false
+      - name: What the change needs
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          # A run with nothing to compare with (a manual run, a new or rewritten branch) is checked in full.
+          case $EVENT in
+            pull_request) base=$PR_BASE ;;
+            push) base=$BEFORE ;;
+            *) base="" ;;
+          esac
+          if [ -n "$base" ]; then scope=$(scripts/change-scope.sh "$base" HEAD); else scope=release; fi
+          echo "scope=$scope" >> "$GITHUB_OUTPUT"
+          echo "Scope: $scope" >> "$GITHUB_STEP_SUMMARY"
+
   lint:
     name: Static checks
     runs-on: macos-26
@@ -53,16 +88,24 @@ jobs:
           esac
 
   build:
+    # The ruleset requires this check by name (docs/repository-settings.md), so it always reports: for a change scoped
+    # `checks` it builds only the command the documentation check reads. Unless the scope is plainly `checks`, even
+    # when the Scope job failed, it builds and tests in full.
     name: Build, test and look for unused code
+    needs: scope
+    if: ${{ !cancelled() }}
     # Xcode 27 (Swift 6.4) is on its own image; macos-26 carries Xcode 26 only.
     runs-on: xcode-27
     permissions:
       contents: read
+    env:
+      SCOPE: ${{ needs.scope.outputs.scope }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Install XcodeGen and Periphery
+        if: env.SCOPE != 'checks'
         env:
           HOMEBREW_NO_AUTO_UPDATE: "1"
         run: brew install xcodegen periphery
@@ -71,4 +114,8 @@ jobs:
           xcodebuild -version
           swift --version
       - name: Build, test, build the app, find unused code
+        if: env.SCOPE != 'checks'
         run: scripts/verify.sh --app --no-lint
+      - name: The documentation check alone, as the change touches no code
+        if: env.SCOPE == 'checks'
+        run: scripts/verify.sh --checks-only --no-lint

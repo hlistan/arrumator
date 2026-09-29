@@ -17,7 +17,8 @@
 
 ## Checklist
 
-- [ ] `scripts/verify.sh` passes (with `--app` when `App/` or `project.yml` changed)
+- [ ] `scripts/verify.sh` passes (with `--app` when `App/` or `project.yml` changed, `--checks-only` when
+      `scripts/change-scope.sh main` says `checks`)
 - [ ] The documentation this change affects is updated in this pull request (AGENTS.md §4.10)
 - [ ] Eval numbers before and after are included, if placement behaviour changed
 - [ ] No real documents, secrets or machine-local commit identities

@@ -1,3 +1,9 @@
 #!/bin/sh
-# Refuses a commit that would add a secret, signing material or a real document. Enabled by scripts/bootstrap.sh.
+# Refuses a commit on main, which only ever receives squash merges of pull requests (AGENTS.md §2 and §8), and a commit
+# that would add a secret, signing material or a real document. Enabled by scripts/bootstrap.sh.
+if [ "$(git symbolic-ref --quiet --short HEAD)" = main ]; then
+  echo "pre-commit: never commit on main (AGENTS.md §2). Move the change to a branch named for it, then commit:" >&2
+  echo "  git switch -c fix/<change>   (or feat/, refactor/, test/, docs/, ci/)" >&2
+  exit 1
+fi
 exec "$(git rev-parse --show-toplevel)/scripts/check-secrets.sh" --staged

@@ -18,7 +18,8 @@ scripts/bootstrap.sh
 
 `scripts/bootstrap.sh` installs the tools in [`Brewfile`](Brewfile) and turns on the Git hooks in `.githooks`:
 
-- **pre-commit** runs `scripts/check-secrets.sh --staged`. It refuses a commit that adds a secret, signing material
+- **pre-commit** refuses any commit on `main`: start every change on a branch named for it (`git switch -c fix/…`).
+  It then runs `scripts/check-secrets.sh --staged`, refusing a commit that adds a secret, signing material
   (`.p12`, `.p8`, …), an `.env` file, a path into someone's home folder, or a real document from
   `Tests/Fixtures/private`.
 - **pre-push** refuses a direct push to `main` (see [the push protocol](#pull-requests-the-push-protocol)) and runs
@@ -42,11 +43,15 @@ it a scratch home and scratch folders, as [the command line reference](docs/cli.
 
 ## Checking a change
 
-`scripts/verify.sh` is the definition of done. Add `--app` when `App/` or `project.yml` changed; CI always does.
+`scripts/verify.sh` is the definition of done. Add `--app` when `App/` or `project.yml` changed; CI always does when
+the change touches code or what builds and tests it. A change that touches neither, such as documentation alone,
+needs only `scripts/verify.sh --checks-only`: `scripts/change-scope.sh main` tells which
+([what a change needs](docs/releasing.md#what-a-change-needs-scriptschange-scopesh)).
 
 | Script | What it checks |
 |---|---|
-| `scripts/verify.sh [--app] [--no-lint]` | Everything below, then `swift build`, the documentation check, `swift test`, and with `--app` the app build and the unused-code search. |
+| `scripts/verify.sh [--app \| --checks-only] [--no-lint]` | Everything below, then `swift build`, the documentation check, `swift test`, and with `--app` the app build and the unused-code search. With `--checks-only`, the static checks and the documentation check alone, building only `arrumatorcli`. |
+| `scripts/change-scope.sh <base> [<head>]` | Which scope a change falls in, from the files it touches (without `<head>`, uncommitted ones too): `release` (code), `build` (what builds and tests it) or `checks` (anything else). CI builds, tests and releases by it. |
 | `scripts/lint.sh` | Static checks that build nothing: the guideline gates from AGENTS.md (environment, network, crash, debt), secrets, [SwiftLint](https://realm.github.io/SwiftLint/) (`.swiftlint.yml`), [ShellCheck](https://www.shellcheck.net), [actionlint](https://github.com/rhysd/actionlint) and [zizmor](https://docs.zizmor.sh) for the workflows, [markdownlint](https://github.com/DavidAnson/markdownlint-cli2) (`.markdownlint-cli2.jsonc`) and [lychee](https://lychee.cli.rs) for links between documents. |
 | `scripts/check-secrets.sh [--staged \| --range <revs>…]` | [gitleaks](https://github.com/gitleaks/gitleaks) with `.gitleaks.toml` over every commit, the index, the working tree and untracked files; real documents; with `--range`, commit identities. |
 | `scripts/check-docs.sh <arrumatorcli>` | Every command and option in [docs/cli.md](docs/cli.md), every `ARRUMATOR_*` variable in [docs/using-arrumator.md](docs/using-arrumator.md), every `pipeline.json` key the docs name, and every script here. |
@@ -81,17 +86,20 @@ that no longer exists. Behaviour it cannot compare mechanically is up to you and
 
 ## Pull requests: the push protocol
 
-Every change reaches `main` the same way ([AGENTS.md §8](AGENTS.md#8-push-protocol)), because each merge to `main` is
-released:
+Every change reaches `main` the same way ([AGENTS.md §8](AGENTS.md#8-push-protocol)), because each merge to `main`
+that changes code is released:
 
 1. **Green gates locally.** Work on a branch named for the change (`fix/…`, `feat/…`, `docs/…`, …), never on `main`.
    Start a fix or a feature with a test that fails for the stated reason, then make it pass (AGENTS.md §2 and §3).
-   Push only when `scripts/verify.sh --app` ends with `All checks passed`.
+   Push only when the verify command the change's scope calls for (`scripts/change-scope.sh main`) ends with
+   `All checks passed`.
 2. **Push the branch and get it green on the remote runners.** `git push -u origin <branch>`, open a pull request to
    `main` with the template filled in (`gh pr create`), and wait for CI (`gh pr checks --watch`). Fix any failure on
    the same branch and push again. A red pull request is never merged.
 3. **Squash-merge to `main` and remove the branch.** `gh pr merge --squash --delete-branch`, then
    `git switch main && git pull --ff-only`.
+4. **Release only code.** The merge is released only when its scope is `release`. Any other merge is checked and
+   goes out with the next release that changes code.
 
 The pre-push hook refuses a direct push to `main`, and the repository's settings enforce the same on GitHub
 ([docs/repository-settings.md](docs/repository-settings.md)).
