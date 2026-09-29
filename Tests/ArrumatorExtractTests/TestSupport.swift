@@ -176,6 +176,14 @@ enum TestConfig {
     }
 }
 
+extension ExtractedContent {
+    /// What went wrong while reading, for expectation messages: an OCR failure shows its error here, which tells
+    /// Vision failing on a machine apart from Vision finding no text.
+    var warningSummary: String {
+        warnings.isEmpty ? "no warnings" : warnings.map { "\($0.code.rawValue): \($0.detail)" }.joined(separator: "; ")
+    }
+}
+
 // MARK: Ollama mock
 
 extension MockOllama {

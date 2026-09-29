@@ -24,7 +24,7 @@ struct ImageAndVisionTests {
         let content = try await registry.extract(url, sha256: "x", context: try TestConfig.context(vision: TestConfig.visionOptions()),
                                                  trace: .disabled)
         #expect(content.kind == .image)
-        #expect(content.textOrigin == .ocr)
+        #expect(content.textOrigin == .ocr, "a photo with text is read by OCR (\(content.warningSummary))")
         #expect(content.text.contains("Farmácia Central"))
         #expect(content.language.primary == "pt")
         #expect(content.visual == nil)
@@ -54,7 +54,7 @@ struct ImageAndVisionTests {
         #expect(visual.organisations == ["Continente"])
         #expect(visual.unverifiedOrganisations == ["Acme Corp"])
         #expect(visual.dates == ["2025-01-02"])
-        #expect(content.textOrigin == .ocr)
+        #expect(content.textOrigin == .ocr, "sparse text is still read by OCR (\(content.warningSummary))")
         #expect(!content.hasWarning(.vlmFailed))
 
         let requests = await ollama.chatRequests
