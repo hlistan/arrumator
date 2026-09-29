@@ -39,7 +39,15 @@ else
 fi
 
 echo "→ swift test"
-swift test --quiet || failed="$failed test"
+# The whole log only when something failed; otherwise the skipped tests, each with its reason, and the totals.
+test_log=$(mktemp -t arrumator-test) || exit 1
+if swift test > "$test_log" 2>&1; then
+  grep -E '➜ Test|Test run with' "$test_log"
+else
+  cat "$test_log"
+  failed="$failed test"
+fi
+rm -f "$test_log"
 
 if [ "$build_app" = true ]; then
   echo "→ app build"
