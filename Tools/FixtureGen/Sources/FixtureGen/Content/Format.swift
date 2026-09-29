@@ -41,6 +41,9 @@ struct Day: Sendable, Hashable, Comparable {
 
     var iso: String { String(format: "%04d-%02d-%02d", year, month, day) }
 
+    /// Day, month and year with this separator, as most of the world writes a date: "20.01.2026".
+    func dayFirst(_ separator: String) -> String { String(format: "%02d%@%02d%@%04d", day, separator, month, separator, year) }
+
     // Portuguese
     var ptNumeric: String { String(format: "%02d/%02d/%04d", day, month, year) }
     var ptDashed: String { String(format: "%02d-%02d-%04d", day, month, year) }
@@ -149,7 +152,8 @@ struct Money: Sendable, Hashable, Comparable {
 
     var units: Double { Double(cents) / 100 }
 
-    private func grouped(thousands: String, decimal: String) -> String {
+    /// The amount with its thousands grouped and two decimals: `grouped(thousands: ".", decimal: ",")` is "1.234,56".
+    func grouped(thousands: String, decimal: String) -> String {
         let magnitude = abs(cents)
         var integer = String(magnitude / 100)
         var groups: [String] = []
@@ -175,6 +179,12 @@ struct Money: Sendable, Hashable, Comparable {
     var eurEN: String { (cents < 0 ? "-€" : "€") + Money(cents: abs(cents)).en }
     /// "£1,234.56"
     var gbp: String { (cents < 0 ? "-£" : "£") + Money(cents: abs(cents)).en }
+    /// Whole units with their thousands grouped, for currencies without minor units: "8,432".
+    func whole(thousands: String) -> String {
+        let text = grouped(thousands: thousands, decimal: ".")
+        return String(text.dropLast(3))
+    }
+
     /// Plain decimal for spreadsheet cells: "1234.56".
     var decimal: String { (cents < 0 ? "-" : "") + "\(abs(cents) / 100)." + String(format: "%02d", abs(cents) % 100) }
 }

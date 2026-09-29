@@ -1,7 +1,9 @@
 import Foundation
 
+/// A fixture's main language, as its ISO 639-1 code.
 enum Language: String, Decodable, Sendable {
     case pt, ru, en
+    case de, fr, es, it, nl, pl, sv, cs, uk, tr, el, zh, ja, ko, ar, hi
     /// Undetermined: the file carries no readable language (blank scan).
     case und
 }
@@ -87,6 +89,11 @@ enum ExpectedStatus: String, Decodable, Sendable {
     case filed, needsReview, duplicate
 }
 
+/// Kinds of label a fixture expects beyond its type, sender, date and language (raw values match the app's `LabelKind`).
+enum Signal: String, CaseIterable, Decodable, Sendable {
+    case party, object, reference, period, deadline, amount, jurisdiction
+}
+
 struct Expected: Decodable, Sendable {
     let status: ExpectedStatus
     let docType: DocType?
@@ -95,6 +102,9 @@ struct Expected: Decodable, Sendable {
     let titleContains: [String]
     let identifiers: [String]
     let warnings: [WarningCode]?
+    /// Labels the document should get, by kind: each value must be found in a label of that kind (alternatives
+    /// separated by `|`). Amounts are "number CODE", dates and periods as the app writes them.
+    var labels: [String: [String]]?
 
     /// Absent values are explicit nulls, except `warnings`, which only appears when non-empty.
     var json: JSON {
@@ -108,6 +118,11 @@ struct Expected: Decodable, Sendable {
         ]
         if let warnings {
             members.append(("warnings", .array(warnings.map { .string($0.rawValue) })))
+        }
+        if let labels {
+            members.append(("labels", .object(Signal.allCases.compactMap { kind in
+                labels[kind.rawValue].map { (kind.rawValue, .array($0.map { .string($0) })) }
+            })))
         }
         return .object(members)
     }
@@ -246,13 +261,14 @@ struct Fixture: Sendable {
         type: DocType, correspondent: String, date: Day,
         titleContains: [String], identifiers: [Identifier] = [],
         acceptAlso: AcceptAlso? = nil, invalidIdentifiers: [Identifier] = [], warnings: [WarningCode] = [],
-        encoding: TextEncoding? = nil, payload: Payload
+        encoding: TextEncoding? = nil, labels: [Signal: [String]] = [:], payload: Payload
     ) -> Fixture {
         precondition(identifiers.allSatisfy(\.isChecksumValid), "\(file): an expected identifier fails its checksum")
         precondition(!invalidIdentifiers.contains(where: \.isChecksumValid), "\(file): a distractor passes its checksum")
         let expected = Expected(
             status: .filed, docType: type, correspondent: correspondent, date: date.iso, titleContains: titleContains,
-            identifiers: identifiers.map(\.token), warnings: warnings.isEmpty ? nil : warnings)
+            identifiers: identifiers.map(\.token), warnings: warnings.isEmpty ? nil : warnings,
+            labels: labels.isEmpty ? nil : Dictionary(uniqueKeysWithValues: labels.map { ($0.key.rawValue, $0.value) }))
         let record = FixtureRecord(
             file: file, lang: lang, kind: kind, expected: expected, acceptAlso: acceptAlso,
             duplicateOf: nil, encoding: encoding, password: nil,

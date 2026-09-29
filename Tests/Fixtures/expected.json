@@ -225,10 +225,13 @@
       "expected": {
         "status": "filed",
         "doc_type": "invoice",
-        "correspondent": "Mosenergosbyt",
+        "correspondent": "Мосэнергосбыт",
         "date": "2026-09-03",
         "title_contains": ["электроэнергию", "август"],
         "identifiers": ["ruINN:7784210225"]
+      },
+      "accept_also": {
+        "correspondent": ["Mosenergosbyt"]
       }
     },
     {
@@ -238,13 +241,13 @@
       "expected": {
         "status": "filed",
         "doc_type": "tax-return",
-        "correspondent": "FNS",
+        "correspondent": "ФНС",
         "date": "2026-04-15",
         "title_contains": ["3-НДФЛ", "2025"],
         "identifiers": ["ruINN:773724849207"]
       },
       "accept_also": {
-        "correspondent": ["ФНС", "ИФНС России № 28 по г. Москве"]
+        "correspondent": ["FNS", "ИФНС России № 28 по г. Москве"]
       }
     },
     {
@@ -254,13 +257,13 @@
       "expected": {
         "status": "filed",
         "doc_type": "tax-assessment",
-        "correspondent": "FNS",
+        "correspondent": "ФНС",
         "date": "2026-09-01",
         "title_contains": ["Налоговое уведомление", "2025"],
         "identifiers": ["ruINN:773724849207", "ruINN:7709592631"]
       },
       "accept_also": {
-        "correspondent": ["ФНС", "ИФНС России № 28 по г. Москве"]
+        "correspondent": ["FNS", "ИФНС России № 28 по г. Москве"]
       }
     },
     {
@@ -270,10 +273,13 @@
       "expected": {
         "status": "filed",
         "doc_type": "statement",
-        "correspondent": "Sberbank",
+        "correspondent": "Сбербанк",
         "date": "2026-07-31",
         "title_contains": ["Выписка", "июль"],
         "identifiers": ["ruINN:7728783021"]
+      },
+      "accept_also": {
+        "correspondent": ["Sberbank"]
       }
     },
     {
@@ -283,13 +289,13 @@
       "expected": {
         "status": "filed",
         "doc_type": "id-document",
-        "correspondent": "SFR",
+        "correspondent": "СФР",
         "date": "2015-06-14",
         "title_contains": ["Страховое", "свидетельство"],
         "identifiers": []
       },
       "accept_also": {
-        "correspondent": ["ПФР", "СФР", "Пенсионный фонд Российской Федерации"]
+        "correspondent": ["ПФР", "SFR", "Пенсионный фонд Российской Федерации"]
       }
     },
     {
@@ -315,10 +321,13 @@
       "expected": {
         "status": "filed",
         "doc_type": "policy",
-        "correspondent": "Ingosstrakh",
+        "correspondent": "Ингосстрах",
         "date": "2026-05-14",
         "title_contains": ["ОСАГО"],
         "identifiers": ["ruINN:7704593254"]
+      },
+      "accept_also": {
+        "correspondent": ["Ingosstrakh"]
       }
     },
     {
@@ -361,13 +370,13 @@
       "expected": {
         "status": "filed",
         "doc_type": "certificate",
-        "correspondent": "Rosreestr",
+        "correspondent": "Росреестр",
         "date": "2018-12-03",
         "title_contains": ["Выписка", "ЕГРН"],
         "identifiers": []
       },
       "accept_also": {
-        "correspondent": ["Росреестр", "ФКП Росреестра"]
+        "correspondent": ["Rosreestr", "ФКП Росреестра"]
       }
     },
     {
@@ -377,11 +386,14 @@
       "expected": {
         "status": "filed",
         "doc_type": "invoice",
-        "correspondent": "Rostelecom",
+        "correspondent": "Ростелеком",
         "date": "2026-08-05",
         "title_contains": ["Счет", "июль"],
         "identifiers": ["ruINN:7754900454"],
         "warnings": ["encodingGuessed"]
+      },
+      "accept_also": {
+        "correspondent": ["Rostelecom"]
       },
       "encoding": "koi8-r",
       "invalid_identifiers": ["ruINN:764946860856"]
@@ -511,12 +523,469 @@
       }
     },
     {
+      "file": "intl/50-swm-jahresabrechnung-strom-2025.pdf",
+      "lang": "de",
+      "kind": "pdf-text",
+      "expected": {
+        "status": "filed",
+        "doc_type": "invoice",
+        "correspondent": "Stadtwerke München",
+        "date": "2026-01-20",
+        "title_contains": ["Strom", "Jahresabrechnung"],
+        "identifiers": [],
+        "labels": {
+          "party": ["Anna Beispiel"],
+          "object": ["1ESY 1160 4478 21"],
+          "period": ["2025"],
+          "deadline": ["2026-02-10"],
+          "amount": ["142.13 EUR"],
+          "jurisdiction": ["Germany"]
+        }
+      },
+      "accept_also": {
+        "doc_type": ["statement"],
+        "correspondent": ["SWM"]
+      }
+    },
+    {
+      "file": "intl/51-finanzamt-bescheid-2025-scan.pdf",
+      "lang": "de",
+      "kind": "pdf-scan",
+      "expected": {
+        "status": "filed",
+        "doc_type": "tax-assessment",
+        "correspondent": "Finanzamt",
+        "date": "2026-06-18",
+        "title_contains": ["Einkommensteuer", "Bescheid"],
+        "identifiers": [],
+        "labels": {
+          "party": ["Anna Beispiel", "Thomas Beispiel"],
+          "reference": ["143/220/61854"],
+          "period": ["2025"],
+          "deadline": ["2026-07-21"],
+          "amount": ["1086.00 EUR"],
+          "jurisdiction": ["Germany"]
+        }
+      }
+    },
+    {
+      "file": "intl/52-bail-habitation-lyon.docx",
+      "lang": "fr",
+      "kind": "docx",
+      "expected": {
+        "status": "filed",
+        "doc_type": "contract",
+        "correspondent": "Claire Martin",
+        "date": "2025-08-20",
+        "title_contains": ["location", "bail"],
+        "identifiers": [],
+        "labels": {
+          "party": ["Julien Exemple"],
+          "object": ["rue des Exemples"],
+          "period": ["2025-09-01"],
+          "amount": ["850.00 EUR"],
+          "jurisdiction": ["France"]
+        }
+      }
+    },
+    {
+      "file": "intl/53-dgfip-avis-impot-2026.pdf",
+      "lang": "fr",
+      "kind": "pdf-text",
+      "expected": {
+        "status": "filed",
+        "doc_type": "tax-assessment",
+        "correspondent": "DGFiP",
+        "date": "2026-07-24",
+        "title_contains": ["impôt", "revenus"],
+        "identifiers": [],
+        "labels": {
+          "party": ["Julien Exemple"],
+          "reference": ["26 69 A 244167 67"],
+          "period": ["2025"],
+          "deadline": ["2026-09-15"],
+          "amount": ["1482.00 EUR"],
+          "jurisdiction": ["France"]
+        }
+      },
+      "accept_also": {
+        "correspondent": ["Finances publiques"]
+      }
+    },
+    {
+      "file": "intl/54-mapfre-poliza-hogar.pdf",
+      "lang": "es",
+      "kind": "pdf-text",
+      "expected": {
+        "status": "filed",
+        "doc_type": "policy",
+        "correspondent": "MAPFRE",
+        "date": "2026-02-20",
+        "title_contains": ["Hogar", "póliza"],
+        "identifiers": [],
+        "labels": {
+          "party": ["Lucía Ejemplo"],
+          "object": ["Calle del Ejemplo 7"],
+          "reference": ["061-2026-1596647"],
+          "period": ["2026-03-01/2027-02-28"],
+          "amount": ["312.45 EUR"],
+          "jurisdiction": ["Spain"]
+        }
+      }
+    },
+    {
+      "file": "intl/55-cfe-recibo-luz-2026-07.pdf",
+      "lang": "es",
+      "kind": "pdf-text",
+      "expected": {
+        "status": "filed",
+        "doc_type": "invoice",
+        "correspondent": "CFE",
+        "date": "2026-07-16",
+        "title_contains": ["energía", "luz"],
+        "identifiers": [],
+        "labels": {
+          "party": ["Roberto Muestra"],
+          "object": ["123 456 789 012"],
+          "period": ["2026-05-15/2026-07-15"],
+          "deadline": ["2026-07-30"],
+          "amount": ["1234.00 MXN"],
+          "jurisdiction": ["Mexico"]
+        }
+      },
+      "accept_also": {
+        "correspondent": ["Comisión Federal de Electricidad"]
+      }
+    },
+    {
+      "file": "intl/56-comune-milano-verbale.pdf",
+      "lang": "it",
+      "kind": "pdf-text",
+      "expected": {
+        "status": "filed",
+        "doc_type": "letter",
+        "correspondent": "Comune di Milano",
+        "date": "2026-05-12",
+        "title_contains": ["verbale", "violazione"],
+        "identifiers": [],
+        "labels": {
+          "party": ["Marco Esempio"],
+          "object": ["GX 482 KM"],
+          "reference": ["V/2026/532774"],
+          "amount": ["83.00 EUR|58.10 EUR"],
+          "jurisdiction": ["Italy|Milan"]
+        }
+      },
+      "accept_also": {
+        "doc_type": ["legal", "invoice"],
+        "correspondent": ["Polizia Locale"]
+      }
+    },
+    {
+      "file": "intl/57-loonstrook-2026-06.pdf",
+      "lang": "nl",
+      "kind": "pdf-text",
+      "expected": {
+        "status": "filed",
+        "doc_type": "payslip",
+        "correspondent": "Voorbeeld Techniek",
+        "date": "2026-06-25",
+        "title_contains": ["loonstrook", "juni"],
+        "identifiers": [],
+        "labels": {
+          "party": ["Sanne de Vries"],
+          "period": ["2026-06"],
+          "amount": ["3245.18 EUR"],
+          "jurisdiction": ["Netherlands"]
+        }
+      }
+    },
+    {
+      "file": "intl/58-orange-faktura-2026-05.pdf",
+      "lang": "pl",
+      "kind": "pdf-text",
+      "expected": {
+        "status": "filed",
+        "doc_type": "invoice",
+        "correspondent": "Orange",
+        "date": "2026-06-05",
+        "title_contains": ["faktura"],
+        "identifiers": [],
+        "labels": {
+          "party": ["Katarzyna Przykładowa"],
+          "object": ["512 345 678"],
+          "reference": ["F/11104/06/2026"],
+          "period": ["2026-05"],
+          "deadline": ["2026-06-19"],
+          "amount": ["89.99 PLN"],
+          "jurisdiction": ["Poland"]
+        }
+      }
+    },
+    {
+      "file": "intl/59-folktandvarden-bokning.eml",
+      "lang": "sv",
+      "kind": "eml",
+      "expected": {
+        "status": "filed",
+        "doc_type": "letter",
+        "correspondent": "Folktandvården",
+        "date": "2026-09-22",
+        "title_contains": ["bokning", "tandläkar"],
+        "identifiers": [],
+        "labels": {
+          "party": ["Erik Exempel"],
+          "reference": ["BK-845185"],
+          "deadline": ["2026-10-14"]
+        }
+      }
+    },
+    {
+      "file": "intl/60-potvrzeni-o-studiu.txt",
+      "lang": "cs",
+      "kind": "text",
+      "expected": {
+        "status": "filed",
+        "doc_type": "attestation",
+        "correspondent": "Univerzita Karlova",
+        "date": "2026-09-24",
+        "title_contains": ["studiu", "potvrzení"],
+        "identifiers": [],
+        "labels": {
+          "party": ["Tereza Příkladová"],
+          "period": ["2026"],
+          "jurisdiction": ["Czech|Czechia"]
+        }
+      },
+      "accept_also": {
+        "doc_type": ["certificate"],
+        "correspondent": ["Charles University"]
+      },
+      "encoding": "utf-8"
+    },
+    {
+      "file": "intl/61-privatbank-vypyska-2026-07.pdf",
+      "lang": "uk",
+      "kind": "pdf-text",
+      "expected": {
+        "status": "filed",
+        "doc_type": "statement",
+        "correspondent": "ПриватБанк",
+        "date": "2026-08-01",
+        "title_contains": ["виписка"],
+        "identifiers": ["iban:UA213052990000026715729858127"],
+        "labels": {
+          "party": ["Олена Прикладна"],
+          "object": ["UA21 3052 9900 0002 6715 7298 5812 7"],
+          "period": ["2026-07"],
+          "amount": ["24518.40 UAH"],
+          "jurisdiction": ["Ukraine"]
+        }
+      },
+      "accept_also": {
+        "correspondent": ["PrivatBank"]
+      }
+    },
+    {
+      "file": "intl/62-turkcell-fatura-2026-07.pdf",
+      "lang": "tr",
+      "kind": "pdf-text",
+      "expected": {
+        "status": "filed",
+        "doc_type": "invoice",
+        "correspondent": "Turkcell",
+        "date": "2026-08-03",
+        "title_contains": ["fatura"],
+        "identifiers": [],
+        "labels": {
+          "party": ["Mehmet Örnek"],
+          "object": ["0532 123 45 67"],
+          "reference": ["TCSD65342868"],
+          "period": ["2026-07"],
+          "deadline": ["2026-08-18"],
+          "amount": ["489.90 TRY"],
+          "jurisdiction": ["Turkey|Türkiye"]
+        }
+      }
+    },
+    {
+      "file": "intl/63-aade-ekkatharistiko-2025.pdf",
+      "lang": "el",
+      "kind": "pdf-text",
+      "expected": {
+        "status": "filed",
+        "doc_type": "tax-assessment",
+        "correspondent": "ΑΑΔΕ",
+        "date": "2026-07-15",
+        "title_contains": ["Φόρου", "Εισοδήματος"],
+        "identifiers": [],
+        "labels": {
+          "party": ["Γιώργος Παράδειγμα"],
+          "period": ["2025"],
+          "deadline": ["2026-07-31"],
+          "amount": ["1420.00 EUR"],
+          "jurisdiction": ["Greece"]
+        }
+      },
+      "accept_also": {
+        "correspondent": ["AADE", "Αρχή Δημοσίων Εσόδων"]
+      }
+    },
+    {
+      "file": "intl/64-laodong-hetong.docx",
+      "lang": "zh",
+      "kind": "docx",
+      "expected": {
+        "status": "filed",
+        "doc_type": "contract",
+        "correspondent": "示例科技",
+        "date": "2026-03-02",
+        "title_contains": ["劳动合同"],
+        "identifiers": [],
+        "labels": {
+          "party": ["王小明"],
+          "period": ["2026-03-16/2029-03-15"],
+          "amount": ["25000.00 CNY"],
+          "jurisdiction": ["China|Shanghai"]
+        }
+      }
+    },
+    {
+      "file": "intl/65-tepco-denki-ryokin-2026-07.pdf",
+      "lang": "ja",
+      "kind": "pdf-text",
+      "expected": {
+        "status": "filed",
+        "doc_type": "invoice",
+        "correspondent": "東京電力",
+        "date": "2026-08-05",
+        "title_contains": ["電気料金"],
+        "identifiers": [],
+        "labels": {
+          "party": ["山田 花子|山田花子"],
+          "period": ["2026-07-04/2026-08-03"],
+          "deadline": ["2026-08-25"],
+          "amount": ["8432.00 JPY"],
+          "jurisdiction": ["Japan"]
+        }
+      },
+      "accept_also": {
+        "correspondent": ["TEPCO"]
+      }
+    },
+    {
+      "file": "intl/66-snuh-jinryobi-yeongsujeung.pdf",
+      "lang": "ko",
+      "kind": "pdf-text",
+      "expected": {
+        "status": "filed",
+        "doc_type": "receipt",
+        "correspondent": "서울대학교병원",
+        "date": "2026-09-07",
+        "title_contains": ["영수증", "진료비"],
+        "identifiers": [],
+        "labels": {
+          "party": ["김민준"],
+          "amount": ["48300.00 KRW"]
+        }
+      },
+      "accept_also": {
+        "correspondent": ["Seoul National University Hospital"]
+      }
+    },
+    {
+      "file": "intl/67-shahadat-ratib.pdf",
+      "lang": "ar",
+      "kind": "pdf-text",
+      "expected": {
+        "status": "filed",
+        "doc_type": "attestation",
+        "correspondent": "المثال للتجارة",
+        "date": "2026-04-10",
+        "title_contains": ["شهادة راتب"],
+        "identifiers": [],
+        "labels": {
+          "party": ["أحمد المثال"],
+          "amount": ["18500.00 AED"],
+          "jurisdiction": ["United Arab Emirates|UAE|Dubai"]
+        }
+      },
+      "accept_also": {
+        "doc_type": ["certificate", "payslip"]
+      }
+    },
+    {
+      "file": "intl/68-kiraya-rasid-2026-06.txt",
+      "lang": "hi",
+      "kind": "text",
+      "expected": {
+        "status": "filed",
+        "doc_type": "receipt",
+        "correspondent": "राजेश उदाहरण",
+        "date": "2026-06-05",
+        "title_contains": ["किराया", "रसीद"],
+        "identifiers": [],
+        "labels": {
+          "party": ["प्रिया नमूना"],
+          "object": ["उदाहरण मार्ग"],
+          "period": ["2026-06"],
+          "amount": ["25000.00 INR"]
+        }
+      },
+      "encoding": "utf-8"
+    },
+    {
+      "file": "intl/69-dmv-registration-renewal.pdf",
+      "lang": "en",
+      "kind": "pdf-text",
+      "expected": {
+        "status": "filed",
+        "doc_type": "invoice",
+        "correspondent": "DMV",
+        "date": "2026-08-01",
+        "title_contains": ["registration", "renewal"],
+        "identifiers": [],
+        "labels": {
+          "party": ["Jordan Sample"],
+          "object": ["8ABC123"],
+          "deadline": ["2026-09-15"],
+          "amount": ["243.00 USD"],
+          "jurisdiction": ["California|United States"]
+        }
+      },
+      "accept_also": {
+        "doc_type": ["letter"],
+        "correspondent": ["Department of Motor Vehicles"]
+      }
+    },
+    {
+      "file": "intl/70-enel-conta-energia-2026-06.pdf",
+      "lang": "pt",
+      "kind": "pdf-text",
+      "expected": {
+        "status": "filed",
+        "doc_type": "invoice",
+        "correspondent": "Enel",
+        "date": "2026-06-10",
+        "title_contains": ["energia"],
+        "identifiers": [],
+        "labels": {
+          "party": ["Ana Exemplo Souza"],
+          "object": ["90466571"],
+          "period": ["2026-06"],
+          "deadline": ["2026-06-25"],
+          "amount": ["287.43 BRL"],
+          "jurisdiction": ["Brazil|São Paulo"]
+        }
+      }
+    },
+    {
       "file": "negative/90-budget-2026.xlsx",
       "lang": "en",
       "kind": "xlsx",
       "expected": {
         "status": "filed",
-        "doc_type": "other",
+        "doc_type": null,
         "correspondent": null,
         "date": null,
         "title_contains": ["Budget"],

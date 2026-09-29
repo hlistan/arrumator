@@ -48,7 +48,7 @@ enum NegativeFixtures {
         rows.append([.text("Notes: keep a 10% emergency fund; review the electricity tariff in October.")])
         let workbook = Workbook(title: "Household budget 2026", creator: "Alex Sample", created: Day(2026, 1, 4),
                                 sheets: [Sheet(name: "Budget 2026", columnWidths: [22] + Array(repeating: 10, count: 13), rows: rows)])
-        return .edgeCase(file, .en, .xlsx, status: .filed, type: .other, titleContains: ["Budget"], payload: .xlsx(workbook))
+        return .edgeCase(file, .en, .xlsx, status: .filed, type: nil, titleContains: ["Budget"], payload: .xlsx(workbook))
     }
 
     static func duplicate() -> Fixture {

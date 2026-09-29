@@ -122,7 +122,7 @@
     "watchdogMinutes": 10
   },
   "extraction": {
-    "languages": [
+    "ocrLanguages": [
       "en",
       "ru",
       "pt"
@@ -248,7 +248,7 @@
     "minTextDateScore": 1
   },
   "analysis": {
-    "promptVersion": 4,
+    "promptVersion": 5,
     "excerptChars": 12000,
     "embeddingSummaryChars": 2000,
     "embeddingNumCtx": 2048,

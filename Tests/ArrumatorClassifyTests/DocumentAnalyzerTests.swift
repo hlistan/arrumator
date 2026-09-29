@@ -44,14 +44,17 @@ import Testing
     @Test func eachKindKeepsOnlyWhatIsALabelOfThatKind() throws {
         let answer = Fixtures.answer([
             .type: ["invoice", "receipt"], .date: ["yesterday"], .deadline: ["31.07.2026", "soon"],
-            .period: ["2025", "2026-06/2026-07", "2026-13", "Q3"], .amount: ["54.21 EUR", "free"],
+            .period: ["2025", "2026-06/2026-07", "2026-13", "Q3"], .amount: ["54.21 EUR", "free", "EUR 12.00", "25000.00: cny", "1.5 ABC"],
+            .reference: ["invoice 2026/17", "tax assessment for 2025", "the customer's"],
             .topic: ["Electricity", "electricity"], .language: ["Portuguese", "POR", "ru", "Klingonese", "english"],
         ])
         let v = try Self.validator(maxPerKind: 5).validate(answer)
         #expect(v.labels.values(.type) == ["invoice"], "a document has one type")
         #expect(v.labels.values(.date).isEmpty && v.labels.values(.deadline) == ["2026-07-31"], "dates are ISO or nothing")
         #expect(v.labels.values(.period) == ["2025", "2026-06/2026-07"], "a period is a year, a month, a day or a span of them")
-        #expect(v.labels.values(.amount) == ["54.21 EUR"], "an amount has a number")
+        #expect(v.labels.values(.amount) == ["54.21 EUR", "12.00 EUR", "25000.00 CNY", "1.5 ABC"],
+                "an amount has a number, written before its currency code when it has one")
+        #expect(v.labels.values(.reference) == ["invoice 2026/17", "tax assessment for 2025"], "a reference has a number")
         #expect(v.labels.values(.topic) == ["electricity"], "topics are lowercase, once")
         #expect(v.labels.values(.language) == ["pt", "ru", "en"], "a language named in English or by any ISO 639 code is its code, once")
         #expect(v.notes.contains("dates: “yesterday” is no date, dropped") && v.notes.contains("languages: “Klingonese” is no language, dropped"))

@@ -79,8 +79,8 @@ enum RussianFixtures {
                 .paragraph("Показания счётчика передавайте с 15 по 26 число месяца в личном кабинете на сайте mosenergosbyt.ru или в мобильном приложении."),
             ])
         return .filed(file, .ru, .pdfScan, type: .invoice,
-                      correspondent: "Mosenergosbyt", date: formed,
-                      titleContains: ["электроэнергию", "август"], identifiers: [.ruINN(cast.mosenergosbyt.taxID)],
+                      correspondent: "Мосэнергосбыт", date: formed,
+                      titleContains: ["электроэнергию", "август"], identifiers: [.ruINN(cast.mosenergosbyt.taxID)], acceptAlso: AcceptAlso(correspondent: ["Mosenergosbyt"]),
                       payload: .pdfScan(.document(document)))
     }
 
@@ -138,9 +138,9 @@ enum RussianFixtures {
                 .note("Достоверность и полноту сведений, указанных в настоящей декларации, подтверждаю. \(ivan.shortName), \(filed.ruNumeric)."),
             ])
         return .filed(file, .ru, .pdfText, type: .taxReturn,
-                      correspondent: "FNS", date: filed,
+                      correspondent: "ФНС", date: filed,
                       titleContains: ["3-НДФЛ", "2025"], identifiers: [.ruINN(ivan.inn)],
-                      acceptAlso: AcceptAlso(correspondent: ["ФНС", "ИФНС России № 28 по г. Москве"]),
+                      acceptAlso: AcceptAlso(correspondent: ["FNS", "ИФНС России № 28 по г. Москве"]),
                       payload: .pdfText(document))
     }
 
@@ -187,10 +187,10 @@ enum RussianFixtures {
                 .note("Налоговое уведомление размещено в личном кабинете налогоплательщика и считается полученным со дня, следующего за днём его размещения."),
             ])
         return .filed(file, .ru, .pdfText, type: .taxAssessment,
-                      correspondent: "FNS", date: issued,
+                      correspondent: "ФНС", date: issued,
                       titleContains: ["Налоговое уведомление", "2025"],
                       identifiers: [.ruINN(ivan.inn), .ruINN(cast.treasury.taxID)],
-                      acceptAlso: AcceptAlso(correspondent: ["ФНС", "ИФНС России № 28 по г. Москве"]),
+                      acceptAlso: AcceptAlso(correspondent: ["FNS", "ИФНС России № 28 по г. Москве"]),
                       payload: .pdfText(document))
     }
 
@@ -258,8 +258,8 @@ enum RussianFixtures {
                 .note("Выписка сформирована в СберБанк Онлайн. Документ подписан электронной подписью банка и не требует печати."),
             ])
         return .filed(file, .ru, .pdfText, type: .statement,
-                      correspondent: "Sberbank", date: formed,
-                      titleContains: ["Выписка", "июль"], identifiers: [.ruINN(cast.sberbank.taxID)],
+                      correspondent: "Сбербанк", date: formed,
+                      titleContains: ["Выписка", "июль"], identifiers: [.ruINN(cast.sberbank.taxID)], acceptAlso: AcceptAlso(correspondent: ["Sberbank"]),
                       payload: .pdfText(document))
     }
 
@@ -296,9 +296,9 @@ enum RussianFixtures {
         let photo = Photo(subject: .card(card), format: .jpeg,
                           taken: DateTimeStamp(Day(2026, 2, 10), hour: 20, minute: 14, second: 55, utcOffsetMinutes: 180))
         return .filed(file, .ru, .imagePhoto, type: .idDocument,
-                      correspondent: "SFR", date: registered,
+                      correspondent: "СФР", date: registered,
                       titleContains: ["Страховое", "свидетельство"],
-                      acceptAlso: AcceptAlso(correspondent: ["ПФР", "СФР", "Пенсионный фонд Российской Федерации"]),
+                      acceptAlso: AcceptAlso(correspondent: ["ПФР", "SFR", "Пенсионный фонд Российской Федерации"]),
                       payload: .photo(photo))
     }
 
@@ -386,8 +386,8 @@ enum RussianFixtures {
                 .note("Полис оформлен в электронном виде и подписан усиленной квалифицированной электронной подписью страховщика."),
             ])
         return .filed(file, .ru, .pdfText, type: .policy,
-                      correspondent: "Ingosstrakh", date: concluded,
-                      titleContains: ["ОСАГО"], identifiers: [.ruINN(cast.ingosstrakh.taxID)],
+                      correspondent: "Ингосстрах", date: concluded,
+                      titleContains: ["ОСАГО"], identifiers: [.ruINN(cast.ingosstrakh.taxID)], acceptAlso: AcceptAlso(correspondent: ["Ingosstrakh"]),
                       payload: .pdfText(document))
     }
 
@@ -528,9 +528,9 @@ enum RussianFixtures {
                 .note("Выписка выдана Филиалом ФГБУ «ФКП Росреестра» по Москве. Государственный регистратор: Иванова Е. П."),
             ])
         return .filed(file, .ru, .pdfText, type: .certificate,
-                      correspondent: "Rosreestr", date: issued,
+                      correspondent: "Росреестр", date: issued,
                       titleContains: ["Выписка", "ЕГРН"],
-                      acceptAlso: AcceptAlso(correspondent: ["Росреестр", "ФКП Росреестра"]),
+                      acceptAlso: AcceptAlso(correspondent: ["Rosreestr", "ФКП Росреестра"]),
                       payload: .pdfText(document))
     }
 
@@ -575,8 +575,8 @@ enum RussianFixtures {
 
             """
         return .filed(file, .ru, .text, type: .invoice,
-                      correspondent: "Rostelecom", date: issued,
-                      titleContains: ["Счет", "июль"], identifiers: [.ruINN(cast.rostelecom.taxID)],
+                      correspondent: "Ростелеком", date: issued,
+                      titleContains: ["Счет", "июль"], identifiers: [.ruINN(cast.rostelecom.taxID)], acceptAlso: AcceptAlso(correspondent: ["Rostelecom"]),
                       invalidIdentifiers: [.ruINN(account)], warnings: [.encodingGuessed], encoding: .koi8r,
                       payload: .text(text, .koi8r))
     }

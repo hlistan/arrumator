@@ -10,7 +10,9 @@
 Drop any file into your Incoming folder: a PDF, a scan, a photo, a screenshot, a Word, Excel or PowerPoint file, an
 e-mail, plain text. Arrumator reads it, labels it with what it is about, gives it a name that says what it is, files it
 into your archive and indexes it for search. There are no folders to keep in order: a document is described by its labels
-alone, and you find it by them, its words or its meaning. Documents in English, Russian and Portuguese are supported.
+alone, and you find it by them, its words or its meaning. A document can be in any language and any script: its labels
+say what it is in one vocabulary, so a German electricity bill and a Japanese one are both `type:invoice`,
+`topic:electricity`.
 
 - [Features](#features)
 - [Privacy](#privacy)

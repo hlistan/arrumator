@@ -8,7 +8,7 @@ covers the app and its settings. [Storage](storage.md) covers where everything i
 
 ```text
 new file in Incoming ──► wait until it stops changing ──► hash (an exact copy of a filed document is a duplicate)
-   ──► extract: PDFKit text, Apple Vision OCR (en/ru/pt), textutil (doc/docx/rtf/odt/html), CoreXLSX, PPTX, e-mail,
+   ──► extract: PDFKit text, Apple Vision OCR, textutil (doc/docx/rtf/odt/html), CoreXLSX, PPTX, e-mail,
        archives, media metadata, Quick Look previews, local vision model for photos; language, dates, identifiers
    ──► analyse: the local model reads it once, with the app's own prompt, picks out its signals, which become its
        labels, and names the file
@@ -20,6 +20,18 @@ A document is described by its labels and nothing else: who sent it, what type i
 concerns, and the rest are all labels of one kind or another. The archive has no folders of the app's making. Every
 document is filed at its top and found again by its labels, its words or its meaning. A folder you make yourself is
 yours: the app reads files you put in it where they are, and never moves them out.
+
+### Documents in any language
+
+Nothing in reading a document is tied to a language. The extractor tells the language of the text among all that
+Apple's NaturalLanguage knows. Its dates are found with month names in every language the system has a calendar for,
+in each form it writes them (`15 мая 2024`, `3. März 2025`, `2025年3月5日`), and in numeric forms from day first to
+year first. OCR asks Vision for the document's own language first, then the hints in `extraction.ocrLanguages`, and
+lets Vision detect any other it reads. A script Vision does not read in images is still read from a PDF's text layer,
+an e-mail or a text file. The model reads the document as written and describes it in labels that do not depend on its
+language: names and numbers as the document writes them, topics, objects and jurisdictions in English, dates, amounts and
+languages in ISO forms. Documents in different languages are therefore found by the same labels. The file name's
+description is in the document's own language.
 
 OCR runs on Vision's default device, the Neural Engine or GPU. When that fails, as it can when the Neural Engine's
 model does not compile, the page is read again on the CPU, and so is every later page until the app restarts. The
@@ -68,8 +80,9 @@ fields document managers and key-information extraction read from personal paper
 Every label is kept on one line, cut to `labels.maxValueChars` after the last whole word, and kept once however it is
 written. Each kind keeps its first `labels.maxPerKind` labels, the most significant first; a document has at most one
 type and one date. A value that is no label of its kind is dropped rather than sent back: a date or deadline that is no
-calendar day (day-first dates such as `31.07.2026` become ISO), a period of another shape, an amount without a number,
-a language that is none (one written `pt`, `por` or `Portuguese` becomes `pt`). Topics are lowercase.
+calendar day (day-first dates such as `31.07.2026` become ISO), a period of another shape, an amount or a reference
+without a number, a language that is none (one written `pt`, `por` or `Portuguese` becomes `pt`). An amount written
+with its currency code first or after a colon (`EUR 54.21`, `54.21: EUR`) becomes `54.21 EUR`. Topics are lowercase.
 
 Labels are the document's. They sit in its entry in `_documents.md` and survive a rebuild, and each kind is a field of
 the search: `sender:edp`, `party:"maria silva"`, `type:invoice`, `object:AA-12-BB`, `reference:926804564`,

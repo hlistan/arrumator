@@ -182,7 +182,9 @@ public struct ExtractionConfig: Sendable, Codable, Hashable {
         public var maxRows: Int
         public var maxColumns: Int
     }
-    public var languages: [String]
+    /// Languages text recognition is told to expect first, in this order. They are hints, not a limit: a document's
+    /// own language, as detected, goes ahead of them, and Vision detects any other it can read.
+    public var ocrLanguages: [String]
     public var languageSampleChars: Int
     public var languageMinConfidence: Double
     public var maxIndexChars: Int

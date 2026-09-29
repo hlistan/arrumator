@@ -7,7 +7,7 @@ import Testing
     @Test func bundledDefaultsDecode() throws {
         let config = try PipelineConfig.bundledDefaults()
         #expect(config.modelProfiles.keys.contains("standard"))
-        #expect(config.extraction.languages == ["en", "ru", "pt"])
+        #expect(config.extraction.ocrLanguages == ["en", "ru", "pt"])
         let settings = try AppSettings.bundledDefaults()
         let models = try config.models(for: settings.models)
         #expect(!models.chat.isEmpty && !models.embed.isEmpty)

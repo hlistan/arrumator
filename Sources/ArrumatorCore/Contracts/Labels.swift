@@ -57,8 +57,9 @@ extension DocumentLabel {
 
     /// A label of `kind` with `value` as a label keeps it, or nil when it is none. Every value is one line. A date or
     /// deadline is ISO 8601 (`YYYY-MM-DD`, from day-first dates too), a period one or two ISO dates of any precision
-    /// joined by `/`, a language its ISO 639-1 code, a type one of `DocumentType` other than `other`, an amount has a
-    /// number in it, and a topic is lowercase.
+    /// joined by `/`, a language its ISO 639-1 code, a type one of `DocumentType` other than `other`, an amount and a
+    /// reference have a number in them (an amount with its ISO 4217 code before or after it is written `number CODE`),
+    /// and a topic is lowercase.
     public static func normalized(_ value: String, kind: LabelKind) -> DocumentLabel? {
         let written = oneLine(value)
         guard !written.isEmpty else { return nil }
@@ -68,11 +69,23 @@ extension DocumentLabel {
             .flatMap { $0 == .other ? nil : $0.rawValue }
         case .date, .deadline: isoDay(written)
         case .period: period(written)
-        case .amount: written.contains(where: \.isNumber) ? written : nil
+        case .amount: amount(written)
+        case .reference: written.contains(where: \.isNumber) ? written : nil
         case .topic: written.lowercased()
-        case .sender, .party, .object, .reference, .jurisdiction: written
+        case .sender, .party, .object, .jurisdiction: written
         }
         return normalized.map { DocumentLabel(kind: kind, value: $0) }
+    }
+
+    /// An amount as `number CODE` when it is a number and an ISO 4217 code in either order (`EUR 54.21`, `54.21: EUR`),
+    /// as written when it is anything else with a number in it, and nil without one.
+    static func amount(_ written: String) -> String? {
+        guard written.contains(where: \.isNumber) else { return nil }
+        guard let match = written.wholeMatch(of: /([A-Za-z]{3})?[\s:]*(-?[0-9]+(?:\.[0-9]+)?)[\s:]*([A-Za-z]{3})?/),
+              (match.output.1 == nil) != (match.output.3 == nil),
+              let code = (match.output.1 ?? match.output.3).map({ $0.uppercased() }),
+              Locale.Currency.isoCurrencies.contains(where: { $0.identifier == code }) else { return written }
+        return "\(match.output.2) \(code)"
     }
 
     /// Runs of white space, line breaks and control characters become one space.

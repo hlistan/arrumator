@@ -5,7 +5,9 @@ import Foundation
 
 /// Runs a fixture corpus through the full live pipeline in a throw-away home and archive, then scores how each
 /// document was read against `expected.json`: whether it was filed, waited for the user or was taken for a copy; its
-/// type, sender, date and language labels and its file name; and how many labels of each kind documents got.
+/// type, sender, date and language labels and its file name; whether it got the other labels the corpus expects of it
+/// (parties, objects, references, periods, deadlines, amounts, jurisdictions); and how many labels of each kind
+/// documents got.
 struct Eval: AsyncParsableCommand {
     static let configuration = CommandConfiguration(abstract: "Evaluate the live pipeline on a fixture corpus (expected.json).")
     @OptionGroup var options: GlobalOptions
@@ -24,8 +26,10 @@ struct Eval: AsyncParsableCommand {
         var correspondent: String?
         var date: String?
         var titleContains: [String]
+        /// Labels expected by kind; each value, or one of its `|` alternatives, must be found in a label of that kind.
+        var labels: [String: [String]]?
         enum CodingKeys: String, CodingKey {
-            case status, docType = "doc_type", correspondent, date, titleContains = "title_contains"
+            case status, docType = "doc_type", correspondent, date, titleContains = "title_contains", labels
         }
     }
 
@@ -58,6 +62,8 @@ struct Eval: AsyncParsableCommand {
         var titleOK: Bool?
         /// Whether the document's language labels include the language the corpus wrote it in.
         var languageOK: Bool?
+        /// For each expected label, as `kind: value`, whether the document got it.
+        var expectedLabels: [String: Bool]?
         var seconds: Double
     }
 
@@ -74,6 +80,9 @@ struct Eval: AsyncParsableCommand {
         var labelsPerDocument: Double
         /// Of the labelled documents that should be filed, the share with at least one label of each kind.
         var coverage: [String: Double]
+        /// Of the labels the corpus expects, the share found, in all and by kind.
+        var expectedFound: Double
+        var expectedFoundByKind: [String: Double]
         var medianSeconds: Double
 
         /// The share of details read right: type, sender, date and title together.
@@ -135,6 +144,10 @@ struct Eval: AsyncParsableCommand {
                          summary.labelled * 100, summary.labelsPerDocument, summary.medianSeconds))
             print("labels per kind: " + LabelKind.allCases.map { String(format: "%@ %.0f%%", $0.rawValue, (summary.coverage[$0.rawValue] ?? 0) * 100) }
                 .joined(separator: " · "))
+            print(String(format: "expected labels found: %.0f%% (", summary.expectedFound * 100)
+                  + LabelKind.allCases.compactMap { kind in
+                      summary.expectedFoundByKind[kind.rawValue].map { String(format: "%@ %.0f%%", kind.rawValue, $0 * 100) }
+                  }.joined(separator: " · ") + ")")
         }
         if let report {
             struct Report: Encodable { var rows: [Row]; var summaries: [Summary] }
@@ -166,7 +179,40 @@ struct Eval: AsyncParsableCommand {
                    dateOK: ordinary ? e.date.map { $0 == doc.labels(.date).first } : nil,
                    titleOK: ordinary && !e.titleContains.isEmpty ? e.titleContains.contains { folded(doc.filename).contains(folded($0)) } : nil,
                    languageOK: ordinary && DocumentLabel.languageCode(fixture.lang) != nil ? languages?.contains(fixture.lang) ?? false : nil,
+                   expectedLabels: ordinary ? e.labels.map { Self.found($0, in: doc.labels ?? []) } : nil,
                    seconds: seconds)
+    }
+
+    /// Whether each expected label, as `kind: value`, is among the document's labels: an amount by its number and
+    /// currency, a date or period by its start, anything else by its words, ignoring case, accents and spacing.
+    static func found(_ expected: [String: [String]], in labels: [DocumentLabel]) -> [String: Bool] {
+        func folded(_ s: String) -> String {
+            s.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: nil).filter { !$0.isWhitespace }
+        }
+        func amount(_ s: String) -> (Double, String)? {
+            let parts = s.split(separator: " ")
+            guard parts.count == 2, let value = Double(parts[0]) else { return nil }
+            return (value, String(parts[1]).uppercased())
+        }
+        var results: [String: Bool] = [:]
+        for (key, values) in expected {
+            guard let kind = LabelKind(rawValue: key) else { continue }
+            let actual = labels.values(kind)
+            for value in values {
+                results["\(key): \(value)"] = value.split(separator: "|").map(String.init).contains { option in
+                    actual.contains { label in
+                        switch kind {
+                        case .amount:
+                            guard let want = amount(option), let got = amount(label) else { return false }
+                            return abs(want.0 - got.0) < 0.005 && want.1 == got.1
+                        case .date, .deadline, .period: return label.hasPrefix(option)
+                        default: return folded(label).contains(folded(option))
+                        }
+                    }
+                }
+            }
+        }
+        return results
     }
 
     static func summarize(pass: Int, rows: [Row], corpus: [Fixture]) -> Summary {
@@ -181,13 +227,16 @@ struct Eval: AsyncParsableCommand {
             (kind.rawValue, labelled.isEmpty ? 0 : Double(labelled.filter { $0.labels?.contains { $0.kind == kind } == true }.count)
                 / Double(labelled.count))
         })
+        let checks = filed.compactMap(\.expectedLabels).flatMap { $0 }
+        let byKind = Dictionary(grouping: checks) { String($0.key.prefix { $0 != ":" }) }
+            .mapValues { rate($0.map(\.value)) }
         let seconds = rows.map(\.seconds).sorted()
         return Summary(pass: pass, statusAccuracy: rate(rows.map(\.statusOK)), docTypeAccuracy: rate(rows.map(\.docTypeOK)),
                        correspondentAccuracy: rate(rows.map(\.correspondentOK)), dateAccuracy: rate(rows.map(\.dateOK)),
                        titleAccuracy: rate(rows.map(\.titleOK)), languageAccuracy: rate(rows.map(\.languageOK)),
                        labelled: filed.isEmpty ? 0 : Double(labelled.count) / Double(filed.count),
                        labelsPerDocument: labelled.isEmpty ? 0 : Double(labelled.compactMap(\.labels?.count).reduce(0, +)) / Double(labelled.count),
-                       coverage: coverage,
+                       coverage: coverage, expectedFound: rate(checks.map(\.value)), expectedFoundByKind: byKind,
                        medianSeconds: seconds.isEmpty ? 0 : seconds[seconds.count / 2])
     }
 }

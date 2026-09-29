@@ -19,16 +19,53 @@ the real pipeline and the configured models, in a throw-away home and archive, a
 | language | The `language` labels include the language the document is written in. |
 | labelled | Of the documents that should be filed, the share the model labelled at all, and how many labels each has. |
 | labels per kind | Of those labelled, the share with at least one label of each kind (`sender`, `party`, `type`, `topic`, `object`, `reference`, `date`, `period`, `deadline`, `amount`, `jurisdiction`, `language`): how much of the label set the prompt draws out. |
+| expected labels | Of the other labels the corpus expects a document to get (its parties, objects, references, periods, deadlines, amounts and jurisdictions), the share it got, in all and by kind. An amount must match in number and currency; a date or period must start with the expected value; anything else must contain the expected words, ignoring case, accents and spacing. |
 
 Type, sender, date, title and language are scored only for documents the corpus expects to be filed. The median
 time per document is reported too. A second pass files the same documents again with different bytes, which shows
 how consistently they are read. `--min-accuracy <x>` fails the run when the first pass reads fewer than that share of
 type, sender, date and title right.
 
-**Label quality has not yet been measured with the profile models.** The corpus records the expected sender, type,
-date, title words and language, but not the parties, topics, objects, references, periods, deadlines, amounts and
-jurisdictions a document should be labelled with. Those kinds are measured only by coverage, how often a document gets
-one, not by whether it is right. Adding expected labels to the generator is the next step for this measurement.
+The 21 documents of the international set (`intl/`) record the labels they should get besides their type, sender and
+date. The others record only sender, type, date, title words and language, and their other labels are measured by
+coverage alone.
+
+## Results
+
+Measured on 2026-09-30 with the `standard` profile (`ministral-3:14b`, `bge-m3`) on an Ollama server on the local
+network, the full corpus, two passes, prompt version 5:
+
+| pass | status | type | sender | date | title | language | labels each | expected labels | median |
+|---|---|---|---|---|---|---|---|---|---|
+| 1 | 100% | 91% | 95% | 98% | 95% | 100% | 15.0 | 92% | 26.9 s |
+| 2 | 100% | 89% | 93% | 98% | 95% | 100% | 15.0 | 92% | 26.8 s |
+
+Expected labels found in pass 1, by kind: party 91%, object 91%, reference 100%, period 75%, deadline 91%, amount 100%,
+jurisdiction 100%. Share of labelled documents with at least one label of each kind: sender 98%, party 98%, type 98%,
+topic 100%, object 98%, reference 90%, date 98%, period 81%, deadline 52%, amount 81%, jurisdiction 98%, language 100%.
+
+The prompt is generic: its fields are defined by meaning and format, with no example values from the corpus. On the 21
+international documents it reads as well as the previous prompt, whose examples came from the Portuguese and Russian
+documents, which were scored the same way:
+
+| prompt | type | sender | date | title | language | expected labels | median |
+|---|---|---|---|---|---|---|---|
+| version 4, examples from the corpus | 90% | 100% | 100% | 100% | 86% | 93% | 22.5 s |
+| version 5, generic | 86% | 100% | 100% | 100% | 100% | 92% | 23.5 s |
+
+What the runs showed about the prompt:
+
+- **An example format anchors the model.** Without an example amount, the model left the currency code off most
+  amounts (37% of the expected amounts found). Describing the pattern (`1234.50 XXX`, the code never left out) brought
+  it to 100%, and amounts written with the code first are normalised to that form.
+- **File names follow the document's language only when told to use its own words.** Asked for a description "in the
+  document's language", the model translated English documents about Portugal into Portuguese. Asked to make the
+  description of words that appear in the document, its title first, every English document got an English name.
+- **Remaining misses:**
+  - A traffic fine and a dentist's booking are typed `ticket`.
+  - Two names on one line are sometimes kept as one party ("Thomas und Anna Beispiel").
+  - A period is sometimes written at month precision where the document gives days.
+  - A private seller's contract names both parties as senders.
 
 ## Image descriptions and the model's context
 
@@ -89,9 +126,9 @@ now takes one model call instead of up to several, so these times are upper boun
 
 ## Limits of these results
 
-- **Synthetic documents.** The corpus is synthetic, 36 documents of 21 kinds in three languages and five edge cases.
-  Real archives have more kinds and longer histories.
-- **Most label kinds are measured only by coverage.** Only the sender, type, date and language labels are checked
-  against the corpus; see above.
+- **Synthetic documents.** The corpus is synthetic: 57 documents of 21 kinds in 18 languages and 8 scripts, and five
+  edge cases. Real archives have more kinds and longer histories.
+- **Expected labels on a third of the corpus.** Parties, objects, references, periods, deadlines, amounts and
+  jurisdictions are checked on the 21 international documents only; on the rest they are measured by coverage.
 - **No image descriptions.** Every image in the corpus has enough text for OCR, so the corpus never tests how well a
   model describes a photo without text.

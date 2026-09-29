@@ -33,7 +33,9 @@ public struct PromptBuilder: Sendable {
         var lines = ["Original file name: \(c.source.originalFilename)"]
         var format = "Format: \(c.source.fileExtension.isEmpty ? c.kind.rawValue : c.source.fileExtension.uppercased())"
         if let pages = c.pageCount { format += ", \(pages) pages" }
-        format += ", \(c.textOrigin.rawValue), language \(c.language.primary) (\(String(format: "%.2f", c.language.confidence)))"
+        // The model reads the language itself: the detector's guess misleads it on mixed pages, such as an English
+        // invoice sent to a Portuguese address.
+        format += ", \(c.textOrigin.rawValue)"
         lines.append(format)
         let dates = c.entities.dates.prefix(config.promptDatesLimit).map(\.date)
         if !dates.isEmpty { lines.append("DETECTED DATES: " + dates.joined(separator: ", ")) }
