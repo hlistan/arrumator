@@ -15,6 +15,10 @@
 
 <!-- Lost learned state, renamed settings or pipeline.json keys, changed CLI output. "Nothing" is an answer. -->
 
+## Guideline refinement
+
+<!-- The [GUIDELINE REFINEMENT] block from the report (AGENTS.md §2): how this change refined AGENTS.md, if it did. -->
+
 ## Checklist
 
 - [ ] `scripts/verify.sh` passes (with `--app` when `App/` or `project.yml` changed, `--checks-only` when

@@ -1,8 +1,11 @@
 # Agent Execution Contract
 
 These rules bind every agent and every person who changes this repository. The contract is deliberately short, so read
-all of it before every task. What the product does is in [README.md](README.md); how the pipeline decides and files is
-in [docs/how-it-works.md](docs/how-it-works.md).
+all of it before every task. Tasks teach it new rules (§2), and it stays short because a rule is never just appended:
+it is merged with the rules it overlaps into one broader rule, replaces those it contradicts or makes obsolete, and goes
+in the section that owns its concern, and what it subsumes is deleted rather than kept beside it. Only the user may
+make a rule demand less or a check catch less. What the product does is in [README.md](README.md); how the pipeline
+decides and files is in [docs/how-it-works.md](docs/how-it-works.md).
 
 ## 1. Role and mandate
 
@@ -47,9 +50,19 @@ Then, for a QA issue, a defect or an architectural task:
 2. **Fix.** Implement or refactor until it passes, following §3 and §4.
 3. **Clean up the tests.** Update or replace the unit and integration tests the change made obsolete, and delete
    flaky, redundant or dead ones.
-4. **Report.** Give a Test Coverage and Verification Summary: the happy paths, boundary cases and failure modes now
-   covered, what is not covered, and the verification output (§7).
-5. **Deliver** through the push protocol (§8).
+4. **Learn.** Every task that fixes a defect, changes code or corrects an inconsistency takes this step, not only the
+   tasks above, and takes it again when something goes wrong later, such as a check failing on the pull request. Find
+   what let the error in and what else went wrong on the way, such as a correction from the user or a reviewer, or a
+   decision the rules left open. Turn it into a rule that prevents its whole class of error ("Always…", "Never…",
+   "Ensure…"), enforced wherever a script or a test can catch it (a gate in `scripts/lint.sh`, `scripts/check-docs.sh`,
+   a test), and fold it into this file in the same change, as the top of the file says. The regression test holds the
+   instance; this file holds the class. When the rules and checks already cover what happened, leave the file as it is.
+5. **Report.** Give a Test Coverage and Verification Summary: the happy paths, boundary cases and failure modes now
+   covered, what is not covered, and the verification output (§7). End it with a `[GUIDELINE REFINEMENT]` block saying
+   what the Learn step did to this file, such as
+   `Refined Guidelines: Merged <old rule> with <new rule> under §<n> to prevent <issue>.`, or which rules and checks
+   already covered what happened.
+6. **Deliver** through the push protocol (§8).
 
 ## 3. Core principles
 
@@ -186,6 +199,8 @@ Every `arrumatorcli` command accepts `--json`. [docs/cli.md](docs/cli.md) lists 
 - [ ] Superseded code, config keys, prompts, tests and dependencies are deleted. No TODO markers and no new warnings.
 - [ ] Every document the change affects is updated in the same change (§4.10), and the report lists them.
       `scripts/check-docs.sh` passes as part of `scripts/verify.sh`.
+- [ ] The Learn step (§2) is done: what the task taught is folded into this file, and the report ends with its
+      `[GUIDELINE REFINEMENT]` block.
 - [ ] The report states what breaks for the installed app: lost learned state, renamed config keys, changed CLI output.
 - [ ] The change reached `main` through §8: green locally, green on the pull request, squash-merged, branch deleted.
 
