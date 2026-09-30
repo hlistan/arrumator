@@ -37,18 +37,18 @@ struct MainWindow: View {
     }
 }
 
-/// Lists, a search for labels above and a small menu at the foot, as in Things. The archive has no folders to list:
-/// documents are found by their labels, listed below the lists with how many documents have each, the most used first,
-/// in one list or kind by kind (`AppSettings.groupLabelsByKind`), each kind in its own colour. Choosing one shows the
-/// documents that have it, and leaves only the labels those documents have, to narrow them down further. The search
-/// lists only the labels written with its text in them. Besides the labels', counts appear only where something is
-/// waiting.
+/// Lists, then the labels, and a small menu at the foot, as in Things. The archive has no folders to list: documents
+/// are found by their labels, listed below the lists with how many documents have each, the most used first, in one
+/// list or kind by kind (`AppSettings.groupLabelsByKind`), each kind in its own colour. Choosing one shows the documents
+/// that have it, and leaves only the labels those documents have, to narrow them down further. A filter between the
+/// lists and the labels lists only the labels written with its text in them, and a button below them clears it.
+/// Besides the labels', counts appear only where something is waiting.
 struct Sidebar: View {
     @Environment(AppModel.self) private var model
     /// The labels of the documents in view, kind by kind, the most used first: every document's when none is chosen.
     @State private var usage: [LabelKind: [LabelUsage]] = [:]
-    /// Text in the search field: only the labels written with it in them are listed, each one of them.
-    @State private var search = ""
+    /// Text in the filter field: only the labels written with it in them are listed, each one of them.
+    @State private var filter = ""
     @State private var collapsed: Set<LabelKind> = []
     /// Kinds whose labels are all listed, past `interface.sidebarLabelsPerKind`.
     @State private var listedInFull: Set<LabelKind> = []
@@ -56,7 +56,7 @@ struct Sidebar: View {
     @State private var rankedInFull = false
 
     var body: some View {
-        let shown = usage.matching(search)
+        let shown = usage.matching(filter)
         List(selection: Binding(get: { model.destination }, set: { if let d = $0 { model.go(d) } })) {
             Section {
                 ForEach(Destination.lists, id: \.self) { destination in
@@ -68,6 +68,9 @@ struct Sidebar: View {
                     .badge(count(destination))
                     .tag(destination)
                 }
+            }
+            if !usage.isEmpty || !filter.isEmpty {
+                Section { filterField }
             }
             if model.settings?.groupLabelsByKind == true {
                 ForEach(LabelKind.allCases.filter { shown[$0] != nil }, id: \.self) { kind in
@@ -84,12 +87,17 @@ struct Sidebar: View {
                     labels(shown.ranked(), limit: rankedInFull ? nil : model.runtime?.config.interface.sidebarLabels) { rankedInFull = true }
                 }
             }
-            if shown.isEmpty, !search.isEmpty {
-                Text(Wording.noLabelsMatch(search)).foregroundStyle(.secondary)
+            if !filter.isEmpty {
+                Section {
+                    if shown.isEmpty {
+                        Text(Wording.noLabelsMatch(filter)).foregroundStyle(.secondary)
+                    }
+                    Button(Wording.clearFilter) { filter = "" }
+                        .buttonStyle(.plain).foregroundStyle(.secondary)
+                }
             }
         }
         .listStyle(.sidebar)
-        .safeAreaInset(edge: .top) { searchField }
         .safeAreaInset(edge: .bottom) { footer }
         .task(id: "\(model.labelSelection)|\(model.activity)") { await loadLabels() }
     }
@@ -98,13 +106,13 @@ struct Sidebar: View {
         Binding(get: { !collapsed.contains(kind) }, set: { if $0 { collapsed.remove(kind) } else { collapsed.insert(kind) } })
     }
 
-    /// Labels in the order given, the most used first, up to `limit` until the user asks for the rest. A search lists
+    /// Labels in the order given, the most used first, up to `limit` until the user asks for the rest. A filter lists
     /// every label it finds. Those chosen come first, which keeps that order, as every document in view has them: they
     /// stay in sight however many other labels are as used.
     @ViewBuilder private func labels(_ listed: [LabelUsage], limit: Int?, showAll: @escaping () -> Void) -> some View {
         let chosen = listed.filter { model.labelSelection.contains($0.label) }
         let ordered = chosen + listed.filter { !model.labelSelection.contains($0.label) }
-        let shown = search.isEmpty ? Array(ordered.prefix(limit ?? ordered.count)) : ordered
+        let shown = filter.isEmpty ? Array(ordered.prefix(limit ?? ordered.count)) : ordered
         ForEach(shown, id: \.label) { item in
             SidebarLabel(usage: item, chosen: model.labelSelection.contains(item.label))
         }
@@ -129,18 +137,17 @@ struct Sidebar: View {
         }
     }
 
-    private var searchField: some View {
-        HStack(spacing: Style.searchFieldSpacing) {
-            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-            TextField(Wording.searchLabels, text: $search).textFieldStyle(.plain)
-            if !search.isEmpty {
-                Button { search = "" } label: { Image(systemName: "xmark.circle.fill") }
+    private var filterField: some View {
+        HStack(spacing: Style.filterFieldSpacing) {
+            Image(systemName: "line.3.horizontal.decrease.circle").foregroundStyle(.secondary)
+            TextField(Wording.filterLabels, text: $filter).textFieldStyle(.plain)
+            if !filter.isEmpty {
+                Button { filter = "" } label: { Image(systemName: "xmark.circle.fill") }
                     .buttonStyle(.plain).foregroundStyle(.tertiary)
             }
         }
-        .padding(Style.searchFieldInsets)
-        .background(.quaternary.opacity(Style.searchFieldFillOpacity), in: .rect(cornerRadius: Style.searchFieldCornerRadius))
-        .padding(Style.searchFieldMargins)
+        .padding(Style.filterFieldInsets)
+        .background(.quaternary.opacity(Style.filterFieldFillOpacity), in: .rect(cornerRadius: Style.filterFieldCornerRadius))
     }
 
     private var footer: some View {

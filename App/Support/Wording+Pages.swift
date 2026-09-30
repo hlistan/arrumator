@@ -56,6 +56,9 @@ extension Wording {
     /// Tags an event the user caused.
     static let byYou = "you"
     static let noDocumentHasAll = "No document has every one of these labels."
+    /// Lets go of every label chosen, beside them at the top of the page.
+    static let clearLabels = "Clear"
+    static let clearLabelsHelp = "Let go of every label and show all documents"
 }
 
 // MARK: Labels page
@@ -99,7 +102,8 @@ extension Wording {
     static let chooseArchive = "Choose the archive to file into"
     static let setUpApp = "Set Up Arrumator…"
     static let openApp = "Open Arrumator"
-    static let searchLabels = "Search Labels"
+    static let filterLabels = "Filter Labels"
+    static let clearFilter = "Clear Filter"
     static let groupLabelsByKind = "Group Labels by Kind"
     /// Heads the sidebar's labels when they are in one list.
     static let mostUsedLabels = "Most Used"

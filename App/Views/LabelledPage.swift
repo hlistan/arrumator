@@ -2,7 +2,7 @@ import ArrumatorCore
 import SwiftUI
 
 /// The documents that have every label chosen in the sidebar, newest first and grouped by day, as on Processed. The
-/// chosen labels head the page, and each can be let go of there as in the sidebar.
+/// chosen labels head the page, each can be let go of there as in the sidebar, and Clear beside them lets go of all.
 struct LabelledPage: View {
     @Environment(AppModel.self) private var model
     @State private var documents: [DocumentRecord] = []
@@ -15,6 +15,8 @@ struct LabelledPage: View {
             if let task = model.collecting { CollectingBar(task: task) }
             HStack(spacing: Style.chipSpacing) {
                 ForEach(selection, id: \.self) { ChosenLabel(label: $0) }
+                Button(Wording.clearLabels) { model.clearLabels() }
+                    .buttonStyle(.link).font(.callout).help(Wording.clearLabelsHelp)
             }
             if documents.isEmpty {
                 EmptyState(symbol: "tag", text: Wording.noDocumentHasAll)
