@@ -45,7 +45,7 @@ extension Wording {
     static func arrived(_ date: Date) -> String { "arrived \(date.formatted(.relative(presentation: .named)))" }
 }
 
-// MARK: Needs You, Processed, History, Search, Labelled
+// MARK: Needs You, Processed, History, Labelled
 
 extension Wording {
     static let reviewNotes = "Arrumator could not read these as it should. Confirm one as it is, "
@@ -55,15 +55,7 @@ extension Wording {
     static let nothingHappened = "Nothing has happened yet."
     /// Tags an event the user caused.
     static let byYou = "you"
-    static let search = "Search"
     static let noDocumentHasAll = "No document has every one of these labels."
-
-    static func noMatches(_ query: String) -> String { "No documents match “\(query)”." }
-
-    /// Said when search works with words only, and why.
-    static func wordsOnly(_ reason: String?) -> String {
-        "Matching words only: \(reason ?? "search by meaning is unavailable")."
-    }
 }
 
 // MARK: Labels page
@@ -107,6 +99,17 @@ extension Wording {
     static let chooseArchive = "Choose the archive to file into"
     static let setUpApp = "Set Up Arrumator…"
     static let openApp = "Open Arrumator"
+    static let searchLabels = "Search Labels"
+    static let groupLabelsByKind = "Group Labels by Kind"
+    /// Heads the sidebar's labels when they are in one list.
+    static let mostUsedLabels = "Most Used"
+
+    static func noLabelsMatch(_ query: String) -> String { "No labels match “\(query)”." }
+
+    /// A sidebar label's help: its kind, which its colour stands for, and what clicking it does.
+    static func sidebarLabelHelp(_ kind: LabelKind, chosen: Bool) -> String {
+        "\(labelKinds(kind)): \(chosen ? showWithoutLabel : showOnlyWithLabel)"
+    }
 
     /// How many documents wait for the user, in the menu bar.
     static func needYou(_ count: Int) -> String { "\(count) need\(count == 1 ? "s" : "") you" }

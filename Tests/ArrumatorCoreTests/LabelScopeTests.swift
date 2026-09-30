@@ -4,7 +4,8 @@ import Foundation
 import Testing
 
 /// Drilling down by labels: choosing labels narrows the documents to those that have every one, and narrows the labels
-/// offered to those the narrowed documents have (`DocumentFilter.labels`, `LabelStore.usage(within:)`).
+/// offered to those the narrowed documents have (`DocumentFilter.labels`, `LabelStore.usage(within:)`), listed as the
+/// sidebar lists them: the most used first, in one list or kind by kind, and only those its search finds.
 @Suite struct LabelScopeTests {
     static func label(_ kind: LabelKind, _ value: String) -> DocumentLabel { DocumentLabel(kind: kind, value: value) }
 
@@ -113,5 +114,54 @@ import Testing
         #expect(try await documents(h, [Self.edp]).isEmpty, "a merged-away label no longer chooses anything")
         #expect(try await documents(h, [Self.label(.sender, "EDP")]) == ids(all, "edp_bill.txt", "edp_contract.txt"),
                 "the label it was merged into chooses its documents")
+    }
+
+    // MARK: Listing the labels offered, as the sidebar and `labels browse` do
+
+    @Test func inOneListTheLabelsMostDocumentsHaveComeFirstWhateverTheirKind() async throws {
+        let (h, _) = try await archive()
+        defer { h.env.cleanup() }
+        let ranked = try await h.services.labels.usage().ranked()
+        #expect(ranked.first == LabelUsage(label: Self.label(.jurisdiction, "Portugal"), documents: 4),
+                "the one label every labelled document has leads, though its kind comes last of the four")
+        #expect(Array(ranked.dropFirst().prefix(3)) == [LabelUsage(label: Self.edp, documents: 2), LabelUsage(label: Self.invoice, documents: 2),
+                                                        LabelUsage(label: Self.label(.topic, "electricity"), documents: 2)],
+                "labels two documents have come next, in the order of their kinds: sender, type, topic")
+        #expect(zip(ranked, ranked.dropFirst()).allSatisfy { $0.documents >= $1.documents }, "no label comes before one more documents have")
+        #expect(ranked.count == 10, "every label is listed once: 3 senders, 3 types, 3 topics and 1 jurisdiction")
+    }
+
+    @Test func groupedTheLabelsAreListedKindByKindEachKindsMostUsedFirst() async throws {
+        let (h, _) = try await archive()
+        defer { h.env.cleanup() }
+        let usage = try await h.services.labels.usage()
+        let grouped = usage.listed(groupedByKind: true)
+        #expect(grouped.map(\.label.kind) == [.sender, .sender, .sender, .type, .type, .type, .topic, .topic, .topic, .jurisdiction],
+                "kinds follow one another in their order, each kind's labels together")
+        #expect(grouped.first == LabelUsage(label: Self.edp, documents: 2), "within a kind, the most used label first")
+        #expect(usage.listed(groupedByKind: false) == usage.ranked(), "not grouped is the one ranked list")
+    }
+
+    static let offered: [LabelKind: [LabelUsage]] = [
+        .sender: [LabelUsage(label: label(.sender, "EDP-Comercial, S.A."), documents: 3), LabelUsage(label: label(.sender, "Autoridade Tributária"), documents: 1)],
+        .type: [LabelUsage(label: label(.type, "tax-assessment"), documents: 1)],
+        .language: [LabelUsage(label: label(.language, "pt"), documents: 4)],
+    ]
+
+    @Test func searchingListsOnlyTheLabelsWrittenWithTheTextInThem() {
+        #expect(Self.offered.matching("edp") == [.sender: [LabelUsage(label: Self.label(.sender, "EDP-Comercial, S.A."), documents: 3)]],
+                "the matching label, with its count, and no kind left without one")
+        #expect(Self.offered.matching("edp comercial").keys.elementsEqual([.sender]), "punctuation does not matter")
+        #expect(Self.offered.matching("TRIBUTARIA")[.sender]?.map(\.label.value) == ["Autoridade Tributária"],
+                "nor case or accents")
+        #expect(Self.offered.matching("tax assess")[.type]?.count == 1, "a type is found as it is shown, in words")
+        #expect(Self.offered.matching("portug")[.language]?.count == 1, "a language is found by its English name, as search finds it")
+    }
+
+    @Test func blankSearchListsEveryLabelAndOneNoLabelHasListsNone() {
+        #expect(Self.offered.matching("") == Self.offered, "nothing typed lists every label")
+        #expect(Self.offered.matching("  \t") == Self.offered, "and so does only white space")
+        #expect(Self.offered.matching("--") == Self.offered, "or only punctuation, which matching leaves out")
+        #expect(Self.offered.matching("edf").isEmpty, "a text no label is written with lists nothing, so no kind heads an empty group")
     }
 }

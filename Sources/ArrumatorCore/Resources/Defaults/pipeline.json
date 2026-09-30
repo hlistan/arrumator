@@ -463,6 +463,7 @@
     "recentlyProcessed": 8,
     "pageSize": 100,
     "sidebarLabelsPerKind": 8,
+    "sidebarLabels": 20,
     "menuBarRecent": 5,
     "notificationEvents": 12,
     "extractPreviewChars": 2000

@@ -34,8 +34,6 @@ final class AppModel {
     /// The labels chosen in the sidebar, in the order they were chosen: the documents shown have every one, and the
     /// sidebar offers only the labels those documents have.
     var labelSelection: [DocumentLabel] = []
-    /// Text in the sidebar's search field; while it is not empty the main area shows results.
-    var searchText = ""
     weak var presenter: (any WindowPresenting)?
     /// True when the menu bar has no room left for the icon, so the Dock icon is the only way in.
     var menuBarIconHidden = false
@@ -195,13 +193,12 @@ final class AppModel {
         }
     }
 
-    /// Switches the main window to a page, closing any open card and search. Any other page than the chosen labels'
-    /// lets go of them.
+    /// Switches the main window to a page, closing any open card. Any other page than the chosen labels' lets go of
+    /// them.
     func go(_ destination: Destination) {
         self.destination = destination
         openDocument = nil
         openLabel = nil
-        searchText = ""
         if destination != .labelled { labelSelection = [] }
     }
 

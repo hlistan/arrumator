@@ -46,19 +46,3 @@ enum FolderPicker {
         return panel.runModal() == .OK ? panel.url?.path : nil
     }
 }
-
-extension Text {
-    /// Renders search snippets with matched terms emphasised.
-    init(highlighted snippet: String) {
-        var attributed = AttributedString()
-        for (segment, isMatch) in SearchHighlight.runs(snippet) {
-            var part = AttributedString(segment)
-            if isMatch {
-                part.inlinePresentationIntent = .stronglyEmphasized
-                part.backgroundColor = Palette.searchMatch
-            }
-            attributed += part
-        }
-        self.init(attributed)
-    }
-}

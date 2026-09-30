@@ -17,5 +17,6 @@
   "pauseOnBattery": true,
   "logLevel": "info",
   "traceRawRetentionDays": 180,
-  "onboardingCompleted": false
+  "onboardingCompleted": false,
+  "groupLabelsByKind": false
 }

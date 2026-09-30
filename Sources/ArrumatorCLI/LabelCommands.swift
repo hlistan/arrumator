@@ -108,11 +108,14 @@ struct Labels: AsyncParsableCommand {
         @OptionGroup var options: GlobalOptions
         @Argument(help: "Labels, as kind=value, such as type=invoice sender=EDP; none lists every document and label.")
         var labels: [String] = []
+        @Option(help: "List only the labels written with this in them, as the sidebar's search does; the documents stay.")
+        var matching = ""
 
         struct Scope: Encodable {
             var selection: [DocumentLabel]
             var documents: [Row]
-            /// The labels the documents have, kind by kind, the most used first, with how many of them have each.
+            /// The labels the documents have, with how many of them have each, as the sidebar lists them: kind by kind,
+            /// or all in one list, the most used first (`groupLabelsByKind`).
             var labels: [LabelUsage]
         }
 
@@ -123,10 +126,11 @@ struct Labels: AsyncParsableCommand {
             let selection = try labels.map(Labels.label)
             let documents = try await runtime.services.documents.list(DocumentFilter(labels: selection), order: .recentlyProcessed,
                                                                       limit: Int.max)
-            let usage = try await runtime.services.labels.usage(within: selection)
+            let usage = try await runtime.services.labels.usage(within: selection).matching(matching)
+            let grouped = await runtime.settings.current.groupLabelsByKind
             let scope = Scope(selection: selection,
                               documents: documents.compactMap { d in d.id.map { Row(id: $0, path: d.path, labels: d.labels) } },
-                              labels: LabelKind.allCases.flatMap { usage[$0] ?? [] })
+                              labels: usage.listed(groupedByKind: grouped))
             options.emit(scope) {
                 guard !scope.documents.isEmpty else { return "No document has every one of these labels." }
                 return (scope.documents.map { "#\($0.id) \($0.path)\n    \(Terminal.labels($0.labels))" }

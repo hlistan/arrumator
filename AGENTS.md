@@ -101,9 +101,10 @@ These are rules you can check, not aspirations. Each row says how it is checked.
 7. **The interface stays quiet.** The app follows Things: a sidebar of a few lists and the archive's labels to narrow
    the documents down by, one list per page under a large title, rows without separators, and an item that opens in
    place as a card. Working screens have no dashboards, stat tiles or counters. A count appears only where something is
-   waiting for the user. Numbers belong in Statistics. Every document row shows what happened to it, and its name and
-   labels can be changed from its card through `ReviewActions`, and every change is recorded. Layout values and colours
-   live in `Style` and `Palette`, and wording in `Wording`. Views never hardcode them.
+   waiting for the user, and beside each label in the sidebar, as how many of the documents in view have it, which is
+   what the labels are ordered by. Other numbers belong in Statistics. Every document row shows what happened to it,
+   and its name and labels can be changed from its card through `ReviewActions`, and every change is recorded. Layout
+   values and colours live in `Style` and `Palette`, and wording in `Wording`. Views never hardcode them.
 8. **Ask before irreversible or outward-facing actions:**
    - committing or pushing when the user has not asked for the change to be delivered (a delivered change follows §8
      to the end, including its squash merge, which publishes a release when it changes code);

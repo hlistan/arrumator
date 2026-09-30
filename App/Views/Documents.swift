@@ -7,7 +7,6 @@ import SwiftUI
 struct DocumentList: View {
     @Environment(AppModel.self) private var model
     let documents: [DocumentRecord]
-    var snippets: [Int64: String] = [:]
 
     var body: some View {
         ForEach(documents, id: \.id) { document in
@@ -21,10 +20,9 @@ struct DocumentList: View {
     }
 
     private func row(_ d: DocumentRecord) -> some View {
-        let subtitle = d.id.flatMap { snippets[$0] }?.replacingOccurrences(of: "\n", with: " ") ?? Wording.labels(d.labels)
-        return ListRow(symbol: d.status.symbol, tint: d.status.tint, title: d.filename,
-                       detail: Wording.outcome(of: d, archive: model.settings?.archiveURL, incoming: model.settings?.incomingURL),
-                       subtitle: subtitle)
+        ListRow(symbol: d.status.symbol, tint: d.status.tint, title: d.filename,
+                detail: Wording.outcome(of: d, archive: model.settings?.archiveURL, incoming: model.settings?.incomingURL),
+                subtitle: Wording.labels(d.labels))
     }
 }
 

@@ -151,6 +151,8 @@ struct Settings: AsyncParsableCommand {
     @Option(help: "Pause on battery when it runs low (true/false).") var pauseOnBattery: Bool?
     @Option(help: "Lowest level logged: error, warning, info, debug, trace.") var logLevel: LogLevel?
     @Option(help: "Days the prompts and raw model answers of a reading are kept in its trace.") var traceRetentionDays: Int?
+    @Option(help: "List the sidebar's labels under their kinds, rather than in one list, the most used first (true/false).")
+    var groupLabelsByKind: Bool?
 
     func run() async throws {
         let runtime = try await options.runtime()
@@ -166,7 +168,7 @@ struct Settings: AsyncParsableCommand {
         let (incoming, profile, ollama) = (incoming, profile, ollama)
         let (showInDock, renameFiles, transliterate, duplicateAction) = (showInDock, renameFiles, transliterate, duplicateAction)
         let (notifyOnFiled, notifyOnReview, pauseOnBattery, logLevel) = (notifyOnFiled, notifyOnReview, pauseOnBattery, logLevel)
-        let traceRetentionDays = traceRetentionDays
+        let (traceRetentionDays, groupLabelsByKind) = (traceRetentionDays, groupLabelsByKind)
         try await runtime.settings.update { s in
             if let incoming { s.incomingPath = incoming }
             if let profile { s.models.profile = profile }
@@ -180,6 +182,7 @@ struct Settings: AsyncParsableCommand {
             if let pauseOnBattery { s.pauseOnBattery = pauseOnBattery }
             if let logLevel { s.logLevel = logLevel }
             if let traceRetentionDays { s.traceRawRetentionDays = traceRetentionDays }
+            if let groupLabelsByKind { s.groupLabelsByKind = groupLabelsByKind }
         }
         if let paused { try await runtime.setPaused(paused) }
         if let ollamaURL {

@@ -24,35 +24,38 @@ struct MainWindow: View {
     }
 
     @ViewBuilder private var page: some View {
-        if !model.searchText.isEmpty {
-            SearchPage()
-        } else {
-            switch model.destination {
-            case .incoming: IncomingPage()
-            case .review: ReviewPage()
-            case .processed: ProcessedPage()
-            case .labels: LabelsPage()
-            case .labelled: LabelledPage()
-            case .history: HistoryPage()
-            case .statistics: StatisticsView()
-            }
+        switch model.destination {
+        case .incoming: IncomingPage()
+        case .review: ReviewPage()
+        case .processed: ProcessedPage()
+        case .labels: LabelsPage()
+        case .labelled: LabelledPage()
+        case .history: HistoryPage()
+        case .statistics: StatisticsView()
         }
     }
 }
 
-/// Lists, search above and a small menu at the foot, as in Things. The archive has no folders to list: documents are
-/// found by their labels, listed below the lists kind by kind. Choosing one shows the documents that have it, and
-/// leaves only the labels those documents have, to narrow them down further. Counts appear only where something is
+/// Lists, a search for labels above and a small menu at the foot, as in Things. The archive has no folders to list:
+/// documents are found by their labels, listed below the lists with how many documents have each, the most used first,
+/// in one list or kind by kind (`AppSettings.groupLabelsByKind`), each kind in its own colour. Choosing one shows the
+/// documents that have it, and leaves only the labels those documents have, to narrow them down further. The search
+/// lists only the labels written with its text in them. Besides the labels', counts appear only where something is
 /// waiting.
 struct Sidebar: View {
     @Environment(AppModel.self) private var model
     /// The labels of the documents in view, kind by kind, the most used first: every document's when none is chosen.
     @State private var usage: [LabelKind: [LabelUsage]] = [:]
+    /// Text in the search field: only the labels written with it in them are listed, each one of them.
+    @State private var search = ""
     @State private var collapsed: Set<LabelKind> = []
     /// Kinds whose labels are all listed, past `interface.sidebarLabelsPerKind`.
     @State private var listedInFull: Set<LabelKind> = []
+    /// Whether the one list of labels is listed in full, past `interface.sidebarLabels`.
+    @State private var rankedInFull = false
 
     var body: some View {
+        let shown = usage.matching(search)
         List(selection: Binding(get: { model.destination }, set: { if let d = $0 { model.go(d) } })) {
             Section {
                 ForEach(Destination.lists, id: \.self) { destination in
@@ -65,16 +68,27 @@ struct Sidebar: View {
                     .tag(destination)
                 }
             }
-            ForEach(LabelKind.allCases.filter { usage[$0]?.isEmpty == false }, id: \.self) { kind in
-                Section(isExpanded: expanded(kind)) {
-                    labels(kind)
-                } header: {
-                    Text(Wording.labelKinds(kind))
+            if model.settings?.groupLabelsByKind == true {
+                ForEach(LabelKind.allCases.filter { shown[$0] != nil }, id: \.self) { kind in
+                    Section(isExpanded: expanded(kind)) {
+                        labels(shown[kind] ?? [], limit: listedInFull.contains(kind) ? nil : model.runtime?.config.interface.sidebarLabelsPerKind) {
+                            listedInFull.insert(kind)
+                        }
+                    } header: {
+                        Text(Wording.labelKinds(kind)).foregroundStyle(Palette.labelKind(kind))
+                    }
                 }
+            } else if !shown.isEmpty {
+                Section(Wording.mostUsedLabels) {
+                    labels(shown.ranked(), limit: rankedInFull ? nil : model.runtime?.config.interface.sidebarLabels) { rankedInFull = true }
+                }
+            }
+            if shown.isEmpty, !search.isEmpty {
+                Text(Wording.noLabelsMatch(search)).foregroundStyle(.secondary)
             }
         }
         .listStyle(.sidebar)
-        .safeAreaInset(edge: .top) { search }
+        .safeAreaInset(edge: .top) { searchField }
         .safeAreaInset(edge: .bottom) { footer }
         .task(id: "\(model.labelSelection)|\(model.activity)") { await loadLabels() }
     }
@@ -83,17 +97,18 @@ struct Sidebar: View {
         Binding(get: { !collapsed.contains(kind) }, set: { if $0 { collapsed.remove(kind) } else { collapsed.insert(kind) } })
     }
 
-    /// A kind's labels, those chosen first, then the most used, up to `interface.sidebarLabelsPerKind` until the user
-    /// asks for the rest.
-    @ViewBuilder private func labels(_ kind: LabelKind) -> some View {
-        let all = usage[kind] ?? []
-        let ordered = all.filter { model.labelSelection.contains($0.label) } + all.filter { !model.labelSelection.contains($0.label) }
-        let limit = listedInFull.contains(kind) ? ordered.count : (model.runtime?.config.interface.sidebarLabelsPerKind ?? ordered.count)
-        ForEach(ordered.prefix(limit), id: \.label) { item in
-            SidebarLabel(label: item.label, chosen: model.labelSelection.contains(item.label))
+    /// Labels in the order given, the most used first, up to `limit` until the user asks for the rest. A search lists
+    /// every label it finds. Those chosen come first, which keeps that order, as every document in view has them: they
+    /// stay in sight however many other labels are as used.
+    @ViewBuilder private func labels(_ listed: [LabelUsage], limit: Int?, showAll: @escaping () -> Void) -> some View {
+        let chosen = listed.filter { model.labelSelection.contains($0.label) }
+        let ordered = chosen + listed.filter { !model.labelSelection.contains($0.label) }
+        let shown = search.isEmpty ? Array(ordered.prefix(limit ?? ordered.count)) : ordered
+        ForEach(shown, id: \.label) { item in
+            SidebarLabel(usage: item, chosen: model.labelSelection.contains(item.label))
         }
-        if ordered.count > limit {
-            Button(Wording.showMore) { listedInFull.insert(kind) }
+        if shown.count < listed.count {
+            Button(Wording.showMore, action: showAll)
                 .buttonStyle(.plain).foregroundStyle(.secondary)
         }
     }
@@ -113,13 +128,12 @@ struct Sidebar: View {
         }
     }
 
-    private var search: some View {
-        @Bindable var model = model
-        return HStack(spacing: Style.searchFieldSpacing) {
+    private var searchField: some View {
+        HStack(spacing: Style.searchFieldSpacing) {
             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-            TextField(Wording.search, text: $model.searchText).textFieldStyle(.plain)
-            if !model.searchText.isEmpty {
-                Button { model.searchText = "" } label: { Image(systemName: "xmark.circle.fill") }
+            TextField(Wording.searchLabels, text: $search).textFieldStyle(.plain)
+            if !search.isEmpty {
+                Button { search = "" } label: { Image(systemName: "xmark.circle.fill") }
                     .buttonStyle(.plain).foregroundStyle(.tertiary)
             }
         }
@@ -145,6 +159,9 @@ struct Sidebar: View {
                 Button(Destination.statistics.title) { model.go(.statistics) }
                 Button(Destination.history.title) { model.go(.history) }
                 Divider()
+                Toggle(Wording.groupLabelsByKind, isOn: Binding(get: { model.settings?.groupLabelsByKind == true },
+                                                                set: { grouped in Task { await model.update { $0.groupLabelsByKind = grouped } } }))
+                Divider()
                 Button(Wording.openIncomingFolder) { if let path = model.settings?.incomingURL.path { model.open(path) } }
                 Button(Wording.openArchiveFolder) { if let path = model.settings?.archiveURL.path { model.open(path) } }
                 Button(Wording.switchArchive) {
@@ -166,25 +183,27 @@ struct Sidebar: View {
     }
 }
 
-/// One label in the sidebar: choosing it narrows the documents shown to those that have it, and choosing it again lets
-/// go of it.
+/// One label in the sidebar, in its kind's colour, with how many of the documents in view have it: choosing it narrows
+/// the documents shown to those that have it, and choosing it again lets go of it.
 private struct SidebarLabel: View {
     @Environment(AppModel.self) private var model
-    let label: DocumentLabel
+    let usage: LabelUsage
     let chosen: Bool
 
     var body: some View {
+        let label = usage.label
         Button { model.choose(label) } label: {
             Label {
                 Text(Wording.label(label)).lineLimit(1).truncationMode(.middle)
             } icon: {
-                Image(systemName: chosen ? "tag.fill" : "tag").foregroundStyle(chosen ? Destination.labelled.tint : .secondary)
+                Image(systemName: chosen ? "tag.fill" : "tag").foregroundStyle(Palette.labelKind(label.kind))
             }
             .fontWeight(chosen ? .semibold : .regular)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .help(chosen ? Wording.showWithoutLabel : Wording.showOnlyWithLabel)
+        .badge(usage.documents)
+        .help(Wording.sidebarLabelHelp(label.kind, chosen: chosen))
     }
 }

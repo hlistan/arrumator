@@ -51,6 +51,8 @@ public struct AppSettings: Sendable, Codable, Hashable {
     public var logLevel: LogLevel
     public var traceRawRetentionDays: Int
     public var onboardingCompleted: Bool
+    /// List the sidebar's labels under their kinds; otherwise in one list, the most used first.
+    public var groupLabelsByKind: Bool
 
     public var incomingURL: URL { URL(fileURLWithPath: incomingPath.expandingTilde, isDirectory: true).standardizedFileURL }
     public var archiveURL: URL { URL(fileURLWithPath: archivePath.expandingTilde, isDirectory: true).standardizedFileURL }

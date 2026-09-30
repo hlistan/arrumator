@@ -92,8 +92,6 @@ enum Wording {
     static let keepApartAction = "Keep apart"
     static let mergeLabelsAction = "Merge labels"
     static let forgetRuleAction = "Forget rule"
-    static let prepareSearchAction = "Prepare search"
-    static let searchAction = "Search"
     static let checkModelsAction = "Check models"
     static let rebuildIndexAction = "Rebuild the index"
     static let exportDiagnosticsAction = "Export diagnostics"
