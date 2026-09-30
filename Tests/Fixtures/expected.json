@@ -7,48 +7,39 @@
       "file": "pt/01-edp-fatura-2026-07.pdf",
       "lang": "pt",
       "kind": "pdf-text",
-      "core": true,
       "expected": {
-        "category": "energy-bills",
-        "year_folder": "2026",
+        "status": "filed",
         "doc_type": "invoice",
         "correspondent": "EDP",
         "date": "2026-08-05",
         "title_contains": ["eletricidade", "julho"],
-        "identifiers": ["ptNIF:999999990", "ptNIF:576514454"],
-        "min_band": "check"
+        "identifiers": ["ptNIF:999999990", "ptNIF:576514454"]
       }
     },
     {
       "file": "pt/02-edp-fatura-2026-08-scan.pdf",
       "lang": "pt",
       "kind": "pdf-scan",
-      "core": true,
       "expected": {
-        "category": "energy-bills",
-        "year_folder": "2026",
+        "status": "filed",
         "doc_type": "invoice",
         "correspondent": "EDP",
         "date": "2026-09-05",
         "title_contains": ["eletricidade", "agosto"],
-        "identifiers": ["ptNIF:999999990", "ptNIF:576514454"],
-        "min_band": "check"
+        "identifiers": ["ptNIF:999999990", "ptNIF:576514454"]
       }
     },
     {
       "file": "pt/03-meo-fatura-2026-08.pdf",
       "lang": "pt",
       "kind": "pdf-text",
-      "core": true,
       "expected": {
-        "category": "telecom-bills",
-        "year_folder": "2026",
+        "status": "filed",
         "doc_type": "invoice",
         "correspondent": "MEO",
         "date": "2026-08-10",
         "title_contains": ["Fibra", "agosto"],
-        "identifiers": ["ptNIF:999999990", "ptNIF:532361067"],
-        "min_band": "check"
+        "identifiers": ["ptNIF:999999990", "ptNIF:532361067"]
       },
       "invalid_identifiers": ["ptNIF:123456780"]
     },
@@ -56,169 +47,130 @@
       "file": "pt/04-at-irs-modelo3-2025.pdf",
       "lang": "pt",
       "kind": "pdf-text",
-      "core": true,
       "expected": {
-        "category": "taxes-portugal",
-        "year_folder": "2025",
+        "status": "filed",
         "doc_type": "tax-return",
         "correspondent": "Autoridade Tributária",
         "date": "2026-05-20",
         "title_contains": ["Modelo 3", "2025"],
-        "identifiers": ["ptNIF:999999990"],
-        "min_band": "check"
-      },
-      "accept_also": {
-        "category": ["needs-review"]
+        "identifiers": ["ptNIF:999999990"]
       }
     },
     {
       "file": "pt/05-at-nota-liquidacao-2025.pdf",
       "lang": "pt",
       "kind": "pdf-text",
-      "core": true,
       "expected": {
-        "category": "taxes-portugal",
-        "year_folder": "2025",
+        "status": "filed",
         "doc_type": "tax-assessment",
         "correspondent": "Autoridade Tributária",
         "date": "2026-06-12",
         "title_contains": ["liquidação", "2025"],
-        "identifiers": ["ptNIF:999999990", "iban:PT50000201231234567890154"],
-        "min_band": "check"
+        "identifiers": ["ptNIF:999999990", "iban:PT50000201231234567890154"]
       }
     },
     {
       "file": "pt/06-ss-comprovativo-niss.pdf",
       "lang": "pt",
       "kind": "pdf-text",
-      "core": true,
       "expected": {
-        "category": "identity-documents",
-        "year_folder": null,
+        "status": "filed",
         "doc_type": "attestation",
         "correspondent": "Segurança Social",
         "date": "2024-03-12",
         "title_contains": ["NISS"],
-        "identifiers": ["ptNIF:999999990"],
-        "min_band": "check"
-      },
-      "accept_also": {
-        "category": ["social-security"]
+        "identifiers": ["ptNIF:999999990"]
       }
     },
     {
       "file": "pt/07-aima-titulo-residencia-frente.jpg",
       "lang": "pt",
       "kind": "image-photo",
-      "core": true,
       "expected": {
-        "category": "residence-permits",
-        "year_folder": null,
+        "status": "filed",
         "doc_type": "id-document",
         "correspondent": "AIMA",
         "date": "2025-02-01",
         "title_contains": ["Título", "residência"],
-        "identifiers": [],
-        "min_band": "review"
-      },
-      "accept_also": {
-        "category": ["identity-documents"]
+        "identifiers": []
       }
     },
     {
       "file": "pt/08-millennium-extrato-2026-08.pdf",
       "lang": "pt",
       "kind": "pdf-text",
-      "core": true,
       "expected": {
-        "category": "bank-accounts",
-        "year_folder": "2026",
+        "status": "filed",
         "doc_type": "statement",
         "correspondent": "Millennium BCP",
         "date": "2026-08-31",
         "title_contains": ["Extrato", "agosto"],
-        "identifiers": ["ptNIF:999999990", "iban:PT50000201231234567890154", "ptNIF:558779182"],
-        "min_band": "check"
+        "identifiers": ["ptNIF:999999990", "iban:PT50000201231234567890154", "ptNIF:558779182"]
       }
     },
     {
       "file": "pt/09-contrato-arrendamento.docx",
       "lang": "pt",
       "kind": "docx",
-      "core": true,
       "expected": {
-        "category": "property",
-        "year_folder": null,
+        "status": "filed",
         "doc_type": "contract",
         "correspondent": "João Exemplo",
         "date": "2025-08-25",
         "title_contains": ["arrendamento"],
-        "identifiers": ["ptNIF:206528167", "ptNIF:999999990", "iban:PT50003571781736679187676"],
-        "min_band": "check"
+        "identifiers": ["ptNIF:206528167", "ptNIF:999999990", "iban:PT50003571781736679187676"]
       }
     },
     {
       "file": "pt/10-recibo-renda-2026-09.pdf",
       "lang": "pt",
       "kind": "pdf-text",
-      "core": true,
       "expected": {
-        "category": "rent",
-        "year_folder": "2026",
+        "status": "filed",
         "doc_type": "receipt",
         "correspondent": "João Exemplo",
         "date": "2026-09-05",
         "title_contains": ["Renda", "setembro"],
-        "identifiers": ["ptNIF:206528167", "ptNIF:999999990"],
-        "min_band": "check"
+        "identifiers": ["ptNIF:206528167", "ptNIF:999999990"]
       }
     },
     {
       "file": "pt/11-unilabs-analises-2026-06.pdf",
       "lang": "pt",
       "kind": "pdf-text",
-      "core": true,
       "expected": {
-        "category": "medical-records",
-        "year_folder": "2026",
+        "status": "filed",
         "doc_type": "medical-report",
         "correspondent": "Unilabs",
         "date": "2026-06-18",
         "title_contains": ["Análises", "Clínicas"],
-        "identifiers": ["ptNIF:573474613"],
-        "min_band": "check"
+        "identifiers": ["ptNIF:573474613"]
       }
     },
     {
       "file": "pt/12-multicare-apolice.pdf",
       "lang": "pt",
       "kind": "pdf-text",
-      "core": true,
       "expected": {
-        "category": "health-insurance",
-        "year_folder": null,
+        "status": "filed",
         "doc_type": "policy",
         "correspondent": "Multicare",
         "date": "2025-12-15",
         "title_contains": ["Apólice", "Saúde"],
-        "identifiers": ["ptNIF:999999990", "ptNIF:539620106"],
-        "min_band": "check"
+        "identifiers": ["ptNIF:999999990", "ptNIF:539620106"]
       }
     },
     {
       "file": "pt/13-continente-talao.jpeg",
       "lang": "pt",
       "kind": "image-photo",
-      "core": true,
       "expected": {
-        "category": "shopping-receipts",
-        "year_folder": "2026",
+        "status": "filed",
         "doc_type": "receipt",
         "correspondent": "Continente",
         "date": "2026-09-14",
         "title_contains": ["Fatura", "simplificada"],
-        "identifiers": ["ptNIF:999999990", "ptNIF:595605966"],
-        "min_band": "review"
+        "identifiers": ["ptNIF:999999990", "ptNIF:595605966"]
       },
       "accept_also": {
         "doc_type": ["invoice"]
@@ -228,48 +180,39 @@
       "file": "pt/14-orcamento-canalizador.xlsx",
       "lang": "pt",
       "kind": "xlsx",
-      "core": false,
       "expected": {
-        "category": "home-repairs",
-        "year_folder": null,
+        "status": "filed",
         "doc_type": "quote",
         "correspondent": "Canalizações Exemplo",
         "date": "2026-08-15",
         "title_contains": ["Orçamento", "casa de banho"],
-        "identifiers": ["ptNIF:551718188", "ptNIF:999999990"],
-        "min_band": "review"
+        "identifiers": ["ptNIF:551718188", "ptNIF:999999990"]
       }
     },
     {
       "file": "pt/15-ss-situacao-contributiva.pdf",
       "lang": "pt",
       "kind": "pdf-text",
-      "core": false,
       "expected": {
-        "category": "social-security",
-        "year_folder": "2026",
+        "status": "filed",
         "doc_type": "attestation",
         "correspondent": "Segurança Social",
         "date": "2026-03-05",
         "title_contains": ["situação contributiva"],
-        "identifiers": ["ptNIF:999999990"],
-        "min_band": "check"
+        "identifiers": ["ptNIF:999999990"]
       }
     },
     {
       "file": "pt/16-farmacia-fatura-recibo.heic",
       "lang": "pt",
       "kind": "image-photo",
-      "core": false,
       "expected": {
-        "category": "pharmacy",
-        "year_folder": "2026",
+        "status": "filed",
         "doc_type": "receipt",
         "correspondent": "Farmácia Central Exemplo",
         "date": "2026-06-20",
         "title_contains": ["Fatura-recibo"],
-        "identifiers": ["ptNIF:999999990", "ptNIF:589004077"],
-        "min_band": "review"
+        "identifiers": ["ptNIF:999999990", "ptNIF:589004077"]
       },
       "accept_also": {
         "doc_type": ["invoice"]
@@ -279,105 +222,93 @@
       "file": "ru/20-mosenergosbyt-kvitanciya-2026-08.pdf",
       "lang": "ru",
       "kind": "pdf-scan",
-      "core": true,
       "expected": {
-        "category": "energy-bills",
-        "year_folder": "2026",
+        "status": "filed",
         "doc_type": "invoice",
-        "correspondent": "Mosenergosbyt",
+        "correspondent": "Мосэнергосбыт",
         "date": "2026-09-03",
         "title_contains": ["электроэнергию", "август"],
-        "identifiers": ["ruINN:7784210225"],
-        "min_band": "check"
+        "identifiers": ["ruINN:7784210225"]
+      },
+      "accept_also": {
+        "correspondent": ["Mosenergosbyt"]
       }
     },
     {
       "file": "ru/21-fns-3ndfl-2025.pdf",
       "lang": "ru",
       "kind": "pdf-text",
-      "core": true,
       "expected": {
-        "category": "taxes-russia",
-        "year_folder": "2025",
+        "status": "filed",
         "doc_type": "tax-return",
-        "correspondent": "FNS",
+        "correspondent": "ФНС",
         "date": "2026-04-15",
         "title_contains": ["3-НДФЛ", "2025"],
-        "identifiers": ["ruINN:773724849207"],
-        "min_band": "check"
+        "identifiers": ["ruINN:773724849207"]
       },
       "accept_also": {
-        "correspondent": ["ФНС", "ИФНС России № 28 по г. Москве"]
+        "correspondent": ["FNS", "ИФНС России № 28 по г. Москве"]
       }
     },
     {
       "file": "ru/22-fns-uvedomlenie-2025.pdf",
       "lang": "ru",
       "kind": "pdf-text",
-      "core": true,
       "expected": {
-        "category": "taxes-russia",
-        "year_folder": "2025",
+        "status": "filed",
         "doc_type": "tax-assessment",
-        "correspondent": "FNS",
+        "correspondent": "ФНС",
         "date": "2026-09-01",
         "title_contains": ["Налоговое уведомление", "2025"],
-        "identifiers": ["ruINN:773724849207", "ruINN:7709592631"],
-        "min_band": "check"
+        "identifiers": ["ruINN:773724849207", "ruINN:7709592631"]
       },
       "accept_also": {
-        "correspondent": ["ФНС", "ИФНС России № 28 по г. Москве"]
+        "correspondent": ["FNS", "ИФНС России № 28 по г. Москве"]
       }
     },
     {
       "file": "ru/23-sber-vypiska-2026-07.pdf",
       "lang": "ru",
       "kind": "pdf-text",
-      "core": true,
       "expected": {
-        "category": "bank-accounts",
-        "year_folder": "2026",
+        "status": "filed",
         "doc_type": "statement",
-        "correspondent": "Sberbank",
+        "correspondent": "Сбербанк",
         "date": "2026-07-31",
         "title_contains": ["Выписка", "июль"],
-        "identifiers": ["ruINN:7728783021"],
-        "min_band": "check"
+        "identifiers": ["ruINN:7728783021"]
+      },
+      "accept_also": {
+        "correspondent": ["Sberbank"]
       }
     },
     {
       "file": "ru/24-snils.jpg",
       "lang": "ru",
       "kind": "image-photo",
-      "core": true,
       "expected": {
-        "category": "identity-documents",
-        "year_folder": null,
+        "status": "filed",
         "doc_type": "id-document",
-        "correspondent": "SFR",
+        "correspondent": "СФР",
         "date": "2015-06-14",
         "title_contains": ["Страховое", "свидетельство"],
-        "identifiers": [],
-        "min_band": "review"
+        "identifiers": []
       },
       "accept_also": {
-        "correspondent": ["ПФР", "СФР", "Пенсионный фонд Российской Федерации"]
+        "correspondent": ["ПФР", "SFR", "Пенсионный фонд Российской Федерации"]
       }
     },
     {
       "file": "ru/25-vypisnoy-epikriz.pdf",
       "lang": "ru",
       "kind": "pdf-scan",
-      "core": true,
       "expected": {
-        "category": "medical-records",
-        "year_folder": "2025",
+        "status": "filed",
         "doc_type": "medical-report",
         "correspondent": "ГКБ № 1",
         "date": "2025-11-03",
         "title_contains": ["Выписной", "эпикриз"],
-        "identifiers": [],
-        "min_band": "check"
+        "identifiers": []
       },
       "accept_also": {
         "correspondent": ["Городская клиническая больница № 1", "GKB 1"]
@@ -387,32 +318,29 @@
       "file": "ru/26-osago-polis.pdf",
       "lang": "ru",
       "kind": "pdf-text",
-      "core": true,
       "expected": {
-        "category": "vehicle-insurance",
-        "year_folder": null,
+        "status": "filed",
         "doc_type": "policy",
-        "correspondent": "Ingosstrakh",
+        "correspondent": "Ингосстрах",
         "date": "2026-05-14",
         "title_contains": ["ОСАГО"],
-        "identifiers": ["ruINN:7704593254"],
-        "min_band": "check"
+        "identifiers": ["ruINN:7704593254"]
+      },
+      "accept_also": {
+        "correspondent": ["Ingosstrakh"]
       }
     },
     {
       "file": "ru/27-dogovor-kupli-prodazhi.docx",
       "lang": "ru",
       "kind": "docx",
-      "core": false,
       "expected": {
-        "category": "property",
-        "year_folder": null,
+        "status": "filed",
         "doc_type": "contract",
         "correspondent": "Пётр Образцов",
         "date": "2018-11-20",
         "title_contains": ["купли-продажи", "квартиры"],
-        "identifiers": ["ruINN:776390696459", "ruINN:773724849207"],
-        "min_band": "review"
+        "identifiers": ["ruINN:776390696459", "ruINN:773724849207"]
       },
       "accept_also": {
         "correspondent": ["Образцов Пётр Сергеевич", "Petr Obraztsov"]
@@ -422,19 +350,15 @@
       "file": "ru/28-spravka-2ndfl-2025.pdf",
       "lang": "ru",
       "kind": "pdf-text",
-      "core": false,
       "expected": {
-        "category": "income-and-payslips",
-        "year_folder": "2026",
+        "status": "filed",
         "doc_type": "payslip",
         "correspondent": "ООО Ромашка",
         "date": "2026-02-10",
         "title_contains": ["доходах", "2025"],
-        "identifiers": ["ruINN:7799866531", "ruINN:773724849207"],
-        "min_band": "check"
+        "identifiers": ["ruINN:7799866531", "ruINN:773724849207"]
       },
       "accept_also": {
-        "year_folder": ["2025"],
         "doc_type": ["attestation"],
         "correspondent": ["ООО «Ромашка»", "OOO Romashka"]
       }
@@ -443,36 +367,33 @@
       "file": "ru/29-egrn-vypiska.pdf",
       "lang": "ru",
       "kind": "pdf-text",
-      "core": false,
       "expected": {
-        "category": "property",
-        "year_folder": null,
+        "status": "filed",
         "doc_type": "certificate",
-        "correspondent": "Rosreestr",
+        "correspondent": "Росреестр",
         "date": "2018-12-03",
         "title_contains": ["Выписка", "ЕГРН"],
-        "identifiers": [],
-        "min_band": "check"
+        "identifiers": []
       },
       "accept_also": {
-        "correspondent": ["Росреестр", "ФКП Росреестра"]
+        "correspondent": ["Rosreestr", "ФКП Росреестра"]
       }
     },
     {
       "file": "ru/30-rostelecom-schet-koi8r.txt",
       "lang": "ru",
       "kind": "text",
-      "core": false,
       "expected": {
-        "category": "telecom-bills",
-        "year_folder": "2026",
+        "status": "filed",
         "doc_type": "invoice",
-        "correspondent": "Rostelecom",
+        "correspondent": "Ростелеком",
         "date": "2026-08-05",
         "title_contains": ["Счет", "июль"],
         "identifiers": ["ruINN:7754900454"],
-        "min_band": "review",
         "warnings": ["encodingGuessed"]
+      },
+      "accept_also": {
+        "correspondent": ["Rostelecom"]
       },
       "encoding": "koi8-r",
       "invalid_identifiers": ["ruINN:764946860856"]
@@ -481,16 +402,13 @@
       "file": "ru/31-spravka-s-mesta-raboty.txt",
       "lang": "ru",
       "kind": "text",
-      "core": false,
       "expected": {
-        "category": "employment",
-        "year_folder": null,
+        "status": "filed",
         "doc_type": "attestation",
         "correspondent": "ООО Ромашка",
         "date": "2026-03-16",
         "title_contains": ["Справка", "места работы"],
-        "identifiers": ["ruINN:7799866531"],
-        "min_band": "review"
+        "identifiers": ["ruINN:7799866531"]
       },
       "accept_also": {
         "correspondent": ["ООО «Ромашка»", "OOO Romashka"]
@@ -501,112 +419,91 @@
       "file": "en/40-acme-employment-agreement.docx",
       "lang": "en",
       "kind": "docx",
-      "core": true,
       "expected": {
-        "category": "employment",
-        "year_folder": null,
+        "status": "filed",
         "doc_type": "contract",
         "correspondent": "Acme Ltd",
         "date": "2024-01-15",
         "title_contains": ["Employment", "Agreement"],
-        "identifiers": [],
-        "min_band": "check"
+        "identifiers": []
       }
     },
     {
       "file": "en/41-acme-payslip-2026-08.pdf",
       "lang": "en",
       "kind": "pdf-text",
-      "core": true,
       "expected": {
-        "category": "income-and-payslips",
-        "year_folder": "2026",
+        "status": "filed",
         "doc_type": "payslip",
         "correspondent": "Acme Ltd",
         "date": "2026-08-31",
         "title_contains": ["August", "2026"],
-        "identifiers": [],
-        "min_band": "check"
+        "identifiers": []
       }
     },
     {
       "file": "en/42-hetzner-invoice-2026-09.pdf",
       "lang": "en",
       "kind": "pdf-text",
-      "core": true,
       "expected": {
-        "category": "hosting-services",
-        "year_folder": "2026",
+        "status": "filed",
         "doc_type": "invoice",
         "correspondent": "Hetzner",
         "date": "2026-09-01",
         "title_contains": ["Cloud", "Server"],
-        "identifiers": [],
-        "min_band": "check"
+        "identifiers": []
       }
     },
     {
       "file": "en/43-jetbrains-license.pdf",
       "lang": "en",
       "kind": "pdf-text",
-      "core": true,
       "expected": {
-        "category": "software-licences",
-        "year_folder": null,
+        "status": "filed",
         "doc_type": "license",
         "correspondent": "JetBrains",
         "date": "2026-01-10",
         "title_contains": ["All Products Pack"],
-        "identifiers": [],
-        "min_band": "check"
+        "identifiers": []
       }
     },
     {
       "file": "en/44-revolut-transfer.png",
       "lang": "en",
       "kind": "image-screenshot",
-      "core": true,
       "expected": {
-        "category": "bank-accounts",
-        "year_folder": "2026",
+        "status": "filed",
         "doc_type": "receipt",
         "correspondent": "Revolut",
         "date": "2026-09-12",
         "title_contains": ["Transfer", "Wise"],
-        "identifiers": ["iban:BE68967619962934"],
-        "min_band": "review"
+        "identifiers": ["iban:BE68967619962934"]
       }
     },
     {
       "file": "en/45-tap-booking.pdf",
       "lang": "en",
       "kind": "pdf-text",
-      "core": false,
       "expected": {
-        "category": "travel",
-        "year_folder": "2026",
+        "status": "filed",
         "doc_type": "ticket",
         "correspondent": "TAP",
         "date": "2026-08-15",
         "title_contains": ["Lisbon", "Istanbul"],
-        "identifiers": [],
-        "min_band": "check"
+        "identifiers": []
       }
     },
     {
       "file": "en/46-passport-scan.pdf",
       "lang": "en",
       "kind": "pdf-scan",
-      "core": false,
       "expected": {
-        "category": "identity-documents",
-        "year_folder": null,
+        "status": "filed",
         "doc_type": "id-document",
         "correspondent": "HM Passport Office",
         "date": "2022-03-01",
         "title_contains": ["Passport"],
-        "identifiers": [],
-        "min_band": "review"
+        "identifiers": []
       },
       "accept_also": {
         "correspondent": ["HMPO"]
@@ -616,48 +513,496 @@
       "file": "en/47-aima-appointment.eml",
       "lang": "en",
       "kind": "eml",
-      "core": false,
       "expected": {
-        "category": "residence-permits",
-        "year_folder": null,
+        "status": "filed",
         "doc_type": "letter",
         "correspondent": "AIMA",
         "date": "2026-03-04",
         "title_contains": ["appointment", "residence"],
+        "identifiers": []
+      }
+    },
+    {
+      "file": "intl/50-swm-jahresabrechnung-strom-2025.pdf",
+      "lang": "de",
+      "kind": "pdf-text",
+      "expected": {
+        "status": "filed",
+        "doc_type": "invoice",
+        "correspondent": "Stadtwerke München",
+        "date": "2026-01-20",
+        "title_contains": ["Strom", "Jahresabrechnung"],
         "identifiers": [],
-        "min_band": "check"
+        "labels": {
+          "party": ["Anna Beispiel"],
+          "object": ["1ESY 1160 4478 21"],
+          "period": ["2025"],
+          "deadline": ["2026-02-10"],
+          "amount": ["142.13 EUR"],
+          "jurisdiction": ["Germany"]
+        }
+      },
+      "accept_also": {
+        "doc_type": ["statement"],
+        "correspondent": ["SWM"]
+      }
+    },
+    {
+      "file": "intl/51-finanzamt-bescheid-2025-scan.pdf",
+      "lang": "de",
+      "kind": "pdf-scan",
+      "expected": {
+        "status": "filed",
+        "doc_type": "tax-assessment",
+        "correspondent": "Finanzamt",
+        "date": "2026-06-18",
+        "title_contains": ["Einkommensteuer", "Bescheid"],
+        "identifiers": [],
+        "labels": {
+          "party": ["Anna Beispiel", "Thomas Beispiel"],
+          "reference": ["143/220/61854"],
+          "period": ["2025"],
+          "deadline": ["2026-07-21"],
+          "amount": ["1086.00 EUR"],
+          "jurisdiction": ["Germany"]
+        }
+      }
+    },
+    {
+      "file": "intl/52-bail-habitation-lyon.docx",
+      "lang": "fr",
+      "kind": "docx",
+      "expected": {
+        "status": "filed",
+        "doc_type": "contract",
+        "correspondent": "Claire Martin",
+        "date": "2025-08-20",
+        "title_contains": ["location", "bail"],
+        "identifiers": [],
+        "labels": {
+          "party": ["Julien Exemple"],
+          "object": ["rue des Exemples"],
+          "period": ["2025-09-01"],
+          "amount": ["850.00 EUR"],
+          "jurisdiction": ["France"]
+        }
+      }
+    },
+    {
+      "file": "intl/53-dgfip-avis-impot-2026.pdf",
+      "lang": "fr",
+      "kind": "pdf-text",
+      "expected": {
+        "status": "filed",
+        "doc_type": "tax-assessment",
+        "correspondent": "DGFiP",
+        "date": "2026-07-24",
+        "title_contains": ["impôt", "revenus"],
+        "identifiers": [],
+        "labels": {
+          "party": ["Julien Exemple"],
+          "reference": ["26 69 A 244167 67"],
+          "period": ["2025"],
+          "deadline": ["2026-09-15"],
+          "amount": ["1482.00 EUR"],
+          "jurisdiction": ["France"]
+        }
+      },
+      "accept_also": {
+        "correspondent": ["Finances publiques"]
+      }
+    },
+    {
+      "file": "intl/54-mapfre-poliza-hogar.pdf",
+      "lang": "es",
+      "kind": "pdf-text",
+      "expected": {
+        "status": "filed",
+        "doc_type": "policy",
+        "correspondent": "MAPFRE",
+        "date": "2026-02-20",
+        "title_contains": ["Hogar", "póliza"],
+        "identifiers": [],
+        "labels": {
+          "party": ["Lucía Ejemplo"],
+          "object": ["Calle del Ejemplo 7"],
+          "reference": ["061-2026-1596647"],
+          "period": ["2026-03-01/2027-02-28"],
+          "amount": ["312.45 EUR"],
+          "jurisdiction": ["Spain"]
+        }
+      }
+    },
+    {
+      "file": "intl/55-cfe-recibo-luz-2026-07.pdf",
+      "lang": "es",
+      "kind": "pdf-text",
+      "expected": {
+        "status": "filed",
+        "doc_type": "invoice",
+        "correspondent": "CFE",
+        "date": "2026-07-16",
+        "title_contains": ["energía", "luz"],
+        "identifiers": [],
+        "labels": {
+          "party": ["Roberto Muestra"],
+          "object": ["123 456 789 012"],
+          "period": ["2026-05-15/2026-07-15"],
+          "deadline": ["2026-07-30"],
+          "amount": ["1234.00 MXN"],
+          "jurisdiction": ["Mexico"]
+        }
+      },
+      "accept_also": {
+        "correspondent": ["Comisión Federal de Electricidad"]
+      }
+    },
+    {
+      "file": "intl/56-comune-milano-verbale.pdf",
+      "lang": "it",
+      "kind": "pdf-text",
+      "expected": {
+        "status": "filed",
+        "doc_type": "letter",
+        "correspondent": "Comune di Milano",
+        "date": "2026-05-12",
+        "title_contains": ["verbale", "violazione"],
+        "identifiers": [],
+        "labels": {
+          "party": ["Marco Esempio"],
+          "object": ["GX 482 KM"],
+          "reference": ["V/2026/532774"],
+          "amount": ["83.00 EUR|58.10 EUR"],
+          "jurisdiction": ["Italy|Milan"]
+        }
+      },
+      "accept_also": {
+        "doc_type": ["legal", "invoice"],
+        "correspondent": ["Polizia Locale"]
+      }
+    },
+    {
+      "file": "intl/57-loonstrook-2026-06.pdf",
+      "lang": "nl",
+      "kind": "pdf-text",
+      "expected": {
+        "status": "filed",
+        "doc_type": "payslip",
+        "correspondent": "Voorbeeld Techniek",
+        "date": "2026-06-25",
+        "title_contains": ["loonstrook", "juni"],
+        "identifiers": [],
+        "labels": {
+          "party": ["Sanne de Vries"],
+          "period": ["2026-06"],
+          "amount": ["3245.18 EUR"],
+          "jurisdiction": ["Netherlands"]
+        }
+      }
+    },
+    {
+      "file": "intl/58-orange-faktura-2026-05.pdf",
+      "lang": "pl",
+      "kind": "pdf-text",
+      "expected": {
+        "status": "filed",
+        "doc_type": "invoice",
+        "correspondent": "Orange",
+        "date": "2026-06-05",
+        "title_contains": ["faktura"],
+        "identifiers": [],
+        "labels": {
+          "party": ["Katarzyna Przykładowa"],
+          "object": ["512 345 678"],
+          "reference": ["F/11104/06/2026"],
+          "period": ["2026-05"],
+          "deadline": ["2026-06-19"],
+          "amount": ["89.99 PLN"],
+          "jurisdiction": ["Poland"]
+        }
+      }
+    },
+    {
+      "file": "intl/59-folktandvarden-bokning.eml",
+      "lang": "sv",
+      "kind": "eml",
+      "expected": {
+        "status": "filed",
+        "doc_type": "letter",
+        "correspondent": "Folktandvården",
+        "date": "2026-09-22",
+        "title_contains": ["bokning", "tandläkar"],
+        "identifiers": [],
+        "labels": {
+          "party": ["Erik Exempel"],
+          "reference": ["BK-845185"],
+          "deadline": ["2026-10-14"]
+        }
+      }
+    },
+    {
+      "file": "intl/60-potvrzeni-o-studiu.txt",
+      "lang": "cs",
+      "kind": "text",
+      "expected": {
+        "status": "filed",
+        "doc_type": "attestation",
+        "correspondent": "Univerzita Karlova",
+        "date": "2026-09-24",
+        "title_contains": ["studiu", "potvrzení"],
+        "identifiers": [],
+        "labels": {
+          "party": ["Tereza Příkladová"],
+          "period": ["2026"],
+          "jurisdiction": ["Czech|Czechia"]
+        }
+      },
+      "accept_also": {
+        "doc_type": ["certificate"],
+        "correspondent": ["Charles University"]
+      },
+      "encoding": "utf-8"
+    },
+    {
+      "file": "intl/61-privatbank-vypyska-2026-07.pdf",
+      "lang": "uk",
+      "kind": "pdf-text",
+      "expected": {
+        "status": "filed",
+        "doc_type": "statement",
+        "correspondent": "ПриватБанк",
+        "date": "2026-08-01",
+        "title_contains": ["виписка"],
+        "identifiers": ["iban:UA213052990000026715729858127"],
+        "labels": {
+          "party": ["Олена Прикладна"],
+          "object": ["UA21 3052 9900 0002 6715 7298 5812 7"],
+          "period": ["2026-07"],
+          "amount": ["24518.40 UAH"],
+          "jurisdiction": ["Ukraine"]
+        }
+      },
+      "accept_also": {
+        "correspondent": ["PrivatBank"]
+      }
+    },
+    {
+      "file": "intl/62-turkcell-fatura-2026-07.pdf",
+      "lang": "tr",
+      "kind": "pdf-text",
+      "expected": {
+        "status": "filed",
+        "doc_type": "invoice",
+        "correspondent": "Turkcell",
+        "date": "2026-08-03",
+        "title_contains": ["fatura"],
+        "identifiers": [],
+        "labels": {
+          "party": ["Mehmet Örnek"],
+          "object": ["0532 123 45 67"],
+          "reference": ["TCSD65342868"],
+          "period": ["2026-07"],
+          "deadline": ["2026-08-18"],
+          "amount": ["489.90 TRY"],
+          "jurisdiction": ["Turkey|Türkiye"]
+        }
+      }
+    },
+    {
+      "file": "intl/63-aade-ekkatharistiko-2025.pdf",
+      "lang": "el",
+      "kind": "pdf-text",
+      "expected": {
+        "status": "filed",
+        "doc_type": "tax-assessment",
+        "correspondent": "ΑΑΔΕ",
+        "date": "2026-07-15",
+        "title_contains": ["Φόρου", "Εισοδήματος"],
+        "identifiers": [],
+        "labels": {
+          "party": ["Γιώργος Παράδειγμα"],
+          "period": ["2025"],
+          "deadline": ["2026-07-31"],
+          "amount": ["1420.00 EUR"],
+          "jurisdiction": ["Greece"]
+        }
+      },
+      "accept_also": {
+        "correspondent": ["AADE", "Αρχή Δημοσίων Εσόδων"]
+      }
+    },
+    {
+      "file": "intl/64-laodong-hetong.docx",
+      "lang": "zh",
+      "kind": "docx",
+      "expected": {
+        "status": "filed",
+        "doc_type": "contract",
+        "correspondent": "示例科技",
+        "date": "2026-03-02",
+        "title_contains": ["劳动合同"],
+        "identifiers": [],
+        "labels": {
+          "party": ["王小明"],
+          "period": ["2026-03-16/2029-03-15"],
+          "amount": ["25000.00 CNY"],
+          "jurisdiction": ["China|Shanghai"]
+        }
+      }
+    },
+    {
+      "file": "intl/65-tepco-denki-ryokin-2026-07.pdf",
+      "lang": "ja",
+      "kind": "pdf-text",
+      "expected": {
+        "status": "filed",
+        "doc_type": "invoice",
+        "correspondent": "東京電力",
+        "date": "2026-08-05",
+        "title_contains": ["電気料金"],
+        "identifiers": [],
+        "labels": {
+          "party": ["山田 花子|山田花子"],
+          "period": ["2026-07-04/2026-08-03"],
+          "deadline": ["2026-08-25"],
+          "amount": ["8432.00 JPY"],
+          "jurisdiction": ["Japan"]
+        }
+      },
+      "accept_also": {
+        "correspondent": ["TEPCO"]
+      }
+    },
+    {
+      "file": "intl/66-snuh-jinryobi-yeongsujeung.pdf",
+      "lang": "ko",
+      "kind": "pdf-text",
+      "expected": {
+        "status": "filed",
+        "doc_type": "receipt",
+        "correspondent": "서울대학교병원",
+        "date": "2026-09-07",
+        "title_contains": ["영수증", "진료비"],
+        "identifiers": [],
+        "labels": {
+          "party": ["김민준"],
+          "amount": ["48300.00 KRW"]
+        }
+      },
+      "accept_also": {
+        "correspondent": ["Seoul National University Hospital"]
+      }
+    },
+    {
+      "file": "intl/67-shahadat-ratib.pdf",
+      "lang": "ar",
+      "kind": "pdf-text",
+      "expected": {
+        "status": "filed",
+        "doc_type": "attestation",
+        "correspondent": "المثال للتجارة",
+        "date": "2026-04-10",
+        "title_contains": ["شهادة راتب"],
+        "identifiers": [],
+        "labels": {
+          "party": ["أحمد المثال"],
+          "amount": ["18500.00 AED"],
+          "jurisdiction": ["United Arab Emirates|UAE|Dubai"]
+        }
+      },
+      "accept_also": {
+        "doc_type": ["certificate", "payslip"]
+      }
+    },
+    {
+      "file": "intl/68-kiraya-rasid-2026-06.txt",
+      "lang": "hi",
+      "kind": "text",
+      "expected": {
+        "status": "filed",
+        "doc_type": "receipt",
+        "correspondent": "राजेश उदाहरण",
+        "date": "2026-06-05",
+        "title_contains": ["किराया", "रसीद"],
+        "identifiers": [],
+        "labels": {
+          "party": ["प्रिया नमूना"],
+          "object": ["उदाहरण मार्ग"],
+          "period": ["2026-06"],
+          "amount": ["25000.00 INR"]
+        }
+      },
+      "encoding": "utf-8"
+    },
+    {
+      "file": "intl/69-dmv-registration-renewal.pdf",
+      "lang": "en",
+      "kind": "pdf-text",
+      "expected": {
+        "status": "filed",
+        "doc_type": "invoice",
+        "correspondent": "DMV",
+        "date": "2026-08-01",
+        "title_contains": ["registration", "renewal"],
+        "identifiers": [],
+        "labels": {
+          "party": ["Jordan Sample"],
+          "object": ["8ABC123"],
+          "deadline": ["2026-09-15"],
+          "amount": ["243.00 USD"],
+          "jurisdiction": ["California|United States"]
+        }
+      },
+      "accept_also": {
+        "doc_type": ["letter"],
+        "correspondent": ["Department of Motor Vehicles"]
+      }
+    },
+    {
+      "file": "intl/70-enel-conta-energia-2026-06.pdf",
+      "lang": "pt",
+      "kind": "pdf-text",
+      "expected": {
+        "status": "filed",
+        "doc_type": "invoice",
+        "correspondent": "Enel",
+        "date": "2026-06-10",
+        "title_contains": ["energia"],
+        "identifiers": [],
+        "labels": {
+          "party": ["Ana Exemplo Souza"],
+          "object": ["90466571"],
+          "period": ["2026-06"],
+          "deadline": ["2026-06-25"],
+          "amount": ["287.43 BRL"],
+          "jurisdiction": ["Brazil|São Paulo"]
+        }
       }
     },
     {
       "file": "negative/90-budget-2026.xlsx",
       "lang": "en",
       "kind": "xlsx",
-      "core": true,
       "expected": {
-        "category": "needs-review",
-        "year_folder": null,
-        "doc_type": "other",
+        "status": "filed",
+        "doc_type": null,
         "correspondent": null,
         "date": null,
         "title_contains": ["Budget"],
-        "identifiers": [],
-        "min_band": "review"
+        "identifiers": []
       }
     },
     {
       "file": "negative/91-edp-fatura-2026-07-copy.pdf",
       "lang": "pt",
       "kind": "pdf-text",
-      "core": true,
       "expected": {
-        "category": "duplicates",
-        "year_folder": null,
+        "status": "duplicate",
         "doc_type": null,
         "correspondent": null,
         "date": null,
         "title_contains": [],
-        "identifiers": [],
-        "min_band": "review"
+        "identifiers": []
       },
       "duplicate_of": "pt/01-edp-fatura-2026-07.pdf"
     },
@@ -665,16 +1010,13 @@
       "file": "negative/92-blank-scan.pdf",
       "lang": "und",
       "kind": "pdf-scan",
-      "core": true,
       "expected": {
-        "category": "needs-review",
-        "year_folder": null,
+        "status": "needsReview",
         "doc_type": null,
         "correspondent": null,
         "date": null,
         "title_contains": [],
         "identifiers": [],
-        "min_band": "review",
         "warnings": ["emptyText"]
       }
     },
@@ -682,16 +1024,13 @@
       "file": "negative/93-encrypted.pdf",
       "lang": "pt",
       "kind": "pdf-text",
-      "core": true,
       "expected": {
-        "category": "needs-review",
-        "year_folder": null,
+        "status": "needsReview",
         "doc_type": null,
         "correspondent": null,
         "date": null,
         "title_contains": [],
         "identifiers": [],
-        "min_band": "review",
         "warnings": ["encrypted"]
       },
       "password": "arrumator-fixture"
@@ -700,16 +1039,13 @@
       "file": "negative/94-corrupt.pdf",
       "lang": "en",
       "kind": "pdf-text",
-      "core": true,
       "expected": {
-        "category": "needs-review",
-        "year_folder": null,
+        "status": "needsReview",
         "doc_type": null,
         "correspondent": null,
         "date": null,
         "title_contains": [],
         "identifiers": [],
-        "min_band": "review",
         "warnings": ["corrupted"]
       }
     }

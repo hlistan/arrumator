@@ -266,14 +266,14 @@ public struct ExtractedContent: Sendable, Codable {
     }
 
     /// Compact description used for embeddings, identical in shape for documents and memories.
-    public func embeddingSummary(correspondentHint: String?, maxChars: Int) -> String {
+    public func embeddingSummary(senders: [String], maxChars: Int) -> String {
         var lines: [String] = []
         lines.append("filename: \(source.originalFilename)")
         var typeLine = "type: \(source.fileExtension.isEmpty ? kind.rawValue : source.fileExtension)"
         if let pageCount { typeLine += ", \(pageCount) pages" }
         typeLine += ", language: \(language.primary)"
         lines.append(typeLine)
-        if let correspondentHint, !correspondentHint.isEmpty { lines.append("correspondent hints: \(correspondentHint)") }
+        if !senders.isEmpty { lines.append("from: " + senders.joined(separator: "; ")) }
         if !entities.stableKeys.isEmpty {
             lines.append("identifiers: " + entities.stableKeys.prefix(6).map(\.token).joined(separator: "; "))
         }
@@ -308,9 +308,9 @@ public struct VisionModelOptions: Sendable {
     public var numPredict: Int
     /// The context the model is asked with (`ResolvedModels.visionNumCtx`).
     public var numCtx: Int
-    public var options: ClassificationConfig.LLMOptions
+    public var options: AnalysisConfig.LLMOptions
 
-    public init(model: String, keepAlive: String, numPredict: Int, numCtx: Int, options: ClassificationConfig.LLMOptions) {
+    public init(model: String, keepAlive: String, numPredict: Int, numCtx: Int, options: AnalysisConfig.LLMOptions) {
         self.model = model
         self.keepAlive = keepAlive
         self.numPredict = numPredict

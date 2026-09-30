@@ -128,7 +128,7 @@ extension Language {
         switch self {
         case .pt: "Página \(page) de \(total)"
         case .ru: "Страница \(page) из \(total)"
-        case .en, .und: "Page \(page) of \(total)"
+        default: "Page \(page) of \(total)"
         }
     }
 }

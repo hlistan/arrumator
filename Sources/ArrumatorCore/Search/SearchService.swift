@@ -63,9 +63,10 @@ public struct SearchResults: Sendable, Hashable {
     public var elapsedMs: Double
 }
 
-/// Builds safe FTS5 MATCH expressions from user input: quoted terms, `"phrases"`, `field:term`, prefix on the last term.
+/// Builds safe FTS5 MATCH expressions from user input: quoted terms, `"phrases"`, `field:term`, `field:"phrase"`, prefix
+/// on the last term. The fields are the full-text columns (`SearchService.columns`), a label's kind among them.
 public enum FTSQueryBuilder {
-    static let fields: Set<String> = ["title", "correspondent", "filename", "body"]
+    static let fields = Set(SearchService.columns)
 
     public static func build(_ input: String) -> String? {
         var tokens: [String] = []
@@ -74,8 +75,15 @@ public enum FTSQueryBuilder {
         for ch in input {
             if ch == "\"" {
                 if inQuotes {
-                    if !current.isEmpty { tokens.append("\"" + current + "\"") }
+                    tokens.append(current + "\"")
                     current = ""
+                } else {
+                    // A phrase starts. A word before it is a term of its own, unless it names the phrase's field.
+                    if !current.isEmpty && !isField(current) {
+                        tokens.append(current)
+                        current = ""
+                    }
+                    current.append(ch)
                 }
                 inQuotes.toggle()
             } else if ch.isWhitespace && !inQuotes {
@@ -85,20 +93,23 @@ public enum FTSQueryBuilder {
                 current.append(ch)
             }
         }
-        if !current.isEmpty { tokens.append(inQuotes ? "\"" + current + "\"" : current) }
+        if !current.isEmpty { tokens.append(inQuotes ? current + "\"" : current) }
         guard !tokens.isEmpty else { return nil }
         var parts: [String] = []
         for (i, token) in tokens.enumerated() {
             let isLast = i == tokens.count - 1
-            if token.hasPrefix("\"") {
-                parts.append("\"" + token.dropFirst().dropLast().replacingOccurrences(of: "\"", with: "\"\"") + "\"")
-                continue
-            }
             var column: String?
             var term = token
             if let colon = token.firstIndex(of: ":"), fields.contains(String(token[..<colon]).lowercased()) {
                 column = String(token[..<colon]).lowercased()
                 term = String(token[token.index(after: colon)...])
+            }
+            if term.hasPrefix("\"") {
+                let phrase = term.dropFirst().dropLast()
+                guard !phrase.trimmingCharacters(in: .whitespaces).isEmpty else { continue }
+                let expr = "\"" + phrase.replacingOccurrences(of: "\"", with: "\"\"") + "\""
+                parts.append(column.map { "\($0) : \(expr)" } ?? expr)
+                continue
             }
             let cleaned = term.unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) || $0 == "-" || $0 == "." }
             let word = String(String.UnicodeScalarView(cleaned))
@@ -109,10 +120,21 @@ public enum FTSQueryBuilder {
         }
         return parts.isEmpty ? nil : parts.joined(separator: " ")
     }
+
+    /// `jurisdiction:`, a field's name and the colon that ends it.
+    private static func isField(_ word: String) -> Bool {
+        word.hasSuffix(":") && fields.contains(String(word.dropLast()).lowercased())
+    }
 }
 
 /// Hybrid search: FTS5 BM25 (instant) fused with embedding similarity via Reciprocal Rank Fusion.
 public actor SearchService {
+    /// The columns of the full-text index, in its order (`AppDatabase.migrator`): each can be searched on its own as
+    /// `column:term`, and `SearchConfig.bm25Weights` weighs them in this order.
+    public static let columns = ["filename", "body"] + LabelKind.allCases.map(\.rawValue)
+    /// The column snippets are cut from: the document's text.
+    static let bodyColumn = 1
+
     private let database: AppDatabase
     private let vectors: VectorIndex
     private var embedder: (any Embedder)?
@@ -182,11 +204,11 @@ public actor SearchService {
     }
 
     private func ftsHits(_ query: SearchQuery) async throws -> [SearchHit] {
-        let (whereSQL, whereArgs) = Self.filterSQL(query.filter)
         let limit = config.ftsCandidateLimit
         guard let match = FTSQueryBuilder.build(query.text) else {
             return try await database.reader.read { db in
-                try DocumentRecord.fetchAll(db, sql: "SELECT d.* FROM documents d WHERE 1=1 \(whereSQL) ORDER BY d.added_at DESC LIMIT ?",
+                let (whereSQL, whereArgs) = try query.filter.sql(db)
+                return try DocumentRecord.fetchAll(db, sql: "SELECT d.* FROM documents d WHERE 1=1 \(whereSQL) ORDER BY d.added_at DESC LIMIT ?",
                                             arguments: whereArgs + [limit])
                     .map { SearchHit(document: $0, score: 0, snippet: "", sources: []) }
             }
@@ -196,9 +218,10 @@ public actor SearchService {
         let close = SearchHighlight.close
         let tokens = config.snippetTokens
         return try await database.reader.read { db in
+            let (whereSQL, whereArgs) = try query.filter.sql(db)
             let rows = try Row.fetchAll(db, sql: """
                 SELECT d.*, bm25(document_fts, \(weights)) AS rank,
-                       snippet(document_fts, 3, ?, ?, '…', ?) AS snip
+                       snippet(document_fts, \(Self.bodyColumn), ?, ?, '…', ?) AS snip
                 FROM document_fts JOIN documents d ON d.id = document_fts.rowid
                 WHERE document_fts MATCH ? \(whereSQL)
                 ORDER BY rank LIMIT ?
@@ -245,27 +268,10 @@ public actor SearchService {
     }
 
     private func allowedIDs(_ filter: DocumentFilter) async throws -> Set<Int64>? {
-        let (sql, args) = Self.filterSQL(filter)
-        guard !sql.isEmpty else { return nil }
-        return try await database.reader.read { db in
-            Set(try Int64.fetchAll(db, sql: "SELECT d.id FROM documents d WHERE 1=1 \(sql)", arguments: args))
+        try await database.reader.read { db in
+            let (sql, args) = try filter.sql(db)
+            guard !sql.isEmpty else { return nil }
+            return Set(try Int64.fetchAll(db, sql: "SELECT d.id FROM documents d WHERE 1=1 \(sql)", arguments: args))
         }
-    }
-
-    static func filterSQL(_ f: DocumentFilter) -> (String, StatementArguments) {
-        var sql = ""
-        var args = StatementArguments()
-        func inList<T: DatabaseValueConvertible>(_ column: String, _ values: Set<T>) {
-            sql += " AND d.\(column) IN (\(values.map { _ in "?" }.joined(separator: ",")))"
-            for v in values { _ = args.append(contentsOf: [v]) }
-        }
-        if let v = f.folderIDs { inList("folder_id", v) }
-        if let v = f.statuses { inList("status", Set(v.map(\.rawValue))) }
-        if let v = f.docTypes { inList("doc_type", v) }
-        if let v = f.correspondents { inList("correspondent", v) }
-        if let v = f.languages { inList("language", v) }
-        if let v = f.dateFrom { sql += " AND d.doc_date >= ?"; _ = args.append(contentsOf: [v]) }
-        if let v = f.dateTo { sql += " AND d.doc_date <= ?"; _ = args.append(contentsOf: [v]) }
-        return (sql, args)
     }
 }

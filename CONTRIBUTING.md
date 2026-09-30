@@ -59,10 +59,10 @@ needs only `scripts/verify.sh --checks-only`: `scripts/change-scope.sh main` tel
 | `scripts/bootstrap.sh` | Installs the tools and enables the hooks (see above). |
 | `scripts/release.sh` | Builds a release into `dist/`; see [Continuous integration and releases](docs/releasing.md). |
 
-A change to how documents are placed (prompts, the built-in logic, thresholds, calibration, rules) also needs
-`swift run arrumatorcli eval Tests/Fixtures --passes 2` numbers from before and after, which needs a local Ollama with the
-profile's models. The corpus in `Tests/Fixtures` is generated: change `Tools/FixtureGen` and regenerate it, never edit
-the fixtures by hand.
+A change to how documents are read (the prompt, the answer schema and its validation, the label kinds, the `analysis`
+and `labels` settings) also needs `swift run arrumatorcli eval Tests/Fixtures --passes 2` numbers from before and after,
+which needs a local Ollama with the profile's models. The corpus in `Tests/Fixtures` is generated: change
+`Tools/FixtureGen` and regenerate it, never edit the fixtures by hand.
 
 ## Documentation
 
@@ -72,7 +72,7 @@ document:
 | Document | Covers |
 |---|---|
 | [README.md](README.md) | What Arrumator is, installing, a first run, where to read on. |
-| [docs/how-it-works.md](docs/how-it-works.md) | How a document is decided and filed: senders, rules, logic, the folder tree. |
+| [docs/how-it-works.md](docs/how-it-works.md) | How a document is read, labelled and filed, and the kinds of label. |
 | [docs/using-arrumator.md](docs/using-arrumator.md) | The app's pages, settings, environment variables, audit trail, where data lives. |
 | [docs/cli.md](docs/cli.md) | Every command and option. |
 | [docs/storage.md](docs/storage.md) | The archive's record files and the index. |

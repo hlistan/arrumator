@@ -5,6 +5,7 @@ enum Catalog {
         let fixtures = PortugueseFixtures.all(cast: cast, seed: seed)
             + RussianFixtures.all(cast: cast, seed: seed)
             + EnglishFixtures.all(cast: cast, seed: seed)
+            + InternationalFixtures.all(seed: seed)
             + NegativeFixtures.all(cast: cast, seed: seed)
         let files = fixtures.map(\.record.file)
         precondition(Set(files).count == files.count, "duplicate fixture paths")
@@ -12,5 +13,5 @@ enum Catalog {
     }
 
     /// Top-level folders the generator owns inside the output directory.
-    static let folders = ["pt", "ru", "en", "negative"]
+    static let folders = ["pt", "ru", "en", "intl", "negative"]
 }

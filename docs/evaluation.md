@@ -1,191 +1,144 @@
-# Evaluation results: pipeline and models
+# Evaluation: how well documents are read
 
-What was measured to arrive at the current placement pipeline and model profiles, September 2026. Every number
-comes from `arrumatorcli eval` runs through the live pipeline in a throw-away archive; nothing here is estimated.
+How the pipeline and the model profiles are measured, and what was measured. Every number here comes from
+`arrumatorcli eval` runs through the live pipeline in a throw-away archive; nothing is estimated.
 
-## Setup
+## The evaluation
 
-- **Server:** Mac mini (M5, 16 GB unified memory) running Ollama 0.34.4, reached over the local network
-  (`ARRUMATOR_OLLAMA_URL`). About 11 GB of that memory is available to the GPU, which caps model size at the 14B
-  class; larger models would have to swap.
-- **Profile under test:** one model makes the decisions, describes images and names files, with one context size
-  (12,288 tokens). The embedding model is `bge-m3` unless stated otherwise.
-- **Standard corpus:** `Tests/Fixtures`, 41 documents, `eval --passes 2`. Pass 2 files the same documents again.
-- **Three-instance corpora:** each kind of document occurs three times, as a recurring document does. They are built
-  from the fixture generator run with several seeds, which keeps each document's kind, sender and dates and changes
-  its identifiers and amounts:
-  - `fixturegen --out <dir>/s43 --seed 43`, then `--seed 44` into `s44`. The committed fixtures are seed 42.
-  - One `expected.json` lists seed 42, then 43, then 44, with each path prefixed by its seed folder (`s43/pt/…`).
-    The negative fixtures are kept for the first seed only, which gives 113 documents.
-  - The same corpus in reverse order, to measure how much arrival order matters.
-  - A second corpus from seeds 45, 46 and 47, to measure how much the particular documents matter.
-  - `eval --passes 1` on each.
-- **Robust numbers are means over those three trajectories** (forward, reversed, second corpus). One run is
-  deterministic, but a slightly different prompt changes a few early decisions, and they cascade through what is
-  learned. Differences under about ±0.04 F1 are within the spread between trajectories.
+`arrumatorcli eval Tests/Fixtures --passes 2` files every document of the synthetic corpus in `Tests/Fixtures` through
+the real pipeline and the configured models, in a throw-away home and archive, and scores each against
+`expected.json` ([the corpus](../Tests/Fixtures/README.md)):
 
-### Metrics
+| Score | What counts as right |
+|---|---|
+| status | Filed, waiting for you or taken for a copy, as the corpus expects: ordinary documents are filed; the encrypted, damaged and blank files wait for you; the byte-identical copy is a duplicate. |
+| type | The `type` label is the expected type, or one the corpus also accepts. |
+| sender | A `sender` label contains the expected sender, or one the corpus also accepts, ignoring case and accents. |
+| date | The `date` label is the expected issue date, exactly. |
+| title | The file name contains one of the words the corpus expects. |
+| language | The `language` labels include the language the document is written in. |
+| labelled | Of the documents that should be filed, the share the model labelled at all, and how many labels each has. |
+| labels per kind | Of those labelled, the share with at least one label of each kind (`sender`, `party`, `type`, `topic`, `object`, `reference`, `date`, `period`, `deadline`, `amount`, `jurisdiction`, `language`): how much of the label set the prompt draws out. |
+| expected labels | Of the other labels the corpus expects a document to get (its parties, objects, references, periods, deadlines, amounts and jurisdictions), the share it got, in all and by kind. An amount must match in number and currency; a date or period must start with the expected value; anything else must contain the expected words, ignoring case, accents and spacing. |
+| sender writings | Of the senders the corpus expects on more than one document, how many ways each was written on average: 1 when every document from one sender got the same sender label. |
+| distinct labels | How many different labels of each kind the documents got in all, as a label list would show them: fewer, for as many expected labels found, is a tidier vocabulary. |
 
-- **F1, P, R:** grouping precision and recall over document pairs, as `arrumatorcli eval` reports them. P falls when
-  kinds are mixed in one folder; R falls when one kind is split over several.
-- **Folders:** folders holding documents after the run. There are 21 kinds.
-- **Recurrence:** the later instances of a kind filed into the folder its first instance went to. On the standard
-  corpus, **stable** is the same measure between pass 1 and pass 2.
-- **ARI:** adjusted Rand index between the groupings of the forward and reversed runs. 1 means arrival order changes
-  nothing.
-- **Sender:** the recognised sender matches the corpus, counting its accepted alternative names and matching across
-  scripts and legal forms.
-- **Time:** mean seconds per document, and minutes for the 113 documents.
+Type, sender, date, title and language are scored only for documents the corpus expects to be filed. The median
+time per document is reported too. A second pass files the same documents again with different bytes, which shows
+how consistently they are read. `--min-accuracy <x>` fails the run when the first pass reads fewer than that share of
+type, sender, date and title right.
 
-## Pipeline: what helped
+The 21 documents of the international set (`intl/`) record the labels they should get besides their type, sender and
+date. The others record only sender, type, date, title words and language, and their other labels are measured by
+coverage alone.
 
-`gemma4:e2b-it-qat`, three-instance corpora, means of three trajectories:
+## Results
 
-| pipeline | F1 | P | R | folders | recurrence | ARI | s/doc |
+Measured on 2026-09-30 with the `standard` profile (`ministral-3:14b`, `bge-m3`) on an Ollama server on the local
+network, the full corpus, two passes. Prompt version 6 shows the model the archive's labels and your decisions about
+them, and the labels it gives are tidied to the archive's ([keeping labels one
+vocabulary](how-it-works.md#keeping-labels-one-vocabulary)); version 5 did neither:
+
+| prompt | pass | status | type | sender | date | title | language | labels each | expected labels | median |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 6 | 1 | 100% | 89% | 89% | 98% | 93% | 100% | 14.4 | 92% | 28.6 s |
+| 6 | 2 | 100% | 89% | 89% | 98% | 98% | 100% | 14.6 | 93% | 31.1 s |
+| 5 | 1 | 100% | 91% | 95% | 98% | 95% | 100% | 15.0 | 92% | 26.8 s |
+| 5 | 2 | 100% | 89% | 93% | 98% | 95% | 100% | 15.0 | 92% | 26.8 s |
+
+How consistent the labels are, for the same documents:
+
+| prompt | pass | sender writings | senders | parties | topics | objects | references | jurisdictions |
+|---|---|---|---|---|---|---|---|---|
+| 6 | 1 | 1.25 | 49 | 26 | 63 | 105 | 97 | 26 |
+| 6 | 2 | 1.25 | 49 | 29 | 55 | 103 | 97 | 26 |
+| 5 | 1 | 1.38 | 53 | 37 | 91 | 121 | 84 | 39 |
+| 5 | 2 | 1.50 | 52 | 38 | 86 | 123 | 83 | 38 |
+
+Expected labels found in pass 1, by kind, are the same with both prompts: party 91%, object 91%, reference 100%,
+period 75%, deadline 91%, amount 100%, jurisdiction 100%. Share of labelled documents with at least one label of each
+kind, version 6 (version 5): sender 97% (98%), party 98% (98%), type 98% (98%), topic 100% (100%), object 91% (98%),
+reference 91% (90%), date 98% (98%), period 79% (81%), deadline 47% (52%), amount 81% (81%), jurisdiction 98% (98%),
+language 100% (100%).
+
+The prompt is generic: its fields are defined by meaning and format, with no example values from the corpus. On the 21
+international documents it reads as well as the previous prompt, whose examples came from the Portuguese and Russian
+documents, which were scored the same way:
+
+| prompt | type | sender | date | title | language | expected labels | median |
 |---|---|---|---|---|---|---|---|
-| name-based folder matching (before) | 0.45 | 0.84 | 0.31 | 50 | 55% | 0.55 | 7.7 |
-| canonicalization | 0.52 | 0.67 | 0.43 | 38 | 54% | 0.36 | 8.3 |
-| **canonicalization + recurring documents join their predecessor** | **0.66** | 0.76 | **0.58** | **27** | **83%** | 0.54 | **5.9** |
+| version 4, examples from the corpus | 90% | 100% | 100% | 100% | 86% | 93% | 22.5 s |
+| version 5, generic | 86% | 100% | 100% | 100% | 100% | 92% | 23.5 s |
 
-- **Canonicalization** (`PlacementGuard`; `classification.placementGuard.offerAbove`, `choices`, `rankFusionK`)
-  maps a folder the model named freely onto the few most alike folders beside it, in one multiple-choice question.
-- **Recurring documents join their predecessor.** A document almost identical to a confidently filed one goes to its
-  folder without the model deciding (`learning.directPlacement.knnMinNeighbors` 1).
-- **Why this works:** `gemma4:e2b` proposed the same path for only 24 of 66 repeat documents, and the same top-level
-  area for 39 of them. A small model names a recurring document differently every time, so the archive's own filings
-  have to keep repeats together.
-- **It holds for larger models too** (canonicalization → with the recurring-document step, forward order, 113
-  documents):
+What the runs showed about the prompt:
 
-| model | F1 | P | recurrence | folders | s/doc |
-|---|---|---|---|---|---|
-| gemma4:e4b | 0.51 → 0.61 | 0.77 → 0.76 | 40% → 81% | 43 → 30 | 15.7 → 11.1 |
-| gemma4:12b | 0.57 → 0.62 | 0.90 → 0.91 | 71% → 93% | 40 → 33 | 30.3 → 23.5 |
+- **An example format anchors the model.** Without an example amount, the model left the currency code off most
+  amounts (37% of the expected amounts found). Describing the pattern (`1234.50 XXX`, the code never left out) brought
+  it to 100%, and amounts written with the code first are normalised to that form.
+- **File names follow the document's language only when told to use its own words.** Asked for a description "in the
+  document's language", the model translated English documents about Portugal into Portuguese. Asked to make the
+  description of words that appear in the document, its title first, every English document got an English name.
+- **Remaining misses:**
+  - A traffic fine and a dentist's booking are typed `ticket`.
+  - Two names on one line are sometimes kept as one party ("Thomas und Anna Beispiel").
+  - A period is sometimes written at month precision where the document gives days.
+  - A private seller's contract names both parties as senders.
 
-  A document that joins its predecessor needs no model call, so the step also makes filing faster.
+### Keeping labels one vocabulary
 
-- **On the standard corpus** (`eval Tests/Fixtures --passes 2`, name-based → canonicalization → with the
-  recurring-document step):
+Version 6 reads with the same number of expected labels found (92% and 93% against 92%) and gives far fewer different
+labels for the same 62 documents: a third fewer topics and jurisdictions, a quarter fewer parties, and each sender
+that recurs is written fewer ways (1.25 against 1.38 and 1.50). The tidying after the model's answer changed only
+labels written the same way but for case or punctuation (`invoice: FS 0231/376823` became the archive's
+`invoice FS 0231/376823`, `Univerzita Karlova` its `UNIVERZITA KARLOVA`); none of its changes was wrong. Each reading
+takes a second or two more: the prompt is longer by the archive's labels.
 
-| model | F1 pass 1 / 2 | P pass 2 | stable | folders |
-|---|---|---|---|---|
-| gemma4:e2b | 0.35/0.18 → 0.44/0.48 → **0.53/0.60** | 0.67 → 0.70 → 0.82 | 56% → 42% → 81% | 48 → 40 → 30 |
-| gemma4:e4b | 0.19/0.48 → 0.39/0.47 → 0.39/0.48 | 1.00 → 0.64 → 0.70 | 33% → 47% → 86% | 55 → 40 → 29 |
-| ministral-3:8b | 0.46/0.54 → 0.46/0.57 → 0.46/0.46 | 1.00 → 0.89 → 0.86 | 53% → 78% → 97% | 45 → 36 → 31 |
-| ministral-3:14b | 0.52/0.57 → 0.55/0.60 → 0.55/0.57 | 0.89 → 0.82 → 0.89 | 75% → 89% → 97% | 36 → 30 → 29 |
+The sender score is 89% in both passes against 95% and 93%. Of the three documents version 6 reads differently in
+pass 1, one is read unstably by version 5 too (a passport's sender is `HMPO` in one pass and `UK Government` in the
+next); in the other two the model wrote a longer form than the corpus's (`Федеральная кадастровая палата по Москве`
+for `ФКП Росреестра`) or a shorter one than the one the archive already had (`ACME` beside `ACME LTD`). The regression
+is accepted for what the vocabulary gains; setting `labels.vocabulary.kinds.sender.promptLimit` to 0 stops showing
+the model the senders in use, if names matter more than their consistency.
 
-No run filed a document with another sender's documents (sender mix-ups: 0).
+What the runs showed about telling the model of the archive:
 
-Pass 2 files the same documents again. With the recurring-document step, each one joins its pass-1 copy, so pass 2
-now repeats pass 1 (97% stable for the ministral models). Before, the model decided each document again and
-sometimes merged what pass 1 had split. That is why pass-2 F1 falls for `ministral-3:8b` (0.57 → 0.46) while pass 1
-is unchanged. A second look that regroups the archive is what rethinking does, and ordinary filing should not
-reshuffle.
-
-## Pipeline: what did not help
-
-Each was built and measured against the pipeline above. Measured on `gemma4:e2b` on the three-instance corpus unless
-stated.
-
-| approach | result | verdict |
-|---|---|---|
-| Ask the folder question in 3 rotated orders and take the majority (permutation self-consistency) | F1 0.50 vs 0.51; recurrence 56% vs 43%. Combined with the recurring-document step, 0.63 vs 0.68 | no gain |
-| The model's own new folder as a numbered option instead of "none" | F1 0.37, P 0.94, 62 folders: the small model almost always picks its own | worse |
-| Show the paths of similar past filings while the model decides (retrieval few-shot) | F1 0.48, P 0.61, recurrence 57% | worse: the model copies paths that don't fit, as the "show no folders" design anticipated |
-| Before making a folder, ask whether the folder of the most similar past documents is the home | F1 0.57, recurrence 74% alone; with the recurring-document step 0.65 vs 0.66 | redundant once repeats join their predecessor |
-| Offer every sibling (up to 8), 3 orders, plus the step above | F1 0.60, P 0.62, 10.5 s/doc | worse and slower |
-| A logic with fixed top-level areas, with or without typical topics per area (standard corpus, 2 passes) | F1 0.32/0.42 and 0.37/0.33 vs 0.44/0.48 | worse: the small model files into the area and stops |
-| The same with at least two levels enforced by the schema | F1 0.49–0.54 vs 0.68 | worse |
-| Refresh folder descriptions every 3 documents | F1 0.61 vs 0.61, slower | no gain |
-| Send back folder names written in another language than the archive's (NaturalLanguage recogniser) | e2b 0.69 vs 0.68 (it names in English anyway); e4b 0.58 vs 0.61 (foreign names 5 → 2) | no gain |
-| Stricter candidate floor, `offerAbove` 0.7 (forward + reversed) | F1 0.60 vs 0.64; P 0.84 vs 0.74; ARI 0.66 vs 0.54; 33 folders vs 27 | a trade-off toward precision, not a gain |
-| Near-duplicate threshold `knnMinSimilarity` 0.88 / 0.95 (forward + reversed) | 0.645 / 0.582 vs 0.644 at 0.92 | 0.92 is on the plateau |
-| EmbeddingGemma 300M as the embedder, thresholds unchanged | F1 0.46 vs 0.51 | worse without recalibrated thresholds |
-| The model says which of the detected identifiers are the sender's, and only those are learned (plus the contrast rule below) | sender accuracy +2 points, fewer held for review; F1 0.58 vs 0.66 (means of three) | costs grouping consistency |
-| An identifier identifies a sender only once other senders' documents lack it (`stableKeyMinContrast`, since removed), without the model attributing identifiers (standard corpus, 2 passes) | F1 0.41/0.30 vs 0.43/0.19; sender 78% vs 81% | no clear gain |
-
-### Candidate retrieval for the folder question
-
-These were measured on 25 hand-labelled pairs of top-level folder names from one run, 11 of them the same thing.
-AUC shows how well similarity separates same from different. "In top 4" is the share of cases where the true
-match was among the first four candidates out of 20.
-
-| embedding | names AUC | name + description AUC | in top 4: names / fused |
-|---|---|---|---|
-| bge-m3 (in use) | 0.76 | 0.80 | 59% / **91%** |
-| EmbeddingGemma 300M | 0.95 | 0.84 | 86% / 95% |
-| EmbeddingGemma, prefix `task: sentence similarity \| query:` | 0.95 | 0.90 | – / 91–100% |
-| EmbeddingGemma, prefix `task: clustering \| query:` | 0.59 | 0.70 | – / 73% |
-| qwen3-embedding 0.6B | 0.85 | 0.92 | 73% / 86% |
-
-"Fused" is reciprocal rank fusion of the ranking by name and the ranking by name with description, as
-`PlacementGuard.offers` does.
-
-## Models
-
-The pipeline above ran on every model that fits the 16 GB Mac mini, one model per profile. Rows with three runs
-are means over the three trajectories; the others ran on the forward corpus only, because they were clearly behind
-after it.
-
-| model (download) | runs | F1 | P | R | folders | recurrence | ARI | sender | held | s/doc | min / 113 docs |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| gemma4:e2b-it-qat (4.3 GB) | 3 | 0.66 ±0.04 | 0.76 | 0.58 | 27 | 83% | 0.54 | ~77% | 5.0 | **5.9** | **11** |
-| qwen3.5:4b (3.4 GB) | 1 | 0.56 | 0.97 | 0.40 | 37 | 92% | – | 80% | 0 | 8.3 | 16 |
-| gemma3:4b (3.3 GB) | 1 | 0.59 | 0.64 | 0.55 | 30 | 75% | – | 78% | 6 | 10.6 | 20 |
-| gemma4:e4b (9.6 GB) | 3 | 0.63 ±0.03 | 0.81 | 0.52 | 31 | 81% | 0.52 | 85% | 0 | 13.1 | 25 |
-| ministral-3:8b (6.0 GB) | 3 | 0.65 ±0.03 | 0.92 | 0.51 | 33 | 85% | 0.71 | 85% | 1.0 | 15.6 | 29 |
-| qwen3.5:9b (6.6 GB) | 1 | 0.56 | 0.69 | 0.47 | 32 | 78% | – | 87% | 6 | 26.2 | 49 |
-| gemma4:12b (7.6 GB) | 3 | 0.63 ±0.01 | **0.94** | 0.48 | 33 | **94%** | 0.84 | **90%** | 0 | 36.3 | 68 |
-| **ministral-3:14b (9.1 GB)** | 3 | **0.71 ±0.03** | 0.90 | **0.58** | 30 | 92% | **0.85** | 86% | 2.0 | 24.8 | 47 |
-
-- **Larger models are more precise and more stable.** They mix kinds less and file repeats together more often.
-  F1 does not rise evenly with size, because the more careful models also merge less.
-- **`ministral-3:14b` is the best on this hardware:** the highest F1, arrival order barely matters, and it is faster
-  than `gemma4:12b`, which is as precise but 1.5 times slower.
-- **Dominated models:**
-  - `gemma4:e4b` and `gemma3:4b` are beaten by `gemma4:e2b` on time and grouping.
-  - `qwen3.5:9b` is slow and mixes kinds.
-  - `qwen3.5:4b` is very precise but splits every kind.
-- **Processing time is ordered by size, except for** `gemma4:e4b`: its larger file (audio and vision encoders) makes
-  it slower than `ministral-3:8b` per unit of quality.
-
-The profiles in `pipeline.json` follow this table:
-
-| profile | model | F1 three-instance / standard pass 1 | P three-instance / standard | s/doc three-instance / standard pass 1 | memory |
-|---|---|---|---|---|---|
-| `standard` | ministral-3:14b | **0.71 / 0.55** | 0.90 / **0.89** | 25 / 39 | ~10 GB |
-| `balanced` | ministral-3:8b | 0.65 / 0.46 | **0.92** / 0.86 | 16 / 29 | ~7 GB |
-| `lowMemory` | gemma4:e2b-it-qat | 0.66 / 0.53 | 0.76 / 0.82 | **6 / 8.5** | ~5.5 GB |
-
-- **Time depends on how many documents are new.** On the standard corpus nearly every pass-1 document is new, so
-  the model decides each one. On the three-instance corpora two in three follow a predecessor without a model call.
-- **`balanced` groups no better than `lowMemory`.** It is chosen for precision (fewer kinds mixed in one folder)
-  and sender recognition (85% against about 77%), at three to four times the time.
-- **The previous `standard` profile used `gemma4:latest`,** about 11 GB with `bge-m3`, which is the size of
-  `gemma4:e4b`. On the standard corpus `gemma4:e4b` scored F1 0.39 / 0.48 with P 0.70.
+- **A list of labels in use makes the model label less, unless told it must not.** Told to "give a new label only
+  for something no listed label names", it gave fewer labels of every kind (13.4 each), fewer references (86% of the
+  expected), and no sender at all for three private landlords and sellers. Told instead that the lists never decide
+  what to label, only how a label is written, it labelled as fully as before.
+- **Naming the list inside a field forces its labels.** Adding "when the archive lists a sender label for it, give
+  that label" to the sender field made the model give a listed sender that was wrong (the tax authority for a pension
+  card) and drop senders it did not find listed, for five documents. The instruction stays in one paragraph after the
+  fields.
+- **Objects are not shown.** Almost every document has objects of its own, and listing those in use gave the model
+  nothing to reuse.
+- **Look Alike's thresholds.** On the labels the corpus got, every pair offered at `suggestSimilarity` was the same
+  thing written two ways for objects (the same account, meter, plate or policy), parties (`M. EXEMPLE JULIEN` and
+  `Julien Exemple`) and senders (`ACME LTD` and `ACME`). Topics at 0.85 offered only different subjects sharing a word
+  (`property tax` and `property sale`, 0.92) or a narrower topic beside a broad one (`plumbing repair`, 0.91), which
+  the prompt asks for; typos and plurals score 0.97 and above, so topics are offered from 0.94.
 
 ## Image descriptions and the model's context
 
-An image is described by the model only when OCR finds too little text in it. Image descriptions used to be
-requested without a context size, so Ollama applied its own default. Measured on the server with `gemma4:e2b`, a
-description request without `num_ctx` reloaded the model at 131,072 tokens (1.9 s). The next decision, asked with
-the profile's 12,288, reloaded it again (1.4 s). That is about 3 s spent on reloading per described image, and more
-for larger models. Every vision request now sends the context its model is loaded with (`ResolvedModels.visionNumCtx`),
-and a model that decides and describes stays loaded once.
+An image is described by the model only when OCR finds too little text in it. Image descriptions used to be requested
+without a context size, so Ollama applied its own default. Measured on the server with `gemma4:e2b`, a description
+request without `num_ctx` reloaded the model at 131,072 tokens (1.9 s). The next request to read a document, asked with
+the profile's 12,288, reloaded it again (1.4 s). That is about 3 s spent on reloading per described image, and more for
+larger models. Every vision request now sends the context its model is loaded with (`ResolvedModels.visionNumCtx`), and
+a model that reads documents and describes images stays loaded once.
 
-The corpora don't show this: OCR found enough text in each of their images, so no run described one. With the change,
-the three-instance forward runs took 6.2 s/doc (was 5.9) on `gemma4:e2b` and 23.7 (was 23.5) on `gemma4:12b`, with
-the same grouping. These differences are within run-to-run variation.
+The corpora don't show this: OCR found enough text in each of their images, so no run described one.
 
 ## Search
 
 Search lists the documents that contain the query's words first, then documents found by meaning alone, most similar
 first. Cosine similarity gives every query nearest neighbours, so without a floor every search returned the whole
-archive. `search.semanticMinSimilarity` is that floor. It was calibrated on the 36 fixture documents filed into a scratch
-archive, with 51 queries in English, Portuguese and Russian: kinds of document ("electricity bill", "extrato
-bancário", "налоговая декларация"), senders, and six with no relevant document ("banana", "wedding"). A document is
-relevant when the corpus gives it the queried category or sender. Only documents without the query's words count,
-because the floor decides only about those. Query vectors are from `bge-m3`, the embedding model of every profile.
+archive. `search.semanticMinSimilarity` is that floor. It was calibrated, before documents had labels, on the 36 fixture
+documents filed into a scratch archive, with 51 queries in English, Portuguese and Russian: kinds of document
+("electricity bill", "extrato bancário", "налоговая декларация"), senders, and six with no relevant document ("banana",
+"wedding"). A document was relevant when the corpus then gave it the queried category (the corpus labelled which
+documents belong together) or sender. Only documents without the query's words count, because the floor decides only
+about those. Query vectors are from `bge-m3`, the embedding model of every profile.
 
 | floor | found by meaning | relevant | precision | recall | F0.5 | queries with an irrelevant hit |
 |---|---|---|---|---|---|---|
@@ -203,15 +156,30 @@ because the floor decides only about those. Query vectors are from `bge-m3`, the
 - **For short queries, `bge-m3` similarities are compressed:** relevant documents score 0.37 to 0.67. Another
   embedding model needs its own floor.
 
+## Earlier measurements: filing into folders
+
+The model profiles were chosen when Arrumator filed documents into folders the archive's logic described. Those runs
+scored how consistently documents of one kind were grouped into one folder (F1), on a Mac mini (M5, 16 GB) through
+Ollama 0.34.4, over three-instance corpora rendered with several seeds. They no longer measure what the app does, and
+are kept only because the profiles still follow them.
+
+The profiles in `pipeline.json` follow this table:
+
+| profile | model | F1 three-instance / standard pass 1 | P three-instance / standard | s/doc three-instance / standard pass 1 | memory |
+|---|---|---|---|---|---|
+| `standard` | ministral-3:14b | **0.71 / 0.55** | 0.90 / **0.89** | 25 / 39 | ~10 GB |
+| `balanced` | ministral-3:8b | 0.65 / 0.46 | **0.92** / 0.86 | 16 / 29 | ~7 GB |
+| `lowMemory` | gemma4:e2b-it-qat | 0.66 / 0.53 | 0.76 / 0.82 | **6 / 8.5** | ~5.5 GB |
+
+`ministral-3:14b` grouped best at about 25 s per document, `ministral-3:8b` as precisely at 16 s, and
+`gemma4:e2b-it-qat` fastest at 6 s with more mixing. Larger models do not fit such a Mac's memory. Reading a document
+now takes one model call instead of up to several, so these times are upper bounds.
+
 ## Limits of these results
 
-- **Synthetic documents.** The corpora are synthetic, 21 kinds in three languages, three instances each. Real
-  archives have more kinds and longer histories.
-- **Unconfirmed filings.** No run included a user confirming or correcting filings, so learned rules and identifiers
-  barely form. With confirmations the recurring-document step gets more trusted predecessors to follow.
-- **Wrong first placements repeat.** Following a predecessor repeats its folder, including a wrong one, until the user
-  moves it. One move corrects the kind for the future through the learned rules.
-- **Language drift.** `gemma4:e4b` names some folders in Portuguese or Russian despite an English naming setting.
-  The other models don't.
-- **No image descriptions.** Every image in the corpora has enough text for OCR, so the corpora never test how well
-  a model describes a photo without text.
+- **Synthetic documents.** The corpus is synthetic: 57 documents of 21 kinds in 18 languages and 8 scripts, and five
+  edge cases. Real archives have more kinds and longer histories.
+- **Expected labels on a third of the corpus.** Parties, objects, references, periods, deadlines, amounts and
+  jurisdictions are checked on the 21 international documents only; on the rest they are measured by coverage.
+- **No image descriptions.** Every image in the corpus has enough text for OCR, so the corpus never tests how well a
+  model describes a photo without text.

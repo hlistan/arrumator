@@ -4,37 +4,26 @@ import ArrumatorRuntime
 import Foundation
 
 struct Stats: AsyncParsableCommand {
-    static let configuration = CommandConfiguration(abstract: "Where the pipeline needs tuning: accuracy, confusions, calibration, latency.")
+    static let configuration = CommandConfiguration(abstract: "How the archive is labelled and where the pipeline spends its time.")
     @OptionGroup var options: GlobalOptions
 
     func run() async throws {
-        let runtime = try await options.runtime()
-        let insights = try await runtime.stats.insights()
-        let taxonomy = try await runtime.taxonomy.snapshot(root: await runtime.settings.current.archiveURL)
-        let folder = { (code: String) in taxonomy.path(ofCode: code) ?? code }
+        let insights = try await options.runtime().stats.insights()
         options.emit(insights) {
-            var out = ["Documents: \(insights.documents) · decided by \(insights.decidedBy.sorted { $0.key < $1.key }.map { "\($0.key) \($0.value)" }.joined(separator: ", "))"]
-            out.append("Accuracy (not later moved by you): " + insights.accuracy.map { "\($0.days)d \(Format.percent($0.accuracy)) of \($0.autoFiled)" }
-                .joined(separator: " · "))
-            if !insights.accuracyByLanguage.isEmpty {
-                out.append("By language: " + insights.accuracyByLanguage.sorted { $0.key < $1.key }.map { "\($0.key) \(Format.percent($0.value))" }
+            var out = ["Documents: \(insights.documents) · " + insights.statuses.sorted { $0.key < $1.key }.map { "\($0.key) \($0.value)" }
+                .joined(separator: ", ")]
+            out.append("Labelled: \(insights.labelled) · not labelled yet: \(insights.unlabelled)")
+            if !insights.labelsByKind.isEmpty {
+                out.append("Labels: " + LabelKind.allCases.map { "\($0.rawValue) \(insights.labelsByKind[$0.rawValue] ?? 0)" }
                     .joined(separator: ", "))
             }
-            if !insights.confusion.isEmpty {
-                out.append("Most frequent corrections:")
-                out += insights.confusion.map { "  \(folder($0.from)) → \(folder($0.to)): \($0.count)" }
-            }
-            out.append("Auto-filing threshold what-if:")
-            out += insights.whatIf.map { "  ≥ \(String(format: "%.2f", $0.autoThreshold)): \(Format.percent($0.autoShare)) automatic, \(Format.percent($0.autoAccuracy)) right" }
+            out.append("Corrected by you: \(insights.corrected) · confirmed: \(insights.confirmed)")
+            out.append("Rules about labels: " + LabelRuleAction.allCases.map { "\($0.rawValue) \(insights.labelRules[$0.rawValue] ?? 0)" }
+                .joined(separator: " · ") + " · labels tidied in readings: \(insights.labelsTidied)")
             out.append("Latency per stage (p50 / p95):")
-            out += insights.latency.map { "  \($0.stage.padding(toLength: 12, withPad: " ", startingAt: 0)) \(Int($0.p50Ms)) / \(Int($0.p95Ms)) ms (\($0.count))" }
-            out.append("Rules: \(insights.rules), hits \(insights.ruleHits), contradictions \(insights.ruleContradictions)")
+            out += insights.latency.map { "  \($0.stage.padding(toLength: 13, withPad: " ", startingAt: 0)) \(Int($0.p50Ms)) / \(Int($0.p95Ms)) ms (\($0.count))" }
             if let ocr = insights.meanOCRConfidence { out.append(String(format: "Mean OCR confidence: %.2f", ocr)) }
             if !insights.warnings.isEmpty { out.append("Extraction warnings: " + insights.warnings.map { "\($0.key) \($0.value)" }.joined(separator: ", ")) }
-            if !insights.overlaps.isEmpty {
-                out.append("Folders that look alike (consider merging or sharpening descriptions):")
-                out += insights.overlaps.map { "  \(folder($0.a)) ~ \(folder($0.b)) (\(String(format: "%.2f", $0.similarity)))" }
-            }
             return out.joined(separator: "\n")
         }
     }
@@ -58,11 +47,6 @@ struct Funnel: AsyncParsableCommand {
                 if step.warnings > 0 { line += " · \(step.warnings) warnings" }
                 out.append(line)
                 out += step.stoppedHere.map { "      \($0.count) \($0.reason.lowercased())" }
-            }
-            if !funnel.decisions.isEmpty {
-                out.append("Who chose the folder:")
-                out += funnel.decisions.map { "  \($0.count) \($0.id.lowercased())\($0.learned ? " (no model call)" : "")" }
-                out.append("Placed without the model: \(funnel.decidedWithoutModel) of \(funnel.decidedTotal)")
             }
             if let slow = funnel.slowestStep { out.append("Slowest step: \(slow.title) at \(Int(slow.medianMs)) ms median") }
             if let drop = funnel.biggestDropOff { out.append("Most documents stopped at: \(drop.title) (\(drop.dropped))") }
@@ -161,9 +145,9 @@ struct Models: AsyncParsableCommand {
 }
 
 struct Diagnostics: AsyncParsableCommand {
-    static let configuration = CommandConfiguration(abstract: "Write a zip with logs, recent traces, doctor report, settings and folder tree.")
+    static let configuration = CommandConfiguration(abstract: "Write a zip with logs, recent traces, doctor report and settings.")
     @OptionGroup var options: GlobalOptions
-    @Flag(help: "Also include prompts that contain document text.") var includeDocumentText = false
+    @Flag(help: "Also include the prompts and model answers that contain document text.") var includeDocumentText = false
     @Argument var output: String
 
     func run() async throws {
@@ -171,9 +155,7 @@ struct Diagnostics: AsyncParsableCommand {
         let settings = await runtime.settings.current
         let exporter = DiagnosticsExporter(database: runtime.database, paths: runtime.paths, config: runtime.config.stats)
         let contents = try await exporter.export(to: URL(fileURLWithPath: output.expandingTilde), doctor: await runtime.runDoctor(),
-                                                 settings: settings,
-                                                 taxonomy: try await runtime.taxonomy.snapshot(root: settings.archiveURL),
-                                                 includeDocumentText: includeDocumentText)
+                                                 settings: settings, includeDocumentText: includeDocumentText)
         options.emit(contents) { "Wrote \(output): \(contents.logFiles.count) log files, \(contents.traces) traces" }
     }
 }

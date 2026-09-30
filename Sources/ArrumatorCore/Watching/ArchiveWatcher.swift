@@ -25,19 +25,18 @@ public enum ArchiveChange: Sendable, Hashable {
     case documentMoved(uid: String, newPath: String)
     /// A tracked document's path no longer exists.
     case documentMissing(path: String)
-    /// A file the app does not know appeared inside a folder.
+    /// A file the app does not know appeared in the archive, outside its system folder.
     case untrackedFile(path: String)
-    /// Folders or `_about.md` changed; the taxonomy must be re-synced.
-    case taxonomyChanged
-    /// A record file (`_documents.md`, or a learned, logic or history file) was changed by something other than the
-    /// app, such as an edit by hand or a copy synchronised from another Mac; the index reads it again.
+    /// A record file (`_documents.md`, the senders or a history file) was changed by something other than the app,
+    /// such as an edit by hand or a copy synchronised from another Mac, or events were lost; the index reads the
+    /// record files that changed again.
     case recordsChanged
 }
 
 /// Watches the archive root and reports user-driven changes. Resumes from the last FSEvents id across launches.
 public actor ArchiveWatcher {
     private let config: WatcherConfig
-    private let taxonomyConfig: TaxonomyConfig
+    private let records: RecordsConfig
     private let skip: SkipRules
     private let registry: SelfChangeRegistry
     private let database: AppDatabase
@@ -50,10 +49,10 @@ public actor ArchiveWatcher {
     static let lastEventKey = "archive_fsevents_last_id"
     static let deviceKey = "archive_fsevents_device"
 
-    public init(config: WatcherConfig, taxonomy: TaxonomyConfig, skip: SkipRules, registry: SelfChangeRegistry,
+    public init(config: WatcherConfig, records: RecordsConfig, skip: SkipRules, registry: SelfChangeRegistry,
                 database: AppDatabase) {
         self.config = config
-        taxonomyConfig = taxonomy
+        self.records = records
         self.skip = skip
         self.registry = registry
         self.database = database
@@ -79,7 +78,6 @@ public actor ArchiveWatcher {
         pumpTask = Task { [weak self] in
             for await batch in s.events { await self?.handle(batch) }
         }
-        if since == nil { output.yield([.taxonomyChanged]) }
         Log.info(.watch, "Watching archive", ["path": root.path, "resume": since.map(String.init) ?? "now"])
     }
 
@@ -93,14 +91,14 @@ public actor ArchiveWatcher {
     private func handle(_ batch: [FSEvent]) async {
         guard let root else { return }
         var result: [ArchiveChange] = []
-        var taxonomyChanged = false
         var recordsChanged = false
+        let layout = ArchiveLayout(root: root, records: records, watcher: config)
         var missing: [String] = []
         var seenPaths = Set<String>()
         for event in batch {
             if event.needsRescan {
                 Log.info(.watch, "Archive FSEvents requested rescan", ["flags": String(event.flags, radix: 16)])
-                taxonomyChanged = true
+                recordsChanged = true
                 continue
             }
             if event.isHistoryDone { continue }
@@ -110,21 +108,16 @@ public actor ArchiveWatcher {
             if await registry.isExpected(path) { continue }
             let url = URL(fileURLWithPath: path)
             let name = url.lastPathComponent
-            if event.isDirectory || name == taxonomyConfig.aboutFileName {
-                taxonomyChanged = true
-                continue
-            }
+            if event.isDirectory { continue }
             if isRecordFile(name) {
                 recordsChanged = true
                 continue
             }
-            if name == taxonomyConfig.indexFileName || (skip.ignoreReason(url) != nil && FileManager.default.fileExists(atPath: path)) {
-                continue
-            }
+            if skip.ignoreReason(url) != nil && FileManager.default.fileExists(atPath: path) { continue }
             if FileManager.default.fileExists(atPath: path) {
                 if let uid = Xattr.get(Xattr.documentID, from: url) {
                     result.append(.documentMoved(uid: uid, newPath: path))
-                } else if isInsideFolder(url, root: root) {
+                } else if !layout.isSystem(url) {
                     result.append(.untrackedFile(path: path))
                 }
             } else if event.isFile {
@@ -132,7 +125,6 @@ public actor ArchiveWatcher {
             }
         }
         result += missing.map { .documentMissing(path: $0) }
-        if taxonomyChanged { result.append(.taxonomyChanged) }
         if recordsChanged { result.append(.recordsChanged) }
         if let last = batch.map(\.id).max() {
             do { try await database.setMeta(Self.lastEventKey, String(last)) } catch {
@@ -145,14 +137,8 @@ public actor ArchiveWatcher {
         }
     }
 
-    /// The app's own Markdown other than folder descriptions and the archive index: the record files.
+    /// The app's own Markdown: the record files.
     private func isRecordFile(_ name: String) -> Bool {
         name.hasPrefix(config.managedFilePrefix) && name.hasSuffix("." + config.managedFileExtension)
-            && name != taxonomyConfig.aboutFileName && name != taxonomyConfig.indexFileName
-    }
-
-    /// Inside some folder of the archive rather than loose at its top; which folder, the reconciler decides.
-    private func isInsideFolder(_ url: URL, root: URL) -> Bool {
-        url.pathComponents.count - root.pathComponents.count >= 2
     }
 }

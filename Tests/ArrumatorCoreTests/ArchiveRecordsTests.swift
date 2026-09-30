@@ -11,77 +11,44 @@ import Testing
         let h: Harness
         let records: ArchiveRecords
         let documents: [Int64]
-        let sender: Correspondent
-        let rule: FilingRule
-        let folder: TaxonomyFolder
     }
 
-    /// Files two documents, then teaches a sender, a rule and a correction, gives the archive its own logic, and
-    /// writes the record files.
+    /// Files two documents and writes the record files.
     private func world() async throws -> World {
-        let h = try await Harness.make(classifier: StubClassifier(newFolder: StubClassifier.utilities, band: .auto))
+        let h = try await Harness.make(analyzer: LabelingTests.PerFileAnalyzer(labels: ["edp_july.txt": StubAnalyzer.edpBill,
+                                                                                        "edp_august.txt": StubAnalyzer.edpBill]))
         for (name, text) in [("edp_july.txt", "EDP electricity July"), ("edp_august.txt", "EDP electricity August")] {
-            await h.coordinator.enqueue(try h.env.drop(name, text: text))
+            try await h.ingest(name, text: text)
         }
-        await h.coordinator.drain()
-        let filed = try await h.services.documents.list(DocumentFilter(statuses: [.filed]), limit: 10)
-        let documents = filed.compactMap(\.id).sorted()
-        let folder = try #require(try await h.env.taxonomy.snapshot(root: h.env.archive).folders.first { $0.name == "Utilities" })
-        let store = GRDBLearningStore(database: h.env.database)
-        let sender = try await store.saveCorrespondent(Correspondent(
-            id: 0, canonicalName: "EDP Comercial", country: "PT", aliases: ["EDP"], stableKeys: ["ptNIF:503504564"], emailDomains: [],
-            webDomains: ["edp.pt"], defaultFolderCode: folder.code, filedCount: 2, origin: .learned))
-        let rule = try await store.saveRule(FilingRule(
-            name: "EDP · invoice → Home / Utilities", priority: 50, origin: .induced,
-            predicates: [.correspondent(id: sender.id), .documentType(.invoice)],
-            action: RuleAction(folderID: folder.id, folderCode: folder.code, documentType: .invoice), support: 3))
-        _ = try await store.insertCorrection(CorrectionEvent(documentID: documents[0], source: .markCorrect, fromFolderID: folder.id,
-                                                             toFolderID: folder.id))
-        let logic = LogicStore(database: h.env.database, maxChars: h.env.config.classification.logicMaxChars)
-        try await logic.sync(builtin: Self.builtin)
-        try await logic.update(body: "Bills by year, one folder per supplier.")
-        let records = ArchiveRecords(database: h.env.database, settings: h.env.settings, taxonomy: h.env.taxonomy,
-                                     config: h.env.config, registry: nil)
+        let documents = try await h.services.documents.list(DocumentFilter(statuses: [.filed]), limit: 10).compactMap(\.id).sorted()
+        let records = ArchiveRecords(database: h.env.database, settings: h.env.settings, config: h.env.config, registry: nil)
         try await records.flush()
-        return World(h: h, records: records, documents: documents, sender: sender, rule: rule, folder: folder)
-    }
-
-    private static let builtin = "The logic that ships with the app."
-
-    private func learned(_ w: World, _ name: String) async throws -> URL {
-        let snapshot = try await w.h.env.taxonomy.snapshot(root: w.h.env.archive)
-        let folder = try #require(snapshot.folder(role: .learned))
-        return snapshot.url(for: folder).appendingPathComponent(name)
+        return World(h: h, records: records, documents: documents)
     }
 
     /// A second index over the same archive, as after the database was lost.
-    private func freshIndex(_ w: World) throws -> (AppDatabase, TaxonomyStore, ArchiveRecords) {
+    private func freshIndex(_ w: World) throws -> (AppDatabase, ArchiveRecords) {
         let database = try AppDatabase.inMemory()
-        let taxonomy = TaxonomyStore(database: database, config: w.h.env.config.taxonomy, registry: nil)
-        return (database, taxonomy, ArchiveRecords(database: database, settings: w.h.env.settings, taxonomy: taxonomy,
-                                                   config: w.h.env.config, registry: nil))
+        return (database, ArchiveRecords(database: database, settings: w.h.env.settings, config: w.h.env.config, registry: nil))
+    }
+
+    private func listing(_ w: World, in directory: URL) throws -> String {
+        try String(contentsOf: directory.appendingPathComponent(w.h.env.config.records.documentsFileName), encoding: .utf8)
     }
 
     @Test func everythingTheAppKnowsIsWrittenIntoTheArchive() async throws {
         let w = try await world()
         defer { w.h.env.cleanup() }
         let doc = try #require(try await w.h.services.documents.document(id: w.documents[0]))
-        let listing = try String(contentsOf: doc.url.deletingLastPathComponent()
-            .appendingPathComponent(w.h.env.config.taxonomy.documentsFileName), encoding: .utf8)
-        #expect(listing.contains("uid: \(doc.uid)") && listing.contains("file: \(doc.filename)"),
-                "a document's entry sits next to it")
-        #expect(try String(contentsOf: try await learned(w, w.h.env.config.records.sendersFileName), encoding: .utf8).contains("EDP Comercial"))
-        #expect(try String(contentsOf: try await learned(w, w.h.env.config.records.rulesFileName), encoding: .utf8).contains(w.rule.name))
-        #expect(FileManager.default.fileExists(atPath: try await learned(w, w.h.env.config.records.correctionsFileName).path))
-        let snapshot = try await w.h.env.taxonomy.snapshot(root: w.h.env.archive)
-        let logicFile = snapshot.url(for: try #require(snapshot.folder(role: .logic)))
-            .appendingPathComponent(w.h.env.config.records.logicFileName)
-        #expect(try String(contentsOf: logicFile, encoding: .utf8).hasSuffix("\nBills by year, one folder per supplier.\n"),
-                "the prompt is the logic file's text")
-        #expect(try await w.records.logicFileURL() == logicFile)
-        let historyDir = snapshot.url(for: try #require(snapshot.folder(role: .history)))
-        let month = RecordKind.month(of: Date())
-        #expect(try String(contentsOf: historyDir.appendingPathComponent("_\(month).md"), encoding: .utf8).contains("filed"))
+        let listing = try listing(w, in: w.h.env.archive)
+        #expect(listing.contains("uid: \(doc.uid)") && listing.contains("file: \(doc.filename)"), "a document's entry sits next to it")
+        #expect(listing.contains("kind: jurisdiction") && listing.contains("value: Portugal"), "with its labels")
+        #expect(listing.contains("analysis:") && !listing.contains("decision:"), "and what the model read it as")
+        #expect(listing.contains("| edp_july.txt | 2026-07-05 | EDP Comercial | invoice |"), "and, for people, a table of them")
+        let layout = w.h.env.layout
+        #expect(try String(contentsOf: layout.historyFile(month: RecordKind.month(of: Date())), encoding: .utf8).contains("filed"))
+        let system = try FileManager.default.contentsOfDirectory(atPath: layout.system.path)
+        #expect(system == [w.h.env.config.records.historyFolderName], "the system folder holds the history, nothing else")
         let pending = try await w.h.env.database.reader.read { db in try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM record_dirty") }
         #expect(pending == 0)
     }
@@ -92,47 +59,32 @@ import Testing
         let before = try await w.h.services.documents.list(DocumentFilter(), limit: 100).sorted { ($0.id ?? 0) < ($1.id ?? 0) }
         let eventsBefore = try await w.h.services.history.events(limit: 1_000).count
 
-        let (database, taxonomy, records) = try freshIndex(w)
+        let (database, records) = try freshIndex(w)
         let summary = try await records.rebuild()
         #expect(summary.documents == before.count && summary.missing == 0 && summary.adopted == 0)
 
         let after = try await DocumentStore(database: database).list(DocumentFilter(), limit: 100).sorted { ($0.id ?? 0) < ($1.id ?? 0) }
         #expect(after.map(\.id) == before.map(\.id), "documents keep their numbers")
-        let rebuilt = try await taxonomy.snapshot(root: w.h.env.archive)
         for (a, b) in zip(after, before) {
-            #expect(a.uid == b.uid && a.path == b.path && a.status == b.status && a.title == b.title && a.docType == b.docType)
-            #expect(a.decision?.decidedBy == b.decision?.decidedBy && a.confidence == b.confidence)
-            let folder = try #require(a.folderId.flatMap { rebuilt.folder(id: $0) })
-            #expect(folder.code == w.folder.code, "the folder comes from where the entry sits")
+            #expect(a.uid == b.uid && a.path == b.path && a.status == b.status)
+            #expect(a.analysis == b.analysis, "what the model read it as comes back")
+            #expect(a.labels == StubAnalyzer.edpBill && a.labels == b.labels, "labels come back from the record files")
         }
-        let store = GRDBLearningStore(database: database)
-        let senders = try await store.correspondents()
-        #expect(senders.map(\.canonicalName) == ["EDP Comercial"] && senders.first?.id == w.sender.id)
-        #expect(senders.first?.stableKeys == ["ptNIF:503504564"] && senders.first?.aliases == ["EDP"])
-        let rules = try await store.rules()
-        #expect(rules.map(\.id) == [w.rule.id] && rules.first?.support == 3)
-        #expect(rules.first?.predicates.contains(.correspondent(id: w.sender.id)) == true)
-        let rebuiltFolder = try #require(try await taxonomy.snapshot(root: w.h.env.archive).folder(code: w.folder.code))
-        #expect(rules.first?.action.folderID == rebuiltFolder.id, "a rule points at the folder by its code")
-        #expect(try await store.corrections(limit: 10).count == 1)
-        let logic = try #require(try await LogicStore(database: database, maxChars: 1_000).current())
-        #expect(logic.body == "Bills by year, one folder per supplier." && !logic.followsBuiltin, "the archive's logic comes back")
         #expect(try await HistoryStore(database: database).events(limit: 1_000).count == eventsBefore + 1, "plus the rebuild itself")
         let queued = try await JobStore(database: database).active(kinds: [.reindex])
         #expect(Set(queued.compactMap(\.docId)) == Set(w.documents), "every document is read again for search")
     }
 
-    @Test func afterARebuildDocumentsAreReadAgainForSearchWithoutMoving() async throws {
+    @Test func afterARebuildDocumentsAreSearchableAgainWithoutAskingTheModel() async throws {
         let w = try await world()
         defer { w.h.env.cleanup() }
         let paths = try await w.h.services.documents.list(DocumentFilter(), limit: 100).map(\.path).sorted()
-        let (database, taxonomy, records) = try freshIndex(w)
+        let (database, records) = try freshIndex(w)
         try await records.rebuild()
-        let learner = RecordingLearner()
+        let analyzer = StubAnalyzer()
         var services = w.h.services
         services = PipelineServices(
-            database: database, config: services.config, settings: services.settings, taxonomy: taxonomy,
-            extractor: services.extractor, classifier: services.classifier, learner: learner,
+            database: database, config: services.config, settings: services.settings, extractor: services.extractor, analyzer: analyzer,
             filer: DocumentFiler(database: database, placer: services.filer.placer, index: IndexStore(database: database),
                                  registry: SelfChangeRegistry(ttl: services.config.watcher.selfChangeTTLSeconds)),
             traces: TraceRecorder(database: database, appVersion: "test"), vectors: VectorIndex())
@@ -141,168 +93,188 @@ import Testing
         let index = IndexStore(database: database)
         for id in w.documents {
             #expect(try await index.body(docID: id)?.contains("EDP electricity") == true, "the text is searchable again")
-            #expect(try await index.embedding(docID: id, model: "stub-embed") != nil)
+            #expect(try await index.embedding(docID: id, model: StubAnalyzer.embeddingModel) != nil)
         }
-        #expect(Set(await learner.reembedded) == Set(w.documents), "memories get their vectors back")
         #expect(try await DocumentStore(database: database).list(DocumentFilter(), limit: 100).map(\.path).sorted() == paths,
                 "reading again moves nothing")
-        #expect(await learner.filed.isEmpty, "and decides nothing")
+        #expect(await analyzer.calls.files.isEmpty, "and asks the model nothing")
+        let search = SearchService(database: database, vectors: VectorIndex(), embedder: nil, config: services.config.search)
+        #expect(Set(try await search.fullText(SearchQuery(text: "jurisdiction:portugal")).hits.map(\.id)) == Set(w.documents),
+                "a document is found by its labels again, from its record")
+    }
+
+    @Test func aDocumentNotYetLabelledStaysSoThroughARebuild() async throws {
+        let h = try await Harness.make(analyzer: StubAnalyzer(labels: nil))
+        defer { h.env.cleanup() }
+        let doc = try await h.ingest("bill.txt", text: "EDP electricity July")
+        let records = ArchiveRecords(database: h.env.database, settings: h.env.settings, config: h.env.config, registry: nil)
+        try await records.flush()
+        let text = try String(contentsOf: h.env.archive.appendingPathComponent(h.env.config.records.documentsFileName), encoding: .utf8)
+        #expect(!text.contains("labels:"), "an entry has no labels until the model has given some")
+
+        let database = try AppDatabase.inMemory()
+        try await ArchiveRecords(database: database, settings: h.env.settings, config: h.env.config, registry: nil).rebuild()
+        let id = try #require(doc.id)
+        let back = try #require(try await DocumentStore(database: database).document(id: id))
+        #expect(back.labels == nil && back.status == .needsReview, "read back as not labelled, never as labelled with nothing")
+    }
+
+    @Test func anEntryWrittenByAnEarlierVersionIsReadWithItsDocumentUnlabelled() async throws {
+        let env = try await TestEnvironment.make()
+        defer { env.cleanup() }
+        let directory = env.archive.appendingPathComponent("Home/Utilities/2026", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let file = directory.appendingPathComponent("2026-07-05 EDP - Fatura.pdf")
+        try Data("pdf".utf8).write(to: file)
+        // As versions that filed into folders wrote it: tags and a filing decision, no labels and no analysis.
+        try """
+        ---
+        arrumator: 1
+        entries:
+        - id: 7
+          uid: 5B7A8F4E-0000-0000-0000-000000000007
+          file: 2026-07-05 EDP - Fatura.pdf
+          original_name: fatura.pdf
+          added: 2026-07-05T10:00:00Z
+          filed: 2026-07-05T10:01:00Z
+          status: filed
+          sender: EDP Comercial
+          document_type: invoice
+          date: 2026-07-05
+          title: Fatura eletricidade
+          language: pt
+          tags: [energy]
+          decided_by: llm
+          confidence: 0.93
+          band: auto
+          rationale: EDP electricity invoice
+          content_type: com.adobe.pdf
+          size: 3
+          sha256: abc
+          decision: {folderCode: F12, title: Fatura eletricidade, confidence: {final: 0.93}}
+        ---
+        """.write(to: directory.appendingPathComponent(env.config.records.documentsFileName), atomically: true, encoding: .utf8)
+        let summary = try await ArchiveRecords(database: env.database, settings: env.settings, config: env.config, registry: nil).rebuild()
+        #expect(summary.documents == 1)
+        let doc = try #require(try await DocumentStore(database: env.database).document(id: 7))
+        #expect(doc.path == file.standardizedFileURL.path && doc.status == .filed && doc.originalFilename == "fatura.pdf",
+                "a document an earlier version filed into a folder stays where it is")
+        let unlabelled = try await DocumentStore(database: env.database).unlabelled()
+        #expect(doc.labels == nil && doc.analysis == nil && unlabelled.isEmpty,
+                "it has no labels until it is read again; with no stored text yet, it waits for its text to be read first")
+    }
+
+    /// Changes a label of the first document in the top `_documents.md`, as someone editing it by hand would.
+    private func editLabelByHand(_ w: World) throws -> URL {
+        let url = w.h.env.archive.appendingPathComponent(w.h.env.config.records.documentsFileName)
+        let text = try String(contentsOf: url, encoding: .utf8)
+        let edited = try #require(text.range(of: "value: Maria Exemplo").map { text.replacingCharacters(in: $0, with: "value: Maria Silva") })
+        try edited.write(to: url, atomically: true, encoding: .utf8)
+        return url
     }
 
     @Test func aRecordFileEditedByHandIsReadBack() async throws {
         let w = try await world()
         defer { w.h.env.cleanup() }
-        let url = try await learned(w, w.h.env.config.records.rulesFileName)
-        let text = try String(contentsOf: url, encoding: .utf8)
-        try text.replacingOccurrences(of: "enabled: true", with: "enabled: false").write(to: url, atomically: true, encoding: .utf8)
+        _ = try editLabelByHand(w)
         #expect(try await w.records.reconcile() == 1)
-        #expect(try await GRDBLearningStore(database: w.h.env.database).rules().first?.enabled == false)
-    }
-
-    @Test func logicEditedInTheFileIsTheArchivesLogicAndNoLongerFollowsTheApp() async throws {
-        let w = try await world()
-        defer { w.h.env.cleanup() }
-        let logic = LogicStore(database: w.h.env.database, maxChars: w.h.env.config.classification.logicMaxChars)
-        try await logic.reset(to: Self.builtin)
-        try await w.records.flush()
-        let url = try #require(try await w.records.logicFileURL())
-        let text = try String(contentsOf: url, encoding: .utf8)
-        try text.replacingOccurrences(of: Self.builtin, with: "Everything by year.").write(to: url, atomically: true, encoding: .utf8)
-        #expect(try await w.records.reconcile() == 1)
-        #expect(try await logic.current()?.body == "Everything by year.")
-        try await logic.sync(builtin: "A newer text shipped with the app.")
-        #expect(try await logic.current()?.body == "Everything by year.", "an edit in the file is never overwritten by the app")
-    }
-
-    @Test func aLogicFileWrittenByHandIsTheArchivesLogic() async throws {
-        let w = try await world()
-        defer { w.h.env.cleanup() }
-        let url = try #require(try await w.records.logicFileURL())
-        try "Just the prompt, no front matter.\n".write(to: url, atomically: true, encoding: .utf8)
-        let (database, _, records) = try freshIndex(w)
-        let summary = try await records.rebuild()
-        #expect(summary.logic)
-        let logic = try #require(try await LogicStore(database: database, maxChars: 1_000).current())
-        #expect(logic.body == "Just the prompt, no front matter." && !logic.followsBuiltin)
+        let parties = try await w.h.services.documents.list(DocumentFilter(), limit: 5).flatMap { $0.labels(.party) }
+        #expect(parties.contains("Maria Silva"), "a label corrected in the file is the document's")
     }
 
     @Test func aChangeNeverOverwritesAnEditMadeByHand() async throws {
         let w = try await world()
         defer { w.h.env.cleanup() }
-        let url = try await learned(w, w.h.env.config.records.sendersFileName)
-        let text = try String(contentsOf: url, encoding: .utf8)
-        try text.replacingOccurrences(of: "canonicalName: EDP Comercial", with: "canonicalName: EDP Energia")
-            .write(to: url, atomically: true, encoding: .utf8)
-        // Before the app has read the edit, something else changes the senders.
-        let store = GRDBLearningStore(database: w.h.env.database)
-        _ = try await store.saveCorrespondent(Correspondent(
-            id: 0, canonicalName: "MEO", country: "PT", aliases: [], stableKeys: [], emailDomains: [], webDomains: [],
-            defaultFolderCode: nil, filedCount: 1, origin: .learned))
+        let url = try editLabelByHand(w)
+        // Before the app has read the edit, another document arrives in the same directory.
+        try await w.h.ingest("edp_september.txt", text: "EDP electricity September")
         try await w.records.flush()
-        let names = try await store.correspondents().map(\.canonicalName).sorted()
-        #expect(names == ["EDP Energia", "MEO"])
-        #expect(try String(contentsOf: url, encoding: .utf8).contains("EDP Energia"))
+        let text = try String(contentsOf: url, encoding: .utf8)
+        #expect(text.contains("value: Maria Silva") && text.contains("file: edp_september.txt"),
+                "the file keeps the edit and gains what the index added")
+    }
+
+    @Test func theUsersDecisionsAboutLabelsLiveInTheArchiveAndSurviveALostIndex() async throws {
+        let w = try await world()
+        defer { w.h.env.cleanup() }
+        let actions = LabelActions(database: w.h.env.database)
+        try await actions.merge(DocumentLabel(kind: .sender, value: "EDP Comercial"), into: "EDP")
+        try await actions.ignore(DocumentLabel(kind: .topic, value: "electricity"))
+        try await w.records.flush()
+        let url = w.h.env.layout.labelRules
+        let text = try String(contentsOf: url, encoding: .utf8)
+        #expect(text.contains("action: merge") && text.contains("target: EDP") && text.contains("| topic | electricity | not wanted |"),
+                "the rules are the user's, kept in the archive's system folder with a table for people")
+
+        let (database, records) = try freshIndex(w)
+        let summary = try await records.rebuild()
+        #expect(summary.labelRules == 2)
+        let rebuilt = try await LabelStore(database: database, config: w.h.env.config.labels).rules()
+        #expect(rebuilt.map(\.summary) == ["sender “EDP Comercial” → “EDP”", "topic “electricity” ignored"], "they come back with a lost index")
+        #expect(try await DocumentStore(database: database).list(DocumentFilter(), limit: 5).allSatisfy { $0.labels(.sender) == ["EDP"] },
+                "as do the labels they changed")
+
+        try text.replacingOccurrences(of: "target: EDP\n", with: "target: EDP Energia\n").write(to: url, atomically: true, encoding: .utf8)
+        try await w.records.reconcile()
+        #expect(try await w.h.services.labels.rules().first?.target == "EDP Energia", "a rule changed by hand is read back")
+
+        for rule in try await w.h.services.labels.rules() { try await actions.forget(rule: try #require(rule.id)) }
+        try await w.records.flush()
+        #expect(!FileManager.default.fileExists(atPath: url.path), "without rules there is no file")
     }
 
     @Test func aDeletedRecordFileIsWrittenAgain() async throws {
         let w = try await world()
         defer { w.h.env.cleanup() }
-        let url = try await learned(w, w.h.env.config.records.sendersFileName)
+        let url = w.h.env.archive.appendingPathComponent(w.h.env.config.records.documentsFileName)
         try FileManager.default.removeItem(at: url)
         try await w.records.reconcile()
-        #expect(try String(contentsOf: url, encoding: .utf8).contains("EDP Comercial"), "deleting a file does not delete what it records")
-        #expect(try await GRDBLearningStore(database: w.h.env.database).correspondents().count == 1)
+        #expect(try String(contentsOf: url, encoding: .utf8).contains("value: EDP Comercial"), "deleting a file does not delete what it records")
+        #expect(try await w.h.services.documents.list(DocumentFilter(), limit: 5).count == 2)
     }
 
     @Test func aDocumentsEntryFollowsItAndAnEmptiedDirectoryLosesItsFile() async throws {
         let w = try await world()
         defer { w.h.env.cleanup() }
-        let other = try await w.h.env.folder("Rent", area: "Home")
         let doc = try #require(try await w.h.services.documents.document(id: w.documents[0]))
-        let oldListing = doc.url.deletingLastPathComponent().appendingPathComponent(w.h.env.config.taxonomy.documentsFileName)
+        let moved = w.h.env.archive.appendingPathComponent("Kept/\(doc.filename)").standardizedFileURL
+        try FileManager.default.createDirectory(at: moved.deletingLastPathComponent(), withIntermediateDirectories: true)
         for id in w.documents {
-            try await ReviewActions(services: w.h.services, coordinator: w.h.coordinator).move(id, toFolder: other.id)
+            let d = try #require(try await w.h.services.documents.document(id: id))
+            let target = moved.deletingLastPathComponent().appendingPathComponent(d.filename)
+            try FileManager.default.moveItem(at: d.url, to: target)
+            await ArchiveReconciler(services: w.h.services, coordinator: w.h.coordinator)
+                .apply([.documentMoved(uid: d.uid, newPath: target.path)])
         }
         try await w.records.flush()
-        let moved = try #require(try await w.h.services.documents.document(id: w.documents[0]))
-        let newListing = moved.url.deletingLastPathComponent().appendingPathComponent(w.h.env.config.taxonomy.documentsFileName)
-        #expect(try String(contentsOf: newListing, encoding: .utf8).contains("uid: \(moved.uid)"))
-        #expect(!FileManager.default.fileExists(atPath: oldListing.path), "a directory with no documents keeps no listing")
+        #expect(try listing(w, in: moved.deletingLastPathComponent()).contains("uid: \(doc.uid)"), "the entry follows its document")
+        #expect(!FileManager.default.fileExists(atPath: w.h.env.archive.appendingPathComponent(w.h.env.config.records.documentsFileName).path),
+                "a directory with no documents keeps no listing")
     }
 
-    @Test func aLostIndexFindsDocumentsAtAnyDepth() async throws {
-        let path = ["Portugal", "Hlistan Zolerani LDA", "Banking", "Santander"]
-        let deep = FolderSpec(parentCode: nil, levels: path.map { FolderLevel(name: $0, description: "\($0).") },
-                              yearSubfolders: true, yearRule: .documentDate)
-        let h = try await Harness.make(classifier: StubClassifier(newFolder: deep, band: .auto))
-        defer { h.env.cleanup() }
-        for (name, text) in [("july.txt", "Santander July"), ("august.txt", "Santander August")] {
-            await h.coordinator.enqueue(try h.env.drop(name, text: text))
-        }
-        await h.coordinator.drain()
-        try await ArchiveRecords(database: h.env.database, settings: h.env.settings, taxonomy: h.env.taxonomy, config: h.env.config,
-                                 registry: nil).flush()
-        let before = try await h.env.taxonomy.snapshot(root: h.env.archive)
-        let santander = try #require(before.folders.first { $0.name == "Santander" })
-        let banking = try #require(santander.parentCode.flatMap(before.folder(code:)))
-        let dropped = [before.url(for: banking).appendingPathComponent("overview.txt"),
-                       before.url(for: santander).appendingPathComponent("2025/old-statement.txt")]
-        for url in dropped {
-            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try Data("put there by hand".utf8).write(to: url)
-        }
-
-        let database = try AppDatabase.inMemory()
-        let taxonomy = TaxonomyStore(database: database, config: h.env.config.taxonomy, registry: nil)
-        let summary = try await ArchiveRecords(database: database, settings: h.env.settings, taxonomy: taxonomy, config: h.env.config,
-                                               registry: nil).rebuild()
+    @Test func aLostIndexFindsDocumentsWhereverTheyAreAndTakesInFilesPutThereByHand() async throws {
+        let w = try await world()
+        defer { w.h.env.cleanup() }
+        try await w.h.env.settings.update { $0.incomingPath = w.h.env.archive.appendingPathComponent("Inbox").path }
+        let byHand = [try w.h.env.put("loose.txt", text: "put there by hand"), try w.h.env.put("Old/2025/statement.txt", text: "by hand")]
+        _ = try w.h.env.put("Inbox/waiting.txt", text: "not yet filed")
+        _ = try w.h.env.put("\(w.h.env.config.records.systemFolderName)/stray.txt", text: "no document")
+        let (database, records) = try freshIndex(w)
+        let summary = try await records.rebuild()
         #expect(summary.documents == 2 && summary.missing == 0)
-        #expect(summary.adopted == 2, "files put by hand into any folder are adopted, whatever its depth")
-        let after = try await taxonomy.snapshot(root: h.env.archive)
-        let found = try #require(after.folder(code: santander.code))
         let adoptions = try await JobStore(database: database).active(kinds: [.adopt])
-        #expect(Set(adoptions.map(\.sourcePath)) == Set(dropped.map(\.standardizedFileURL.path)))
-        let rebuiltBanking = try #require(after.folder(code: banking.code))
-        #expect(Set(adoptions.compactMap(\.payload.userFolderID)) == [rebuiltBanking.id, found.id], "each in the folder the user put it in")
-        #expect(after.lineage(of: found).map(\.code) == before.lineage(of: santander).map(\.code), "the tree comes back with its codes")
-        #expect(after.path(of: found) == path.joined(separator: " / ") && found.yearSubfolders)
-        let documents = try await DocumentStore(database: database).list(DocumentFilter(), limit: 10)
-        #expect(documents.count == 2 && documents.allSatisfy { $0.folderId == found.id },
-                "documents in its year folder belong to the folder four levels down")
+        #expect(Set(adoptions.map(\.sourcePath)) == Set(byHand.map(\.path)),
+                "files put in the archive by hand are taken in where they are, but not from Incoming or the system folder")
     }
 
-    @Test func theSystemAreaIsFoundWhateverItIsCalled() async throws {
+    @Test func anArchiveWithRecordsIsRecognisedWithoutWalkingIt() async throws {
         let env = try await TestEnvironment.make()
         defer { env.cleanup() }
-        let config = env.config
-        #expect(!ArchiveRecords.mayHoldRecords(archive: env.archive, config: config), "an archive that does not exist yet")
+        #expect(!ArchiveRecords.mayHoldRecords(archive: env.archive, config: env.config), "an archive that does not exist yet")
         try FileManager.default.createDirectory(at: env.archive, withIntermediateDirectories: true)
-        #expect(!ArchiveRecords.mayHoldRecords(archive: env.archive, config: config), "an empty archive")
-        _ = try await env.taxonomy.ensureSystemFolder(.logic, root: env.archive)
-        #expect(ArchiveRecords.mayHoldRecords(archive: env.archive, config: config), "System / Logic, as a new archive has it")
-
-        // Writes `_about.md` files along a chain of directories under a new root.
-        func layout(_ levels: [(directory: String, definition: FolderDefinition)]) throws -> URL {
-            let root = env.archive.deletingLastPathComponent().appendingPathComponent(UUID().uuidString, isDirectory: true)
-            var dir = root
-            for level in levels {
-                dir = dir.appendingPathComponent(level.directory, isDirectory: true)
-                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-                let about = AboutFile(definition: level.definition, body: "")
-                try Data(try about.render(hash: .recompute).utf8).write(to: dir.appendingPathComponent(config.taxonomy.aboutFileName))
-            }
-            return root
-        }
-        func definition(_ code: String, _ name: String, role: FolderRole? = nil, origin: FolderOrigin) -> FolderDefinition {
-            FolderDefinition(code: code, name: name, role: role, description: name, yearSubfolders: false, yearRule: nil,
-                             autoFile: false, origin: origin)
-        }
-        let earlier = try layout([("00-09 System", definition("00-09", "System", origin: .system)),
-                                  ("05 Learned", definition("05", "Learned", role: .learned, origin: .system))])
-        #expect(ArchiveRecords.mayHoldRecords(archive: earlier, config: config), "the numbered layout of earlier versions")
-        let lookalike = try layout([("System", definition("F1", "System", origin: .learned)),
-                                    ("Learned", definition("F2", "Learned", origin: .learned))])
-        #expect(!ArchiveRecords.mayHoldRecords(archive: lookalike, config: config), "a folder of the user's that is only named so")
+        #expect(!ArchiveRecords.mayHoldRecords(archive: env.archive, config: env.config), "an empty archive")
+        try FileManager.default.createDirectory(at: env.layout.history, withIntermediateDirectories: true)
+        #expect(ArchiveRecords.mayHoldRecords(archive: env.archive, config: env.config), "one with the system folder")
     }
 
     @Test func anUnreadableIndexIsSetAsideOnlyWhenTheArchiveCanRebuildIt() throws {

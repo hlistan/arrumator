@@ -28,7 +28,8 @@ struct MenuBarView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     ForEach(recent, id: \.id) { document in
                         ListRow(symbol: document.status.symbol, tint: document.status.tint, title: document.filename,
-                                subtitle: Wording.outcome(of: document, in: model.taxonomy, incoming: model.settings?.incomingURL))
+                                subtitle: Wording.outcome(of: document, archive: model.settings?.archiveURL,
+                                                          incoming: model.settings?.incomingURL))
                             .onTapGesture { model.open(document: document.id, on: .processed) }
                     }
                 }

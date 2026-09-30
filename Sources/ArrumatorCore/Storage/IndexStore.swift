@@ -7,21 +7,41 @@ public struct IndexStore: Sendable {
     public let database: AppDatabase
     public init(database: AppDatabase) { self.database = database }
 
-    public func upsertText(docID: Int64, title: String, correspondent: String, filename: String, body: String,
-                           summary: String?, metadata: [String: String], extractorVersion: String) async throws {
+    /// Indexes a document's text with its labels, replacing what was indexed for it.
+    public func upsertText(docID: Int64, filename: String, body: String, summary: String?, metadata: [String: String],
+                           extractorVersion: String, labels: [DocumentLabel]) async throws {
+        let kinds = LabelKind.allCases.map(\.rawValue)
+        let columns = ["doc_id", "filename", "body", "summary", "metadata_json", "extractor_version"] + kinds
+        let values: [(any DatabaseValueConvertible)?] = [docID, filename, body, summary, JSON.string(metadata), extractorVersion]
+            + LabelKind.allCases.map { DocumentLabel.searchText(labels, kind: $0) }
+        let arguments = StatementArguments(values)
         try await database.writer.write { db in
-            let record = DocumentTextRecord(docId: docID, title: title, correspondent: correspondent, filename: filename,
-                                            body: body, summary: summary, metadataJson: JSON.string(metadata),
-                                            extractorVersion: extractorVersion)
-            try record.upsert(db)
+            try db.execute(sql: """
+                INSERT INTO document_text (\(columns.joined(separator: ", "))) VALUES (\(databaseQuestionMarks(count: columns.count)))
+                ON CONFLICT(doc_id) DO UPDATE SET \(columns.dropFirst().map { "\($0) = excluded.\($0)" }.joined(separator: ", "))
+                """, arguments: arguments)
         }
     }
 
-    /// Updates the searchable header fields after a rename or user edit, keeping the body.
-    public func updateHeader(docID: Int64, title: String, correspondent: String, filename: String) async throws {
+    /// Makes a document's labels its own: on its row, which writes them into its record file, and in the full-text
+    /// index, in one transaction.
+    public func saveLabels(_ labels: [DocumentLabel], docID: Int64) async throws {
+        try await database.writer.write { db in try Self.saveLabels(db, labels, docID: docID) }
+    }
+
+    /// Saves a document's labels inside an existing transaction, so a change to many documents commits as one.
+    static func saveLabels(_ db: Database, _ labels: [DocumentLabel], docID: Int64) throws {
+        let assignments = LabelKind.allCases.map { "\($0.rawValue) = ?" }.joined(separator: ", ")
+        let values: [(any DatabaseValueConvertible)?] = LabelKind.allCases.map { DocumentLabel.searchText(labels, kind: $0) } + [docID]
+        try db.execute(sql: "UPDATE documents SET labels_json = ?, updated_at = ? WHERE id = ?",
+                       arguments: [JSON.string(labels), Date().unixSeconds, docID])
+        try db.execute(sql: "UPDATE document_text SET \(assignments) WHERE doc_id = ?", arguments: StatementArguments(values))
+    }
+
+    /// Updates the searchable file name after a rename, keeping the rest.
+    public func updateFilename(docID: Int64, filename: String) async throws {
         try await database.writer.write { db in
-            try db.execute(sql: "UPDATE document_text SET title = ?, correspondent = ?, filename = ? WHERE doc_id = ?",
-                           arguments: [title, correspondent, filename, docID])
+            try db.execute(sql: "UPDATE document_text SET filename = ? WHERE doc_id = ?", arguments: [filename, docID])
         }
     }
 

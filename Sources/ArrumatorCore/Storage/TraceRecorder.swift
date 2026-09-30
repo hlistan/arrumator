@@ -7,21 +7,16 @@ public struct TraceHeader: Sendable {
     public var attempt: Int
     public var source: TraceSource
     public var promptVersion: Int
-    /// Fingerprint of the logic the model was given (`LogicStore.version`).
-    public var logicVersion: String
-    public var taxonomyVersion: Int
     public var models: ResolvedModels?
     public var settings: AppSettings
 
-    public init(docID: Int64?, jobID: Int64?, attempt: Int, source: TraceSource, promptVersion: Int, logicVersion: String,
-                taxonomyVersion: Int, models: ResolvedModels?, settings: AppSettings) {
+    public init(docID: Int64?, jobID: Int64?, attempt: Int, source: TraceSource, promptVersion: Int, models: ResolvedModels?,
+                settings: AppSettings) {
         self.docID = docID
         self.jobID = jobID
         self.attempt = attempt
         self.source = source
         self.promptVersion = promptVersion
-        self.logicVersion = logicVersion
-        self.taxonomyVersion = taxonomyVersion
         self.models = models
         self.settings = settings
     }
@@ -41,8 +36,7 @@ public struct TraceRecorder: TraceSink {
         let id = try await database.writer.write { db in
             var t = TraceRecord(id: nil, docId: header.docID, jobId: header.jobID, attempt: header.attempt,
                                 source: header.source.rawValue, startedAt: Date(), finishedAt: nil, outcome: nil,
-                                appVersion: appVersion, promptVersion: header.promptVersion,
-                                logicVersion: header.logicVersion, taxonomyVersion: header.taxonomyVersion, modelChat: header.models?.chat,
+                                appVersion: appVersion, promptVersion: header.promptVersion, modelChat: header.models?.chat,
                                 modelVision: header.models?.vision, modelEmbed: header.models?.embed,
                                 settingsJson: JSON.string(header.settings), totalMs: nil)
             try t.insert(db)

@@ -1,176 +1,198 @@
 # How Arrumator works
 
-This is how Arrumator decides where a document belongs, what it learns from you, and how the folder tree takes
-shape. [Using Arrumator](using-arrumator.md) covers the app and its settings. [Storage](storage.md) covers where
-everything is kept, and [Evaluation](evaluation.md) the measurements behind these choices.
+This is how Arrumator reads a document, labels it, names it and files it. [Using Arrumator](using-arrumator.md)
+covers the app and its settings. [Storage](storage.md) covers where everything is kept, and
+[Evaluation](evaluation.md) the measurements behind these choices.
 
 ## How a file is handled
 
 ```text
-new file in Incoming ──► wait until it stops changing ──► hash (exact duplicates → Duplicates)
-   ──► extract: PDFKit text, Apple Vision OCR (en/ru/pt), textutil (doc/docx/rtf/odt/html), CoreXLSX, PPTX, e-mail,
+new file in Incoming ──► wait until it stops changing ──► hash (an exact copy of a filed document is a duplicate)
+   ──► extract: PDFKit text, Apple Vision OCR, textutil (doc/docx/rtf/odt/html), CoreXLSX, PPTX, e-mail,
        archives, media metadata, Quick Look previews, local vision model for photos; language, dates, identifiers
-   ──► learned evidence: known senders (by learned identifiers, e-mail/web domains, names),
-       similar past filings (bge-m3 embeddings), rules formed from usage
-   ──► confident?  ── yes ─► place directly; the model is only asked for the file name, as the logic says
-                   └─ no ──► the local model identifies the document and decides from the archive's logic (your
-                             prompt) and the document alone: who it is from and whom it is about; the path, as many
-                             levels as the logic describes, each named and described; whether it goes in a year
-                             folder; the file name. It is shown no folders: shown any, even broad ones, a model
-                             copies them whether they fit or not (an older arrangement's, another sender's that looks
-                             alike, one area for everything). The app then resolves the path by identity (below),
-                             creates the rest and calibrates confidence.
-   ──► file it (create folders on demand, name it, keep the original name in an extended attribute); when the
-       chosen folder was removed while the model decided, decide again against the tree as it is now
-   ──► learn: every placement becomes a memory; confirmed/confident ones form rules; folder context is refreshed
+   ──► analyse: the local model reads it once, with the app's own prompt and the archive's labels, picks out its
+       signals, which become its labels, and names the file; your rules and the archive's vocabulary tidy the labels
+   ──► file it at the top of the archive under that name, keeping the original name in an extended attribute, and
+       add it to the search index (its words, its labels and its meaning)
 ```
 
+A document is described by its labels and nothing else: who sent it, what type it is, its date, whom and what it
+concerns, and the rest are all labels of one kind or another. The archive has no folders of the app's making. Every
+document is filed at its top and found again by its labels, its words or its meaning. A folder you make yourself is
+yours: the app reads files you put in it where they are, and never moves them out.
+
+### Documents in any language
+
+Nothing in reading a document is tied to a language. The extractor tells the language of the text among all that
+Apple's NaturalLanguage knows. Its dates are found with month names in every language the system has a calendar for,
+in each form it writes them (`15 мая 2024`, `3. März 2025`, `2025年3月5日`), and in numeric forms from day first to
+year first. OCR asks Vision for the document's own language first, then the hints in `extraction.ocrLanguages`, and
+lets Vision detect any other it reads. A script Vision does not read in images is still read from a PDF's text layer,
+an e-mail or a text file. The model reads the document as written and describes it in labels that do not depend on its
+language: names and numbers as the document writes them, topics, objects and jurisdictions in English, dates, amounts and
+languages in ISO forms. Documents in different languages are therefore found by the same labels. The file name's
+description is in the document's own language.
+
 OCR runs on Vision's default device, the Neural Engine or GPU. When that fails, as it can when the Neural Engine's
-model does not compile, the page is read again on the CPU, and so is every later page until the app restarts. The document's
-trace records which device read each page.
+model does not compile, the page is read again on the CPU, and so is every later page until the app restarts. The
+document's trace records which device read each page.
 
-Uncertain documents wait in **Needs review** (created only when first needed). Moving a file in Finder, choosing a
-folder in the app, renaming, undoing: all are recorded as corrections and change future decisions. Senders gain
-other names, and folders' learned context updates.
+## Reading a document
 
-## Senders and rules
+The model reads each document once, with a prompt of the app's own (`labels-system.md`), which you do not edit. It is
+given the document's text (an excerpt of `analysis.excerptChars` characters) and the dates and identifiers the
+extractor found, after what the archive's labels say ([below](#keeping-labels-one-vocabulary)), and it answers in a
+fixed schema: one list of signals for each kind of label, then the file name.
+Under constrained decoding the model writes the lists in the schema's order, so the facts a file name is made of come
+first (the sender, the type, the date) and the name last, built from them as `YYYY-MM-DD Sender - Description`, in the
+document's language.
 
-**Senders are what rules are built on.** A sender is whoever a document comes from (EDP, the tax authority, a bank, a
-landlord). The model names the sender of each document, and filing it links the document to a sender the app knows, or
-to a new one. A sender collects:
+The answer is untrusted input. It is decoded into typed values and checked, each label as described below; an answer
+that cannot be read, or leaves a list out, goes back to the model with what was wrong (`analysis.repairAttempts`
+times). The profile's decision model is asked first and its other model after it, if the profile has two. The file
+name goes through the same cleaning every file name does: no path separators, bounded length, and, when Settings says
+so, transliterated.
 
-- its other names;
-- the identifiers that are only ever on its documents: a tax number, IBAN or account number seen in at least
-  `learning.stableKeyMinFilings` trusted filings;
-- its e-mail and web domains;
-- its usual folder.
+## Labels
 
-Rules form from a sender's trusted filings: ones you confirmed or corrected, or filed with high confidence.
-`learning.ruleMinSupport` of one document type in one folder make "EDP · invoice → Home / Utilities", and
-`learning.correspondentRuleMinSupport` in one folder with none elsewhere make "EDP → Home / Utilities". A rule applies
-to a new document only when its sender is recognised there: by an identifier first, then a domain, then a name. A
-reliable rule then files it without the model deciding. Otherwise the model decides by the logic alone. Where the
-logic gives senders folders of their own, a known sender's document still joins its sender's folder (see
-[the folder tree](#the-folder-tree-grows-with-your-documents)), and rules and similar past filings weigh in on how sure
-the decision is.
+The model picks out the document's *signals*, the facts someone looking for it later would search by, and each one
+becomes a label of one of these kinds:
 
-A document almost identical to one filed with confidence before (`learning.directPlacement.knnMinSimilarity`), such as
-next month's bill, joins it without the model deciding where it goes. A model names a recurring document differently
-from one month to the next, and following its predecessor keeps the two together.
+| Kind | What it holds | Value |
+|---|---|---|
+| `sender` | Who issued or sent the document: the company, authority, institution or person on its letterhead or signature. | As the document writes it. |
+| `party` | Another person or organisation it concerns: whom it is addressed to, whose it is, whom it is about. | As the document writes it, without titles. |
+| `type` | The form of the document. At most one. | One of invoice, receipt, statement, contract, tax-return, tax-assessment, payslip, certificate, attestation, id-document, letter, application, policy, medical-report, prescription, ticket, license, manual, quote, legal. A document none fits has none. |
+| `topic` | A subject area it belongs to, from broad to specific: utilities, electricity; taxes, income tax. | One to three lowercase English words. |
+| `object` | A specific thing it concerns, with what identifies it: an apartment and its address, a car and its plate, a supply point, an account, a policy. | A short English noun phrase and the identifier as written. |
+| `reference` | A number that identifies the document or the matter it belongs to: an invoice, contract, case, customer or order number. | What it is and the number: `invoice FT 2026/926804564`. |
+| `date` | When it was issued. At most one. | `YYYY-MM-DD`. |
+| `period` | The period it covers: a billing month, a tax year, a statement period, a policy term. | `YYYY`, `YYYY-MM` or a day, or two of them as `start/end`. |
+| `deadline` | A date by which something must be done, or on which something ends: payment due, expiry, renewal, an appointment. | `YYYY-MM-DD`. |
+| `amount` | A total it asks for or records: the total due or paid, a net salary, a premium. | A number and an ISO 4217 currency: `54.21 EUR`. |
+| `jurisdiction` | A country, region or city whose law, authority or administration it falls under: where a tax is due, a contract is governed, an ID was issued. | In English: `Portugal`. |
+| `language` | A language it is written in, the main one first. | An ISO 639-1 code: `pt`. |
 
-Rules keep learning after they form. Each filing that agrees with a rule raises its support, so it becomes more
-trusted. Filing a document somewhere other than where a rule points counts against it, and two disagreements switch it
-off. Approving what the app proposed is agreement, not disagreement. A rule the app switched off comes back on its own
-once fresh filings restore its reliability; one you switched off by hand stays off.
+The kinds follow the metadata archival description keeps for a record (DCMI's creator, subject, coverage, issued,
+temporal, valid, type, identifier and language; ISO 23081's agents), the facets of faceted classification, and the
+fields document managers and key-information extraction read from personal paperwork
+([sources](organizing-principles-sources.md#sources-for-labels)).
 
-Every file is named by the model, following the logic: the naming style is part of the logic, and there is no name
-template to set. A document that learned rules place without asking the model where it goes is still named that way,
-with a short request for the name alone. If the model gives no usable name, the file keeps the name it arrived with.
+Every label is kept on one line, cut to `labels.maxValueChars` after the last whole word, and kept once however it is
+written. Each kind keeps its first `labels.maxPerKind` labels, the most significant first; a document has at most one
+type and one date. A value that is no label of its kind is dropped rather than sent back: a date or deadline that is no
+calendar day (day-first dates such as `31.07.2026` become ISO), a period of another shape, an amount or a reference
+without a number, a language that is none (one written `pt`, `por` or `Portuguese` becomes `pt`). An amount written
+with its currency code first or after a colon (`EUR 54.21`, `54.21: EUR`) becomes `54.21 EUR`. Topics are lowercase.
 
-### Forgetting
+Labels are the document's. They sit in its entry in `_documents.md` and survive a rebuild, and each kind is a field of
+the search: `sender:edp`, `party:"maria silva"`, `type:invoice`, `object:AA-12-BB`, `reference:926804564`,
+`deadline:2026-07`, `amount:54.21`, `jurisdiction:portugal`, `language:portuguese` (a language is found by its code and
+by its English name). A plain search finds labels too. A document's card lists them by kind. The app's sidebar lists
+them too: choosing labels there narrows the documents to those that have every one, and the labels offered to those
+the documents left have ([using Arrumator](using-arrumator.md#what-the-app-shows-you)). A chosen label is matched however
+it is cased, accented or punctuated.
 
-Anything learned can be forgotten, from the Learned page, a document's card or `arrumatorcli forget`:
+When the model finds nothing worth a label, the document is labelled with nothing, which is not the same as not
+labelled. A document without labels is labelled when it is read again: `arrumatorcli review retry <document>` for one,
+`arrumatorcli labels --unlabelled` for all of them.
 
-- **A document as an example of its folder.** It stops counting as evidence for future decisions.
-- **A rule.** It stops placing documents, and the same filings never form it again.
-- **Another name for a sender.** The name is no longer matched to that sender.
-- **A whole sender.** Its names, identifiers and usual folder are forgotten, together with the rules about it.
+### Correcting labels
 
-Forgetting something takes it off the Learned page, and on a document's card the lesson is struck through. Each time the
-app forgets something, whether you asked or you undid a filing, it is recorded in History, not among the lessons.
+Every label can be changed. On a document's card, a label is taken off with its ×, and one is added by choosing its kind
+and writing its value; from a terminal, `arrumatorcli labels <document> --add sender=EDP --remove topic=energy`. Your
+labels are kept as the model's are: a date must be a date and a type one of the list. A document keeps one type and one
+date: on the card a new one replaces the old; from a terminal, remove the old one in the same command (`--remove
+type=invoice --add type=receipt`). Each correction is recorded in History. Renaming the document (on its card, or
+`review rename`) renames the file where it is.
 
-## Logic: you decide how the archive is organised
+## Keeping labels one vocabulary
 
-**Logic** is the prompt the model follows when it decides where a document goes and what it is called. Each archive
-has exactly one, kept in the archive itself as `System/Logic/_logic.md`. It comes first in every decision, and
-learned rules, past filings and corrections only advise it: when they disagree, the logic wins. A new archive starts
-with the built-in logic, *Organizing principles*, which condenses established records-management practice (NIST,
-university research-data guides, paperless-ngx; sources in [organizing-principles-sources.md](organizing-principles-sources.md)).
-Until you change it, it is kept up to date with each new version of the app. You can edit it and reset it to the
-original.
+Labels are only as good as they are consistent: a document labelled `EDP Comercial` is not found under `EDP`, and a
+topic written two ways splits what belongs together. This is the synonymy problem of every tagging system
+([sources](organizing-principles-sources.md#sources-for-keeping-labels-one-vocabulary)). Arrumator keeps the archive's
+labels one vocabulary in three ways, and learns from you as it goes.
 
-Edit the logic in place on the Logic page, or open `_logic.md` in any editor: the text after its front matter is the
-prompt, and a file holding nothing but a prompt works too. The app reads an edit made in the file straight away. New
-documents follow the logic from then on. Then:
+**The model is shown the archive's labels.** Every document is read with a section of the prompt
+(`archive-labels.md`) that lists the labels the archive already uses, the most used first, for the kinds
+`labels.vocabulary.kinds` names (`promptLimit` of each), how you asked labels to be written (your merges, the newest
+`labels.vocabulary.promptPreferred`) and the labels you do not want (the newest `labels.vocabulary.promptUnwanted`). The
+lists never decide what the model labels, only how: when the document's sender, a party, a topic or a jurisdiction is
+one the archive has a label for, the model gives that label as listed rather than another writing of the same name.
+Objects and references are not listed, as nearly every document has its own. That is how your decisions teach the
+model: by showing it examples in its prompt, without retraining it, so what it learns stays in your archive and follows
+you to another model.
 
-1. **Try it on a few documents.** The app asks the logic where documents from across the archive belong and
-   shows each decision on the Logic page as it is made, the newest first; click one to see why the logic chose it.
-   You do not have to wait for the end:
-   - **Stop Here** interrupts the document being decided and makes what has been decided so far the plan; the
-     documents not reached stay where they are.
-   - **Discard** throws the trial away, so the logic can be changed straight away.
+**Every label the model gives is tidied.** Your rules come first: a label you merged is written as you want it,
+following one merge into the next, and one you do not want is dropped. Then a label of a kind the vocabulary keeps
+(sender, party, topic, object, reference, jurisdiction) becomes the label the archive already uses when the two are
+written alike enough: `labels.vocabulary.kinds.<kind>.mergeSimilarity`. At 1, the default for names, objects and
+references, only labels written the same way but for case, accents, punctuation, spacing and word order are one
+(`EDP-Comercial, S.A.` is `EDP Comercial SA`); for topics and jurisdictions a typo is forgiven too (`electricty`). How
+alike two labels are written is their Jaro-Winkler similarity, the measure record linkage uses for names, over their
+words in sorted order; labels whose numbers differ are never alike. A label the archive already uses stays itself,
+unless more documents have it written another way. Only writing is compared, never meaning: that one label means
+another in other words is the model's judgment, or yours. What was changed, and by which rule, is in the document's
+trace (the `consolidate` step) and its History entry.
 
-   Nothing moves unless you apply the plan. Documents the logic would move are ticked; untick any that should stay.
-   When the logic was unsure but still suggested a place, the document is listed unticked: tick it to take the
-   suggestion, and the move is recorded as your decision. When nothing would change, the plan closes on its own and
-   says so, so the logic is never left locked by a plan with nothing in it.
-2. **Reprocess everything.** Every processed document is decided again with the logic. Learned rules no longer
-   short-cut the decision here, and a document's own past filing is not offered as evidence. Documents you placed or
-   confirmed yourself are left out unless you include them. You review the plan (which documents move where, and
-   which folders appear; documents keep their names) and leave out anything you want to stay put. Applying it moves
-   the files, creates the folders, removes every folder left empty and lets rules follow their documents to their
-   new folders.
+**What is merely alike waits for you.** Labels in use written alike enough to be one
+(`labels.vocabulary.kinds.<kind>.suggestSimilarity`), but not enough to merge without asking, such as two names a
+letter apart, are listed under **Look Alike** on the Labels page, the most alike first, at most
+`labels.vocabulary.suggestionLimit`. The sidebar shows how many wait.
 
-A topic's home is where the logic puts it: when the logic puts payslips under "Work", a "Payslips" folder under
-"Home" is not their home, and reprocessing moves them. Nothing is moved while a plan is being made, and the logic
-cannot be changed until the plan is applied or discarded, so one plan never mixes two kinds of logic. Every decision
-records which logic made it.
+What you decide becomes a rule, recorded in History and kept in the archive (`System/_labels.md`,
+[Storage](storage.md)):
 
-### Each archive is organised its own way
+- **Merge** a label into another: every document that has it, written however, gets the other instead, and so does
+  every document read from then on. Merging back the other way replaces the first merge, and labels merged into the one
+  you merge follow it.
+- **Remove everywhere** (ignore) a label: it is taken off every document, and the model's answers lose it from then on.
+- **Keep apart** two alike labels: they are never merged and never offered to merge again.
+- **Forget** a rule: documents read from then on no longer follow it. Documents it already changed keep their labels.
 
-Because the logic belongs to the archive, two archives can be arranged in two different ways. Choose another archive
-under Settings › General, with **Switch Archive…** in the menu at the foot of the sidebar, or with
-`arrumatorcli archive switch <folder>`. From then on documents are filed there, following that archive's logic, folders
-and rules, and files still waiting in Incoming go there too. A folder never used as an archive starts with the
-built-in logic; switching back to an archive brings back everything it had. Each archive has an index of its own, so
-nothing learned from filing into one ever advises the other. A running app keeps its archive when the command line
-switches, until it is started again.
+On the Labels page, open a label to merge it or remove it everywhere, open a pair under Look Alike to merge it either
+way or keep it apart, and forget a rule under What You Decided. A label's menu on a document's card opens it there, or
+removes it everywhere. From a terminal: `arrumatorcli labels merge`, `ignore`, `keep-apart`, `similar`, `rules` and
+`forget` ([command line](cli.md)). Rules are about writing, so they apply to labels of every kind; the page lists the
+kinds the vocabulary keeps, as the others have one form each.
 
-A folder is removed as soon as it holds no documents, whether after a rethink or after you move or undo the last
-document in it. Only the app's own `_about.md` and system leftovers such as `.DS_Store` may remain in it. The folder's
-description stays in the database, and a folder that still holds any file is never touched.
+## Documents that wait for you
 
-## The folder tree grows with your documents
+A document is filed however it was read, but some wait for you in **Needs You**, in the archive, with the reason on
+their card:
 
-Nothing is pre-created. The first document creates the first folders. The tree takes the shape the archive's logic
-describes, as many levels deep as it asks for (up to `taxonomy.maxDepth` in `pipeline.json`), with folders named as
-the logic names them. The built-in logic keeps to two levels, `Money & Taxes/Taxes (Portugal)/2025/…`, and a logic of
-your own can ask for `Portugal/Acme Lda/Banking/Santander/2025/…`.
+- the model gave no valid answer, even after being told what was wrong (the document has no labels);
+- the file is encrypted or damaged;
+- no text could be read from it, and no image description either, as with a blank scan.
 
-For every document the model identifies who it is from (its sender) and whom it is about (its subject), and describes
-its home as a path from the top of the archive. It is shown no folders, so a folder is never taken because its name
-looks right, and a logic you change really changes the arrangement. The app works out which level of the path stands
-for which party: the level named like the sender, the one named like the subject, as written or across languages
-(`classification.placementGuard.partyAbove`). It does not ask the model, whose labels for its levels proved
-unreliable. The app puts the path onto the tree, keeping misfilings down:
+A document that waits keeps its own name: what the model read of it is in doubt. Confirm one as it is
+(**Looks Right**), correct its name or labels, or have it read again. A file that keeps failing to be processed at all
+(`ingest.maxAttempts`) is parked in the archive the same way, with status failed, so Incoming stays clean and nothing
+is lost.
 
-- **A sender's folder is recognised by its sender, not its name.** Senders are recognised by what identifies them (a
-  tax number, an IBAN, an e-mail or web domain) before their name. A known sender's documents join the folder its
-  documents are in (one the current logic made), however the model words or arranges the path this time, but only
-  under the subject the document is about: a bank serving your company and you has a folder under each, and a document
-  that does not say whom it concerns is not assumed to be either's. Inside a sender's folder, a document joins the
-  folder holding the sender's documents of the same type. A folder holding another sender's documents is never reused,
-  and a document whose path would put it there waits in Needs review.
-- **When the document and the model disagree about the sender** (an identifier in it belongs to one known sender, and
-  the model names another that nothing in it shows), the document waits in Needs review. A document that lists other
-  parties' identifiers, such as a statement's debits, is no disagreement when the sender the model names shows too.
-- **A topic** is an existing folder of the same name there, or of a name so close it would be a duplicate. Otherwise
-  the name the model chose freely is mapped onto the folders already there. The few most alike beside it are offered
-  to the model in one question, each described with a few of its documents, and it picks the one that already holds
-  what this folder would, or none. They are found by name, which finds "Finanças" for "Finance", and by name with
-  description, which finds "Household Expenses" for "Utilities" (`classification.placementGuard.offerAbove`,
-  `classification.placementGuard.choices`, `classification.placementGuard.rankFusionK`). It is asked a few times per
-  document at most (`classification.placementGuard.maxJudgements`); "unsure" keeps it apart, since a second folder is
-  easier to put right than a misfiled document. Names whose qualifiers differ ("Taxes (Portugal)", "Taxes (Russia)")
-  are never the same folder.
+While Ollama cannot be reached a document waits where it stopped, and a missing model holds it until the model is
+downloaded; neither costs it an attempt.
 
-Each folder the model makes records in its `_about.md` what it stands for and which logic made it. The model also says
-whether the document goes in a year folder, so a bank's statements can be kept by year while its account agreement
-sits in the bank's folder. A logic that spells the year out as its last level ("… / Institution / [YYYY Year]") gets
-exactly that: a year at the end of a path is its year folder. Folder names are cleaned the way file names are, so a
-name such as "Global / Cross-Border" becomes "Global - Cross-Border".
+An exact copy of a document already filed is a **duplicate**. It is not read again: it is filed at the top of the
+archive under its own name, marked as the copy it is, or left in Incoming, as Settings › General says
+(`duplicateAction`).
 
-Each folder has an `_about.md` whose description the model reads when deciding; a machine-maintained block at its end
-lists what actually lives there (recent file names, usual senders). Edit descriptions freely: your text is never
-overwritten. `_INDEX.md` at the archive root lists the whole tree. Folders made by earlier versions keep their numbered
-names until reprocessing moves their documents into the tree the logic describes.
+## Your own changes
+
+Moving or renaming a document in Finder is followed: the app finds the file by the identifier it stores on it and
+records the move in History. A file you put into the archive yourself, at the top or in a folder of yours, is read and
+labelled where it is, under its own name. A file removed from the archive is marked missing. Nothing you do in Finder
+is undone by the app.
+
+Reading a document again (`review retry`, **Read Again**) labels and names it again where it is. A document you undid
+is back in Incoming, held; read again, it is filed at the top of the archive.
+
+## Archives from earlier versions
+
+Earlier versions filed documents into a tree of folders the archive's logic described, and learned senders. Those
+documents stay where they are and are still indexed and searchable. What they were known by becomes their labels:
+their sender, type, date, reporting year, topic tags and language, as `sender`, `type`, `date`, `period`, `topic` and
+`language` labels; the name the model gave them, the model and what they waited for you about become how they were
+read. Titles are not kept. The folders, their `_about.md` files, the logic, what was learned about folders (rules,
+filing memories, corrections) and the senders are no longer used. To give such documents the full set of labels, read
+them again (`review retry`). Everything new is filed at the top of the archive.

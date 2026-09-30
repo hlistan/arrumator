@@ -1,7 +1,7 @@
 import ArrumatorCore
 import SwiftUI
 
-/// What is being worked on, what is waiting, and what was just decided, by day as on the Processed page: the whole
+/// What is being worked on, what is waiting, and what was just filed, by day as on the Processed page: the whole
 /// flow on one page.
 struct IncomingPage: View {
     @Environment(AppModel.self) private var model
@@ -52,7 +52,7 @@ struct IncomingPage: View {
     }
 
     private func load() async {
-        jobs = await model.load("Load queue") { try await $0.services.jobs.active(kinds: [.ingest, .adopt, .reclassify]) } ?? []
+        jobs = await model.load("Load queue") { try await $0.services.jobs.active(kinds: [.ingest, .adopt, .reanalyse]) } ?? []
         recent = await model.load("Load processed documents") {
             try await $0.services.documents.list(DocumentFilter(statuses: DocumentStatus.processed), order: .recentlyProcessed,
                                                  limit: $0.config.interface.recentlyProcessed)

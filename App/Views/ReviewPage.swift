@@ -1,13 +1,15 @@
 import ArrumatorCore
 import SwiftUI
 
-/// Documents the app was not sure about. Each answer is a correction it learns from.
+/// Documents waiting for the user: ones the model could not read, and ones left for later. Each can be confirmed as
+/// it is, corrected, or read again.
 struct ReviewPage: View {
     @Environment(AppModel.self) private var model
     @State private var documents: [DocumentRecord] = []
 
     var body: some View {
-        Page(.review, notes: documents.isEmpty ? nil : "Arrumator was not sure where these belong. Your answer teaches it.") {
+        Page(.review, notes: documents.isEmpty ? nil : "Arrumator could not read these as it should. Confirm one as it is, "
+            + "correct its name and details, or have it read again.") {
             if documents.isEmpty {
                 EmptyState(symbol: "checkmark.circle", text: "Nothing needs you.")
             } else {

@@ -37,8 +37,8 @@ struct GeneralSettings: View {
             } header: {
                 Text("Folders")
             } footer: {
-                Text("Each archive keeps its own logic, folders and what was learned from filing into it. Choosing "
-                    + "another archive files into it from now on; choosing this one again brings everything back.")
+                Text("Each archive keeps its own history. Choosing another archive files into it from now on; "
+                    + "choosing this one again brings everything back.")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             Section("Background") {
@@ -85,34 +85,12 @@ struct FilingSettings: View {
 
     var body: some View {
         Form {
-            Section("Folders") {
-                Toggle("Create folders the model proposes", isOn: setting(model, \.autoCreateFolders, default: true))
-                TextField("Language of folder names", text: setting(model, \.folderNamingLanguage, default: "English"))
-            }
-            Section("Confidence") {
-                LabeledContent("File automatically at") {
-                    Slider(value: setting(model, \.thresholds.auto, default: 0.85), in: 0.5...0.99)
-                    Text(String(format: "%.2f", model.settings?.thresholds.auto ?? 0)).monospacedDigit()
-                }
-                LabeledContent("Hold for review below") {
-                    Slider(value: setting(model, \.thresholds.review, default: 0.5), in: 0.1...0.9)
-                    Text(String(format: "%.2f", model.settings?.thresholds.review ?? 0)).monospacedDigit()
-                }
-                Picker("Uncertain documents", selection: setting(model, \.lowConfidenceAction, default: .holdForReview)) {
-                    Text("Hold in Needs review").tag(LowConfidenceAction.holdForReview)
-                    Text("File and flag").tag(LowConfidenceAction.fileAndFlag)
-                }
-                Picker("Learned rules", selection: setting(model, \.inducedRulePolicy, default: .autoEnableAndNotify)) {
-                    Text("Use them as soon as they form").tag(InducedRulePolicy.autoEnableAndNotify)
-                    Text("Ask me first").tag(InducedRulePolicy.proposeOnly)
-                }
-            }
             Section("Files") {
                 Toggle("Rename files", isOn: setting(model, \.renameFiles, default: true))
                 Toggle("Transliterate names to Latin letters", isOn: setting(model, \.transliterate, default: false))
-                Picker("Exact duplicates", selection: setting(model, \.duplicateAction, default: .moveToDuplicates)) {
-                    Text("Move to Duplicates").tag(DuplicateAction.moveToDuplicates)
-                    Text("Leave in Incoming").tag(DuplicateAction.leaveInIncoming)
+                Picker("Exact duplicates", selection: setting(model, \.duplicateAction, default: .fileInArchive)) {
+                    Text("File copies into the archive").tag(DuplicateAction.fileInArchive)
+                    Text("Leave copies in Incoming").tag(DuplicateAction.leaveInIncoming)
                 }
             }
         }
@@ -272,7 +250,6 @@ struct AdvancedSettings: View {
         do {
             let exporter = DiagnosticsExporter(database: runtime.database, paths: runtime.paths, config: runtime.config.stats)
             let contents = try await exporter.export(to: url, doctor: await runtime.runDoctor(), settings: settings,
-                                                     taxonomy: try await runtime.taxonomy.snapshot(root: settings.archiveURL),
                                                      includeDocumentText: includeText)
             exportMessage = "Saved \(contents.traces) traces and \(contents.logFiles.count) log files."
         } catch {

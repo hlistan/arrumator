@@ -1,30 +1,78 @@
-# Sources for the placement guidance
+# Sources for how documents are read and found
 
-The built-in logic, `Sources/ArrumatorClassify/Prompts/organizing-principles.md`, condenses these references. It is only
-the logic a new archive starts with: the archive's own logic decides the shape of its tree, and can be edited freely.
+The research behind how Arrumator labels documents and searches them. The archive has no folders of the app's making,
+and a document is described by its labels alone: it is found by them, its words and its meaning.
 
-| Principle | Sources |
+## Sources for labels
+
+Every document is labelled with the kinds of metadata archival description keeps for a record, the facets of faceted
+classification, and the fields document managers and key-information extraction read from personal paperwork
+(`labels-system.md`, `LabelKind`). The sources the kinds draw on:
+
+- **DCMI Metadata Terms** — <https://www.dublincore.org/specifications/dublin-core/dcmi-terms/>: *creator* "An entity
+  responsible for making the resource" and *publisher*; *subject* "A topic of the resource"; *coverage* "The spatial or
+  temporal topic of the resource, spatial applicability of the resource, or jurisdiction under which the resource is
+  relevant", with *spatial* and *temporal*; *issued* "Date of formal issuance of the resource"; *valid* "Date (often a
+  range) of validity of a resource"; *type* "The nature or genre of the resource", with a controlled vocabulary
+  recommended; *language*, with ISO 639 recommended; *identifier* "An unambiguous reference to the resource within a
+  given context".
+- **ISO 23081-1:2017, *Metadata for records*** — <https://www.iso.org/standard/73172.html>: a multi-entity model that
+  describes a record together with the agents, business, mandates and relationships around it.
+- **Ranganathan's facets** (personality, matter, energy, space, time): any subject analysed along five fundamental
+  categories — <https://en.wikipedia.org/wiki/Faceted_classification> ;
+  <https://berkeley.pressbooks.pub/tdo4p/chapter/faceted-classification/>.
+- **paperless-ngx**: correspondents, document types and tags, and custom fields including monetary and date fields —
+  <https://docs.paperless-ngx.com/usage/>; **paperless-gpt**, where a local or remote LLM suggests a document's title,
+  tags, correspondent, document type and created date — <https://github.com/icereed/paperless-gpt>.
+- **schema.org**: *Invoice* with *provider*, *customer*, *paymentDueDate*, *totalPaymentDue* and *accountId* —
+  <https://schema.org/Invoice>; *temporalCoverage*, the period a work applies to, as an ISO 8601 interval —
+  <https://schema.org/temporalCoverage>.
+- **Key-information extraction**: the fields benchmark datasets read from receipts and invoices, SROIE (company, date,
+  total) and inv-cdip (invoice number, invoice and due dates, amounts due, totals and tax), as summarised in
+  *Multi-Modal Vision vs. Text-Based Parsing: Benchmarking LLM Strategies for Invoice Processing*, 2025 —
+  <https://arxiv.org/pdf/2509.04469>.
+
+| Kind | Grounded in |
 |---|---|
-| Findability, one home per record, descriptive folder names, structure by function/subject, keep it simple, Title Case, ISO 8601 dates | NIST, *Electronic File Organization Tips* (2016) — <https://www.nist.gov/system/files/documents/2022/03/30/ElectronicFileOrganizationTips-2016-03.pdf> |
-| Balance breadth vs depth, consistent naming, date formats | UW-Madison Libraries, *File Naming & Organization* — <https://learn.library.wisc.edu/research-data-management/lesson-2/> ; UConn *File Naming and Date Formatting* — <https://guides.lib.uconn.edu/c.php?g=832372&p=8226285> |
-| Short folder names, avoid deep paths, document the structure in a file at the top | NBIS, *Organising files and folders* — <https://nbisweden.github.io/module-organising-data-dm-practices/002-files-and-folders/index.html> |
-| Two levels of few, broad areas and focused topics, one home per kind of document, year folders as the one exception | Stefan Zweifel, *An Opinionated Personal Folder Structure* — <https://stefanzweifel.dev/posts/2023/09/16/an-opinionated-personal-folder-structure/> |
-| Document type, correspondent and date as metadata rather than folders | paperless-ngx documentation — <https://docs.paperless-ngx.com/usage/> |
-| Tax records kept together per year (supports retention) | IRS Topic 305, *Recordkeeping* — <https://www.irs.gov/taxtopics/tc305> |
-
-## Sources for how the app places a decided path
-
-The model identifies a document and decides its path from the logic; the app, not the model, puts that path onto the
-folders that exist (`PlacementGuard`), so that nothing is filed where it does not belong.
+| `sender` | DCMI *creator* and *publisher*; ISO 23081 agent; paperless-ngx correspondent; schema.org Invoice *provider*; SROIE company |
+| `party` | ISO 23081 agent; schema.org Invoice *customer*; Ranganathan's personality |
+| `type` | DCMI *type*, from a controlled vocabulary (`DocumentType`); paperless-ngx document type |
+| `topic` | DCMI *subject*; paperless-ngx tags; Ranganathan's energy (the activity a record documents) and ISO 23081 business |
+| `object` | Ranganathan's matter; schema.org Invoice *accountId* |
+| `reference` | DCMI *identifier*; inv-cdip invoice number |
+| `date` | DCMI *issued*; paperless-ngx created date; SROIE and inv-cdip date |
+| `period` | DCMI *temporal*; schema.org *temporalCoverage*; Ranganathan's time |
+| `deadline` | DCMI *valid*; schema.org Invoice *paymentDueDate*; inv-cdip due date |
+| `amount` | schema.org Invoice *totalPaymentDue*; SROIE total; inv-cdip amount due; paperless-ngx monetary field |
+| `jurisdiction` | DCMI *coverage* and *spatial*; Ranganathan's space |
+| `language` | DCMI *language*, as ISO 639-1 codes — <https://www.loc.gov/standards/iso639-2/php/code_list.php> ; `Locale.LanguageCode` — <https://developer.apple.com/documentation/foundation/locale/languagecode> |
 
 | Choice | Sources |
 |---|---|
-| Identify metadata first, then file by it: a sender's documents are placed by who the sender is | paperless-ngx keeps a classifier per field (correspondent, document type, storage path) trained on the user's own assignments — <https://docs.paperless-ngx.com/usage/> ; <https://deepwiki.com/paperless-ngx/paperless-ngx/4.3-document-classification> |
-| Recognise a sender by its identifiers, not its spelling (legal forms, abbreviations and scripts vary) | Entity resolution as the hard half of invoice automation — <https://dev.to/taranpreet_kaur_4b538d878/why-an-llm-alone-cannot-do-invoice-extraction-yet-2mm7> |
-| Classify consistently into one fixed structure over time | ISO 15489-1:2016 — <https://www.iso.org/standard/62542.html> ; National Archives of Australia, *Overview of Classification Tools for Records Management* — <https://www.naa.gov.au/sites/default/files/2019-10/classifcation-tools.pdf> |
-| Let the model name a folder freely, then map the name onto the folders that exist (canonicalization) rather than show it the tree | Vashishth, Jain & Talukdar, *CESI: Canonicalizing Open Knowledge Bases using Embeddings and Side Information*, WWW 2018 — <https://arxiv.org/abs/1902.00172> ; Zhang & Soh, *Extract, Define, Canonicalize: An LLM-based Framework for Knowledge Graph Construction*, EMNLP 2024 — <https://arxiv.org/abs/2404.03868> |
-| Ask the model one narrow question (which of these few described folders is it, if any?) instead of matching a whole tree | Entity matching with foundation models: Narayan et al., *Can Foundation Models Wrangle Your Data?*, VLDB 2022 — <https://arxiv.org/abs/2205.09911> |
-| Offer the folders most alike by name and by name with description, merged by rank: each finds what the other misses (on the top-level folders one evaluation run made, the right folder was among the first four for 91% of pairs, against 59% by names alone; docs/evaluation.md › Candidate retrieval) | Cormack, Clarke & Büttcher, *Reciprocal Rank Fusion Outperforms Condorcet and Individual Rank Learning Methods*, SIGIR 2009 — <https://doi.org/10.1145/1571941.1572114> |
-| A recurring document joins its confidently filed predecessor without the model deciding (one near-identical trusted filing is enough). With gemma4:e2b on a corpus of three instances per kind, later instances were filed with their first in 83% of cases against 55% before, grouping F1 0.66 against 0.45 (means of three arrival orders and corpora) | k-nearest-neighbour classification over the user's own filings, as document managers do with their learned matching (paperless-ngx "Auto" — <https://github.com/paperless-ngx/paperless-ngx/blob/main/docs/advanced_usage.md)> and as TnT-LLM distils LLM labels into a lightweight classifier (Wan et al., KDD 2024 — <https://arxiv.org/abs/2403.12173)> |
-| Decide level by level against what exists at each level | Chen et al., *Retrieval-style In-context Learning for Few-shot Hierarchical Text Classification*, TACL 2024 — <https://aclanthology.org/2024.tacl-1.67/> |
-| Hold back what is uncertain rather than guess (coverage for accuracy) | Selective prediction with LLMs: Chen et al., *Adaptation with Self-Evaluation to Improve Selective Prediction in LLMs*, 2023 — <https://arxiv.org/pdf/2310.11689> |
+| Labels instead of folders, so a document is found from every side | paperless-ngx tags, which a document can carry many of, where a folder holds it in one place — <https://docs.paperless-ngx.com/usage/> |
+| The model answers in a fixed JSON schema, checked and repaired like every other answer | Ollama structured outputs — <https://ollama.com/blog/structured-outputs> |
+| The schema lists the facts a file name is made of (sender, type, date) first and the name last | Under constrained decoding the schema's property order is the order the model generates, so a field declared before another can inform it and one declared after cannot — <https://dev.to/ji_ai/why-json-schema-field-order-breaks-structured-output-accuracy-2985> |
+| `type` is a closed enum, and the other kinds free text normalised by the app | Format restrictions help classification-style answers while hindering free reasoning: Tam et al., *Let Me Speak Freely? A Study on the Impact of Format Restrictions on Performance of Large Language Models*, EMNLP 2024 Industry Track — <https://aclanthology.org/2024.emnlp-industry.91/> |
+| When the model gives no valid answer, the document waits for the user rather than being guessed into shape | Selective prediction with LLMs: Chen et al., *Adaptation with Self-Evaluation to Improve Selective Prediction in LLMs*, 2023 — <https://arxiv.org/pdf/2310.11689> |
+| ISO 8601 dates at the start of file names | NIST, *Electronic File Organization Tips* (2016) — <https://www.nist.gov/system/files/documents/2022/03/30/ElectronicFileOrganizationTips-2016-03.pdf> ; UConn *File Naming and Date Formatting* — <https://guides.lib.uconn.edu/c.php?g=832372&p=8226285> |
+
+## Sources for keeping labels one vocabulary
+
+How the archive's labels are kept consistent, and how the user's decisions about them reach the model
+([how it works](how-it-works.md#keeping-labels-one-vocabulary), `LabelConsolidator`, `LabelSimilarity`,
+`archive-labels.md`).
+
+| Choice | Sources |
+|---|---|
+| Labels written two ways, or two labels for one thing, are the problem to solve: they split what belongs together and a search misses part of it | Golder & Huberman, *The Structure of Collaborative Tagging Systems*, 2005: "Synonymy … presents a greater problem for tagging systems because inconsistency among the terms used in tagging can make it very difficult for one to be sure that all the relevant items have been found" — <https://arxiv.org/abs/cs/0508082> |
+| Labels are compared by the Jaro-Winkler similarity, with Winkler's prefix bonus (scale 0.1, at most 4 characters), and its published examples are the tests' reference values | Winkler, *String Comparator Metrics and Enhanced Decision Rules in the Fellegi-Sunter Model of Record Linkage*, 1990, which extends Jaro's comparator for typographical variation in names and gives the examples MARTHA/MARHTA, DWAYNE/DUANE and DIXON/DICKSONX — <https://files.eric.ed.gov/fulltext/ED325505.pdf> |
+| Jaro-Winkler rather than an edit distance for names | Cohen, Ravikumar & Fienberg, *A Comparison of String Distance Metrics for Name-Matching Tasks*, IIWeb 2003: the Jaro variants are close to the best edit-distance-like method on average, better on several problems, and about ten times faster — <https://www.cs.cmu.edu/~wcohen/postscript/ijcai-ws-2003.pdf> |
+| Words are compared in sorted order, so `Silva, Maria` is `Maria Silva`, and labels whose numbers differ are never alike | Token order is a writing variant for names, as token-based comparison in the same study treats it; a number is what tells one account, invoice or address from the next, so no measure of writing may join two of them |
+| Only labels written the same way merge without asking for names; merely alike ones wait for the user | Two people or companies can differ by one letter; record linkage sends the uncertain band between match and non-match to clerical review (Winkler 1990, above) |
+| The user's decisions teach the model through its prompt, with the archive's labels as examples, rather than by retraining it | In-context learning: a large language model does a task from instructions and demonstrations given "purely via text interaction with the model", "without any gradient updates or fine-tuning" — Brown et al., *Language Models are Few-Shot Learners*, 2020 — <https://arxiv.org/abs/2005.14165> |
+
+## Sources for search
+
+| Choice | Sources |
+|---|---|
+| Documents containing the words first, ordered by fusing their rank by words with their rank by meaning | Cormack, Clarke & Büttcher, *Reciprocal Rank Fusion Outperforms Condorcet and Individual Rank Learning Methods*, SIGIR 2009 — <https://doi.org/10.1145/1571941.1572114> |

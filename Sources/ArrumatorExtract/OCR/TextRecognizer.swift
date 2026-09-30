@@ -31,7 +31,7 @@ struct RecognizedText: Sendable {
 
 /// Runs one text recognition. `OCRService` decides the engine, orientation and device; this only asks.
 protocol TextRecognizing: Sendable {
-    /// Whether `RecognizeDocumentsRequest` reads every one of these language codes.
+    /// Whether `RecognizeDocumentsRequest` reads every one of these language codes that Vision reads at all.
     func documentsSupport(_ languages: [String]) -> Bool
     func recognize(_ image: CGImage, orientation: CGImagePropertyOrientation, engine: OCREngine, languages: [String],
                    on device: OCRDevice) async throws -> RecognizedText
@@ -40,8 +40,10 @@ protocol TextRecognizing: Sendable {
 /// Vision's text recognition, always accurate, with language correction and automatic language detection.
 struct VisionTextRecognizer: TextRecognizing {
     func documentsSupport(_ languages: [String]) -> Bool {
-        let supported = Set(RecognizeDocumentsRequest().supportedRecognitionLanguages.compactMap(\.languageCode?.identifier))
-        return languages.allSatisfy(supported.contains)
+        let documents = Set(RecognizeDocumentsRequest().supportedRecognitionLanguages.compactMap(\.languageCode?.identifier))
+        let text = Set(RecognizeTextRequest().supportedRecognitionLanguages.compactMap(\.languageCode?.identifier))
+        // A language no engine reads is left to automatic detection, and does not cost the document its tables.
+        return languages.allSatisfy { documents.contains($0) || !text.contains($0) }
     }
 
     func recognize(_ image: CGImage, orientation: CGImagePropertyOrientation, engine: OCREngine, languages: [String],

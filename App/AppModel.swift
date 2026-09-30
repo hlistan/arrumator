@@ -19,18 +19,21 @@ final class AppModel {
     private(set) var runtime: ArrumatorRuntime?
     var settings: AppSettings?
     var ingest = IngestStatus.idle
-    var rethink = RethinkProgress.none
     var ollama = OllamaState.unknown
     var recent: [EventRecord] = []
     var reviewCount = 0
-    var pendingProposals = 0
-    /// The archive's folders, for the sidebar and for naming where documents went.
-    var taxonomy: TaxonomySnapshot?
+    /// Pairs of alike labels waiting for the user to merge them or keep them apart.
+    var labelSuggestionCount = 0
     /// Bumped on every database change, and when another archive is opened; views reload with `.task(id:)`.
     var activity: Int64 = 0
     var destination: Destination = .incoming
     /// The document opened in place as a card. One at a time, as in Things.
     var openDocument: Int64?
+    /// The label opened in place as a card on the Labels page.
+    var openLabel: DocumentLabel?
+    /// The labels chosen in the sidebar, in the order they were chosen: the documents shown have every one, and the
+    /// sidebar offers only the labels those documents have.
+    var labelSelection: [DocumentLabel] = []
     /// Text in the sidebar's search field; while it is not empty the main area shows results.
     var searchText = ""
     weak var presenter: (any WindowPresenting)?
@@ -84,7 +87,7 @@ final class AppModel {
         }
     }
 
-    /// Files into the archive at `path` from now on. Its logic, folders and what was learned there come with it: the
+    /// Files into the archive at `path` from now on. Its history comes with it: the
     /// runtime open on this archive stops and one open on the other takes its place.
     func switchArchive(to path: String) async {
         guard let runtime, !switchingArchive,
@@ -100,9 +103,7 @@ final class AppModel {
             self.runtime = next
             settings = await next.settings.current
             ingest = .idle
-            rethink = .none
             openDocument = nil
-            if case .folder = destination { destination = .incoming }
             observe(next)
             activity &+= 1
             lastError = nil
@@ -124,9 +125,6 @@ final class AppModel {
                 for await state in await runtime.lifecycle.states() { self?.ollama = state }
             },
             Task { [weak self] in
-                for await progress in await runtime.rethink.progressUpdates() { self?.rethink = progress }
-            },
-            Task { [weak self] in
                 for await changed in await runtime.settings.changes() { self?.settings = changed }
             },
             Task { [weak self] in
@@ -143,12 +141,11 @@ final class AppModel {
         guard let runtime else { return }
         do {
             let events = try await runtime.services.history.events(
-                limit: 12, kinds: [.filed, .needsReview, .duplicate, .failed, .folderCreated, .ruleInduced, .userMoved])
+                limit: 12, kinds: [.filed, .needsReview, .duplicate, .failed, .userMoved])
             await notifications.announce(events, previous: recent, settings: settings)
             recent = events
             reviewCount = try await runtime.services.documents.reviewQueue().count
-            pendingProposals = try await runtime.proposals.pending().count
-            if let archive = settings?.archiveURL { taxonomy = try await runtime.taxonomy.snapshot(root: archive) }
+            labelSuggestionCount = try await runtime.services.labels.suggestions().count
         } catch {
             Log.error(.ui, "Refresh failed", ["error": error.localizedDescription])
         }
@@ -202,19 +199,36 @@ final class AppModel {
         }
     }
 
-    /// Starts deciding processed documents again with the archive's logic — a trial on a few, or all of them. The
-    /// plan forms on the Logic page, where it was started.
-    func startRethink(_ scope: RethinkScope, includeUserPlaced: Bool) async {
-        await perform(scope == .trial ? "Try the logic" : "Reprocess documents") {
-            try await $0.rethink.begin(scope, includeUserPlaced: includeUserPlaced)
-        }
-    }
-
-    /// Switches the main window to a page, closing any open card and search.
+    /// Switches the main window to a page, closing any open card and search. Any other page than the chosen labels'
+    /// lets go of them.
     func go(_ destination: Destination) {
         self.destination = destination
         openDocument = nil
+        openLabel = nil
         searchText = ""
+        if destination != .labelled { labelSelection = [] }
+    }
+
+    /// Shows a label opened in place on the Labels page.
+    func open(label: DocumentLabel) {
+        go(.labels)
+        openLabel = label
+        show(.main)
+    }
+
+    /// Chooses a label in the sidebar, narrowing the documents shown to those that also have it, or lets go of one
+    /// already chosen. With none left, the window shows every processed document again.
+    func choose(_ label: DocumentLabel) {
+        let selection = labelSelection.contains(label) ? labelSelection.filter { $0 != label } : labelSelection + [label]
+        go(selection.isEmpty ? .processed : .labelled)
+        labelSelection = selection
+    }
+
+    /// Shows the documents that have a label, as choosing it alone in the sidebar does.
+    func browse(_ label: DocumentLabel) {
+        go(.labelled)
+        labelSelection = [label]
+        show(.main)
     }
 
     /// Shows a document opened in place on a page, bringing the main window forward.
@@ -264,12 +278,12 @@ final class AppModel {
     }
 }
 
-/// What the main window shows. The sidebar lists `lists` and the archive's folders; history and statistics are
-/// reached from the sidebar's menu.
+/// What the main window shows. The sidebar lists `lists`, then the labels that choose `labelled`; history and
+/// statistics are reached from the sidebar's menu.
 enum Destination: Hashable {
-    case incoming, review, processed, learned, logic
-    case folder(Int64)
+    case incoming, review, processed, labels
+    case labelled
     case history, statistics
 
-    static let lists: [Destination] = [.incoming, .review, .processed, .learned, .logic]
+    static let lists: [Destination] = [.incoming, .review, .processed, .labels]
 }

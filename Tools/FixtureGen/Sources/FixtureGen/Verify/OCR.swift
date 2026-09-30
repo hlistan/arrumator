@@ -3,7 +3,8 @@ import Foundation
 import ImageIO
 import Vision
 
-/// Vision text recognition, configured like the app's OCR service (accurate, en/ru/pt, language correction).
+/// Vision text recognition, configured like the app's OCR service (accurate, the document's language first, then
+/// en/ru/pt, language correction).
 struct OCREngine {
     func recognize(_ image: CGImage, primary: Language) async throws -> String {
         var request = RecognizeTextRequest()
@@ -16,9 +17,8 @@ struct OCREngine {
 
     /// The fixture's own language first, like the app orders its guesses.
     private static func languages(primary: Language) -> [Locale.Language] {
-        let all: [(Language, String)] = [(.en, "en-US"), (.ru, "ru-RU"), (.pt, "pt-BR")]
-        let ordered = all.filter { $0.0 == primary } + all.filter { $0.0 != primary }
-        return ordered.map { Locale.Language(identifier: $0.1) }
+        let hints: [Language] = [.en, .ru, .pt]
+        return ([primary] + hints.filter { $0 != primary }).filter { $0 != .und }.map { Locale.Language(identifier: $0.rawValue) }
     }
 }
 

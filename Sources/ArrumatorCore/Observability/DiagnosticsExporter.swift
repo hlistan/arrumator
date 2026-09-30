@@ -7,7 +7,7 @@ public struct DiagnosticsContents: Sendable, Codable, Hashable {
     public var includesDocumentText: Bool
 }
 
-/// Writes a zip with logs, recent traces, the doctor report, settings and the taxonomy snapshot.
+/// Writes a zip with logs, recent traces, the doctor report and settings.
 /// Document text is included only when explicitly requested.
 public struct DiagnosticsExporter: Sendable {
     public let database: AppDatabase
@@ -20,7 +20,7 @@ public struct DiagnosticsExporter: Sendable {
         self.config = config
     }
 
-    public func export(to zipURL: URL, doctor: DoctorReport, settings: AppSettings, taxonomy: TaxonomySnapshot,
+    public func export(to zipURL: URL, doctor: DoctorReport, settings: AppSettings,
                        includeDocumentText: Bool) async throws -> DiagnosticsContents {
         let fm = FileManager.default
         let staging = fm.temporaryDirectory.appendingPathComponent("arrumator-diagnostics-\(UUID().uuidString)", isDirectory: true)
@@ -29,7 +29,6 @@ public struct DiagnosticsExporter: Sendable {
         defer { try? fm.removeItem(at: staging.deletingLastPathComponent()) }
         try JSON.prettyEncoder.encode(doctor).write(to: staging.appendingPathComponent("doctor.json"))
         try JSON.prettyEncoder.encode(settings).write(to: staging.appendingPathComponent("settings.json"))
-        try JSON.prettyEncoder.encode(taxonomy).write(to: staging.appendingPathComponent("taxonomy.json"))
         var logFiles: [String] = []
         let logsDir = staging.appendingPathComponent("logs", isDirectory: true)
         try fm.createDirectory(at: logsDir, withIntermediateDirectories: true)
@@ -42,15 +41,8 @@ public struct DiagnosticsExporter: Sendable {
         let traces = try await database.reader.read { db -> [String] in
             let traces = try TraceRecord.order(Column("started_at").desc).limit(limit).fetchAll(db)
             return try traces.map { t in
-                var steps = try TraceStepRecord.filter(Column("trace_id") == t.id).order(Column("seq")).fetchAll(db)
-                if !includeDocumentText {
-                    steps = steps.map { s in
-                        var s = s
-                        if s.stage == TraceStage.llm.rawValue || s.stage == TraceStage.vlm.rawValue { s.inputJson = nil }
-                        return s
-                    }
-                }
-                return JSON.string(TraceExport(trace: t, steps: steps))
+                let steps = try TraceStepRecord.filter(Column("trace_id") == t.id).order(Column("seq")).fetchAll(db)
+                return JSON.string(TraceExport(trace: t, steps: Self.shareable(steps, includeDocumentText: includeDocumentText)))
             }
         }
         try Data(traces.joined(separator: "\n").utf8).write(to: staging.appendingPathComponent("traces.jsonl"))
@@ -64,6 +56,21 @@ public struct DiagnosticsExporter: Sendable {
         }
         Log.info(.app, "Diagnostics exported", ["path": zipURL.path, "traces": String(traces.count)])
         return DiagnosticsContents(logFiles: logFiles, traces: traces.count, includesDocumentText: includeDocumentText)
+    }
+}
+
+extension DiagnosticsExporter {
+    /// Trace steps as a diagnostics export may hold them: without the user's consent, a step that exchanged the
+    /// document's text with a model keeps neither what it sent nor what came back, since both carry the document.
+    public static func shareable(_ steps: [TraceStepRecord], includeDocumentText: Bool) -> [TraceStepRecord] {
+        guard !includeDocumentText else { return steps }
+        return steps.map { step in
+            guard TraceStage(rawValue: step.stage)?.holdsDocumentContent == true else { return step }
+            var shared = step
+            shared.inputJson = nil
+            shared.outputJson = nil
+            return shared
+        }
     }
 }
 

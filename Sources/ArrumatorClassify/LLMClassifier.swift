@@ -34,9 +34,9 @@ public enum ModelAnswerError: Error, LocalizedError {
 public struct LLMClassifier: Sendable {
     public let gate: InferenceGate
     public let models: ModelManager
-    public let config: ClassificationConfig
+    public let config: AnalysisConfig
 
-    public init(gate: InferenceGate, models: ModelManager, config: ClassificationConfig) {
+    public init(gate: InferenceGate, models: ModelManager, config: AnalysisConfig) {
         self.gate = gate
         self.models = models
         self.config = config
@@ -50,6 +50,11 @@ public struct LLMClassifier: Sendable {
             self.model = model
             self.numCtx = numCtx
             self.keepAlive = keepAlive
+        }
+
+        /// The tiers in order, each model once: a profile may use one model for every role.
+        public static func distinct(_ tiers: [Tier]) -> [Tier] {
+            tiers.reduce(into: []) { acc, t in if !acc.contains(where: { $0.model == t.model }) { acc.append(t) } }
         }
     }
 

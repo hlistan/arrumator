@@ -58,7 +58,7 @@ enum EnglishFixtures {
                 .columns(left: ["Signed for and on behalf of Acme Ltd", "", "______________________________", "Jane Example, Director"],
                          right: ["Signed by the Employee", "", "______________________________", cast.alexName]),
             ])
-        return .filed(file, .en, .docx, core: true, category: "employment", year: nil, type: .contract,
+        return .filed(file, .en, .docx, type: .contract,
                       correspondent: "Acme Ltd", date: signed,
                       titleContains: ["Employment", "Agreement"], payload: .docx(document))
     }
@@ -105,7 +105,7 @@ enum EnglishFixtures {
                                      Money(cents: insurance.cents * 5).gbp, Money(cents: pension.cents * 5).gbp]])),
                 .note("Payment reference \(fake.letters(3))\(fake.reference(7)). Please keep this payslip for your records; it is not reissued."),
             ])
-        return .filed(file, .en, .pdfText, core: true, category: "income-and-payslips", year: 2026, type: .payslip,
+        return .filed(file, .en, .pdfText, type: .payslip,
                       correspondent: "Acme Ltd", date: paid,
                       titleContains: ["August", "2026"], payload: .pdfText(document))
     }
@@ -149,7 +149,7 @@ enum EnglishFixtures {
                 .paragraph("Thank you for your business. The amount will be charged to the credit card stored in your account; no further action is required."),
                 .note("Prices are monthly, billed in arrears. VAT is charged at the rate of the customer's country of residence (EU OSS scheme)."),
             ])
-        return .filed(file, .en, .pdfText, core: true, category: "hosting-services", year: 2026, type: .invoice,
+        return .filed(file, .en, .pdfText, type: .invoice,
                       correspondent: "Hetzner", date: issued,
                       titleContains: ["Cloud", "Server"], payload: .pdfText(document))
     }
@@ -184,7 +184,7 @@ enum EnglishFixtures {
                 .paragraph("To activate your products, sign in with your JetBrains Account in the IDE (Help › Register) or use the license key available at account.jetbrains.com."),
                 .note("After twelve months of continuous subscription you receive a perpetual fallback license for the version available at the start of the subscription."),
             ])
-        return .filed(file, .en, .pdfText, core: true, category: "software-licences", year: nil, type: .license,
+        return .filed(file, .en, .pdfText, type: .license,
                       correspondent: "JetBrains", date: ordered,
                       titleContains: ["All Products Pack"], payload: .pdfText(document))
     }
@@ -210,9 +210,9 @@ enum EnglishFixtures {
             ],
             actions: ["Share receipt", "Repeat"],
             footnote: "Payment made with Revolut Bank UAB")
-        return .filed(file, .en, .imageScreenshot, core: true, category: "bank-accounts", year: 2026, type: .receipt,
+        return .filed(file, .en, .imageScreenshot, type: .receipt,
                       correspondent: "Revolut", date: sent,
-                      titleContains: ["Transfer", "Wise"], identifiers: [.iban(cast.alexWiseIBAN)], minBand: .review,
+                      titleContains: ["Transfer", "Wise"], identifiers: [.iban(cast.alexWiseIBAN)],
                       payload: .screenshot(screen))
     }
 
@@ -256,7 +256,7 @@ enum EnglishFixtures {
                 .paragraph("Online check-in opens 36 hours before departure. Please present a passport valid for at least 150 days beyond your arrival in Türkiye."),
                 .note("Carriage is subject to TAP's general conditions of carriage. Changes and refunds follow the rules of the fare purchased."),
             ])
-        return .filed(file, .en, .pdfText, core: false, category: "travel", year: 2026, type: .ticket,
+        return .filed(file, .en, .pdfText, type: .ticket,
                       correspondent: "TAP", date: issued,
                       titleContains: ["Lisbon", "Istanbul"], payload: .pdfText(document))
     }
@@ -314,9 +314,9 @@ enum EnglishFixtures {
                 .text(lineTwo, x: 5, y: 81.5, size: 3.6, family: .mono),
             ])
         let info = DocumentInfo(title: "Passport", author: "HM Passport Office", subject: "Passport data page", created: issued)
-        return .filed(file, .en, .pdfScan, core: false, category: "identity-documents", year: nil, type: .idDocument,
+        return .filed(file, .en, .pdfScan, type: .idDocument,
                       correspondent: "HM Passport Office", date: issued,
-                      titleContains: ["Passport"], minBand: .review,
+                      titleContains: ["Passport"],
                       acceptAlso: AcceptAlso(correspondent: ["HMPO"]), payload: .pdfScan(.card(card, info: info)))
     }
 
@@ -367,7 +367,7 @@ enum EnglishFixtures {
             messageID: "20260304101244.\(fake.hex(12))@notificacoes.aima.gov.pt",
             plainBody: plain, htmlBody: html,
             attachment: Attachment(filename: "agendamento.ics", contentType: "text/calendar; charset=UTF-8; method=PUBLISH", content: calendar))
-        return .filed(file, .en, .eml, core: false, category: "residence-permits", year: nil, type: .letter,
+        return .filed(file, .en, .eml, type: .letter,
                       correspondent: "AIMA", date: sent.day,
                       titleContains: ["appointment", "residence"], payload: .email(email))
     }

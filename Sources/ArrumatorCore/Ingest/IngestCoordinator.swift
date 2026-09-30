@@ -20,24 +20,19 @@ public struct PipelineServices: Sendable {
     public var database: AppDatabase
     public var config: PipelineConfig
     public var settings: SettingsStore
-    public var taxonomy: TaxonomyStore
     public var extractor: any ContentExtracting
-    public var classifier: any DocumentClassifier
-    public var learner: any LearningSink
+    public var analyzer: any DocumentAnalyzing
     public var filer: DocumentFiler
     public var traces: TraceRecorder
     public var vectors: VectorIndex
 
-    public init(database: AppDatabase, config: PipelineConfig, settings: SettingsStore, taxonomy: TaxonomyStore,
-                extractor: any ContentExtracting, classifier: any DocumentClassifier, learner: any LearningSink,
-                filer: DocumentFiler, traces: TraceRecorder, vectors: VectorIndex) {
+    public init(database: AppDatabase, config: PipelineConfig, settings: SettingsStore, extractor: any ContentExtracting,
+                analyzer: any DocumentAnalyzing, filer: DocumentFiler, traces: TraceRecorder, vectors: VectorIndex) {
         self.database = database
         self.config = config
         self.settings = settings
-        self.taxonomy = taxonomy
         self.extractor = extractor
-        self.classifier = classifier
-        self.learner = learner
+        self.analyzer = analyzer
         self.filer = filer
         self.traces = traces
         self.vectors = vectors
@@ -47,19 +42,70 @@ public struct PipelineServices: Sendable {
     public var jobs: JobStore { JobStore(database: database) }
     public var history: HistoryStore { HistoryStore(database: database) }
     public var index: IndexStore { IndexStore(database: database) }
-    public var logic: LogicStore { LogicStore(database: database, maxChars: config.classification.logicMaxChars) }
 
-    /// Starts a trace stamped with the prompt, logic and folder-tree versions in force.
+    /// Where things are in the archive the settings name.
+    public func layout(_ settings: AppSettings) -> ArchiveLayout {
+        ArchiveLayout(root: settings.archiveURL, records: config.records, watcher: config.watcher)
+    }
+
+    /// Starts a trace stamped with the prompt version and models in force.
     public func startTrace(docID: Int64?, jobID: Int64?, attempt: Int, source: TraceSource,
                            settings: AppSettings) async throws -> TraceContext {
-        try await traces.start(TraceHeader(
-            docID: docID, jobID: jobID, attempt: attempt, source: source, promptVersion: config.classification.promptVersion,
-            logicVersion: LogicStore.version(of: try await logic.current()), taxonomyVersion: try await taxonomy.version(),
-            models: try? config.models(for: settings.models), settings: settings))
+        try await traces.start(TraceHeader(docID: docID, jobID: jobID, attempt: attempt, source: source,
+                                           promptVersion: config.analysis.promptVersion,
+                                           models: try? config.models(for: settings.models), settings: settings))
+    }
+
+    public var labels: LabelStore { LabelStore(database: database, config: config.labels) }
+
+    /// Reads a document with the model, telling it of the archive's labels and the user's decisions about them, and
+    /// keeps its labels one vocabulary with the archive's (`LabelConsolidator`), recording what that changed in the
+    /// trace. Nothing is saved: dry runs and replays read this way too.
+    public func read(_ content: ExtractedContent, settings: AppSettings, trace: TraceContext) async throws -> Reading {
+        var outcome = try await analyzer.analyse(content, guidance: try await labels.guidance(), settings: settings, config: config,
+                                                 trace: trace)
+        guard let given = outcome.labels else { return Reading(outcome: outcome, changes: []) }
+        let consolidator = try await labels.consolidator()
+        let consolidation = await trace.measure(.consolidate, input: given, output: { (c: LabelConsolidation) in c }) {
+            consolidator.consolidate(given)
+        }
+        outcome.labels = consolidation.labels
+        return Reading(outcome: outcome, changes: consolidation.changes)
+    }
+
+    /// Asks the model about a document and keeps what it says: the labels on the document and in the search index
+    /// straight away, and a history event with what it was labelled with, or why it was not.
+    public func analyse(docID: Int64, jobID: Int64?, content: ExtractedContent, settings: AppSettings,
+                        trace: TraceContext) async throws -> AnalysisOutcome {
+        let reading = try await read(content, settings: settings, trace: trace)
+        let outcome = reading.outcome
+        if let labels = outcome.labels {
+            try await index.saveLabels(labels, docID: docID)
+            try await history.record(.analysed, doc: docID, job: jobID, trace: trace.traceID,
+                                     summary: labels.isEmpty ? "Nothing worth a label" : labels.map(\.value).joined(separator: " · "),
+                                     payload: AnalysedPayload(analysis: outcome.analysis, changes: reading.changes))
+        } else {
+            try await history.record(.error, doc: docID, job: jobID, trace: trace.traceID,
+                                     summary: "Not read: " + outcome.analysis.problems.joined(separator: "; "), payload: outcome.analysis)
+        }
+        return outcome
     }
 }
 
-/// Runs ingest jobs one at a time through hashing → extracting → classifying → filing.
+/// A reading of a document: what the model gave it, its labels kept one vocabulary with the archive's, and what that
+/// changed of what the model gave.
+public struct Reading: Sendable, Codable {
+    public var outcome: AnalysisOutcome
+    public var changes: [LabelChange]
+}
+
+/// What the history keeps of a reading: how the document was read, and which of the model's labels became others.
+public struct AnalysedPayload: Sendable, Codable, Hashable {
+    public var analysis: DocumentAnalysis
+    public var changes: [LabelChange]
+}
+
+/// Runs ingest jobs one at a time through hashing → extracting → analysing → filing.
 /// Every transition is persisted, so a crash or restart resumes from the last completed stage.
 public actor IngestCoordinator {
     private let services: PipelineServices
@@ -280,69 +326,27 @@ public actor IngestCoordinator {
             try await services.history.record(.extracted, doc: docID, job: job.id, trace: trace.traceID,
                                               summary: "\(content.kind.rawValue), \(content.text.count) chars, \(content.language.primary)",
                                               payload: ["warnings": content.warnings.map(\.code.rawValue).joined(separator: ",")])
-            try await save(&job, payload, state: .classifying)
+            try await save(&job, payload, state: .analysing)
         }
         guard let content = payload.content else { throw IngestError.contentUnavailable(docID) }
 
-        if job.state == .classifying {
-            try await decide(&job, payload: &payload, docID: docID, content: content, settings: settings, trace: trace)
+        if job.state == .analysing {
+            payload.outcome = try await services.analyse(docID: docID, jobID: job.id, content: content, settings: settings, trace: trace)
+            try await save(&job, payload, state: .filing)
         }
-        guard var outcome = payload.outcome else { throw IngestError.invalidState("classification missing") }
+        guard let outcome = payload.outcome else { throw IngestError.invalidState("analysis missing") }
 
         if job.state == .filing {
-            // The folder tree can change while the model decides, as when the last other document in the chosen folder
-            // is undone and the folder removed. A decision naming a folder that is gone is made again against the
-            // tree as it is now, which creates the folder the document needs afresh.
-            if let code = outcome.decision.folderCode,
-               try await services.taxonomy.snapshot(root: settings.archiveURL).folder(code: code) == nil {
-                Log.info(.ingest, "Chosen folder removed while deciding; deciding again", ["doc": String(docID), "folder": code])
-                try await services.history.record(.retry, doc: docID, job: job.id, trace: trace.traceID,
-                                                  summary: "Folder \(code) was removed while this was being decided; deciding again")
-                outcome = try await decide(&job, payload: &payload, docID: docID, content: content, settings: settings, trace: trace)
-            }
             try await fileDocument(&job, payload: &payload, docID: docID, content: content, outcome: outcome,
                                    settings: settings, trace: trace)
         }
     }
 
-    /// Asks the classifier where the document goes, against the folder tree as it is now, and keeps the answer for
-    /// filing.
-    @discardableResult
-    private func decide(_ job: inout JobRecord, payload: inout JobPayload, docID: Int64, content: ExtractedContent,
-                        settings: AppSettings, trace: TraceContext) async throws -> ClassificationOutcome {
-        let taxonomy = try await services.taxonomy.snapshot(root: settings.archiveURL)
-        var outcome = try await services.classifier.classify(content, taxonomy: taxonomy, settings: settings,
-                                                             config: services.config, mode: .arrival, trace: trace)
-        if let userFolder = payload.userFolderID, let folder = taxonomy.folder(id: userFolder) {
-            outcome.decision = userConfirmed(outcome.decision, folderCode: folder.code, settings: settings)
-        }
-        payload.outcome = outcome
-        let d = outcome.decision
-        let destination = taxonomy.destination(of: d).map { ($0.isNew ? "new " : "") + $0.path } ?? "review"
-        try await services.history.record(.classified, doc: docID, job: job.id, trace: trace.traceID,
-                                          summary: "\(destination) · \(d.band.rawValue) · \(String(format: "%.2f", d.confidence.final))",
-                                          payload: d)
-        try await save(&job, payload, state: .filing)
-        return outcome
-    }
-
     private func visionOptions(_ settings: AppSettings) throws -> VisionModelOptions {
         let models = try services.config.models(for: settings.models)
         return VisionModelOptions(model: models.vision, keepAlive: models.keepAliveChat,
-                                  numPredict: services.config.classification.vlmNumPredict, numCtx: models.visionNumCtx,
-                                  options: services.config.classification.llmOptions)
-    }
-
-    private func userConfirmed(_ decision: FilingDecision, folderCode: String, settings: AppSettings) -> FilingDecision {
-        var d = decision
-        d.folderCode = folderCode
-        d.decidedBy = .user
-        d.proposedNewFolder = nil
-        d.confidence = ConfidenceReport(llm: decision.confidence.llm, knnAgreement: decision.confidence.knnAgreement,
-                                        simAgreement: decision.confidence.simAgreement, ruleHit: decision.confidence.ruleHit,
-                                        modifiers: decision.confidence.modifiers.merging(["userChoice": 1], uniquingKeysWith: { $1 }),
-                                        final: 1, band: .auto, thresholds: settings.thresholds)
-        return d
+                                  numPredict: services.config.analysis.vlmNumPredict, numCtx: models.visionNumCtx,
+                                  options: services.config.analysis.llmOptions)
     }
 
     private func ensureDocument(for job: JobRecord, source: URL, sha: String, fingerprint: FileFingerprint) async throws -> DocumentRecord {
@@ -353,7 +357,8 @@ public actor IngestCoordinator {
         return try await services.documents.save(record)
     }
 
-    /// Returns true when the file was handled as a duplicate of an existing document.
+    /// Returns true when the file was handled as a duplicate of an existing document: filed into the archive beside
+    /// it, unread and unlabelled, or left in Incoming, as the settings say.
     private func handleDuplicate(document: DocumentRecord, job: inout JobRecord, payload: JobPayload,
                                  settings: AppSettings, trace: TraceContext) async throws -> Bool {
         guard job.kind != .adopt, let docID = document.id else { return false }
@@ -365,32 +370,30 @@ public actor IngestCoordinator {
         var doc = document
         doc.duplicateOf = original.id
         doc.status = .duplicate
-        if settings.duplicateAction == .moveToDuplicates {
-            let folder = try await services.taxonomy.ensureSystemFolder(.duplicates, root: settings.archiveURL)
-            let taxonomy = try await services.taxonomy.snapshot(root: settings.archiveURL)
-            let decision = FilingDecision(folderCode: folder.code, title: document.originalFilename,
-                                          confidence: ConfidenceReport(final: 1, band: .auto, thresholds: settings.thresholds),
-                                          decidedBy: .rule, rationale: "Identical bytes to document \(original.id ?? 0): \(original.filename)")
-            doc = try await services.documents.save(doc)
-            let source = SourceFile(path: doc.path, originalFilename: doc.originalFilename,
-                                    fileExtension: (doc.originalFilename as NSString).pathExtension, utType: doc.uttype,
-                                    byteSize: doc.size, createdAt: nil, modifiedAt: doc.fileMtime, sha256: doc.sha256)
-            let filedRecord = try await services.filer.file(doc, source: source, decision: decision, folderCode: folder.code,
-                                                       status: .duplicate, userChosen: false, inPlace: false,
-                                                       taxonomy: taxonomy, settings: settings, trace: trace)
-            doc = filedRecord
+        doc = try await services.documents.save(doc)
+        let summary = "\(document.originalFilename) duplicates \(original.filename)"
+        if settings.duplicateAction == .fileInArchive {
+            let analysis = DocumentAnalysis(problems: [summary])
+            _ = try await services.filer.file(doc, source: Self.source(of: doc), analysis: analysis, status: .duplicate,
+                                              directory: services.layout(settings).root, inPlace: false, actor: .system,
+                                              settings: settings, trace: trace, event: .duplicate)
         } else {
-            doc = try await services.documents.save(doc)
+            try await services.history.record(.duplicate, doc: docID, job: job.id, trace: trace.traceID, summary: summary,
+                                              payload: ["original": String(original.id ?? 0), "path": doc.path])
         }
-        try await services.history.record(.duplicate, doc: docID, job: job.id, trace: trace.traceID,
-                                          summary: "\(document.originalFilename) duplicates \(original.filename)",
-                                          payload: ["original": String(original.id ?? 0), "path": doc.path])
         try await save(&job, payload, state: .duplicate)
         return true
     }
 
-    /// Reads a filed document's text and computes its embedding again, deciding and moving nothing: what a document
-    /// needs for search after the index was rebuilt from the archive.
+    /// The file as it is known before it is read.
+    static func source(of document: DocumentRecord) -> SourceFile {
+        SourceFile(path: document.path, originalFilename: document.originalFilename,
+                   fileExtension: (document.originalFilename as NSString).pathExtension, utType: document.uttype,
+                   byteSize: document.size, createdAt: nil, modifiedAt: document.fileMtime, sha256: document.sha256)
+    }
+
+    /// Reads a filed document's text and computes its embedding again, asking the model nothing and moving nothing:
+    /// what a document needs for search after the index was rebuilt from the archive. Its labels come from its record.
     private func reindex(_ job: inout JobRecord, payload: JobPayload, settings: AppSettings, trace: TraceContext) async throws {
         guard let docID = job.docId, let document = try await services.documents.document(id: docID),
               FileManager.default.fileExists(atPath: document.path) else {
@@ -402,65 +405,43 @@ public actor IngestCoordinator {
                                         vision: settings.enableVLM ? try visionOptions(settings) : nil)
         let content = try await services.extractor.extract(document.url, sha256: document.sha256, context: context, trace: trace)
         try await storeExtraction(docID: docID, content: content)
-        try await services.index.updateHeader(docID: docID, title: document.title ?? "", correspondent: document.correspondent ?? "",
-                                              filename: document.filename)
-        if let (vector, model) = try await services.classifier.embedding(for: content, sender: document.correspondent,
-                                                                          settings: settings, config: services.config, trace: trace) {
-            let text = content.embeddingSummary(correspondentHint: document.correspondent,
-                                                maxChars: services.config.classification.embeddingSummaryChars)
-            try await trace.measure(.index, input: ["model": model]) {
-                try await services.index.upsertEmbedding(docID: docID, model: model, vector: vector, sourceText: text)
-                await services.vectors.upsert(docID: docID, vector: vector, model: model)
-            }
-            await services.learner.documentReembedded(documentID: docID, vector: vector, model: model)
+        let senders = document.labels(.sender)
+        if let (vector, model) = try await services.analyzer.embedding(for: content, senders: senders, settings: settings,
+                                                                        config: services.config, trace: trace) {
+            try await index(docID: docID, content: content, senders: senders, vector: vector, model: model, trace: trace)
         }
         try await save(&job, payload, state: .done)
     }
 
+    private func index(docID: Int64, content: ExtractedContent, senders: [String], vector: [Float], model: String,
+                       trace: TraceContext) async throws {
+        let text = content.embeddingSummary(senders: senders, maxChars: services.config.analysis.embeddingSummaryChars)
+        try await trace.measure(.index, input: ["model": model]) {
+            try await services.index.upsertEmbedding(docID: docID, model: model, vector: vector, sourceText: text)
+            await services.vectors.upsert(docID: docID, vector: vector, model: model)
+        }
+    }
+
     private func storeExtraction(docID: Int64, content: ExtractedContent) async throws {
         guard var doc = try await services.documents.document(id: docID) else { throw IngestError.documentNotFound(docID) }
-        doc.language = content.language.primary
         doc.pageCount = content.pageCount
         doc.extractedAt = Date()
         doc.contentJson = DocumentStore.storedContentJSON(content)
         _ = try await services.documents.save(doc)
-        try await services.index.upsertText(docID: docID, title: "", correspondent: "", filename: doc.filename,
-                                            body: content.text, summary: content.visual?.description,
+        try await services.index.upsertText(docID: docID, filename: doc.filename, body: content.text, summary: content.visual?.description,
                                             metadata: content.metadata,
-                                            extractorVersion: "\(content.extractorName)/\(content.extractorVersion)")
+                                            extractorVersion: "\(content.extractorName)/\(content.extractorVersion)",
+                                            labels: doc.labels ?? [])
     }
 
+    /// Files the document under the name the model gave it: a new arrival at the top of the archive, a document read
+    /// again where it is, one the user put in the archive left as it is. A document the model could not read waits
+    /// for the user there.
     private func fileDocument(_ job: inout JobRecord, payload: inout JobPayload, docID: Int64, content: ExtractedContent,
-                              outcome: ClassificationOutcome, settings: AppSettings, trace: TraceContext) async throws {
+                              outcome: AnalysisOutcome, settings: AppSettings, trace: TraceContext) async throws {
         guard let document = try await services.documents.document(id: docID) else { throw IngestError.documentNotFound(docID) }
-        let root = settings.archiveURL
-        var decision = outcome.decision
-        let userChosen = payload.userFolderID != nil
-        let lowConfidence = decision.band == .review && settings.lowConfidenceAction == .holdForReview
-        let targetCode: String
-        let status: DocumentStatus
-        if lowConfidence && !userChosen {
-            targetCode = try await services.taxonomy.ensureSystemFolder(.needsReview, root: root).code
-            status = .needsReview
-        } else if let code = decision.folderCode {
-            targetCode = code
-            status = .filed
-        } else if let spec = decision.proposedNewFolder, settings.autoCreateFolders {
-            let created = try await trace.measure(.place, input: ["create": spec], output: { (f: TaxonomyFolder) in
-                ["code": f.code, "path": f.relativePath]
-            }) {
-                try await services.taxonomy.materialize(spec, root: root, origin: .learned)
-            }
-            decision.folderCode = created.code
-            decision.proposedNewFolder = nil
-            payload.outcome?.decision = decision
-            targetCode = created.code
-            status = .filed
-        } else {
-            targetCode = try await services.taxonomy.ensureSystemFolder(.needsReview, root: root).code
-            status = .needsReview
-        }
-        let taxonomy = try await services.taxonomy.snapshot(root: root)
+        let analysis = outcome.analysis
+        let status: DocumentStatus = analysis.problems.isEmpty ? .filed : .needsReview
         if job.kind != .adopt, document.path != job.sourcePath || !FileManager.default.fileExists(atPath: document.path) {
             if let target = payload.targetPath, FileManager.default.fileExists(atPath: target), document.path == target {
                 Log.info(.ingest, "Filing already completed before interruption", ["doc": String(docID)])
@@ -468,36 +449,21 @@ public actor IngestCoordinator {
                 throw IngestError.sourceMissing(document.path)
             }
         }
-        let filedRecord = try await services.filer.file(document, source: content.source, decision: decision, folderCode: targetCode,
-                                                   status: status, userChosen: userChosen, inPlace: job.kind == .adopt,
-                                                   taxonomy: taxonomy, settings: settings, trace: trace)
+        let directory = job.kind == .ingest ? services.layout(settings).root : document.url.deletingLastPathComponent()
+        let filedRecord = try await services.filer.file(document, source: content.source, analysis: analysis, status: status,
+                                                        directory: directory, inPlace: job.kind == .adopt, actor: .system,
+                                                        settings: settings, trace: trace)
         payload.targetPath = filedRecord.path
         if var doc = try await services.documents.document(id: docID) {
             doc.lastTraceId = trace.traceID
             _ = try await services.documents.save(doc)
         }
         if let embedding = outcome.embedding, let model = outcome.embeddingModel {
-            let text = content.embeddingSummary(correspondentHint: decision.correspondent,
-                                                maxChars: services.config.classification.embeddingSummaryChars)
-            try await trace.measure(.index, input: ["model": model]) {
-                try await services.index.upsertEmbedding(docID: docID, model: model, vector: embedding, sourceText: text)
-                await services.vectors.upsert(docID: docID, vector: embedding, model: model)
-            }
-        }
-        if status == .filed, let folderID = filedRecord.folderId {
-            // Every placement is recorded so repeated patterns turn into rules; user confirmations weigh more.
-            var learned = outcome
-            learned.decision = decision
-            var filed = content
-            filed.source.path = filedRecord.path
-            await services.learner.documentFiled(documentID: docID, folderID: folderID, outcome: learned, content: filed,
-                                                 confirmedByUser: userChosen || job.kind == .adopt, trace: trace)
+            try await index(docID: docID, content: content, senders: outcome.labels?.values(.sender) ?? [], vector: embedding,
+                            model: model, trace: trace)
         }
         try await save(&job, payload, state: status == .needsReview ? .needsReview : .done)
-        Log.info(.ingest, status == .needsReview ? "Held for review" : "Filed", [
-            "doc": String(docID), "folder": targetCode, "band": decision.band.rawValue,
-            "confidence": String(format: "%.2f", decision.confidence.final), "path": filedRecord.path,
-        ])
+        Log.info(.ingest, status == .needsReview ? "Filed; waiting for the user" : "Filed", ["doc": String(docID), "path": filedRecord.path])
     }
 
     // MARK: Failures
@@ -551,30 +517,28 @@ public actor IngestCoordinator {
         Log.error(.ingest, "Job failed", ["job": String(job.id ?? 0), "error": message])
     }
 
-    /// Moves a file that could not be processed into Needs review so Incoming stays clean and nothing is lost.
+    /// Moves a new file that could not be processed into the archive, where it waits for the user, so Incoming stays
+    /// clean and nothing is lost; a document already in the archive stays where it is.
     private func parkFailedDocument(job: JobRecord, message: String, trace: TraceContext) async {
         do {
             let settings = await services.settings.current
-            let review = try await services.taxonomy.ensureSystemFolder(.needsReview, root: settings.archiveURL)
-            let taxonomy = try await services.taxonomy.snapshot(root: settings.archiveURL)
             guard let docID = job.docId, let document = try await services.documents.document(id: docID) else {
                 try await services.history.record(.failed, job: job.id, trace: trace.traceID, summary: message)
                 return
             }
-            if FileManager.default.fileExists(atPath: document.path), job.kind != .adopt {
-                let decision = FilingDecision(folderCode: review.code, title: document.originalFilename,
-                                              confidence: ConfidenceReport(final: 0, band: .review, thresholds: settings.thresholds),
-                                              decidedBy: .review, rationale: "Processing failed: \(message)", reviewReasons: [message])
-                let source = SourceFile(path: document.path, originalFilename: document.originalFilename,
-                                        fileExtension: (document.originalFilename as NSString).pathExtension,
-                                        utType: document.uttype, byteSize: document.size, createdAt: nil,
-                                        modifiedAt: document.fileMtime, sha256: document.sha256)
-                _ = try await services.filer.file(document, source: source, decision: decision, folderCode: review.code,
-                                                  status: .failed, userChosen: false, inPlace: false, taxonomy: taxonomy,
-                                                  settings: settings, trace: trace)
+            let analysis = DocumentAnalysis(problems: ["Processing failed: \(message)"])
+            if FileManager.default.fileExists(atPath: document.path), job.kind == .ingest {
+                _ = try await services.filer.file(document, source: Self.source(of: document), analysis: analysis, status: .failed,
+                                                  directory: services.layout(settings).root, inPlace: false, actor: .system,
+                                                  settings: settings, trace: trace, event: .failed)
+            } else {
+                var failed = document
+                failed.status = .failed
+                failed.analysisJson = JSON.string(analysis)
+                _ = try await services.documents.save(failed)
+                try await services.history.record(.failed, doc: docID, job: job.id, trace: trace.traceID,
+                                                  summary: "\(document.originalFilename): \(message)")
             }
-            try await services.history.record(.failed, doc: docID, job: job.id, trace: trace.traceID,
-                                              summary: "\(document.originalFilename): \(message)")
         } catch {
             Log.error(.ingest, "Could not park failed document", ["job": String(job.id ?? 0), "error": error.localizedDescription])
         }

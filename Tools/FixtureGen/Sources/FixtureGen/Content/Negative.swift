@@ -1,4 +1,4 @@
-/// Files the app must not file normally: a self-made spreadsheet, a duplicate, a blank scan, an encrypted and
+/// Files that are no ordinary document: a self-made spreadsheet, a duplicate, a blank scan, an encrypted and
 /// a truncated PDF.
 enum NegativeFixtures {
     /// User password of the encrypted fixture (recorded in expected.json; the app is not supposed to know it).
@@ -48,17 +48,17 @@ enum NegativeFixtures {
         rows.append([.text("Notes: keep a 10% emergency fund; review the electricity tariff in October.")])
         let workbook = Workbook(title: "Household budget 2026", creator: "Alex Sample", created: Day(2026, 1, 4),
                                 sheets: [Sheet(name: "Budget 2026", columnWidths: [22] + Array(repeating: 10, count: 13), rows: rows)])
-        return .heldBack(file, .en, .xlsx, category: "needs-review", type: .other, titleContains: ["Budget"], payload: .xlsx(workbook))
+        return .edgeCase(file, .en, .xlsx, status: .filed, type: nil, titleContains: ["Budget"], payload: .xlsx(workbook))
     }
 
     static func duplicate() -> Fixture {
-        .heldBack("negative/91-edp-fatura-2026-07-copy.pdf", .pt, .pdfText, category: "duplicates", type: nil,
+        .edgeCase("negative/91-edp-fatura-2026-07-copy.pdf", .pt, .pdfText, status: .duplicate, type: nil,
                   duplicateOf: "pt/01-edp-fatura-2026-07.pdf", payload: .copy(of: "pt/01-edp-fatura-2026-07.pdf"))
     }
 
     static func blankScan() -> Fixture {
         let info = DocumentInfo(title: "", author: "", subject: "", created: Day(2026, 9, 10))
-        return .heldBack("negative/92-blank-scan.pdf", .und, .pdfScan, category: "needs-review", type: nil, warnings: [.emptyText],
+        return .edgeCase("negative/92-blank-scan.pdf", .und, .pdfScan, status: .needsReview, type: nil, warnings: [.emptyText],
                          payload: .pdfScan(.blank(info)))
     }
 
@@ -79,7 +79,7 @@ enum NegativeFixtures {
                              totals: [["Total (IVA incluído)", price.eurPT]])),
                 .paragraph("Garantia de 3 anos a contar da data da fatura. Guarde este documento."),
             ])
-        return .heldBack(file, .pt, .pdfText, category: "needs-review", type: nil, warnings: [.encrypted], password: password,
+        return .edgeCase(file, .pt, .pdfText, status: .needsReview, type: nil, warnings: [.encrypted], password: password,
                          payload: .encryptedPDF(document, password: password))
     }
 
@@ -98,7 +98,7 @@ enum NegativeFixtures {
                              rows: [["Domain renewal example-sample.dev (1 year)", Money(14, 98).eurEN]],
                              totals: [["Total", Money(14, 98).eurEN]])),
             ])
-        return .heldBack(file, .en, .pdfText, category: "needs-review", type: nil, warnings: [.corrupted],
+        return .edgeCase(file, .en, .pdfText, status: .needsReview, type: nil, warnings: [.corrupted],
                          payload: .truncatedPDF(document))
     }
 }

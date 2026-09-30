@@ -47,32 +47,12 @@ public struct FunnelStepStats: Sendable, Codable, Hashable, Identifiable {
     public var cumulativeShare: Double? { ofAll == 0 ? nil : Double(reached) / Double(ofAll) }
 }
 
-/// Who chose the folder: a learned rule, a near-identical past filing, the local model, or the user.
-public struct DecisionSource: Sendable, Codable, Hashable, Identifiable {
-    public var id: String
-    public var count: Int
-    /// True when no model call was needed.
-    public var learned: Bool
-}
-
-/// One period of the "how much is placed without the model" trend.
-public struct FunnelTrendPoint: Sendable, Codable, Hashable, Identifiable {
-    public var start: Date
-    public var end: Date
-    public var decided: Int
-    public var withoutModel: Int
-    public var id: Date { start }
-    public var share: Double? { decided == 0 ? nil : Double(withoutModel) / Double(decided) }
-}
-
 /// The processing funnel over a time window, plus the numbers that say whether the app is learning.
 public struct ProcessingFunnel: Sendable, Codable, Hashable {
     public var generatedAt: Date
     public var windowDays: Int
     public var documents: Int
     public var steps: [FunnelStepStats]
-    public var decisions: [DecisionSource]
-    public var trend: [FunnelTrendPoint]
 
     /// The step where most documents stopped, ignoring the last one.
     public var biggestDropOff: FunnelStepStats? {
@@ -84,10 +64,6 @@ public struct ProcessingFunnel: Sendable, Codable, Hashable {
         steps.max { $0.medianMs < $1.medianMs }.flatMap { $0.medianMs > 0 ? $0 : nil }
     }
 
-    public var decidedWithoutModel: Int { decisions.filter(\.learned).reduce(0) { $0 + $1.count } }
-    public var decidedTotal: Int { decisions.reduce(0) { $0 + $1.count } }
-    /// Share of decisions made with no model call.
-    public var withoutModelShare: Double? { decidedTotal == 0 ? nil : Double(decidedWithoutModel) / Double(decidedTotal) }
     /// Documents that went in and came out filed with nobody touching them.
     public var straightThrough: Int { steps.last?.reached ?? 0 }
     public var straightThroughShare: Double? { documents == 0 ? nil : Double(straightThrough) / Double(documents) }
@@ -110,30 +86,18 @@ extension StatsService {
         }
     }
 
-    /// How a decision maker is named in the funnel.
-    public static func decisionSource(for decidedBy: DecidedBy) -> (name: String, learned: Bool) {
-        switch decidedBy {
-        case .rule: ("A learned rule", true)
-        case .knnOnly: ("A near-identical past filing", true)
-        case .llm: ("The local model", false)
-        case .review, .user: ("You", false)
-        case .dummy: ("A test stub", false)
-        }
-    }
-
     /// Builds the funnel for documents that arrived inside the window.
     public func funnel(days: Int, now: Date = Date()) async throws -> ProcessingFunnel {
         let cfg = config.funnel
         let cutoff = now.addingTimeInterval(-Double(days) * 86_400)
         return try await database.reader.read { db in
             let documents = try Row.fetchAll(db, sql: """
-                SELECT d.id AS id, d.status AS status, d.decided_by AS decided_by, d.added_at AS added_at,
+                SELECT d.id AS id, d.status AS status,
                        (SELECT MAX(t.id) FROM traces t WHERE t.doc_id = d.id AND t.source = ?) AS trace_id
                 FROM documents d WHERE d.added_at >= ?
                 """, arguments: [TraceSource.ingest.rawValue, cutoff.unixSeconds])
             guard !documents.isEmpty else {
-                return ProcessingFunnel(generatedAt: now, windowDays: days, documents: 0,
-                                        steps: Self.emptySteps(cfg), decisions: [], trend: [])
+                return ProcessingFunnel(generatedAt: now, windowDays: days, documents: 0, steps: Self.emptySteps(cfg))
             }
 
             // Every stage a document recorded, and what each cost.
@@ -158,8 +122,7 @@ extension StatsService {
                 }
             }
 
-            return Self.assemble(documents: documents, stagesByTrace: stagesByTrace, cfg: cfg,
-                                 days: days, cutoff: cutoff, now: now)
+            return Self.assemble(documents: documents, stagesByTrace: stagesByTrace, cfg: cfg, days: days, now: now)
         }
     }
 
@@ -178,14 +141,13 @@ extension StatsService {
     }
 
     private static func assemble(documents: [Row], stagesByTrace: [Int64: [String: (status: String, ms: Double)]],
-                                 cfg: FunnelConfig, days: Int, cutoff: Date, now: Date) -> ProcessingFunnel {
+                                 cfg: FunnelConfig, days: Int, now: Date) -> ProcessingFunnel {
         let stepStages = cfg.steps.map { Set($0.stages.map(\.rawValue)) }
         var reached = [Int](repeating: 0, count: cfg.steps.count)
         var warnings = [Int](repeating: 0, count: cfg.steps.count)
         var errors = [Int](repeating: 0, count: cfg.steps.count)
         var durations = [[Double]](repeating: [], count: cfg.steps.count)
         var stops = [[String: (count: Int, severity: FunnelSeverity)]](repeating: [:], count: cfg.steps.count)
-        var sources: [String: (count: Int, learned: Bool)] = [:]
 
         for document in documents {
             let status = DocumentStatus(rawValue: document["status"] ?? "") ?? .processing
@@ -211,12 +173,6 @@ extension StatsService {
                 let previous = stops[furthest][reason.text]?.count ?? 0
                 stops[furthest][reason.text] = (previous + 1, reason.severity)
             }
-            if let decided = (document["decided_by"] as String?).flatMap(DecidedBy.init(rawValue:)) {
-                let source = decisionSource(for: decided)
-                var entry = sources[source.name] ?? (0, source.learned)
-                entry.count += 1
-                sources[source.name] = entry
-            }
         }
 
         let steps = cfg.steps.enumerated().map { index, step -> FunnelStepStats in
@@ -231,30 +187,7 @@ extension StatsService {
                 medianMs: percentile(sorted, 0.5), p95Ms: percentile(sorted, 0.95), ofAll: documents.count)
         }
 
-        let decisions = sources.map { DecisionSource(id: $0.key, count: $0.value.count, learned: $0.value.learned) }
-            .sorted { $0.count > $1.count }
-        return ProcessingFunnel(generatedAt: now, windowDays: days, documents: documents.count, steps: steps,
-                                decisions: decisions,
-                                trend: trend(documents: documents, cfg: cfg, cutoff: cutoff, now: now))
-    }
-
-    private static func trend(documents: [Row], cfg: FunnelConfig, cutoff: Date, now: Date) -> [FunnelTrendPoint] {
-        let buckets = max(1, cfg.trendBuckets)
-        let span = max(1, now.timeIntervalSince(cutoff)) / Double(buckets)
-        var decided = [Int](repeating: 0, count: buckets)
-        var learned = [Int](repeating: 0, count: buckets)
-        for document in documents {
-            guard let source = (document["decided_by"] as String?).flatMap(DecidedBy.init(rawValue:)) else { continue }
-            let added = Date(unixSeconds: document["added_at"] ?? cutoff.unixSeconds)
-            let index = min(buckets - 1, max(0, Int(added.timeIntervalSince(cutoff) / span)))
-            decided[index] += 1
-            if decisionSource(for: source).learned { learned[index] += 1 }
-        }
-        return (0..<buckets).map { index in
-            let start = cutoff.addingTimeInterval(span * Double(index))
-            return FunnelTrendPoint(start: start, end: start.addingTimeInterval(span),
-                                    decided: decided[index], withoutModel: learned[index])
-        }
+        return ProcessingFunnel(generatedAt: now, windowDays: days, documents: documents.count, steps: steps)
     }
 }
 

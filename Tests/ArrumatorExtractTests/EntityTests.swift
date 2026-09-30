@@ -94,18 +94,21 @@ struct EntityTests {
         #expect(resolution.scored.allSatisfy { $0.reasons.contains { $0.hasPrefix("crowdedLine") } })
     }
 
-    @Test("Textual months in every language and form, ISO and numeric dates")
+    @Test("Months named in any language and form, CJK, ISO and numeric dates")
     func dateScanning() throws {
         let text = """
-        «1» января 2025 г.; 4 марта 2025; 12 декабре 2024
-        5 de março de 2025, 7 fev 2025
-        May 20, 2026 and 21st of May 2026
+        «1» января 2025 г.; 4 марта 2025; 12 декабря 2024
+        5 de março de 2025, 7 fev 2025, 8 marco 2025
+        May 20, 2026 and 21st of May 2026; Sept. 3 2025
+        3. März 2024; 1er avril 2024; 15 maja 2024; 9 Μαρτίου 2024; 2024年6月7日; 2024년 8월 9일
+        V Praze dne 24. 9. 2023; 2023. 10. 11.
         2026-01-31; 31/12/2025; 05/13/2025
         31.02.2025 is not a date; neither is May 2024 alone
         """
         let days = Set(DateScanner(twoDigitYearPivot: 2027).candidates(in: text).map(\.day.iso))
         for expected in ["2025-01-01", "2025-03-04", "2024-12-12", "2025-03-05", "2025-02-07", "2026-05-20",
-                         "2026-05-21", "2026-01-31", "2025-12-31", "2025-05-13"] {
+                         "2026-05-21", "2026-01-31", "2025-12-31", "2025-05-13", "2025-03-08", "2025-09-03", "2024-03-03",
+                         "2024-04-01", "2024-05-15", "2024-03-09", "2024-06-07", "2024-08-09", "2023-09-24", "2023-10-11"] {
             #expect(days.contains(expected), "missing \(expected)")
         }
         // 31.02.2025 must not come back as a rolled-over 3 March.

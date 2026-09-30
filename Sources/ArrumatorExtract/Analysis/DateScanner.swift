@@ -10,10 +10,12 @@ public struct DateCandidate: Sendable, Hashable, Encodable {
     public var end: Int { location + length }
 }
 
-/// Finds full dates in EN/RU/PT text: textual months in every grammatical form (`15 мая 2024 г.`,
-/// `20 de maio de 2026`, `May 20, 2026`, `20 May 2026`), ISO `YYYY-MM-DD`, and day-first numeric dates
-/// (`15.05.2024`, `15/05/24`). Month-first numeric dates are accepted only when day-first is impossible.
-/// `NSDataDetector` adds any remaining date expressions that carry both a day number and a four-digit year.
+/// Finds full dates in text of any language: a day, a month named in any language in any of its forms and a year
+/// (`15 мая 2024 г.`, `20 de maio de 2026`, `May 20, 2026`, `3. März 2025`), year-month-day with CJK markers
+/// (`2025年3月5日`, `2025년 3월 5일`), ISO `YYYY-MM-DD`, and numeric dates, day first (`15.05.2024`, `15/05/24`,
+/// `24. 9. 2026`) or year first with dots and spaces (`2026. 9. 7.`).
+/// Month-first numeric dates are accepted only when day-first is impossible. `NSDataDetector` adds any remaining date
+/// expressions that carry both a day number and a four-digit year.
 struct DateScanner: Sendable {
     /// Two-digit years map to 20YY unless that is later than this year, then to 19YY.
     let twoDigitYearPivot: Int
@@ -30,11 +32,13 @@ struct DateScanner: Sendable {
         }
         for pattern in Self.patterns {
             for match in pattern.regex.matches(in: text, range: full) where !overlaps(match.range) {
-                claimed.append(match.range)
                 let groups = (1..<match.numberOfRanges).map { index -> String in
                     let range = match.range(at: index)
                     return range.location == NSNotFound ? "" : ns.substring(with: range)
                 }
+                // A word that is no month leaves the text to the other patterns.
+                if let word = pattern.monthWord, MonthNames.month(for: groups[word]) == nil { continue }
+                claimed.append(match.range)
                 guard let day = pattern.day(groups, twoDigitYearPivot) else { continue }
                 accepted.append(DateCandidate(day: day, location: match.range.location, length: match.range.length,
                                               matched: ns.substring(with: match.range)))
@@ -60,21 +64,36 @@ struct DateScanner: Sendable {
 
     private struct Pattern: Sendable {
         let regex: NSRegularExpression
+        /// The group holding a word that must be a month for the match to count.
+        var monthWord: Int?
         let day: @Sendable ([String], Int) -> CalendarDay?
     }
 
-    private static let months = MonthNames.alternation
-
     private static let patterns: [Pattern] = [
-        // «15» мая 2024 г. | 20 de maio de 2026 | 1st of May 2024 | 15-mai-2024
-        Pattern(regex: regex(#"(?<![\p{L}\p{N}])["«“]?(\d{1,2})(?:st|nd|rd|th|º|°|-?го|-?е)?["»”]?[\s./-]*(?:de\s+|of\s+)?("#
-                             + months + #")(?![\p{L}])\.?,?[\s./-]*(?:de\s+)?(\d{4})(?!\d)"#)) { g, _ in
+        // «15» мая 2024 г. | 20 de maio de 2026 | 1st of May 2024 | 3. März 2025 | 1er avril 2025 | 15-mai-2024
+        Pattern(regex: regex(#"(?<![\p{L}\p{N}])["«“]?(\d{1,2})(?:st|nd|rd|th|er|e|º|°|-?го|-?е)?["»”]?[\s./-]*"#
+                             + #"(?:de\s+|of\s+)?(\p{L}+)\.?,?[\s./-]*(?:de\s+)?(\d{4})(?!\d)"#), monthWord: 1) { g, _ in
             guard let day = Int(g[0]), let month = MonthNames.month(for: g[1]), let year = Int(g[2]) else { return nil }
             return CalendarDay(year: year, month: month, day: day)
         },
         // May 20, 2026 | Sept. 3 2025
-        Pattern(regex: regex(#"(?<![\p{L}\p{N}])("# + months + #")(?![\p{L}])\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})(?!\d)"#)) { g, _ in
+        Pattern(regex: regex(#"(?<![\p{L}\p{N}])(\p{L}+)\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})(?!\d)"#), monthWord: 0) { g, _ in
             guard let month = MonthNames.month(for: g[0]), let day = Int(g[1]), let year = Int(g[2]) else { return nil }
+            return CalendarDay(year: year, month: month, day: day)
+        },
+        // 2025年3月5日 | 2025년 3월 5일
+        Pattern(regex: regex(#"(?<!\d)(\d{4})\s*[年년]\s*(\d{1,2})\s*[月월]\s*(\d{1,2})\s*[日일]"#)) { g, _ in
+            guard let year = Int(g[0]), let month = Int(g[1]), let day = Int(g[2]) else { return nil }
+            return CalendarDay(year: year, month: month, day: day)
+        },
+        // 2026. 9. 7. (year first, as Hungarian or Korean write it; before day first, which would read its end)
+        Pattern(regex: regex(#"(?<![\d.,/-])(\d{4})\.\h(\d{1,2})\.\h(\d{1,2})\.?(?!\d)"#)) { g, _ in
+            guard let year = Int(g[0]), let month = Int(g[1]), let day = Int(g[2]) else { return nil }
+            return CalendarDay(year: year, month: month, day: day)
+        },
+        // 24. 9. 2026 (day first, as Czech, Slovak or German write it)
+        Pattern(regex: regex(#"(?<![\d.,/-])(\d{1,2})\.\h(\d{1,2})\.\h(\d{4})(?!\d)"#)) { g, _ in
+            guard let day = Int(g[0]), let month = Int(g[1]), let year = Int(g[2]) else { return nil }
             return CalendarDay(year: year, month: month, day: day)
         },
         // 2026-05-20 | 2026.05.20 | 2026/05/20
@@ -104,37 +123,35 @@ struct DateScanner: Sendable {
     }
 }
 
-/// Month names and abbreviations in English, Portuguese and Russian (all grammatical cases), lowercased.
+/// Month names in every language the system knows, in each form its calendar writes them (full and short, as in a
+/// date and on their own, such as Russian `мая` and `май`), lowercased and without accents or a final dot. A word
+/// that names different months in different languages (`listopad`) names none.
 enum MonthNames {
-    private static let forms: [[String]] = [
-        ["january", "jan", "janeiro", "январь", "января", "январе", "янв"],
-        ["february", "feb", "fevereiro", "fev", "февраль", "февраля", "феврале", "февр", "фев"],
-        ["march", "mar", "março", "marco", "март", "марта", "марте", "мар"],
-        ["april", "apr", "abril", "abr", "апрель", "апреля", "апреле", "апр"],
-        ["may", "maio", "mai", "май", "мая", "мае"],
-        ["june", "jun", "junho", "июнь", "июня", "июне", "июн"],
-        ["july", "jul", "julho", "июль", "июля", "июле", "июл"],
-        ["august", "aug", "agosto", "ago", "август", "августа", "августе", "авг"],
-        ["september", "sept", "sep", "setembro", "set", "сентябрь", "сентября", "сентябре", "сент", "сен"],
-        ["october", "oct", "outubro", "out", "октябрь", "октября", "октябре", "окт"],
-        ["november", "nov", "novembro", "ноябрь", "ноября", "ноябре", "нояб", "ноя"],
-        ["december", "dec", "dezembro", "dez", "декабрь", "декабря", "декабре", "дек"],
-    ]
-
     private static let lookup: [String: Int] = {
-        var map: [String: Int] = [:]
-        for (index, names) in forms.enumerated() {
-            for name in names { map[name] = index + 1 }
+        var months: [String: Set<Int>] = [:]
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        for identifier in Locale.availableIdentifiers {
+            formatter.locale = Locale(identifier: identifier)
+            for names in [formatter.monthSymbols, formatter.shortMonthSymbols, formatter.standaloneMonthSymbols,
+                          formatter.shortStandaloneMonthSymbols] {
+                for (index, name) in (names ?? []).enumerated() {
+                    let key = folded(name)
+                    // Numbered months (`1月`, `tháng 1`) are read as numbers, not names.
+                    guard !key.isEmpty, key.allSatisfy(\.isLetter) else { continue }
+                    months[key, default: []].insert(index + 1)
+                }
+            }
         }
-        return map
+        return months.compactMapValues { $0.count == 1 ? $0.first : nil }
     }()
 
-    /// Regex alternation of every form, longest first so `março` wins over `mar`.
-    static let alternation: String = lookup.keys.sorted { $0.count != $1.count ? $0.count > $1.count : $0 < $1 }
-        .map { NSRegularExpression.escapedPattern(for: $0) }
-        .joined(separator: "|")
-
     static func month(for name: String) -> Int? {
-        lookup[name.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))]
+        lookup[folded(name)]
+    }
+
+    private static func folded(_ name: String) -> String {
+        name.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: nil)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "."))
     }
 }

@@ -7,7 +7,7 @@ import Testing
     @Test func bundledDefaultsDecode() throws {
         let config = try PipelineConfig.bundledDefaults()
         #expect(config.modelProfiles.keys.contains("standard"))
-        #expect(config.extraction.languages == ["en", "ru", "pt"])
+        #expect(config.extraction.ocrLanguages == ["en", "ru", "pt"])
         let settings = try AppSettings.bundledDefaults()
         let models = try config.models(for: settings.models)
         #expect(!models.chat.isEmpty && !models.embed.isEmpty)
@@ -26,6 +26,25 @@ import Testing
         #expect(models.visionNumCtx == 8192, "an image model that also names files keeps the naming context")
         models.fast = "another-naming-model"
         #expect(models.visionNumCtx == 12288, "an image model of its own is asked with the decision context")
+    }
+
+    @Test func everyFullTextColumnHasItsWeight() throws {
+        let weights = try PipelineConfig.bundledDefaults().search.bm25Weights
+        #expect(weights.count == SearchService.columns.count,
+                "bm25() weighs columns by position; a column without a weight counts as 1 and a label would outrank the title")
+    }
+
+    @Test func theVocabularyMergesOnlyWhatItWouldAlsoOffer() throws {
+        let vocabulary = try PipelineConfig.bundledDefaults().labels.vocabulary
+        for (kind, policy) in vocabulary.kinds {
+            #expect((0...1).contains(policy.suggestSimilarity) && (0...1).contains(policy.mergeSimilarity), "\(kind): a similarity")
+            #expect(policy.mergeSimilarity >= policy.suggestSimilarity,
+                    "\(kind): a label merged without asking is one the user would have been offered to merge")
+        }
+        #expect(throws: (any Error).self, "a kind that does not exist is refused, not ignored") {
+            try JSONDecoder().decode([LabelKind: KindVocabularyConfig].self,
+                                     from: Data(#"{"sendr": {"mergeSimilarity": 1, "suggestSimilarity": 1, "promptLimit": 0}}"#.utf8))
+        }
     }
 
     @Test func deepMergeOverridesNestedKeysOnly() throws {
@@ -88,30 +107,12 @@ import Testing
 
     @Test func chatBodyPutsSchemaPropertiesInOrder() throws {
         let schema: JSONValue = .orderedObject([JSONEntry("type", "object"), JSONEntry("properties",
-            .orderedObject([JSONEntry("rationale", ["type": "string"]), JSONEntry("ideal_path", ["type": "array"])]))])
+            .orderedObject([JSONEntry("correspondent", ["type": "string"]), JSONEntry("file_name", ["type": "string"])]))])
         let body = OllamaChatRequest(model: "m", messages: [.user("hi")], format: schema, options: [:], keepAlive: "1m", think: false)
             .body.serialized()
-        let r = try #require(body.range(of: "rationale"))
-        let f = try #require(body.range(of: "ideal_path"))
+        let r = try #require(body.range(of: "correspondent"))
+        let f = try #require(body.range(of: "file_name"))
         #expect(r.lowerBound < f.lowerBound)
         #expect(body.contains(#""think":false"#))
-    }
-}
-
-@Suite struct FolderCodeTests {
-    @Test func codesCountUpPastEveryCodeEverUsed() {
-        #expect(FolderCode.next(after: []) == "F1")
-        #expect(FolderCode.next(after: ["F1", "F7", "11", "10-19", "needs-review"]) == "F8", "codes of earlier versions are no part of the count")
-    }
-
-    @Test func yearFolders() {
-        #expect(YearFolder.matches("2025") && !YearFolder.matches("25") && !YearFolder.matches("2025 Taxes"))
-    }
-
-    @Test func aFolderReadsItsNameFromItsDirectory() {
-        let definition = FolderDefinition(code: "11", name: "Utilities", description: "", yearSubfolders: false, yearRule: nil,
-                                          autoFile: true, origin: .learned)
-        #expect(definition.name(fromDirectory: "11 Utilities") == "Utilities", "a directory an earlier version numbered")
-        #expect(definition.name(fromDirectory: "Energy and Water") == "Energy and Water", "renamed in Finder")
     }
 }

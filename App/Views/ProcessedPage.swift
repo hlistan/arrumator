@@ -2,7 +2,7 @@ import ArrumatorCore
 import SwiftUI
 
 /// Everything the pipeline has finished with, newest first and grouped by day, like Things' Logbook. Every row shows
-/// the decision; opening one lets you change it.
+/// where the document is and its labels; opening one lets you correct it.
 struct ProcessedPage: View {
     @Environment(AppModel.self) private var model
     @State private var documents: [DocumentRecord] = []

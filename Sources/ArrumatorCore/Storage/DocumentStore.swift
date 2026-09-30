@@ -2,50 +2,57 @@ import Foundation
 import GRDB
 
 public struct DocumentFilter: Sendable, Hashable {
-    public var folderIDs: Set<Int64>?
     public var statuses: Set<DocumentStatus>?
-    public var docTypes: Set<String>?
-    public var correspondents: Set<String>?
-    public var languages: Set<String>?
-    public var dateFrom: String?
-    public var dateTo: String?
+    /// Documents that have every one of these labels, each written however the archive writes it
+    /// (`LabelSimilarity.sameWriting`): the scope the sidebar's labels narrow down to.
+    public var labels: [DocumentLabel]
 
-    public init(folderIDs: Set<Int64>? = nil, statuses: Set<DocumentStatus>? = nil, docTypes: Set<String>? = nil,
-                correspondents: Set<String>? = nil, languages: Set<String>? = nil, dateFrom: String? = nil, dateTo: String? = nil) {
-        self.folderIDs = folderIDs
+    public init(statuses: Set<DocumentStatus>? = nil, labels: [DocumentLabel] = []) {
         self.statuses = statuses
-        self.docTypes = docTypes
-        self.correspondents = correspondents
-        self.languages = languages
-        self.dateFrom = dateFrom
-        self.dateTo = dateTo
+        self.labels = labels
     }
 
-    func apply(_ request: QueryInterfaceRequest<DocumentRecord>) -> QueryInterfaceRequest<DocumentRecord> {
-        var r = request
-        if let folderIDs { r = r.filter(folderIDs.contains(Column("folder_id"))) }
-        if let statuses { r = r.filter(statuses.map(\.rawValue).contains(Column("status"))) }
-        if let docTypes { r = r.filter(docTypes.contains(Column("doc_type"))) }
-        if let correspondents { r = r.filter(correspondents.contains(Column("correspondent"))) }
-        if let languages { r = r.filter(languages.contains(Column("language"))) }
-        if let dateFrom { r = r.filter(Column("doc_date") >= dateFrom) }
-        if let dateTo { r = r.filter(Column("doc_date") <= dateTo) }
-        return r
+    /// The filter as conditions on `documents d`, each opening with AND, for every query that lists documents: the
+    /// document store's, the label store's and search's. A label is matched against the archive's writings of it, so
+    /// `sender=edp` finds the documents labelled `EDP`, and a label no document has matches none.
+    func sql(_ db: Database) throws -> (String, StatementArguments) {
+        var sql = ""
+        var args = StatementArguments()
+        if let statuses {
+            sql += " AND d.status IN (\(Self.placeholders(statuses.count)))"
+            args += StatementArguments(statuses.map(\.rawValue).sorted())
+        }
+        for label in labels {
+            let writings = try String.fetchAll(db, sql: """
+                SELECT DISTINCT json_extract(l.value, '$.value') FROM documents d, json_each(d.labels_json) l
+                WHERE d.labels_json IS NOT NULL AND json_extract(l.value, '$.kind') = ?
+                """, arguments: [label.kind.rawValue]).filter { LabelSimilarity.sameWriting($0, label.value) }
+            guard !writings.isEmpty else { return (" AND 0", []) }
+            sql += """
+                 AND EXISTS (SELECT 1 FROM json_each(d.labels_json) s WHERE json_extract(s.value, '$.kind') = ? \
+                AND json_extract(s.value, '$.value') IN (\(Self.placeholders(writings.count))))
+                """
+            args += [label.kind.rawValue]
+            args += StatementArguments(writings)
+        }
+        return (sql, args)
+    }
+
+    private static func placeholders(_ count: Int) -> String {
+        Array(repeating: "?", count: count).joined(separator: ",")
     }
 }
 
 public enum DocumentOrder: String, Sendable, CaseIterable {
-    case recentlyAdded, recentlyFiled, recentlyProcessed, documentDate, title, correspondent
+    case recentlyAdded, recentlyFiled, recentlyProcessed
 
-    var terms: [any SQLOrderingTerm] {
+    /// The order over `documents d`.
+    var sql: String {
         switch self {
-        case .recentlyAdded: [Column("added_at").desc]
+        case .recentlyAdded: "d.added_at DESC"
         /// When the pipeline finished with it: filed documents by filing time, the rest by arrival.
-        case .recentlyProcessed: [(Column("filed_at") ?? Column("added_at")).desc]
-        case .recentlyFiled: [Column("filed_at").desc]
-        case .documentDate: [Column("doc_date").desc, Column("added_at").desc]
-        case .title: [Column("title").collating(.localizedCaseInsensitiveCompare)]
-        case .correspondent: [Column("correspondent").collating(.localizedCaseInsensitiveCompare), Column("doc_date").desc]
+        case .recentlyProcessed: "COALESCE(d.filed_at, d.added_at) DESC"
+        case .recentlyFiled: "d.filed_at DESC"
         }
     }
 }
@@ -86,7 +93,9 @@ public struct DocumentStore: Sendable {
 
     public func list(_ filter: DocumentFilter, order: DocumentOrder = .recentlyAdded, limit: Int) async throws -> [DocumentRecord] {
         try await database.reader.read { db in
-            try filter.apply(DocumentRecord.all()).order(order.terms).limit(limit).fetchAll(db)
+            let (conditions, args) = try filter.sql(db)
+            return try DocumentRecord.fetchAll(db, sql: "SELECT d.* FROM documents d WHERE 1=1\(conditions) ORDER BY \(order.sql) LIMIT ?",
+                                               arguments: args + [limit])
         }
     }
 
@@ -94,53 +103,11 @@ public struct DocumentStore: Sendable {
         try await list(DocumentFilter(statuses: Set(DocumentStatus.allCases.filter(\.isReviewable))), limit: 10_000)
     }
 
-    public func countsByFolder() async throws -> [Int64: Int] {
+    /// Documents the model has not labelled yet whose text was read, oldest first: those filed before documents were
+    /// labelled, and those it gave no valid answer for.
+    public func unlabelled() async throws -> [Int64] {
         try await database.reader.read { db in
-            let rows = try Row.fetchAll(db, sql: """
-                SELECT folder_id, COUNT(*) AS n FROM documents
-                WHERE folder_id IS NOT NULL AND status IN ('filed','needsReview','duplicate') GROUP BY folder_id
-                """)
-            return Dictionary(uniqueKeysWithValues: rows.map { ($0["folder_id"] as Int64, $0["n"] as Int) })
-        }
-    }
-
-    /// The senders of the documents filed in each folder, by the folder's id.
-    public func sendersByFolder() async throws -> [Int64: Set<Int64>] {
-        try await database.reader.read { db in
-            let rows = try Row.fetchAll(db, sql: """
-                SELECT DISTINCT folder_id, correspondent_id FROM documents
-                WHERE folder_id IS NOT NULL AND correspondent_id IS NOT NULL AND status = ?
-                """, arguments: [DocumentStatus.filed.rawValue])
-            return rows.reduce(into: [Int64: Set<Int64>]()) { $0[$1["folder_id"], default: []].insert($1["correspondent_id"]) }
-        }
-    }
-
-    /// The types of the documents filed in each folder, by the folder's id.
-    public func typesByFolder() async throws -> [Int64: Set<DocumentType>] {
-        try await database.reader.read { db in
-            let rows = try Row.fetchAll(db, sql: """
-                SELECT DISTINCT folder_id, doc_type FROM documents
-                WHERE folder_id IS NOT NULL AND doc_type IS NOT NULL AND status = ?
-                """, arguments: [DocumentStatus.filed.rawValue])
-            return rows.reduce(into: [Int64: Set<DocumentType>]()) { out, row in
-                if let type = DocumentType(rawValue: row["doc_type"]) { out[row["folder_id"], default: []].insert(type) }
-            }
-        }
-    }
-
-    public func recentTitles(perFolder limit: Int) async throws -> [Int64: [String]] {
-        try await database.reader.read { db in
-            let rows = try Row.fetchAll(db, sql: """
-                SELECT folder_id, path FROM (
-                  SELECT folder_id, path, ROW_NUMBER() OVER (PARTITION BY folder_id ORDER BY filed_at DESC) AS rn
-                  FROM documents WHERE status = 'filed' AND folder_id IS NOT NULL)
-                WHERE rn <= ?
-                """, arguments: [limit])
-            var out: [Int64: [String]] = [:]
-            for row in rows {
-                out[row["folder_id"], default: []].append(((row["path"] as String) as NSString).lastPathComponent)
-            }
-            return out
+            try Int64.fetchAll(db, sql: "SELECT id FROM documents WHERE labels_json IS NULL AND content_json IS NOT NULL ORDER BY id")
         }
     }
 

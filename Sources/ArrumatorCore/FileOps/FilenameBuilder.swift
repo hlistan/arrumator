@@ -1,7 +1,6 @@
 import Foundation
 
-/// Produces safe, bounded file names. The name is the model's, chosen by the logic; a document the model gave no name
-/// keeps its own.
+/// Produces safe, bounded file names. The name is the model's; a document the model gave no name keeps its own.
 public struct FilenameBuilder: Sendable {
     public let config: NamingConfig
 
@@ -9,9 +8,9 @@ public struct FilenameBuilder: Sendable {
         self.config = config
     }
 
-    /// Name for a filed document: the decision's `fileName`, or else the name it arrived with.
-    public func name(for decision: FilingDecision, source: SourceFile, transliterate: Bool) -> String {
-        let chosen = decision.fileName?.trimmingCharacters(in: .whitespacesAndNewlines)
+    /// Name for a filed document: the analysis's `fileName`, or else the name it arrived with.
+    public func name(for analysis: DocumentAnalysis, source: SourceFile, transliterate: Bool) -> String {
+        let chosen = analysis.fileName?.trimmingCharacters(in: .whitespacesAndNewlines)
         let name = chosen.flatMap { $0.isEmpty ? nil : $0 } ?? source.stem
         return bounded(transliterate ? Self.transliterated(name) : name, fileExtension: source.fileExtension)
     }

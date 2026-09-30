@@ -18,18 +18,27 @@ struct TextAndLanguageTests {
     December. Kind regards, customer service.
     """
 
-    @Test("Detects English, Russian and Portuguese; no letters is undetermined")
+    @Test("Detects any language, not only the OCR hints; no letters is undetermined")
     func languages() throws {
         let detector = LanguageDetector(config: try TestConfig.pipeline().extraction)
         #expect(detector.detect(english).primary == "en")
         #expect(detector.detect(russian).primary == "ru")
         #expect(detector.detect(portuguese).primary == "pt")
         #expect(detector.detect(portuguese).confidence > 0.5)
-        #expect(Set(detector.detect(russian).hypotheses.keys).isSubset(of: ["en", "ru", "pt"]))
+        #expect(detector.detect(german).primary == "de", "a language outside the hints is itself, not other")
+        #expect(detector.detect(japanese).primary == "ja", "in any script")
+        #expect(detector.detect(chinese).primary == "zh", "a script variant is its language's ISO 639-1 code")
         #expect(detector.detect("12345 / 67.89").primary == "und")
         #expect(detector.ranked(for: russian).first == "ru")
+        #expect(detector.ranked(for: german) == ["de", "en", "ru", "pt"], "a document's own language goes ahead of the hints")
         #expect(detector.ranked(for: "").first == "en")
     }
+
+    private let german = """
+    Sehr geehrte Damen und Herren, hiermit bestätigen wir den Eingang Ihrer Kündigung zum Ende des Monats.     Mit freundlichen Grüßen, Ihr Kundenservice.
+    """
+    private let chinese = "本合同为固定期限劳动合同，甲方每月十日以货币形式支付乙方工资，双方按照国家规定参加社会保险。"
+    private let japanese = "拝啓 平素より格別のご高配を賜り、厚く御礼申し上げます。ご請求書を同封いたしましたので、ご確認ください。"
 
     @Test("Below the confidence floor the primary language is 'other'")
     func otherLanguage() throws {

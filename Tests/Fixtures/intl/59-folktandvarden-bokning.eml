@@ -1,0 +1,71 @@
+Return-Path: <bokning@folktandvarden.example>
+MIME-Version: 1.0
+Date: Tue, 22 Sep 2026 14:03:18 +0200
+From: =?UTF-8?B?Rm9sa3RhbmR2w6VyZGVuIFN0b2NraG9sbQ==?= <bokning@folktandvarden.example>
+To: "Erik Exempel" <erik.exempel@example.com>
+Message-ID: <20260922140318.601918728abe@folktandvarden.example>
+Subject: =?UTF-8?B?Qm9rbmluZ3NiZWtyw6RmdGVsc2Ug4oCTIHRhbmRsw6RrYXJiZXPDtmsgMTQg?=
+ =?UTF-8?B?b2t0b2Jlcg==?=
+Content-Type: multipart/mixed; boundary="=_arrumator_fixture_mixed"
+
+This is a multi-part message in MIME format.
+
+--=_arrumator_fixture_mixed
+Content-Type: multipart/alternative; boundary="=_arrumator_fixture_alternative"
+
+--=_arrumator_fixture_alternative
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Hej Erik Exempel,
+
+Tack för din bokning hos Folktandvården Stockholm. Här är din bokningsbekräftelse.
+
+Behandling: Tandläkarbesök: undersökning och tandrengöring
+Datum: onsdag 14 oktober 2026
+Tid: 09:30
+Klinik: Folktandvården Exempelgatan, Exempelgatan 12, 113 21 Stockholm
+Bokningsnummer: BK-845185
+
+Avboka senast 24 timmar innan besöket, annars debiteras en avgift på 600 kronor.
+
+Välkommen!
+Folktandvården Stockholm
+
+--=_arrumator_fixture_alternative
+Content-Type: text/html; charset=UTF-8
+Content-Transfer-Encoding: quoted-printable
+
+<html><body>
+<p>Hej Erik Exempel,</p>
+<p>Tack f=C3=B6r din bokning hos Folktandv=C3=A5rden Stockholm. H=C3=A4r =
+=C3=A4r din bokningsbekr=C3=A4ftelse.</p>
+<table>
+<tr><td><b>Behandling</b></td><td>Tandl=C3=A4karbes=C3=B6k: unders=C3=B6kni=
+ng och tandreng=C3=B6ring</td></tr>
+<tr><td><b>Datum</b></td><td>onsdag 14 oktober 2026</td></tr>
+<tr><td><b>Tid</b></td><td>09:30</td></tr>
+<tr><td><b>Klinik</b></td><td>Folktandv=C3=A5rden Exempelgatan, Exempelgata=
+n 12, 113 21 Stockholm</td></tr>
+<tr><td><b>Bokningsnummer</b></td><td>BK-845185</td></tr>
+</table>
+<p>Avboka senast 24 timmar innan bes=C3=B6ket, annars debiteras en avgift p=
+=C3=A5 600 kronor.</p>
+<p>V=C3=A4lkommen!<br>Folktandv=C3=A5rden Stockholm</p>
+</body></html>
+
+--=_arrumator_fixture_alternative--
+
+--=_arrumator_fixture_mixed
+Content-Type: text/calendar; charset=UTF-8; method=PUBLISH; name="besok.ics"
+Content-Disposition: attachment; filename="besok.ics"
+Content-Transfer-Encoding: base64
+
+QkVHSU46VkNBTEVOREFSDQpWRVJTSU9OOjIuMA0KUFJPRElEOi0vL0ZvbGt0YW5kdmFyZGVuLy9C
+b2tuaW5nLy9TVg0KTUVUSE9EOlBVQkxJU0gNCkJFR0lOOlZFVkVOVA0KVUlEOkJLLTg0NTE4NUBm
+b2xrdGFuZHZhcmRlbi5leGFtcGxlDQpEVFNUQU1QOjIwMjYwOTIyVDEyMDMxOFoNCkRUU1RBUlQ6
+MjAyNjEwMTRUMDczMDAwWg0KRFRFTkQ6MjAyNjEwMTRUMDgxNTAwWg0KU1VNTUFSWTpUYW5kbMOk
+a2FyYmVzw7ZrIOKAkyBGb2xrdGFuZHbDpXJkZW4NCkxPQ0FUSU9OOkV4ZW1wZWxnYXRhbiAxMiwg
+U3RvY2tob2xtDQpFTkQ6VkVWRU5UDQpFTkQ6VkNBTEVOREFSDQo=
+
+--=_arrumator_fixture_mixed--

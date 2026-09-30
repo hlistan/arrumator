@@ -1,5 +1,4 @@
 import ArrumatorCore
-import Charts
 import SwiftUI
 
 /// What is worth knowing about one funnel step. The statistics that used to sit in a separate screen live here
@@ -8,7 +7,6 @@ struct StepDetail: View {
     @Environment(AppModel.self) private var model
     let step: FunnelStepStats
     let insights: Insights?
-    let showsShares: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -56,9 +54,8 @@ struct StepDetail: View {
         if let insights {
             switch step.id {
             case "read": readingQuality(insights)
-            case "matched": whatItKnows(insights)
-            case "decided": howSureItWas(insights)
-            case "filed": whereItWentWrong(insights)
+            case "analysed": labelling(insights)
+            case "filed": corrections(insights)
             default: EmptyView()
             }
         }
@@ -86,120 +83,34 @@ struct StepDetail: View {
         }
     }
 
-    // MARK: Matched
+    // MARK: Analysed
 
-    @ViewBuilder private func whatItKnows(_ insights: Insights) -> some View {
+    @ViewBuilder private func labelling(_ insights: Insights) -> some View {
         Divider()
         HStack(spacing: 18) {
-            figure("Learned rules", "\(insights.rules)")
-            figure("Times a rule was used", "\(insights.ruleHits)")
-            figure("Times a rule was wrong", "\(insights.ruleContradictions)")
-            if let knn = insights.meanKNNAgreement {
-                figure("Past filings agreed", Format.percent(knn))
-            }
+            figure("Labelled", "\(insights.labelled)")
+            figure("Not labelled yet", "\(insights.unlabelled)")
+            figure("Tidied to the archive's labels", "\(insights.labelsTidied)")
+            figure("Your rules for labels", "\(insights.labelRules.values.reduce(0, +))")
             Spacer()
         }
-        Button("Open Learned") { model.go(.learned) }.buttonStyle(.link)
-        if !insights.overlaps.isEmpty {
-            Text("Folders that look alike, which makes matching harder").font(.subheadline.weight(.medium))
-            ForEach(insights.overlaps, id: \.self) { overlap in
-                Text("\(Wording.path(ofCode: overlap.a, in: model.taxonomy)) and \(Wording.path(ofCode: overlap.b, in: model.taxonomy))")
-                    .font(.callout)
-            }
-        }
-    }
-
-    // MARK: Decided
-
-    @ViewBuilder private func howSureItWas(_ insights: Insights) -> some View {
-        Divider()
-        Text("How sure it was, and whether it was right").font(.subheadline.weight(.medium))
-        ForEach(insights.bands, id: \.band) { band in
-            HStack(spacing: 8) {
-                Text(Self.bandText(band.band)).frame(width: 220, alignment: .leading)
-                Text("\(band.total)").monospacedDigit().frame(width: 50, alignment: .trailing)
-                Text(band.corrected > 0 ? "you moved \(band.corrected)" : "you moved none")
-                    .foregroundStyle(.secondary).frame(width: 130, alignment: .leading)
-                if showsShares, band.total > 0, band.band != Band.review.rawValue {
-                    Text(Format.percent(1 - Double(band.corrected) / Double(band.total)) + " stayed put").monospacedDigit()
+        if !insights.labelsByKind.isEmpty {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: Style.figureMinWidth), alignment: .leading)], alignment: .leading) {
+                ForEach(LabelKind.allCases.filter { insights.labelsByKind[$0.rawValue] != nil }, id: \.self) { kind in
+                    figure(Wording.labelKind(kind), "\(insights.labelsByKind[kind.rawValue] ?? 0)")
                 }
-                Spacer()
-            }
-            .font(.callout)
-        }
-        thresholdControl(insights)
-        if !insights.accuracyByLanguage.isEmpty, showsShares {
-            Text("By language: " + insights.accuracyByLanguage.sorted { $0.key < $1.key }
-                .map { "\($0.key) \(Format.percent($0.value))" }.joined(separator: ", "))
-                .font(.callout).foregroundStyle(.secondary)
-        }
-    }
-
-    /// The calibration curve made usable: move the line and see what it would have done.
-    @ViewBuilder private func thresholdControl(_ insights: Insights) -> some View {
-        let current = model.settings?.thresholds.auto ?? 0.85
-        let nearest = insights.whatIf.min { abs($0.autoThreshold - current) < abs($1.autoThreshold - current) }
-        VStack(alignment: .leading, spacing: 6) {
-            Text("File automatically when the app is at least this sure").font(.subheadline.weight(.medium))
-            HStack {
-                Slider(value: setting(model, \.thresholds.auto, default: 0.85), in: 0.5...0.99)
-                    .frame(maxWidth: 320)
-                Text(String(format: "%.2f", current)).monospacedDigit().frame(width: 44)
-            }
-            if let nearest {
-                Text("At this setting it would have filed \(Format.percent(nearest.autoShare)) on its own, and "
-                     + "\(Format.percent(nearest.autoAccuracy)) of those stayed where it put them.")
-                    .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            }
-            if insights.whatIf.contains(where: { $0.autoAccuracy != nil }) {
-                Chart(insights.whatIf, id: \.autoThreshold) { point in
-                    LineMark(x: .value("Sure at least", point.autoThreshold), y: .value("Filed on its own", point.autoShare))
-                        .foregroundStyle(Palette.progress)
-                    if let accuracy = point.autoAccuracy {
-                        LineMark(x: .value("Sure at least", point.autoThreshold), y: .value("Stayed put", accuracy))
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .chartYScale(domain: 0...1)
-                .chartYAxis { AxisMarks(format: Decimal.FormatStyle.Percent.percent.precision(.fractionLength(0))) }
-                .chartLegend(.hidden)
-                .frame(height: 110)
-                Text("Solid line: how much it would file on its own. Grey line: how much of that stayed put.")
-                    .font(.caption).foregroundStyle(.secondary)
             }
         }
     }
 
     // MARK: Filed
 
-    @ViewBuilder private func whereItWentWrong(_ insights: Insights) -> some View {
+    @ViewBuilder private func corrections(_ insights: Insights) -> some View {
         Divider()
-        if insights.confusion.isEmpty {
-            Text("You have not moved anything it filed.").font(.callout).foregroundStyle(.secondary)
-        } else {
-            Text("Mix-ups you corrected").font(.subheadline.weight(.medium))
-            ForEach(insights.confusion, id: \.self) { pair in
-                HStack {
-                    Text("\(pair.count)").monospacedDigit().frame(width: 40, alignment: .trailing)
-                    Text("filed into \(Wording.path(ofCode: pair.from, in: model.taxonomy)), you moved to \(Wording.path(ofCode: pair.to, in: model.taxonomy))")
-                    Spacer()
-                }
-                .font(.callout)
-            }
-            Text("Sharpen a folder's description from its page in the sidebar.").font(.callout).foregroundStyle(.secondary)
-        }
-        let busy = insights.folders.filter { $0.correctionsIn + $0.correctionsOut > 0 }
-        if !busy.isEmpty {
-            Text("Folders you correct most").font(.subheadline.weight(.medium))
-            ForEach(busy.prefix(6), id: \.code) { folder in
-                HStack {
-                    Text(model.taxonomy?.path(ofCode: folder.code, separator: Wording.pathSeparator) ?? folder.name)
-                    Spacer()
-                    Text("\(folder.documents) filed · \(folder.correctionsIn) moved in · \(folder.correctionsOut) moved out")
-                        .foregroundStyle(.secondary)
-                }
-                .font(.callout)
-            }
+        HStack(spacing: 18) {
+            figure("Corrected by you", "\(insights.corrected)")
+            figure("Confirmed by you", "\(insights.confirmed)")
+            Spacer()
         }
     }
 
@@ -209,16 +120,6 @@ struct StepDetail: View {
         VStack(alignment: .leading, spacing: 1) {
             Text(name).font(.caption).foregroundStyle(.secondary)
             Text(value).font(.title3.monospacedDigit())
-        }
-    }
-
-    /// Bands are named, never shown as a bare number: a 0–1 score means nothing to a reader.
-    static func bandText(_ band: String) -> String {
-        switch Band(rawValue: band) {
-        case .auto: "Filed without asking you"
-        case .check: "Filed, but flagged for a glance"
-        case .review: "Held for you to decide"
-        case nil: band
         }
     }
 

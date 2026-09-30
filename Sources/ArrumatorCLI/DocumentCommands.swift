@@ -5,9 +5,9 @@ import Foundation
 
 struct Ingest: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
-        abstract: "File documents now (moves them into the archive), or show what would happen with --dry-run.")
+        abstract: "File documents now (reads, labels and moves them into the archive), or show what would happen with --dry-run.")
     @OptionGroup var options: GlobalOptions
-    @Flag(help: "Analyse and decide without moving files or recording a decision.") var dryRun = false
+    @Flag(help: "Read and label without moving files or recording anything.") var dryRun = false
     @Argument(help: "Files to ingest.") var files: [String]
 
     func run() async throws {
@@ -24,12 +24,11 @@ struct Ingest: AsyncParsableCommand {
                     context: ExtractionContext(config: runtime.config.extraction, entities: runtime.config.entities,
                                                vision: settings.enableVLM ? try visionOptions(runtime, settings) : nil),
                     trace: trace)
-                let taxonomy = try await runtime.taxonomy.snapshot(root: settings.archiveURL)
-                let outcome = try await runtime.classifier.classify(content, taxonomy: taxonomy, settings: settings,
-                                                                    config: runtime.config, mode: .arrival, trace: trace)
+                let reading = try await runtime.services.read(content, settings: settings, trace: trace)
                 let steps = await sink.steps
-                options.emit(DryRun(content: content, decision: outcome.decision, steps: steps)) {
-                    describe(outcome.decision, content: content, steps: steps, taxonomy: taxonomy)
+                options.emit(DryRun(content: content, analysis: reading.outcome.analysis, labels: reading.outcome.labels,
+                                    changes: reading.changes, steps: steps)) {
+                    describe(reading, content: content, steps: steps)
                 }
             } else {
                 await runtime.coordinator.enqueue(url)
@@ -46,20 +45,22 @@ struct Ingest: AsyncParsableCommand {
 
     struct DryRun: Encodable {
         var content: ExtractedContent
-        var decision: FilingDecision
+        var analysis: DocumentAnalysis
+        /// Nil when the model gave no valid answer.
+        var labels: [DocumentLabel]?
+        /// Labels the model gave that the archive's vocabulary and the user's rules changed.
+        var changes: [LabelChange]
         var steps: [TraceStep]
     }
 
-    func describe(_ d: FilingDecision, content: ExtractedContent, steps: [TraceStep], taxonomy: TaxonomySnapshot) -> String {
-        let target = Terminal.target(of: d, in: taxonomy) ?? "Needs review"
+    func describe(_ reading: Reading, content: ExtractedContent, steps: [TraceStep]) -> String {
+        let a = reading.outcome.analysis
         return """
         \(content.source.originalFilename)
           content:   \(content.kind.rawValue), \(content.textOrigin.rawValue), \(content.text.count) chars, language \(content.language.primary)
-          decision:  \(target)
-          file name: \(d.fileName ?? "(keeps its name)")
-          metadata:  \(d.documentType.rawValue) · \(d.correspondent ?? "—") · \(d.documentDate ?? "—")
-          confidence \(String(format: "%.2f", d.confidence.final)) → \(d.confidence.band.rawValue), decided by \(d.decidedBy.rawValue)
-          rationale: \(d.rationale)
+        \(Terminal.labelTable(reading.outcome.labels, indent: 2))\(reading.changes.isEmpty ? "" : "\n  tidied:    " + Terminal.changes(reading.changes))
+          file name: \(a.fileName ?? "(keeps its name)")
+          read by:   \(a.model ?? "—")\(a.problems.isEmpty ? "" : "; waits for you: " + a.problems.joined(separator: "; "))
           stages:    \(steps.map { "\($0.stage.rawValue) \(Int($0.durationMs))ms" }.joined(separator: ", "))
         """
     }
@@ -68,8 +69,8 @@ struct Ingest: AsyncParsableCommand {
 func visionOptions(_ runtime: ArrumatorRuntime, _ settings: AppSettings) throws -> VisionModelOptions {
     let models = try runtime.config.models(for: settings.models)
     return VisionModelOptions(model: models.vision, keepAlive: models.keepAliveChat,
-                              numPredict: runtime.config.classification.vlmNumPredict, numCtx: models.visionNumCtx,
-                              options: runtime.config.classification.llmOptions)
+                              numPredict: runtime.config.analysis.vlmNumPredict, numCtx: models.visionNumCtx,
+                              options: runtime.config.analysis.llmOptions)
 }
 
 struct Extract: AsyncParsableCommand {
@@ -112,9 +113,10 @@ struct Search: AsyncParsableCommand {
         try await runtime.prepareSearch(await runtime.settings.current)
         let results = try await runtime.search.search(SearchQuery(text: query.joined(separator: " "), semantic: !noSemantic))
         options.emit(results.hits.map { SearchRow(id: $0.id, path: $0.document.path, score: $0.score, snippet: SearchHighlight.plain($0.snippet),
-                                                   sources: $0.sources.map(\.rawValue).sorted()) }) {
+                                                   sources: $0.sources.map(\.rawValue).sorted(), labels: $0.document.labels) }) {
             var lines = results.hits.map { hit in
                 "\(hit.document.path)\n    \(Terminal.highlight(hit.snippet).replacingOccurrences(of: "\n", with: " "))"
+                    + (hit.document.labels?.isEmpty == false ? "\n    \(Terminal.labels(hit.document.labels))" : "")
             }
             lines.append(String(format: "%d results in %.0f ms%@", results.hits.count, results.elapsedMs,
                                 results.semanticUsed ? " (hybrid)" : " (full text: \(results.semanticUnavailableReason ?? ""))"))
@@ -128,11 +130,12 @@ struct Search: AsyncParsableCommand {
         var score: Double
         var snippet: String
         var sources: [String]
+        var labels: [DocumentLabel]?
     }
 }
 
 struct History: AsyncParsableCommand {
-    static let configuration = CommandConfiguration(abstract: "Recent events: arrivals, filings, corrections, rules, folders.")
+    static let configuration = CommandConfiguration(abstract: "Recent events: arrivals, readings, filings, corrections, what was learned.")
     @OptionGroup var options: GlobalOptions
     @Option(help: "Number of events.") var limit = 50
     @Option(help: "Only events of this document.") var doc: Int64?
@@ -183,7 +186,7 @@ struct Trace: AsyncParsableCommand {
 
 struct Replay: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
-        abstract: "Ask the model again about a stored document, from the archive's logic and optionally with another model, without touching files.")
+        abstract: "Read a stored document again with the model, optionally another one, and compare, without touching files.")
     @OptionGroup var options: GlobalOptions
     @Option(help: "Chat model to use instead of the configured one.") var model: String?
     @Argument(help: "Document id or file path.") var document: String
@@ -191,27 +194,30 @@ struct Replay: AsyncParsableCommand {
     func run() async throws {
         let runtime = try await options.runtime()
         let docID = try await resolveDocument(document, runtime: runtime)
-        guard let content = try await runtime.services.documents.content(docID: docID) else {
+        guard let content = try await runtime.services.documents.content(docID: docID),
+              let stored = try await runtime.services.documents.document(id: docID) else {
             throw ValidationError("Document \(docID) has no stored content")
         }
         var settings = await runtime.settings.current
         if let model { settings.models.chatModel = model }
         _ = await runtime.lifecycle.ensureRunning()
-        let taxonomy = try await runtime.taxonomy.snapshot(root: settings.archiveURL)
         let trace = try await runtime.services.startTrace(docID: docID, jobID: nil, attempt: 0, source: .replay, settings: settings)
-        let outcome = try await runtime.classifier.classify(content, taxonomy: taxonomy, settings: settings, config: runtime.config,
-                                                            mode: .rethink(documentID: docID), trace: trace)
+        let outcome = try await runtime.services.read(content, settings: settings, trace: trace).outcome
         await runtime.traces.finish(trace, outcome: "replay", docID: docID)
-        let original = try await runtime.services.documents.document(id: docID)?.decision
-        options.emit(["original": original, "replay": outcome.decision]) {
+        let original = Reading(analysis: stored.analysis, labels: stored.labels)
+        let replay = Reading(analysis: outcome.analysis, labels: outcome.labels)
+        options.emit(["original": original, "replay": replay]) {
             """
-            original: \(original.flatMap { Terminal.target(of: $0, in: taxonomy) } ?? "—") · \(original?.fileName ?? "—") · \
-            \(String(format: "%.2f", original?.confidence.final ?? 0))
-            replay:   \(Terminal.target(of: outcome.decision, in: taxonomy) ?? "review") · \(outcome.decision.fileName ?? "—") · \
-            \(String(format: "%.2f", outcome.decision.confidence.final)) (\(outcome.decision.decidedBy.rawValue))
+            original: \(original.analysis?.fileName ?? "—") · \(Terminal.labels(original.labels))
+            replay:   \(replay.analysis?.fileName ?? "—") · \(Terminal.labels(replay.labels)) (\(replay.analysis?.model ?? "no answer"))
             trace #\(trace.traceID ?? 0)
             """
         }
+    }
+
+    struct Reading: Encodable {
+        var analysis: DocumentAnalysis?
+        var labels: [DocumentLabel]?
     }
 }
 

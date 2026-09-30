@@ -3,17 +3,15 @@ import Foundation
 /// Decides which paths are never ingested (temporary downloads, Office locks, app-managed files, …).
 public struct SkipRules: Sendable {
     public let watcher: WatcherConfig
-    public let managedNames: Set<String>
 
-    public init(watcher: WatcherConfig, taxonomy: TaxonomyConfig) {
+    public init(watcher: WatcherConfig) {
         self.watcher = watcher
-        managedNames = [taxonomy.aboutFileName, taxonomy.documentsFileName, taxonomy.indexFileName]
     }
 
-    /// Reason the file is ignored, or nil when it should be processed.
+    /// Reason the file is ignored, or nil when it should be processed. The app's own files are Markdown named with the
+    /// managed-file prefix (`_documents.md`, history files), and so are those earlier versions left in folders.
     public func ignoreReason(_ url: URL) -> String? {
         let name = url.lastPathComponent
-        if managedNames.contains(name) { return "managed file" }
         if name.hasPrefix(watcher.managedFilePrefix), url.pathExtension.lowercased() == watcher.managedFileExtension {
             return "managed file"
         }

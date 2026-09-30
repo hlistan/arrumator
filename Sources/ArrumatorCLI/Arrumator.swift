@@ -9,12 +9,11 @@ struct Arrumator: AsyncParsableCommand {
 
     static let configuration = CommandConfiguration(
         commandName: "arrumatorcli",
-        abstract: "Local-only document organiser: watches Incoming, understands files with local models, files them.",
+        abstract: "Local-only document organiser: watches Incoming, labels files with local models, files them.",
         version: version,
-        subcommands: [Doctor.self, Run.self, Ingest.self, Extract.self, Search.self, History.self, Trace.self, Replay.self,
-                      Review.self, Folders.self, Rules.self, Senders.self, Forget.self, Archive.self, Logic.self,
-                      Rethink.self, Proposals.self, Funnel.self, Stats.self, Rebuild.self, Logs.self, Models.self,
-                      Diagnostics.self, Eval.self, Settings.self])
+        subcommands: [Doctor.self, Run.self, Ingest.self, Extract.self, Search.self, Labels.self, History.self, Trace.self, Replay.self,
+                      Review.self, Archive.self, Funnel.self, Stats.self, Rebuild.self, Logs.self,
+                      Models.self, Diagnostics.self, Eval.self, Settings.self])
 }
 
 struct GlobalOptions: ParsableArguments {
@@ -41,12 +40,43 @@ enum Terminal {
         SearchHighlight.runs(s).map { $0.1 ? "\u{1B}[1m\($0.0)\u{1B}[0m" : $0.0 }.joined()
     }
 
-    /// A decision's folder by path, "NEW …" for one it would create: "NEW Portugal / Banking / Santander (by year)".
-    static func target(of decision: FilingDecision, in taxonomy: TaxonomySnapshot) -> String? {
-        taxonomy.destination(of: decision).map { destination in
-            guard destination.isNew else { return destination.path }
-            return "NEW \(destination.path)" + (decision.proposedNewFolder?.yearSubfolders == true ? " (by year)" : "")
-        }
+    /// A document's labels on one line, "Maria Exemplo · Portugal · pt (Portuguese)", or why there are none.
+    static func labels(_ labels: [DocumentLabel]?) -> String {
+        guard let labels else { return "not labelled" }
+        return labels.isEmpty ? "nothing worth a label" : labels.map(label).joined(separator: " · ")
+    }
+
+    /// Every kind a document has labels of, one per line: "  sender        EDP Comercial".
+    static func labelTable(_ labels: [DocumentLabel]?, indent: Int) -> String {
+        guard let labels, !labels.isEmpty else { return String(repeating: " ", count: indent) + Self.labels(labels) }
+        return LabelKind.allCases.compactMap { kind in
+            let values = labels.filter { $0.kind == kind }.map(label)
+            guard !values.isEmpty else { return nil }
+            return String(repeating: " ", count: indent) + kind.rawValue.padding(toLength: 13, withPad: " ", startingAt: 0)
+                + values.joined(separator: " · ")
+        }.joined(separator: "\n")
+    }
+
+    static func label(_ label: DocumentLabel) -> String {
+        guard label.kind == .language, let name = DocumentLabel.languageName(label.value) else { return label.value }
+        return "\(label.value) (\(name))"
+    }
+
+    /// Labels the model gave that became others: “sender EDP Comercial → EDP (rule #3)”.
+    static func changes(_ changes: [LabelChange]) -> String {
+        changes.map { change in
+            let reason = switch change.reason {
+            case let .rule(id: id): "rule #\(id)"
+            case let .alike(similarity: similarity): String(format: "alike %.2f", similarity)
+            }
+            return "\(change.from.kind.rawValue) \(change.from.value) → \(change.to?.value ?? "dropped") (\(reason))"
+        }.joined(separator: " · ")
+    }
+
+    /// What a decision about a label did.
+    static func outcome(_ outcome: LabelActionOutcome) -> String {
+        "Rule #\(outcome.rule.id ?? 0): \(outcome.rule.summary)"
+            + (outcome.documents.isEmpty ? "" : "; changed \(Format.count(outcome.documents.count, "document"))")
     }
 
     static func table(_ rows: [[String]]) -> String {
@@ -108,21 +138,16 @@ struct Settings: AsyncParsableCommand {
     @OptionGroup var options: GlobalOptions
     @Option(help: "Folder to watch for new files.") var incoming: String?
     @Option(help: "Model profile defined in pipeline.json (standard, balanced, lowMemory).") var profile: String?
-    @Option(help: "Language for folder names and descriptions.") var folderLanguage: String?
-    @Option(help: "Automatically create folders the model proposes (true/false).") var autoCreateFolders: Bool?
     @Option(help: "Ollama management: launchApp, spawnServe, external.") var ollama: OllamaManagement?
     @Option(help: "Ollama server: this Mac or a machine on the local network, such as http://192.168.1.20:11434.") var ollamaURL: String?
     @Option(help: "Pause processing (true/false).") var paused: Bool?
 
     func run() async throws {
         let runtime = try await options.runtime()
-        let (incoming, profile, language, autoCreate, ollama, paused) =
-            (incoming, profile, folderLanguage, autoCreateFolders, ollama, self.paused)
+        let (incoming, profile, ollama, paused) = (incoming, profile, ollama, self.paused)
         let updated = try await runtime.settings.update { s in
             if let incoming { s.incomingPath = incoming }
             if let profile { s.models.profile = profile }
-            if let language { s.folderNamingLanguage = language }
-            if let autoCreate { s.autoCreateFolders = autoCreate }
             if let ollama { s.ollamaManagement = ollama }
             if let paused { s.paused = paused }
         }

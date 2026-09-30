@@ -1,7 +1,9 @@
 import Foundation
 
+/// A fixture's main language, as its ISO 639-1 code.
 enum Language: String, Decodable, Sendable {
     case pt, ru, en
+    case de, fr, es, it, nl, pl, sv, cs, uk, tr, el, zh, ja, ko, ar, hi
     /// Undetermined: the file carries no readable language (blank scan).
     case und
 }
@@ -13,11 +15,6 @@ enum FixtureKind: String, Decodable, Sendable {
     case imagePhoto = "image-photo"
     case imageScreenshot = "image-screenshot"
     case docx, xlsx, text, eml
-}
-
-/// Lowest acceptable confidence band: `auto` must auto-file, `check` may also be flagged, `review` accepts anything.
-enum Band: String, Decodable, Sendable {
-    case auto, check, review
 }
 
 /// The app's `document_type` vocabulary.
@@ -87,31 +84,45 @@ enum Identifier: Sendable, Hashable {
     }
 }
 
+/// What the app should make of a file: file it, have it wait for the user, or recognise it as a copy.
+enum ExpectedStatus: String, Decodable, Sendable {
+    case filed, needsReview, duplicate
+}
+
+/// Kinds of label a fixture expects beyond its type, sender, date and language (raw values match the app's `LabelKind`).
+enum Signal: String, CaseIterable, Decodable, Sendable {
+    case party, object, reference, period, deadline, amount, jurisdiction
+}
+
 struct Expected: Decodable, Sendable {
-    let category: String
-    let yearFolder: String?
+    let status: ExpectedStatus
     let docType: DocType?
     let correspondent: String?
     let date: String?
     let titleContains: [String]
     let identifiers: [String]
-    let minBand: Band
     let warnings: [WarningCode]?
+    /// Labels the document should get, by kind: each value must be found in a label of that kind (alternatives
+    /// separated by `|`). Amounts are "number CODE", dates and periods as the app writes them.
+    var labels: [String: [String]]?
 
     /// Absent values are explicit nulls, except `warnings`, which only appears when non-empty.
     var json: JSON {
         var members: [(String, JSON)] = [
-            ("category", .string(category)),
-            ("year_folder", yearFolder.json { .string($0) }),
+            ("status", .string(status.rawValue)),
             ("doc_type", docType.json { .string($0.rawValue) }),
             ("correspondent", correspondent.json { .string($0) }),
             ("date", date.json { .string($0) }),
             ("title_contains", .array(titleContains.map { .string($0) })),
             ("identifiers", .array(identifiers.map { .string($0) })),
-            ("min_band", .string(minBand.rawValue)),
         ]
         if let warnings {
             members.append(("warnings", .array(warnings.map { .string($0.rawValue) })))
+        }
+        if let labels {
+            members.append(("labels", .object(Signal.allCases.compactMap { kind in
+                labels[kind.rawValue].map { (kind.rawValue, .array($0.map { .string($0) })) }
+            })))
         }
         return .object(members)
     }
@@ -119,22 +130,15 @@ struct Expected: Decodable, Sendable {
 
 /// Alternative answers that still count as a pass (ambiguous items).
 struct AcceptAlso: Decodable, Sendable {
-    var category: [String]?
-    var yearFolder: [String]?
     var docType: [DocType]?
     var correspondent: [String]?
 
     var json: JSON {
-        let members: [(String, [String]?)] = [
-            ("category", category), ("year_folder", yearFolder), ("doc_type", docType?.map(\.rawValue)),
-            ("correspondent", correspondent),
-        ]
+        let members: [(String, [String]?)] = [("doc_type", docType?.map(\.rawValue)), ("correspondent", correspondent)]
         return .object(members.compactMap { key, values in values.map { (key, .array($0.map { .string($0) })) } })
     }
 
-    init(category: [String]? = nil, yearFolder: [String]? = nil, docType: [DocType]? = nil, correspondent: [String]? = nil) {
-        self.category = category
-        self.yearFolder = yearFolder
+    init(docType: [DocType]? = nil, correspondent: [String]? = nil) {
         self.docType = docType
         self.correspondent = correspondent
     }
@@ -145,7 +149,6 @@ struct FixtureRecord: Decodable, Sendable {
     let file: String
     let lang: Language
     let kind: FixtureKind
-    let core: Bool
     let expected: Expected
     let acceptAlso: AcceptAlso?
     /// For the duplicate fixture: the file it is a byte-identical copy of.
@@ -161,7 +164,7 @@ struct FixtureRecord: Decodable, Sendable {
     var json: JSON {
         var members: [(String, JSON)] = [
             ("file", .string(file)), ("lang", .string(lang.rawValue)), ("kind", .string(kind.rawValue)),
-            ("core", .bool(core)), ("expected", expected.json),
+            ("expected", expected.json),
         ]
         if let acceptAlso { members.append(("accept_also", acceptAlso.json)) }
         if let duplicateOf { members.append(("duplicate_of", .string(duplicateOf))) }
@@ -252,39 +255,39 @@ struct Fixture: Sendable {
         return true
     }
 
-    /// A document the app should file under `category`, a label shared by the fixtures that belong together.
+    /// An ordinary document the app should read, label and file.
     static func filed(
-        _ file: String, _ lang: Language, _ kind: FixtureKind, core: Bool,
-        category: String, year: Int?, type: DocType, correspondent: String, date: Day,
-        titleContains: [String], identifiers: [Identifier] = [], minBand: Band = .check,
+        _ file: String, _ lang: Language, _ kind: FixtureKind,
+        type: DocType, correspondent: String, date: Day,
+        titleContains: [String], identifiers: [Identifier] = [],
         acceptAlso: AcceptAlso? = nil, invalidIdentifiers: [Identifier] = [], warnings: [WarningCode] = [],
-        encoding: TextEncoding? = nil, payload: Payload
+        encoding: TextEncoding? = nil, labels: [Signal: [String]] = [:], payload: Payload
     ) -> Fixture {
         precondition(identifiers.allSatisfy(\.isChecksumValid), "\(file): an expected identifier fails its checksum")
         precondition(!invalidIdentifiers.contains(where: \.isChecksumValid), "\(file): a distractor passes its checksum")
         let expected = Expected(
-            category: category, yearFolder: year.map(String.init), docType: type, correspondent: correspondent,
-            date: date.iso, titleContains: titleContains, identifiers: identifiers.map(\.token),
-            minBand: minBand, warnings: warnings.isEmpty ? nil : warnings)
+            status: .filed, docType: type, correspondent: correspondent, date: date.iso, titleContains: titleContains,
+            identifiers: identifiers.map(\.token), warnings: warnings.isEmpty ? nil : warnings,
+            labels: labels.isEmpty ? nil : Dictionary(uniqueKeysWithValues: labels.map { ($0.key.rawValue, $0.value) }))
         let record = FixtureRecord(
-            file: file, lang: lang, kind: kind, core: core, expected: expected, acceptAlso: acceptAlso,
+            file: file, lang: lang, kind: kind, expected: expected, acceptAlso: acceptAlso,
             duplicateOf: nil, encoding: encoding, password: nil,
             invalidIdentifiers: invalidIdentifiers.isEmpty ? nil : invalidIdentifiers.map(\.token))
         return Fixture(record: record, payload: payload)
     }
 
-    /// A file the app must hold back: `needs-review` or `duplicates`, left with its own name.
-    static func heldBack(
-        _ file: String, _ lang: Language, _ kind: FixtureKind, category: String, type: DocType?,
+    /// A file that is no ordinary document: a copy, a blank scan, an encrypted or damaged file, a spreadsheet of the
+    /// user's own. `status` is what the app should make of it.
+    static func edgeCase(
+        _ file: String, _ lang: Language, _ kind: FixtureKind, status: ExpectedStatus, type: DocType?,
         titleContains: [String] = [], warnings: [WarningCode] = [], duplicateOf: String? = nil,
         password: String? = nil, payload: Payload
     ) -> Fixture {
         let expected = Expected(
-            category: category, yearFolder: nil, docType: type, correspondent: nil, date: nil,
-            titleContains: titleContains, identifiers: [], minBand: .review,
+            status: status, docType: type, correspondent: nil, date: nil, titleContains: titleContains, identifiers: [],
             warnings: warnings.isEmpty ? nil : warnings)
         let record = FixtureRecord(
-            file: file, lang: lang, kind: kind, core: true, expected: expected, acceptAlso: nil,
+            file: file, lang: lang, kind: kind, expected: expected, acceptAlso: nil,
             duplicateOf: duplicateOf, encoding: nil, password: password, invalidIdentifiers: nil)
         return Fixture(record: record, payload: payload)
     }

@@ -1,8 +1,11 @@
 import Foundation
 
 public enum TraceStage: String, Sendable, Codable, CaseIterable {
-    case stability, hash, dedupe, extract, ocr, vlm, entities, correspondent, rules, embed, candidates
-    case llm, judge, validate, calibrate, name, place, index, learn, review, undo
+    case stability, hash, dedupe, extract, ocr, vlm, entities, correspondent, analyse, consolidate, embed, name, place, index, learn
+
+    /// The step records what the document says: prompts holding its text, the model's answers drawn from it, or the
+    /// labels made of those answers.
+    public var holdsDocumentContent: Bool { [.analyse, .vlm, .consolidate].contains(self) }
 }
 
 public enum TraceStatus: String, Sendable, Codable {
@@ -10,7 +13,7 @@ public enum TraceStatus: String, Sendable, Codable {
 }
 
 public enum TraceSource: String, Sendable, Codable {
-    case ingest, eval, replay, review, cli, rethink
+    case ingest, eval, replay, review, cli
 }
 
 /// One recorded pipeline step. Payloads are JSON strings so any Encodable can be stored.

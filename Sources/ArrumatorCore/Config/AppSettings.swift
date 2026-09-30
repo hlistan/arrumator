@@ -4,16 +4,11 @@ public enum OllamaManagement: String, Sendable, Codable, CaseIterable {
     case launchApp, spawnServe, external
 }
 
-public enum LowConfidenceAction: String, Sendable, Codable, CaseIterable {
-    case holdForReview, fileAndFlag
-}
-
+/// What happens to an exact copy of a document already in the archive.
 public enum DuplicateAction: String, Sendable, Codable, CaseIterable {
-    case moveToDuplicates, leaveInIncoming
-}
-
-public enum InducedRulePolicy: String, Sendable, Codable, CaseIterable {
-    case autoEnableAndNotify, proposeOnly
+    /// Filed into the archive beside the original, marked as its copy.
+    case fileInArchive
+    case leaveInIncoming
 }
 
 public enum LogLevel: String, Sendable, Codable, CaseIterable, Comparable {
@@ -38,17 +33,10 @@ public struct AppSettings: Sendable, Codable, Hashable {
     public var paused: Bool
     /// Show a Dock icon as well as the menu-bar icon. A full menu bar can hide status items, so this is on by default.
     public var showInDock: Bool
-    /// Give filed documents the name the model chose, following the logic; otherwise they keep their own.
+    /// Give filed documents the name the model chose; otherwise they keep their own.
     public var renameFiles: Bool
     public var transliterate: Bool
-    public var lowConfidenceAction: LowConfidenceAction
     public var duplicateAction: DuplicateAction
-    /// Create folders the model proposes when its decision is confident; otherwise hold them for review.
-    public var autoCreateFolders: Bool
-    /// Language of folder names and descriptions the model writes.
-    public var folderNamingLanguage: String
-    public var inducedRulePolicy: InducedRulePolicy
-    public var thresholds: Thresholds
     public var models: ModelSelection
     /// Where Ollama answers: this Mac or a machine on the local network (`OllamaEndpoint`). `ARRUMATOR_OLLAMA_URL`
     /// takes its place while set.

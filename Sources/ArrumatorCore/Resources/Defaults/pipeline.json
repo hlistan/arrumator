@@ -106,65 +106,11 @@
     "managedFileExtension": "md",
     "selfChangeTTLSeconds": 30
   },
-  "taxonomy": {
-    "aboutFileName": "_about.md",
-    "documentsFileName": "_documents.md",
-    "indexFileName": "_INDEX.md",
-    "recentTitlesPerFolder": 5,
-    "embeddingExampleLimit": 8,
-    "embeddingBodyChars": 1200,
-    "learnedExamplesLimit": 8,
-    "systemArea": {
-      "code": "system",
-      "name": "System",
-      "description": "Folders the app manages itself; documents here are waiting for a decision."
-    },
-    "systemFolders": [
-      {
-        "role": "needsReview",
-        "code": "needs-review",
-        "name": "Needs review",
-        "description": "Documents the app could not file confidently. Moving one into a folder teaches the app."
-      },
-      {
-        "role": "duplicates",
-        "code": "duplicates",
-        "name": "Duplicates",
-        "description": "Byte-identical copies of documents that are already filed; the app's history names the original."
-      },
-      {
-        "role": "learned",
-        "code": "learned",
-        "name": "Learned",
-        "description": "What Arrumator has learned from how you file: senders, rules, corrections and filing memories. The app rebuilds its index from these files."
-      },
-      {
-        "role": "logic",
-        "code": "logic",
-        "name": "Logic",
-        "description": "How this archive is organised: the logic the model follows when it files documents here. The prompt is the text of _logic.md; edit it in the app or in any editor."
-      },
-      {
-        "role": "history",
-        "code": "history",
-        "name": "History",
-        "description": "Everything that happened, one file per month."
-      }
-    ],
-    "maxDepth": 8,
-    "learnedCorrespondentsLimit": 5,
-    "prunableLeftovers": [
-      ".DS_Store",
-      ".localized",
-      "Icon\r"
-    ]
-  },
   "records": {
-    "sendersFileName": "_senders.md",
-    "rulesFileName": "_rules.md",
-    "correctionsFileName": "_corrections.md",
-    "memoriesFileName": "_memories.md",
-    "logicFileName": "_logic.md",
+    "documentsFileName": "_documents.md",
+    "systemFolderName": "System",
+    "historyFolderName": "History",
+    "labelRulesFileName": "_labels.md",
     "setAsideSuffix": "unreadable"
   },
   "ingest": {
@@ -177,7 +123,7 @@
     "watchdogMinutes": 10
   },
   "extraction": {
-    "languages": [
+    "ocrLanguages": [
       "en",
       "ru",
       "pt"
@@ -300,57 +246,13 @@
     },
     "firstPortionShare": 0.3,
     "crowdedLineDates": 3,
-    "minTextDateScore": 1,
-    "companySuffixes": [
-      "ООО",
-      "ОАО",
-      "ЗАО",
-      "АО",
-      "ПАО",
-      "ИП",
-      "Lda",
-      "Lda.",
-      "S.A.",
-      "SA",
-      "Unipessoal",
-      "Ltd",
-      "Ltd.",
-      "LLC",
-      "Inc",
-      "Inc.",
-      "GmbH",
-      "B.V.",
-      "S.L."
-    ]
+    "minTextDateScore": 1
   },
-  "classification": {
-    "promptVersion": 2,
-    "logicMaxChars": 8000,
+  "analysis": {
+    "promptVersion": 6,
     "excerptChars": 12000,
     "embeddingSummaryChars": 2000,
     "embeddingNumCtx": 2048,
-    "promptExamplesPerFolder": 3,
-    "knn": {
-      "k": 24,
-      "maxPerFolder": 4,
-      "halfLifeDays": 180,
-      "recencyFloor": 0.7
-    },
-    "candidateWeights": {
-      "similarity": 0.5,
-      "knn": 0.5
-    },
-    "candidateWeightsNoMemory": {
-      "similarity": 1.0,
-      "knn": 0.0
-    },
-    "correspondentStrength": {
-      "stableKey": 1.0,
-      "domain": 0.9,
-      "alias": 0.7,
-      "ruleMinimum": 0.9
-    },
-    "correspondentScanChars": 3000,
     "llmOptions": {
       "temperature": 0,
       "topK": 1,
@@ -358,88 +260,51 @@
       "numPredict": 600,
       "seed": 42
     },
-    "titleMaxChars": 60,
-    "maxTags": 5,
     "vlmNumPredict": 300,
     "promptDatesLimit": 5,
     "promptIdentifiersLimit": 8,
-    "alternativesCount": 3,
-    "ruleTextScanChars": 20000,
-    "repairAttempts": 1,
-    "placementGuard": {
-      "duplicateAbove": 0.85,
-      "offerAbove": 0.6,
-      "choices": 4,
-      "rankFusionK": 10,
-      "maxJudgements": 2,
-      "partyAbove": 0.8
+    "repairAttempts": 1
+  },
+  "labels": {
+    "maxPerKind": 5,
+    "maxValueChars": 80,
+    "vocabulary": {
+      "kinds": {
+        "sender": {
+          "mergeSimilarity": 1,
+          "suggestSimilarity": 0.85,
+          "promptLimit": 40
+        },
+        "party": {
+          "mergeSimilarity": 1,
+          "suggestSimilarity": 0.9,
+          "promptLimit": 20
+        },
+        "topic": {
+          "mergeSimilarity": 0.96,
+          "suggestSimilarity": 0.94,
+          "promptLimit": 40
+        },
+        "object": {
+          "mergeSimilarity": 1,
+          "suggestSimilarity": 0.9,
+          "promptLimit": 0
+        },
+        "reference": {
+          "mergeSimilarity": 1,
+          "suggestSimilarity": 1,
+          "promptLimit": 0
+        },
+        "jurisdiction": {
+          "mergeSimilarity": 0.96,
+          "suggestSimilarity": 0.85,
+          "promptLimit": 15
+        }
+      },
+      "promptPreferred": 20,
+      "promptUnwanted": 20,
+      "suggestionLimit": 50
     }
-  },
-  "calibration": {
-    "weights": {
-      "llm": 0.45,
-      "knn": 0.25,
-      "similarity": 0.1,
-      "ideal": 0.2
-    },
-    "weightsNoMemory": {
-      "llm": 0.6,
-      "knn": 0.0,
-      "similarity": 0.1,
-      "ideal": 0.3
-    },
-    "ruleAgreeFloor": 0.9,
-    "ruleAgreeBonus": 0.05,
-    "ruleConflictPenalty": -0.3,
-    "metadataOnlyPenalty": -0.2,
-    "metadataOnlyCap": 0.6,
-    "vlmOnlyCap": 0.7,
-    "lowOCRThreshold": 0.5,
-    "lowOCRPenalty": -0.1,
-    "mtimeDatePenalty": -0.05,
-    "unknownLanguagePenalty": -0.05,
-    "newFolderConfidenceScale": 0.9,
-    "similarityFloor": 0.45,
-    "similarityCeiling": 0.8,
-    "idealFloor": 0.5,
-    "idealCeiling": 0.9
-  },
-  "learning": {
-    "memoryWeights": {
-      "auto": 0.5,
-      "approved": 1.0,
-      "corrected": 1.5,
-      "unconfirmed": 0.25
-    },
-    "maxMemoriesPerFolder": 500,
-    "ruleMinSupport": 3,
-    "ruleMaxContradictionShare": 0.2,
-    "ruleStrictBelowSupport": 5,
-    "ruleDisableAfterContradictions": 2,
-    "ruleReenableReliability": 0.9,
-    "ruleInducedPriority": 50,
-    "correspondentRuleMinSupport": 5,
-    "correspondentRulePriority": 80,
-    "stableKeyMinFilings": 2,
-    "defaultFolderMinWins": 3,
-    "descriptionRefresh": {
-      "minNewDocuments": 10,
-      "intervalDays": 7,
-      "sampleSize": 30,
-      "excerptSamples": 10,
-      "excerptChars": 300,
-      "temperature": 0.2,
-      "exampleCount": 3
-    },
-    "absorbSampleFiles": 10,
-    "directPlacement": {
-      "ruleMinReliability": 0.9,
-      "knnMinSimilarity": 0.92,
-      "knnMinNeighbors": 1,
-      "typeEstimateMinNeighbors": 1
-    },
-    "trustedMemoryMinWeight": 0.5,
-    "settleUnconfirmedAfterDays": 14
   },
   "naming": {
     "maxChars": 120,
@@ -459,10 +324,20 @@
     "semanticMinSimilarity": 0.56,
     "queryCacheSize": 256,
     "bm25Weights": [
-      5,
+      3,
+      1,
+      4,
+      3,
+      3,
+      3,
+      4,
+      4,
       3,
       2,
-      1
+      2,
+      2,
+      3,
+      2
     ],
     "snippetTokens": 24,
     "debounceMilliseconds": 150,
@@ -484,21 +359,8 @@
       30,
       90
     ],
-    "whatIfAutoThresholds": [
-      0.6,
-      0.65,
-      0.7,
-      0.75,
-      0.8,
-      0.85,
-      0.9,
-      0.95
-    ],
-    "folderOverlapSimilarity": 0.9,
-    "confusionPairsLimit": 20,
     "diagnosticsTraceLimit": 200,
     "funnel": {
-      "trendBuckets": 8,
       "minimumForShares": 20,
       "steps": [
         {
@@ -550,52 +412,31 @@
         {
           "id": "understood",
           "title": "Understood",
-          "detail": "Dates, identifiers and the correspondent picked out of the text.",
+          "detail": "Dates and identifiers picked out of the text.",
           "stages": [
-            "entities",
-            "correspondent"
+            "entities"
           ],
           "logCategories": [
-            "extract",
-            "classify"
+            "extract"
           ],
           "jobStates": [
             "extracting"
           ]
         },
         {
-          "id": "matched",
-          "title": "Matched against what it knows",
-          "detail": "Learned rules, past filings and folder descriptions consulted.",
+          "id": "analysed",
+          "title": "Analysed",
+          "detail": "The local model read it and gave it its labels and its name, kept one vocabulary with the archive's.",
           "stages": [
-            "rules",
-            "embed",
-            "candidates"
-          ],
-          "logCategories": [
-            "classify",
-            "learn"
-          ],
-          "jobStates": [
-            "classifying"
-          ]
-        },
-        {
-          "id": "decided",
-          "title": "Decided",
-          "detail": "A folder and a file name chosen, by a learned rule or by the local model.",
-          "stages": [
-            "llm",
-            "judge",
-            "validate",
-            "calibrate"
+            "analyse",
+            "consolidate"
           ],
           "logCategories": [
             "ollama",
             "classify"
           ],
           "jobStates": [
-            "classifying"
+            "analysing"
           ]
         },
         {
@@ -605,28 +446,16 @@
           "stages": [
             "name",
             "place",
+            "embed",
             "index"
           ],
           "logCategories": [
             "fileops",
-            "index",
-            "taxonomy"
+            "index"
           ],
           "jobStates": [
             "filing"
           ]
-        },
-        {
-          "id": "learned",
-          "title": "Learned from",
-          "detail": "The placement was remembered so the next similar file needs no model.",
-          "stages": [
-            "learn"
-          ],
-          "logCategories": [
-            "learn"
-          ],
-          "jobStates": []
         }
       ]
     }
@@ -634,12 +463,7 @@
   "interface": {
     "recentlyProcessed": 8,
     "pageSize": 100,
+    "sidebarLabelsPerKind": 8,
     "menuBarRecent": 5
-  },
-  "rethink": {
-    "trialSize": 10,
-    "memoryMinWeight": 1.0,
-    "followShare": 0.6,
-    "waitSeconds": 5
   }
 }
