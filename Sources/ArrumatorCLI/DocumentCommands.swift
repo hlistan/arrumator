@@ -161,22 +161,8 @@ struct Trace: AsyncParsableCommand {
             throw ValidationError("No trace recorded for document \(docID)")
         }
         options.emit(TraceExport(trace: trace, steps: steps)) {
-            var lines = ["Trace #\(id) · \(trace.source) · \(trace.outcome ?? "running") · \(Int(trace.totalMs ?? 0)) ms · "
-                         + "models \(trace.modelChat ?? "—") / \(trace.modelEmbed ?? "—")"]
-            for s in steps {
-                let seq = String(s.seq).padding(toLength: 3, withPad: " ", startingAt: 0)
-                let stage = s.stage.padding(toLength: 13, withPad: " ", startingAt: 0)
-                let status = s.status.rawValue.padding(toLength: 7, withPad: " ", startingAt: 0)
-                lines.append("\(seq) \(stage) \(status) \(Int(s.durationMs)) ms")
-                if let e = s.error { lines.append("      error: \(e)") }
-                if full {
-                    if let i = s.inputJson { lines.append("      in:  \(i)") }
-                    if let o = s.outputJson { lines.append("      out: \(o)") }
-                } else if let o = s.outputJson {
-                    lines.append("      \(o.prefix(240))")
-                }
-            }
-            return lines.joined(separator: "\n")
+            "Trace #\(id) · \(trace.source) · \(trace.outcome ?? "running") · \(Int(trace.totalMs ?? 0)) ms · "
+                + "models \(trace.modelChat ?? "—") / \(trace.modelEmbed ?? "—")\n" + Terminal.steps(steps, full: full)
         }
     }
 }

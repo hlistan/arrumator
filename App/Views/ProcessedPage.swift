@@ -10,6 +10,7 @@ struct ProcessedPage: View {
 
     var body: some View {
         Page(.processed) {
+            if let task = model.collecting { CollectingBar(task: task) }
             if documents.isEmpty {
                 EmptyState(symbol: "checkmark.circle", text: Wording.nothingProcessed)
             }

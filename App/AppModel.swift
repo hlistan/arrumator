@@ -31,6 +31,11 @@ final class AppModel {
     var openDocument: Int64?
     /// The label opened in place as a card on the Labels page.
     var openLabel: DocumentLabel?
+    /// The search task opened in place as a card on the Tasks page.
+    var openTask: Int64?
+    /// The search task whose set documents are being added to, as the user narrows them down by labels in the sidebar:
+    /// every document row then shows whether it is in the set, and adds it or takes it out.
+    private(set) var collecting: SearchTask?
     /// The labels chosen in the sidebar, in the order they were chosen: the documents shown have every one, and the
     /// sidebar offers only the labels those documents have.
     var labelSelection: [DocumentLabel] = []
@@ -144,6 +149,9 @@ final class AppModel {
             recent = events
             reviewCount = try await runtime.services.documents.reviewCount()
             labelSuggestionCount = try await runtime.services.labels.suggestions().count
+            if let id = collecting?.id {
+                collecting = try await runtime.searchTasks.store.task(id: id)
+            }
         } catch {
             Log.error(.ui, "Refresh failed", ["error": error.localizedDescription])
         }
@@ -194,12 +202,35 @@ final class AppModel {
     }
 
     /// Switches the main window to a page, closing any open card. Any other page than the chosen labels' lets go of
-    /// them.
+    /// them, and any page but those the labels narrow down ends adding documents to a task.
     func go(_ destination: Destination) {
         self.destination = destination
         openDocument = nil
         openLabel = nil
+        openTask = nil
         if destination != .labelled { labelSelection = [] }
+        if destination != .labelled && destination != .processed { collecting = nil }
+    }
+
+    /// Starts adding documents to a task's set: the window shows every processed document, to be narrowed down by
+    /// labels in the sidebar, each row with a way to add it or take it out.
+    func collect(for task: SearchTask) {
+        go(.processed)
+        collecting = task
+    }
+
+    /// Ends adding documents, and shows the task again.
+    func finishCollecting() {
+        let id = collecting?.id
+        go(.tasks)
+        openTask = id
+    }
+
+    /// Shows a search task opened in place on the Tasks page.
+    func open(task id: Int64) {
+        go(.tasks)
+        openTask = id
+        show(.main)
     }
 
     /// Shows a label opened in place on the Labels page.
@@ -274,9 +305,9 @@ final class AppModel {
 /// What the main window shows. The sidebar lists `lists`, then the labels that choose `labelled`; history and
 /// statistics are reached from the sidebar's menu.
 enum Destination: Hashable {
-    case incoming, review, processed, labels
+    case incoming, review, processed, labels, tasks
     case labelled
     case history, statistics
 
-    static let lists: [Destination] = [.incoming, .review, .processed, .labels]
+    static let lists: [Destination] = [.incoming, .review, .processed, .labels, .tasks]
 }

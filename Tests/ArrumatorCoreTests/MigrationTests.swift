@@ -10,7 +10,7 @@ import Testing
     static let shipped = ["v1_initial", "v2_datesAsUnixSeconds", "v3_brainsAndRethink", "v4_renameBrainsToLogic",
                           "v5_logicEvents", "v6_archiveRecords", "v7_oneLogicPerArchive",
                           "v8_undoForgets", "v9_foldersOfAnyDepth", "v10_folderKinds", "v11_labelsNotFolders",
-                          "v12_labelRules", "v13_traceExchanges"]
+                          "v12_labelRules", "v13_traceExchanges", "v14_searchTasks"]
 
     @Test func shippedIdentifiersNeverChange() {
         let registered = AppDatabase.migrator.migrations

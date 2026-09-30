@@ -51,7 +51,7 @@ extension [LabelKind: [LabelUsage]] {
 extension LabelUsage {
     /// `text` folded for matching: lowercase, without accents, and with every run of anything but letters and digits one
     /// space, so `tax return` finds `tax-return` and `edp comercial` finds `EDP-Comercial, S.A.`.
-    static func searchKey(_ text: String) -> String {
+    public static func searchKey(_ text: String) -> String {
         text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
             .split { !($0.isLetter || $0.isNumber) }.joined(separator: " ")
     }

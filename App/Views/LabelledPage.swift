@@ -12,6 +12,7 @@ struct LabelledPage: View {
         let selection = model.labelSelection
         Page(title: selection.map(Wording.label).joined(separator: Wording.labelSeparator), symbol: Destination.labelled.symbol,
              tint: Destination.labelled.tint) {
+            if let task = model.collecting { CollectingBar(task: task) }
             HStack(spacing: Style.chipSpacing) {
                 ForEach(selection, id: \.self) { ChosenLabel(label: $0) }
             }

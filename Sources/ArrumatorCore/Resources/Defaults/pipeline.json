@@ -107,6 +107,7 @@
     "systemFolderName": "System",
     "historyFolderName": "History",
     "labelRulesFileName": "_labels.md",
+    "searchTasksFileName": "_tasks.md",
     "setAsideSuffix": "unreadable"
   },
   "ingest": {
@@ -340,6 +341,26 @@
     "snippetTokens": 24,
     "debounceMilliseconds": 150,
     "vectorSnippetChars": 200
+  },
+  "tasks": {
+    "promptVersion": 2,
+    "promptLabels": {
+      "sender": 60,
+      "party": 30,
+      "topic": 60,
+      "jurisdiction": 20,
+      "language": 10
+    },
+    "maxValuesPerKind": 5,
+    "maxWords": 4,
+    "maxGroupingDepth": 3,
+    "maxTitleChars": 60,
+    "defaultGrouping": [
+      "type",
+      "sender"
+    ],
+    "maxDocuments": 1000,
+    "withoutLabelFolder": "No {{kind}}"
   },
   "logging": {
     "keepDays": 14,

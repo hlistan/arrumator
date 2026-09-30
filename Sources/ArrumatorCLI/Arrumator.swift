@@ -11,7 +11,7 @@ struct Arrumator: AsyncParsableCommand {
         commandName: "arrumatorcli",
         abstract: "Local-only document organiser: watches Incoming, labels files with local models, files them.",
         version: version,
-        subcommands: [Doctor.self, Run.self, Ingest.self, Extract.self, Search.self, Labels.self, History.self, Trace.self, Replay.self,
+        subcommands: [Doctor.self, Run.self, Ingest.self, Extract.self, Search.self, Labels.self, Tasks.self, History.self, Trace.self, Replay.self,
                       Review.self, Archive.self, Funnel.self, Stats.self, Rebuild.self, Logs.self,
                       Models.self, Diagnostics.self, Eval.self, Settings.self])
 }

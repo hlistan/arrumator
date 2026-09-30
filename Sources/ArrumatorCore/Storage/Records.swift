@@ -27,6 +27,10 @@ public enum DocumentStatus: String, Sendable, Codable, CaseIterable {
 
     /// Statuses of documents the pipeline has finished with, whatever the outcome.
     public static let processed: Set<DocumentStatus> = [.filed, .needsReview, .failed, .duplicate, .undone, .held]
+
+    /// Statuses of documents kept in the archive as themselves: what a search task finds. A duplicate is a copy of one
+    /// of them, and a document undone or missing is not in the archive.
+    public static let inArchive: Set<DocumentStatus> = [.filed, .needsReview, .failed, .held]
 }
 
 public struct DocumentRecord: ArrumatorRecord, Identifiable, Hashable {
@@ -105,6 +109,18 @@ public enum EventKind: String, Sendable, Codable, CaseIterable {
     case labelsKeptApart
     /// The user forgot a rule about labels; readings from then on no longer follow it.
     case labelRuleForgotten
+    /// The user asked for documents in their own words: a search task joined the queue.
+    case taskCreated
+    /// The model read a task's prompt, and the documents it asks for were found and arranged.
+    case taskPrepared
+    /// The model could not read a task's prompt.
+    case taskFailed
+    /// The user changed a task: its name, prompt or arrangement, or the documents in its set.
+    case taskEdited
+    /// A task's set was exported to a folder or a ZIP archive.
+    case taskExported
+    /// The user removed a task; what it exported stays where it was put.
+    case taskRemoved
 }
 
 public enum EventActor: String, Sendable, Codable {

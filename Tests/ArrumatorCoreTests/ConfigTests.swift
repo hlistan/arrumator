@@ -70,7 +70,8 @@ import Testing
         let env = try await TestEnvironment.make()
         defer { env.cleanup() }
         for override in [#"{"ingest": {"retryDelays": []}}"#, #"{"analysis": {"repairAttempts": -1}}"#,
-                         #"{"ingest": {"maxAttempts": 0}}"#] {
+                         #"{"ingest": {"maxAttempts": 0}}"#, #"{"tasks": {"withoutLabelFolder": "No {{label}}"}}"#,
+                         #"{"tasks": {"defaultGrouping": ["type", "sender", "date", "party"]}}"#, #"{"tasks": {"maxDocuments": 0}}"#] {
             try Data(override.utf8).write(to: env.paths.pipelineOverrideURL)
             #expect(throws: ConfigError.self, "\(override) would crash or stall the pipeline, so it stops the app with the reason") {
                 try PipelineConfig.load(paths: env.paths, environment: TestEnvironment.isolated)

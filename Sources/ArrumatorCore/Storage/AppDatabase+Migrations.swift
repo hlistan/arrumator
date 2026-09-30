@@ -630,6 +630,8 @@ extension AppDatabase {
             """)
         }
 
+        m.registerMigration("v14_searchTasks", migrate: searchTasksMigration)
+
         return m
     }
 }

@@ -7,7 +7,8 @@ corrupting an index costs time, never information: the app rebuilds it from the 
 This is the pattern of plain-text vaults such as Obsidian, whose notes are the source of truth and whose metadata cache
 is disposable and rebuilt from the files ([Obsidian help: how Obsidian stores data](https://help.obsidian.md/Files+and+folders/How+Obsidian+stores+data)).
 Documents are filed at the top of the archive, each directory holding documents lists them beside them, and the
-history and your rules for labels sit in one `System` folder at the top of the archive. The app makes no other folders.
+history, your rules for labels and your search tasks sit in one `System` folder at the top of the archive. The app makes
+no other folders in the archive.
 
 ## What lives where
 
@@ -16,6 +17,7 @@ history and your rules for labels sit in one `System` folder at the top of the a
 | The documents in a directory | `<directory>/_documents.md` | One entry per file in that directory: identity, original name, checksum, size, content type, pages, status, the labels that describe it (each a kind and a value; absent until the model has labelled it), and how it was read: the file name the model gave it, the model, and why it waits for you, if it does. The table below the data shows each file's date, sender, type and other labels. |
 | History | `System/History/_<year>-<month>.md` | One line per event, newest last. |
 | Rules for labels | `System/_labels.md` | Your decisions about labels ([how](how-it-works.md#keeping-labels-one-vocabulary)): each rule's number, kind, label, what it decides (`merge`, `ignore` or `keepApart`), the other label of a merge or of a pair kept apart, and when it was made. There is no file while there are no rules. |
+| Search tasks | `System/_tasks.md` | Your search tasks ([how](how-it-works.md#search-tasks)): each task's number, what you asked, the name and arrangement you gave it, its state, what the model read the request as and which model, why it failed if it did, the documents of its set by number, each `matched`, `added` or `removed` (taken out by you), and every export: its number, when, as a `folder` or a `zip`, where it was put, where each document went inside it and which could not be copied and why. There is no file while there are no tasks. |
 
 Every file starts with YAML front matter holding the exact data, followed by a Markdown rendering for people. The front
 matter is what the app reads; the rendering is regenerated on every write.
@@ -51,8 +53,10 @@ version moves it into place as that archive's index, so nothing it held is lost.
 
 Some working state is deliberately not kept in files and does not survive a rebuild:
 
-- **Traces**, the full exchange with the model for each document. What the model read the document as, and its
-  labels, are in the document's entry.
+- **Traces**, the full exchange with the model for each document and each search task's request. What the model read
+  the document as, and its labels, are in the document's entry; what it read a request as is in the task's entry.
+- **When a waiting search task is next tried.** A task that was waiting in the queue, or whose request was being read,
+  is waiting again after a rebuild.
 
 ## Keeping files and index together
 
@@ -85,7 +89,8 @@ never moved aside: the app stops and says why, and starts once that has passed. 
 change not yet in the files. Documents are then updated in place from their entries and keep their numbers, so their
 cached text, embeddings and traces stay attached; everything else recorded in files is replaced by what the files say.
 
-A rebuild reads every `_documents.md`, the history and the rules for labels. Documents whose file is not where their
+A rebuild reads every `_documents.md`, the history, the rules for labels and the search tasks; a task's set keeps only
+the documents the archive still has entries for. Documents whose file is not where their
 entry says are looked up by the identifier on the file. Files that have no entry, at the top of the archive or in a
 folder of yours at any depth, are taken in where they are and read by the model; the `System` folder and an Incoming
 folder kept inside the archive are left out. Then, in the background and giving way to new arrivals, each document's

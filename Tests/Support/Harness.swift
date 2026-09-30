@@ -37,6 +37,12 @@ public struct Harness: Sendable {
     }
 
     public var review: ReviewActions { ReviewActions(services: services, coordinator: coordinator) }
+
+    /// Search tasks over this pipeline, their prompts read by `interpreter`: the queue and what the user does with them.
+    public func searchTasks(_ interpreter: any SearchPromptInterpreting) -> (queue: SearchTaskQueue, actions: SearchTaskActions) {
+        let queue = SearchTaskQueue(services: services, interpreter: interpreter)
+        return (queue, SearchTaskActions(services: services, queue: queue))
+    }
     public var labels: LabelActions { LabelActions(database: env.database, time: env.time) }
     public var search: SearchService { SearchService(database: env.database, vectors: VectorIndex(), embedder: nil, config: env.config.search) }
 
