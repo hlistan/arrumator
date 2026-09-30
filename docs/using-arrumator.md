@@ -5,16 +5,16 @@ documents are read and filed; [the command line](cli.md) does everything the app
 
 ## What the app shows you
 
-The window is deliberately quiet, after [Things](https://culturedcode.com/things/). It has a sidebar with four lists.
-Each list is one page under a large title, with no dashboards. Every document row shows at its end what happened to it:
-filed in the archive, or waiting for you and why ("Waiting for you: the model gave no valid answer"), a copy of another
-document, or undone and back in Incoming. Its date, sender and type, and a few more of its labels, show beneath it.
-Clicking a row opens the document in place as a card with its name and its labels, one row for each kind it has
-([labels](how-it-works.md#labels)), and which model read it and any problem it had. The name can be changed there, any
-label taken off with its ×, and a label added by choosing its kind and writing its value; each change is recorded in
-History. A label's menu opens it on the Labels page, shows the documents that have it, or removes it from every
-document. The card's actions follow the document's state: **Looks Right** confirms it as it is, **Read Again** has the
-model read it again, **Leave for Later** holds it, and **Undo Filing** moves it back to Incoming.
+The window is deliberately quiet, after [Things](https://culturedcode.com/things/). It has a sidebar with four lists,
+and below them the archive's labels. Each list is one page under a large title, with no dashboards. Every document row
+shows at its end what happened to it: filed in the archive, or waiting for you and why ("Waiting for you: the model gave
+no valid answer"), a copy of another document, or undone and back in Incoming. Its date, sender and type, and a few more
+of its labels, show beneath it. Clicking a row opens the document in place as a card with its name and its labels, one
+row for each kind it has ([labels](how-it-works.md#labels)), and which model read it and any problem it had. The name
+can be changed there, any label taken off with its ×, and a label added by choosing its kind and writing its value; each
+change is recorded in History. A label's menu opens it on the Labels page, shows the documents that have it, or removes
+it from every document. The card's actions follow the document's state: **Looks Right** confirms it as it is, **Read
+Again** has the model read it again, **Leave for Later** holds it, and **Undo Filing** moves it back to Incoming.
 
 - **Incoming**: what is being worked on (and at which step), what is queued, and what was just processed, grouped by
   day as on Processed, with **Show More in Processed** for the rest.
@@ -25,6 +25,15 @@ model read it again, **Leave for Later** holds it, and **Undo Filing** moves it 
   The sidebar counts them, as they wait for you. Below come the labels of each kind the vocabulary keeps; open one to
   merge it into another or remove it everywhere, or to show the documents that have it. **What You Decided** lists your
   rules, each with **Forget**.
+
+Below the lists, the sidebar lists the labels documents have, kind by kind (Senders, Types, Topics and so on), the most
+used first: `interface.sidebarLabelsPerKind` of each, with **Show More** for the rest, and each kind can be folded away.
+Click a label and the window shows the documents that have it, newest first and grouped by day, under the label as
+its title. The sidebar then lists only the labels those documents have, so each label clicked next narrows them down
+further: the documents shown have every label chosen. Chosen labels are marked in the sidebar and head the page; click
+one again, or its × on the page, to let go of it. Letting go of the last, or choosing a list, shows the lists again.
+"Show Documents" on a label's menu or card starts from that label alone. From a terminal, `arrumatorcli labels browse`
+does the same.
 
 Search sits at the top of the sidebar. It lists the documents that contain your words first, then those alike in
 meaning, such as the same kind of document in another language, most similar first. Words are looked for in the file
@@ -87,7 +96,8 @@ No tunable lives in code. Defaults are bundled in `Sources/ArrumatorCore/Resourc
   `analysis.repairAttempts`), `labels` (`labels.maxPerKind`, `labels.maxValueChars`, and `labels.vocabulary`: for each
   kind kept one vocabulary, how alike labels must be written to be merged without asking or offered to merge and how
   many in use the model is shown, and how many of your merges and unwanted labels it is shown), `naming`, `search`, `logging`,
-  `power`, `stats` and `interface`. Override any subset in `~/Library/Application Support/Arrumator/pipeline.json`.
+  `power`, `stats` and `interface` (how many rows a page loads, `interface.pageSize`, and how many labels of each kind the
+  sidebar lists). Override any subset in `~/Library/Application Support/Arrumator/pipeline.json`.
 
 The Ollama server is set under Settings › Models › Ollama › Server, or with `arrumatorcli settings --ollama-url`. It must
 be this Mac, a private or link-local address, or a `.local` name; anything else is refused.

@@ -49,6 +49,7 @@ punctuated.
 | Command | What it does |
 |---|---|
 | `arrumatorcli labels list [--kind <kind>]` | Every label the documents have, kind by kind, the most used first, with how many documents have it. `--kind` lists one kind. |
+| `arrumatorcli labels browse [<kind>=<value>]…` | Narrow the documents down by labels, as the app's sidebar does: the documents that have every label given, the most recently processed first, and the labels those documents have, kind by kind, with how many of them have each, to narrow them further by. With no label, every document and label. |
 | `arrumatorcli labels similar` | Labels written so alike they may be one, each with the label a merge would keep (the one more documents have) and how alike they are, the most alike first. |
 | `arrumatorcli labels merge <kind>=<value> --into <value>` | Merge a label into another of its kind: every document that has it gets the other instead, and so does every document read from now on. |
 | `arrumatorcli labels ignore <kind>=<value>` | Take a label off every document, and never give it again. |

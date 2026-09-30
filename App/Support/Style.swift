@@ -39,6 +39,7 @@ extension Destination {
         case .review: "Needs You"
         case .processed: "Processed"
         case .labels: "Labels"
+        case .labelled: "Labelled"
         case .history: "History"
         case .statistics: "Statistics"
         }
@@ -49,7 +50,7 @@ extension Destination {
         case .incoming: "tray.and.arrow.down.fill"
         case .review: "questionmark.circle.fill"
         case .processed: "checkmark.circle.fill"
-        case .labels: "tag.fill"
+        case .labels, .labelled: "tag.fill"
         case .history: "clock.fill"
         case .statistics: "chart.bar.fill"
         }
@@ -61,7 +62,7 @@ extension Destination {
         case .incoming: .blue
         case .review: .orange
         case .processed: .green
-        case .labels: .purple
+        case .labels, .labelled: .purple
         case .history, .statistics: .secondary
         }
     }

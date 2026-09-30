@@ -237,7 +237,7 @@ struct LabelChip: View {
             if model.runtime?.config.labels.vocabulary.kinds[label.kind] != nil {
                 Button("Show in Labels") { model.open(label: label) }
             }
-            Button("Show Documents") { model.search(label) }
+            Button("Show Documents") { model.browse(label) }
             Divider()
             Button("Remove from Every Document…") { confirmingRemoval = true }
         }

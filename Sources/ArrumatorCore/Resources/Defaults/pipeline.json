@@ -463,6 +463,7 @@
   "interface": {
     "recentlyProcessed": 8,
     "pageSize": 100,
+    "sidebarLabelsPerKind": 8,
     "menuBarRecent": 5
   }
 }

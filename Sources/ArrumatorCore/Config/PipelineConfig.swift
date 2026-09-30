@@ -361,6 +361,8 @@ public struct InterfaceConfig: Sendable, Codable, Hashable {
     public var recentlyProcessed: Int
     /// Rows loaded per page of a long list; "Show more" loads another page.
     public var pageSize: Int
+    /// Labels of each kind the sidebar lists, the most used first, before "Show More" lists the rest.
+    public var sidebarLabelsPerKind: Int
     /// Recently processed documents listed in the menu bar.
     public var menuBarRecent: Int
 }

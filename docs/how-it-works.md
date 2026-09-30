@@ -88,7 +88,10 @@ with its currency code first or after a colon (`EUR 54.21`, `54.21: EUR`) become
 Labels are the document's. They sit in its entry in `_documents.md` and survive a rebuild, and each kind is a field of
 the search: `sender:edp`, `party:"maria silva"`, `type:invoice`, `object:AA-12-BB`, `reference:926804564`,
 `deadline:2026-07`, `amount:54.21`, `jurisdiction:portugal`, `language:portuguese` (a language is found by its code and
-by its English name). A plain search finds labels too. A document's card lists them by kind.
+by its English name). A plain search finds labels too. A document's card lists them by kind. The app's sidebar lists
+them too: choosing labels there narrows the documents to those that have every one, and the labels offered to those
+the documents left have ([using Arrumator](using-arrumator.md#what-the-app-shows-you)). A chosen label is matched however
+it is cased, accented or punctuated.
 
 When the model finds nothing worth a label, the document is labelled with nothing, which is not the same as not
 labelled. A document without labels is labelled when it is read again: `arrumatorcli review retry <document>` for one,

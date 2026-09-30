@@ -3,26 +3,56 @@ import GRDB
 
 public struct DocumentFilter: Sendable, Hashable {
     public var statuses: Set<DocumentStatus>?
+    /// Documents that have every one of these labels, each written however the archive writes it
+    /// (`LabelSimilarity.sameWriting`): the scope the sidebar's labels narrow down to.
+    public var labels: [DocumentLabel]
 
-    public init(statuses: Set<DocumentStatus>? = nil) {
+    public init(statuses: Set<DocumentStatus>? = nil, labels: [DocumentLabel] = []) {
         self.statuses = statuses
+        self.labels = labels
     }
 
-    func apply(_ request: QueryInterfaceRequest<DocumentRecord>) -> QueryInterfaceRequest<DocumentRecord> {
-        guard let statuses else { return request }
-        return request.filter(statuses.map(\.rawValue).contains(Column("status")))
+    /// The filter as conditions on `documents d`, each opening with AND, for every query that lists documents: the
+    /// document store's, the label store's and search's. A label is matched against the archive's writings of it, so
+    /// `sender=edp` finds the documents labelled `EDP`, and a label no document has matches none.
+    func sql(_ db: Database) throws -> (String, StatementArguments) {
+        var sql = ""
+        var args = StatementArguments()
+        if let statuses {
+            sql += " AND d.status IN (\(Self.placeholders(statuses.count)))"
+            args += StatementArguments(statuses.map(\.rawValue).sorted())
+        }
+        for label in labels {
+            let writings = try String.fetchAll(db, sql: """
+                SELECT DISTINCT json_extract(l.value, '$.value') FROM documents d, json_each(d.labels_json) l
+                WHERE d.labels_json IS NOT NULL AND json_extract(l.value, '$.kind') = ?
+                """, arguments: [label.kind.rawValue]).filter { LabelSimilarity.sameWriting($0, label.value) }
+            guard !writings.isEmpty else { return (" AND 0", []) }
+            sql += """
+                 AND EXISTS (SELECT 1 FROM json_each(d.labels_json) s WHERE json_extract(s.value, '$.kind') = ? \
+                AND json_extract(s.value, '$.value') IN (\(Self.placeholders(writings.count))))
+                """
+            args += [label.kind.rawValue]
+            args += StatementArguments(writings)
+        }
+        return (sql, args)
+    }
+
+    private static func placeholders(_ count: Int) -> String {
+        Array(repeating: "?", count: count).joined(separator: ",")
     }
 }
 
 public enum DocumentOrder: String, Sendable, CaseIterable {
     case recentlyAdded, recentlyFiled, recentlyProcessed
 
-    var terms: [any SQLOrderingTerm] {
+    /// The order over `documents d`.
+    var sql: String {
         switch self {
-        case .recentlyAdded: [Column("added_at").desc]
+        case .recentlyAdded: "d.added_at DESC"
         /// When the pipeline finished with it: filed documents by filing time, the rest by arrival.
-        case .recentlyProcessed: [(Column("filed_at") ?? Column("added_at")).desc]
-        case .recentlyFiled: [Column("filed_at").desc]
+        case .recentlyProcessed: "COALESCE(d.filed_at, d.added_at) DESC"
+        case .recentlyFiled: "d.filed_at DESC"
         }
     }
 }
@@ -63,7 +93,9 @@ public struct DocumentStore: Sendable {
 
     public func list(_ filter: DocumentFilter, order: DocumentOrder = .recentlyAdded, limit: Int) async throws -> [DocumentRecord] {
         try await database.reader.read { db in
-            try filter.apply(DocumentRecord.all()).order(order.terms).limit(limit).fetchAll(db)
+            let (conditions, args) = try filter.sql(db)
+            return try DocumentRecord.fetchAll(db, sql: "SELECT d.* FROM documents d WHERE 1=1\(conditions) ORDER BY \(order.sql) LIMIT ?",
+                                               arguments: args + [limit])
         }
     }
 

@@ -98,7 +98,7 @@ private struct SuggestionCard: View {
             Text("Two \(Wording.labelKinds(suggestion.kind).lowercased()) written alike. Are they one?")
                 .foregroundStyle(.secondary)
             HStack(spacing: 14) {
-                Button("Show Documents") { model.search(b) }
+                Button("Show Documents") { model.browse(b) }
                 Spacer()
                 Button("Keep Apart") { run("Keep apart") { try await $0.labels.keepApart(a, from: b.value) } }
                     .help("They mean different things: never merge them, and never ask again")
@@ -159,7 +159,7 @@ struct LabelCard: View {
             }
             .controlSize(.small)
             HStack(spacing: 14) {
-                Button("Show Documents") { model.search(label) }
+                Button("Show Documents") { model.browse(label) }
                 Spacer()
                 Button("Remove Everywhere…") { confirmingRemoval = true }
                     .help("Take it off every document, and never give it again")

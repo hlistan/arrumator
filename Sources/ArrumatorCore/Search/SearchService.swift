@@ -204,11 +204,11 @@ public actor SearchService {
     }
 
     private func ftsHits(_ query: SearchQuery) async throws -> [SearchHit] {
-        let (whereSQL, whereArgs) = Self.filterSQL(query.filter)
         let limit = config.ftsCandidateLimit
         guard let match = FTSQueryBuilder.build(query.text) else {
             return try await database.reader.read { db in
-                try DocumentRecord.fetchAll(db, sql: "SELECT d.* FROM documents d WHERE 1=1 \(whereSQL) ORDER BY d.added_at DESC LIMIT ?",
+                let (whereSQL, whereArgs) = try query.filter.sql(db)
+                return try DocumentRecord.fetchAll(db, sql: "SELECT d.* FROM documents d WHERE 1=1 \(whereSQL) ORDER BY d.added_at DESC LIMIT ?",
                                             arguments: whereArgs + [limit])
                     .map { SearchHit(document: $0, score: 0, snippet: "", sources: []) }
             }
@@ -218,6 +218,7 @@ public actor SearchService {
         let close = SearchHighlight.close
         let tokens = config.snippetTokens
         return try await database.reader.read { db in
+            let (whereSQL, whereArgs) = try query.filter.sql(db)
             let rows = try Row.fetchAll(db, sql: """
                 SELECT d.*, bm25(document_fts, \(weights)) AS rank,
                        snippet(document_fts, \(Self.bodyColumn), ?, ?, '…', ?) AS snip
@@ -267,21 +268,10 @@ public actor SearchService {
     }
 
     private func allowedIDs(_ filter: DocumentFilter) async throws -> Set<Int64>? {
-        let (sql, args) = Self.filterSQL(filter)
-        guard !sql.isEmpty else { return nil }
-        return try await database.reader.read { db in
-            Set(try Int64.fetchAll(db, sql: "SELECT d.id FROM documents d WHERE 1=1 \(sql)", arguments: args))
+        try await database.reader.read { db in
+            let (sql, args) = try filter.sql(db)
+            guard !sql.isEmpty else { return nil }
+            return Set(try Int64.fetchAll(db, sql: "SELECT d.id FROM documents d WHERE 1=1 \(sql)", arguments: args))
         }
-    }
-
-    static func filterSQL(_ f: DocumentFilter) -> (String, StatementArguments) {
-        var sql = ""
-        var args = StatementArguments()
-        func inList<T: DatabaseValueConvertible>(_ column: String, _ values: Set<T>) {
-            sql += " AND d.\(column) IN (\(values.map { _ in "?" }.joined(separator: ",")))"
-            for v in values { _ = args.append(contentsOf: [v]) }
-        }
-        if let v = f.statuses { inList("status", Set(v.map(\.rawValue))) }
-        return (sql, args)
     }
 }

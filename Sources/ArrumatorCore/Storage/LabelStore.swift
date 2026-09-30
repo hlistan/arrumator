@@ -59,17 +59,19 @@ public struct LabelStore: Sendable {
         self.config = config
     }
 
-    /// Every label in use, by kind, the most used first.
-    public func usage() async throws -> [LabelKind: [LabelUsage]] {
-        try await database.reader.read { db in try Self.usage(db) }
+    /// Every label in use, by kind, the most used first. With `selection`, only the documents that have every label of
+    /// it count, so what is left are the labels to narrow them down further by, the selection's own among them.
+    public func usage(within selection: [DocumentLabel] = []) async throws -> [LabelKind: [LabelUsage]] {
+        try await database.reader.read { db in try Self.usage(db, within: DocumentFilter(labels: selection)) }
     }
 
-    static func usage(_ db: Database) throws -> [LabelKind: [LabelUsage]] {
+    static func usage(_ db: Database, within scope: DocumentFilter = DocumentFilter()) throws -> [LabelKind: [LabelUsage]] {
+        let (conditions, args) = try scope.sql(db)
         let rows = try Row.fetchAll(db, sql: """
             SELECT json_extract(l.value, '$.kind') AS kind, json_extract(l.value, '$.value') AS value, COUNT(DISTINCT d.id) AS documents
-            FROM documents d, json_each(d.labels_json) l WHERE d.labels_json IS NOT NULL
+            FROM documents d, json_each(d.labels_json) l WHERE d.labels_json IS NOT NULL\(conditions)
             GROUP BY 1, 2 ORDER BY documents DESC, value
-            """)
+            """, arguments: args)
         var usage: [LabelKind: [LabelUsage]] = [:]
         for row in rows {
             guard let kind = LabelKind(rawValue: row["kind"] ?? ""), let value: String = row["value"] else { continue }

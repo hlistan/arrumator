@@ -6,7 +6,7 @@ import Foundation
 struct Labels: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         abstract: "Labels: a document's, the archive's, and the rules every reading follows.",
-        subcommands: [Show.self, Unlabelled.self, List.self, Similar.self, Merge.self, Ignore.self, KeepApart.self, Rules.self,
+        subcommands: [Show.self, Unlabelled.self, List.self, Browse.self, Similar.self, Merge.self, Ignore.self, KeepApart.self, Rules.self,
                       Forget.self],
         defaultSubcommand: Show.self)
 
@@ -98,6 +98,42 @@ struct Labels: AsyncParsableCommand {
             options.emit(listed) {
                 listed.isEmpty ? "No labels yet." : Terminal.table(listed.map { [$0.label.kind.rawValue, Terminal.label($0.label),
                                                                                  Format.count($0.documents, "document")] })
+            }
+        }
+    }
+
+    struct Browse: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            abstract: "The documents that have every label given, and the labels they have, to narrow them down further by.")
+        @OptionGroup var options: GlobalOptions
+        @Argument(help: "Labels, as kind=value, such as type=invoice sender=EDP; none lists every document and label.")
+        var labels: [String] = []
+
+        struct Scope: Encodable {
+            var selection: [DocumentLabel]
+            var documents: [Row]
+            /// The labels the documents have, kind by kind, the most used first, with how many of them have each.
+            var labels: [LabelUsage]
+        }
+
+        func validate() throws { _ = try labels.map(Labels.label) }
+
+        func run() async throws {
+            let runtime = try await options.runtime()
+            let selection = try labels.map(Labels.label)
+            let documents = try await runtime.services.documents.list(DocumentFilter(labels: selection), order: .recentlyProcessed,
+                                                                      limit: Int.max)
+            let usage = try await runtime.services.labels.usage(within: selection)
+            let scope = Scope(selection: selection,
+                              documents: documents.compactMap { d in d.id.map { Row(id: $0, path: d.path, labels: d.labels) } },
+                              labels: LabelKind.allCases.flatMap { usage[$0] ?? [] })
+            options.emit(scope) {
+                guard !scope.documents.isEmpty else { return "No document has every one of these labels." }
+                return (scope.documents.map { "#\($0.id) \($0.path)\n    \(Terminal.labels($0.labels))" }
+                    + ["", Format.count(scope.documents.count, "document"), ""]
+                    + [Terminal.table(scope.labels.map { [$0.label.kind.rawValue, Terminal.label($0.label),
+                                                          Format.count($0.documents, "document")] })])
+                    .joined(separator: "\n")
             }
         }
     }

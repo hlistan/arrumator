@@ -31,6 +31,9 @@ final class AppModel {
     var openDocument: Int64?
     /// The label opened in place as a card on the Labels page.
     var openLabel: DocumentLabel?
+    /// The labels chosen in the sidebar, in the order they were chosen: the documents shown have every one, and the
+    /// sidebar offers only the labels those documents have.
+    var labelSelection: [DocumentLabel] = []
     /// Text in the sidebar's search field; while it is not empty the main area shows results.
     var searchText = ""
     weak var presenter: (any WindowPresenting)?
@@ -196,12 +199,14 @@ final class AppModel {
         }
     }
 
-    /// Switches the main window to a page, closing any open card and search.
+    /// Switches the main window to a page, closing any open card and search. Any other page than the chosen labels'
+    /// lets go of them.
     func go(_ destination: Destination) {
         self.destination = destination
         openDocument = nil
         openLabel = nil
         searchText = ""
+        if destination != .labelled { labelSelection = [] }
     }
 
     /// Shows a label opened in place on the Labels page.
@@ -211,10 +216,19 @@ final class AppModel {
         show(.main)
     }
 
-    /// Searches for the documents that have a label, by its kind.
-    func search(_ label: DocumentLabel) {
-        go(destination)
-        searchText = "\(label.kind.rawValue):\"\(label.value.replacingOccurrences(of: "\"", with: " "))\""
+    /// Chooses a label in the sidebar, narrowing the documents shown to those that also have it, or lets go of one
+    /// already chosen. With none left, the window shows every processed document again.
+    func choose(_ label: DocumentLabel) {
+        let selection = labelSelection.contains(label) ? labelSelection.filter { $0 != label } : labelSelection + [label]
+        go(selection.isEmpty ? .processed : .labelled)
+        labelSelection = selection
+    }
+
+    /// Shows the documents that have a label, as choosing it alone in the sidebar does.
+    func browse(_ label: DocumentLabel) {
+        go(.labelled)
+        labelSelection = [label]
+        show(.main)
     }
 
     /// Shows a document opened in place on a page, bringing the main window forward.
@@ -264,9 +278,11 @@ final class AppModel {
     }
 }
 
-/// What the main window shows. The sidebar lists `lists`; history and statistics are reached from the sidebar's menu.
+/// What the main window shows. The sidebar lists `lists`, then the labels that choose `labelled`; history and
+/// statistics are reached from the sidebar's menu.
 enum Destination: Hashable {
     case incoming, review, processed, labels
+    case labelled
     case history, statistics
 
     static let lists: [Destination] = [.incoming, .review, .processed, .labels]
