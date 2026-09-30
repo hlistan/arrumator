@@ -37,7 +37,7 @@ struct PDFExtractor: FileExtractor {
         var hint = scans.filter { $0.reason == nil }.map(\.text).joined(separator: "\n")
         if hint.isEmpty { hint = job.source.stem }
 
-        var pass = OCRPass(service: ocr, config: job.config)
+        var pass = OCRPass(service: ocr, config: job.config, time: job.time)
         var ocrText: [Int: String] = [:]
         var renderedDPI: [Int: Double] = [:]
         var tables: [String] = []

@@ -22,9 +22,18 @@ public struct ModelAnswer<Answer: Sendable & Hashable>: Sendable, Hashable {
 
 public enum ModelAnswerError: Error, LocalizedError {
     case exhausted([ModelCall])
+
+    /// Every call made before giving up, for the trace.
+    public var calls: [ModelCall] {
+        switch self {
+        case let .exhausted(calls): calls
+        }
+    }
+
     public var errorDescription: String? {
         switch self {
-        case let .exhausted(calls): "No valid answer after \(calls.count) model calls: \(calls.last?.error ?? "unknown")"
+        case let .exhausted(calls):
+            "No valid answer after \(calls.count) model calls" + (calls.last?.error.map { ": \($0)" } ?? "")
         }
     }
 }
@@ -98,7 +107,7 @@ public struct LLMClassifier: Sendable {
                     calls.append(call)
                     Log.warning(.classify, "Invalid model answer", ["model": tier.model, "attempt": String(attempt),
                                                                     "error": error.localizedDescription])
-                    messages.append(OllamaMessage(role: "assistant", content: response.message.content))
+                    messages.append(.assistant(response.message.content))
                     messages.append(.user(try repairPrompt(error.localizedDescription)))
                 }
             }

@@ -15,13 +15,13 @@ import Testing
 
     /// Files two documents and writes the record files.
     private func world() async throws -> World {
-        let h = try await Harness.make(analyzer: LabelingTests.PerFileAnalyzer(labels: ["edp_july.txt": StubAnalyzer.edpBill,
+        let h = try await Harness.make(analyzer: PerFileAnalyzer(labels: ["edp_july.txt": StubAnalyzer.edpBill,
                                                                                         "edp_august.txt": StubAnalyzer.edpBill]))
         for (name, text) in [("edp_july.txt", "EDP electricity July"), ("edp_august.txt", "EDP electricity August")] {
             try await h.ingest(name, text: text)
         }
         let documents = try await h.services.documents.list(DocumentFilter(statuses: [.filed]), limit: 10).compactMap(\.id).sorted()
-        let records = ArchiveRecords(database: h.env.database, settings: h.env.settings, config: h.env.config, registry: nil)
+        let records = ArchiveRecords(database: h.env.database, settings: h.env.settings, config: h.env.config, registry: nil, time: TestTime(.advances))
         try await records.flush()
         return World(h: h, records: records, documents: documents)
     }
@@ -29,7 +29,7 @@ import Testing
     /// A second index over the same archive, as after the database was lost.
     private func freshIndex(_ w: World) throws -> (AppDatabase, ArchiveRecords) {
         let database = try AppDatabase.inMemory()
-        return (database, ArchiveRecords(database: database, settings: w.h.env.settings, config: w.h.env.config, registry: nil))
+        return (database, ArchiveRecords(database: database, settings: w.h.env.settings, config: w.h.env.config, registry: nil, time: TestTime(.advances)))
     }
 
     private func listing(_ w: World, in directory: URL) throws -> String {
@@ -46,11 +46,12 @@ import Testing
         #expect(listing.contains("analysis:") && !listing.contains("decision:"), "and what the model read it as")
         #expect(listing.contains("| edp_july.txt | 2026-07-05 | EDP Comercial | invoice |"), "and, for people, a table of them")
         let layout = w.h.env.layout
-        #expect(try String(contentsOf: layout.historyFile(month: RecordKind.month(of: Date())), encoding: .utf8).contains("filed"))
+        #expect(try String(contentsOf: layout.historyFile(month: RecordKind.month(of: w.h.env.time.now())), encoding: .utf8).contains("filed"),
+                "the filing is in the month's history file")
         let system = try FileManager.default.contentsOfDirectory(atPath: layout.system.path)
         #expect(system == [w.h.env.config.records.historyFolderName], "the system folder holds the history, nothing else")
         let pending = try await w.h.env.database.reader.read { db in try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM record_dirty") }
-        #expect(pending == 0)
+        #expect(pending == 0, "every change has reached a file")
     }
 
     @Test func aLostIndexIsRebuiltFromTheArchiveAlone() async throws {
@@ -61,17 +62,18 @@ import Testing
 
         let (database, records) = try freshIndex(w)
         let summary = try await records.rebuild()
-        #expect(summary.documents == before.count && summary.missing == 0 && summary.adopted == 0)
+        #expect(summary.documents == before.count && summary.missing == 0 && summary.adopted == 0,
+                "every document is found in its record, none missing and none new")
 
-        let after = try await DocumentStore(database: database).list(DocumentFilter(), limit: 100).sorted { ($0.id ?? 0) < ($1.id ?? 0) }
+        let after = try await DocumentStore(database: database, time: TestTime(.advances)).list(DocumentFilter(), limit: 100).sorted { ($0.id ?? 0) < ($1.id ?? 0) }
         #expect(after.map(\.id) == before.map(\.id), "documents keep their numbers")
         for (a, b) in zip(after, before) {
-            #expect(a.uid == b.uid && a.path == b.path && a.status == b.status)
+            #expect(a.uid == b.uid && a.path == b.path && a.status == b.status, "each document keeps its identity, place and status")
             #expect(a.analysis == b.analysis, "what the model read it as comes back")
             #expect(a.labels == StubAnalyzer.edpBill && a.labels == b.labels, "labels come back from the record files")
         }
-        #expect(try await HistoryStore(database: database).events(limit: 1_000).count == eventsBefore + 1, "plus the rebuild itself")
-        let queued = try await JobStore(database: database).active(kinds: [.reindex])
+        #expect(try await HistoryStore(database: database, time: TestTime(.advances)).events(limit: 1_000).count == eventsBefore + 1, "plus the rebuild itself")
+        let queued = try await JobStore(database: database, time: TestTime(.advances)).active(kinds: [.reindex])
         #expect(Set(queued.compactMap(\.docId)) == Set(w.documents), "every document is read again for search")
     }
 
@@ -82,20 +84,21 @@ import Testing
         let (database, records) = try freshIndex(w)
         try await records.rebuild()
         let analyzer = StubAnalyzer()
-        var services = w.h.services
-        services = PipelineServices(
-            database: database, config: services.config, settings: services.settings, extractor: services.extractor, analyzer: analyzer,
-            filer: DocumentFiler(database: database, placer: services.filer.placer, index: IndexStore(database: database),
-                                 registry: SelfChangeRegistry(ttl: services.config.watcher.selfChangeTTLSeconds)),
-            traces: TraceRecorder(database: database, appVersion: "test"), vectors: VectorIndex())
+        var services = Harness.services(w.h.env, analyzer: analyzer, config: w.h.env.config)
+        services.database = database
+        services.filer = DocumentFiler(database: database, placer: services.filer.placer, index: IndexStore(database: database, time: w.h.env.time),
+                                       registry: services.filer.registry, time: w.h.env.time)
+        services.traces = TraceRecorder(database: database, appVersion: "test", time: w.h.env.time)
         await IngestCoordinator(services: services).drain()
 
-        let index = IndexStore(database: database)
+        let index = IndexStore(database: database, time: TestTime(.advances))
+        var bodies: [String?] = []
         for id in w.documents {
-            #expect(try await index.body(docID: id)?.contains("EDP electricity") == true, "the text is searchable again")
-            #expect(try await index.embedding(docID: id, model: StubAnalyzer.embeddingModel) != nil)
+            bodies.append(try await index.body(docID: id))
+            #expect(try await index.embedding(docID: id, model: StubAnalyzer.embeddingModel) == [1, 0, 0], "and it is found by meaning again")
         }
-        #expect(try await DocumentStore(database: database).list(DocumentFilter(), limit: 100).map(\.path).sorted() == paths,
+        #expect(bodies == ["EDP electricity July", "EDP electricity August"], "the text is searchable again")
+        #expect(try await DocumentStore(database: database, time: TestTime(.advances)).list(DocumentFilter(), limit: 100).map(\.path).sorted() == paths,
                 "reading again moves nothing")
         #expect(await analyzer.calls.files.isEmpty, "and asks the model nothing")
         let search = SearchService(database: database, vectors: VectorIndex(), embedder: nil, config: services.config.search)
@@ -107,15 +110,15 @@ import Testing
         let h = try await Harness.make(analyzer: StubAnalyzer(labels: nil))
         defer { h.env.cleanup() }
         let doc = try await h.ingest("bill.txt", text: "EDP electricity July")
-        let records = ArchiveRecords(database: h.env.database, settings: h.env.settings, config: h.env.config, registry: nil)
+        let records = ArchiveRecords(database: h.env.database, settings: h.env.settings, config: h.env.config, registry: nil, time: TestTime(.advances))
         try await records.flush()
         let text = try String(contentsOf: h.env.archive.appendingPathComponent(h.env.config.records.documentsFileName), encoding: .utf8)
         #expect(!text.contains("labels:"), "an entry has no labels until the model has given some")
 
         let database = try AppDatabase.inMemory()
-        try await ArchiveRecords(database: database, settings: h.env.settings, config: h.env.config, registry: nil).rebuild()
+        try await ArchiveRecords(database: database, settings: h.env.settings, config: h.env.config, registry: nil, time: TestTime(.advances)).rebuild()
         let id = try #require(doc.id)
-        let back = try #require(try await DocumentStore(database: database).document(id: id))
+        let back = try #require(try await DocumentStore(database: database, time: TestTime(.advances)).document(id: id))
         #expect(back.labels == nil && back.status == .needsReview, "read back as not labelled, never as labelled with nothing")
     }
 
@@ -154,12 +157,12 @@ import Testing
           decision: {folderCode: F12, title: Fatura eletricidade, confidence: {final: 0.93}}
         ---
         """.write(to: directory.appendingPathComponent(env.config.records.documentsFileName), atomically: true, encoding: .utf8)
-        let summary = try await ArchiveRecords(database: env.database, settings: env.settings, config: env.config, registry: nil).rebuild()
-        #expect(summary.documents == 1)
-        let doc = try #require(try await DocumentStore(database: env.database).document(id: 7))
+        let summary = try await ArchiveRecords(database: env.database, settings: env.settings, config: env.config, registry: nil, time: TestTime(.advances)).rebuild()
+        #expect(summary.documents == 1, "the earlier version's entry is read")
+        let doc = try #require(try await DocumentStore(database: env.database, time: TestTime(.advances)).document(id: 7))
         #expect(doc.path == file.standardizedFileURL.path && doc.status == .filed && doc.originalFilename == "fatura.pdf",
                 "a document an earlier version filed into a folder stays where it is")
-        let unlabelled = try await DocumentStore(database: env.database).unlabelled()
+        let unlabelled = try await DocumentStore(database: env.database, time: TestTime(.advances)).unlabelled()
         #expect(doc.labels == nil && doc.analysis == nil && unlabelled.isEmpty,
                 "it has no labels until it is read again; with no stored text yet, it waits for its text to be read first")
     }
@@ -177,9 +180,29 @@ import Testing
         let w = try await world()
         defer { w.h.env.cleanup() }
         _ = try editLabelByHand(w)
-        #expect(try await w.records.reconcile() == 1)
+        #expect(try await w.records.reconcile() == 1, "the edited file, and only it, is read again")
         let parties = try await w.h.services.documents.list(DocumentFilter(), limit: 5).flatMap { $0.labels(.party) }
-        #expect(parties.contains("Maria Silva"), "a label corrected in the file is the document's")
+        #expect(parties.sorted() == ["Maria Exemplo", "Maria Silva"], "a label corrected in the file is the document's, and only that document's")
+    }
+
+    @Test func aRecordFileThatCannotBeReadIsNeitherOverwrittenNorTakenAsEmpty() async throws {
+        let w = try await world()
+        defer { w.h.env.cleanup() }
+        let url = w.h.env.archive.appendingPathComponent(w.h.env.config.records.documentsFileName)
+        let broken = try String(contentsOf: url, encoding: .utf8).replacingOccurrences(of: "entries:", with: "entries: [unclosed")
+        try broken.write(to: url, atomically: true, encoding: .utf8)
+        await #expect(throws: (any Error).self, "a file that is no longer valid YAML stops the read with the reason") {
+            try await w.records.reconcile()
+        }
+        try await w.h.ingest("edp_september.txt", text: "EDP electricity September")
+        await #expect(throws: RecordsError.self, "and a change to its directory is not written over it; it is tried again") {
+            try await w.records.flush()
+        }
+        #expect(try String(contentsOf: url, encoding: .utf8) == broken, "the user's file stays exactly as they left it")
+        let documents = try await w.h.services.documents.list(DocumentFilter(), limit: 10)
+        #expect(documents.count == w.documents.count + 1, "the index keeps every document, the new one too")
+        #expect(documents.filter { $0.labels == StubAnalyzer.edpBill }.compactMap(\.id).sorted() == w.documents,
+                "and the ones already there keep their labels")
     }
 
     @Test func aChangeNeverOverwritesAnEditMadeByHand() async throws {
@@ -197,7 +220,7 @@ import Testing
     @Test func theUsersDecisionsAboutLabelsLiveInTheArchiveAndSurviveALostIndex() async throws {
         let w = try await world()
         defer { w.h.env.cleanup() }
-        let actions = LabelActions(database: w.h.env.database)
+        let actions = w.h.labels
         try await actions.merge(DocumentLabel(kind: .sender, value: "EDP Comercial"), into: "EDP")
         try await actions.ignore(DocumentLabel(kind: .topic, value: "electricity"))
         try await w.records.flush()
@@ -208,10 +231,10 @@ import Testing
 
         let (database, records) = try freshIndex(w)
         let summary = try await records.rebuild()
-        #expect(summary.labelRules == 2)
+        #expect(summary.labelRules == 2, "both rules are read from the archive")
         let rebuilt = try await LabelStore(database: database, config: w.h.env.config.labels).rules()
         #expect(rebuilt.map(\.summary) == ["sender “EDP Comercial” → “EDP”", "topic “electricity” ignored"], "they come back with a lost index")
-        #expect(try await DocumentStore(database: database).list(DocumentFilter(), limit: 5).allSatisfy { $0.labels(.sender) == ["EDP"] },
+        #expect(try await DocumentStore(database: database, time: TestTime(.advances)).list(DocumentFilter(), limit: 5).allSatisfy { $0.labels(.sender) == ["EDP"] },
                 "as do the labels they changed")
 
         try text.replacingOccurrences(of: "target: EDP\n", with: "target: EDP Energia\n").write(to: url, atomically: true, encoding: .utf8)
@@ -230,7 +253,7 @@ import Testing
         try FileManager.default.removeItem(at: url)
         try await w.records.reconcile()
         #expect(try String(contentsOf: url, encoding: .utf8).contains("value: EDP Comercial"), "deleting a file does not delete what it records")
-        #expect(try await w.h.services.documents.list(DocumentFilter(), limit: 5).count == 2)
+        #expect(try await w.h.services.documents.list(DocumentFilter(), limit: 5).count == 2, "no document is lost or doubled")
     }
 
     @Test func aDocumentsEntryFollowsItAndAnEmptiedDirectoryLosesItsFile() async throws {
@@ -261,8 +284,8 @@ import Testing
         _ = try w.h.env.put("\(w.h.env.config.records.systemFolderName)/stray.txt", text: "no document")
         let (database, records) = try freshIndex(w)
         let summary = try await records.rebuild()
-        #expect(summary.documents == 2 && summary.missing == 0)
-        let adoptions = try await JobStore(database: database).active(kinds: [.adopt])
+        #expect(summary.documents == 2 && summary.missing == 0, "filed documents are found where their records say")
+        let adoptions = try await JobStore(database: database, time: TestTime(.advances)).active(kinds: [.adopt])
         #expect(Set(adoptions.map(\.sourcePath)) == Set(byHand.map(\.path)),
                 "files put in the archive by hand are taken in where they are, but not from Incoming or the system folder")
     }
@@ -277,6 +300,13 @@ import Testing
         #expect(ArchiveRecords.mayHoldRecords(archive: env.archive, config: env.config), "one with the system folder")
     }
 
+    private static func open(_ url: URL, busyTimeout: Double = 1, canRebuild: Bool) throws -> (AppDatabase, AppDatabase.Opening) {
+        var config = try PipelineConfig.bundledDefaults()
+        config.database.busyTimeout = busyTimeout
+        return try AppDatabase.open(at: url, config: config.database, setAsideSuffix: config.records.setAsideSuffix,
+                                    time: TestTime(.advances)) { canRebuild }
+    }
+
     @Test func anUnreadableIndexIsSetAsideOnlyWhenTheArchiveCanRebuildIt() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("arrumator-db-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -284,15 +314,33 @@ import Testing
         let url = dir.appendingPathComponent("arrumator.sqlite")
         try Data("not a database".utf8).write(to: url)
         #expect(throws: DatabaseOpeningError.self, "without records to rebuild from, the app stops instead of starting empty") {
-            _ = try AppDatabase.open(at: url, setAsideSuffix: "unreadable") { false }
+            _ = try Self.open(url, canRebuild: false)
         }
         #expect(try String(contentsOf: url, encoding: .utf8) == "not a database", "and leaves the file alone")
-        let (_, opening) = try AppDatabase.open(at: url, setAsideSuffix: "unreadable") { true }
+        let (_, opening) = try Self.open(url, canRebuild: true)
         guard case let .setAside(aside) = opening else {
             Issue.record("expected the database to be set aside, got \(opening)")
             return
         }
         #expect(try String(contentsOf: aside, encoding: .utf8) == "not a database", "the unreadable file is kept, never deleted")
-        #expect(opening.needsRebuild)
+        #expect(opening.needsRebuild, "and the index is rebuilt from the archive")
+    }
+
+    @Test func anIndexAnotherProcessHoldsIsNeverSetAside() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("arrumator-db-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("index.sqlite")
+        _ = try Self.open(url, canRebuild: true)
+        // Another process, the app or arrumatorcli, writing to the index while this one opens it.
+        try DatabaseQueue(path: url.path).inDatabase { db in
+            try db.execute(sql: "BEGIN EXCLUSIVE")
+            #expect(throws: DatabaseOpeningError.self, "a lock is the moment's, so the app stops and says so") {
+                _ = try Self.open(url, busyTimeout: 0, canRebuild: true)
+            }
+            try db.execute(sql: "ROLLBACK")
+        }
+        let asides = try FileManager.default.contentsOfDirectory(atPath: dir.path).filter { $0.contains("unreadable") }
+        #expect(asides.isEmpty, "a sound index is never moved aside and rebuilt, losing its traces and queue, for a lock")
     }
 }

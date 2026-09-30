@@ -23,7 +23,6 @@ public struct DocumentAnalyzer: DocumentAnalyzing {
             LLMClassifier.Tier(model: resolved.chat, numCtx: resolved.numCtx, keepAlive: resolved.keepAliveChat),
             LLMClassifier.Tier(model: resolved.fast, numCtx: resolved.fastNumCtx, keepAlive: resolved.keepAliveChat)])
         let validator = AnswerValidator(labels: config.labels)
-        let prompts = prompts
         let input = ["tiers": tiers.map(\.model).joined(separator: ",")]
         let started = Date()
         var answer: ModelAnswer<ValidatedAnalysis>?
@@ -33,12 +32,10 @@ public struct DocumentAnalyzer: DocumentAnalyzing {
                 schema: ClassificationSchema.analysis(maxPerKind: config.labels.maxPerKind), tiers: tiers,
                 repairPrompt: { try prompts.repair(errors: $0) }, validate: { try validator.validate($0) })
             await trace.record(.analyse, status: (answer?.calls.count ?? 0) > 1 ? .warn : .ok, startedAt: started, input: input,
-                               output: AnalysisTrace(answer: answer?.answer, calls: answer?.calls ?? []))
+                               output: AnalysisTrace(answer: answer?.answer, exchange: answer?.calls ?? []))
         } catch let error as ModelAnswerError {
-            if case let .exhausted(calls) = error {
-                await trace.record(.analyse, status: .error, startedAt: started, input: input,
-                                   output: AnalysisTrace(answer: nil, calls: calls), error: error.localizedDescription)
-            }
+            await trace.record(.analyse, status: .error, startedAt: started, input: input,
+                               output: AnalysisTrace(answer: nil, exchange: error.calls), error: error.localizedDescription)
             Log.warning(.classify, "The model gave no valid answer", ["error": error.localizedDescription])
         }
 
@@ -62,7 +59,8 @@ public struct DocumentAnalyzer: DocumentAnalyzing {
         let resolved = try config.models(for: settings.models)
         let embedder = OllamaEmbedder(gate: gate, model: resolved.embed, keepAlive: resolved.keepAliveEmbed,
                                       numCtx: config.analysis.embeddingNumCtx)
-        let summary = content.embeddingSummary(senders: senders, maxChars: config.analysis.embeddingSummaryChars)
+        let summary = content.embeddingSummary(senders: senders, maxChars: config.analysis.embeddingSummaryChars,
+                                               identifiersLimit: config.analysis.embeddingIdentifiersLimit)
         let started = Date()
         do {
             guard let vector = try await embedder.embed([summary]).first else { return nil }
@@ -80,8 +78,9 @@ public struct DocumentAnalyzer: DocumentAnalyzing {
     }
 }
 
-/// What the analysis step records: the validated answer and every model call.
+/// What the analysis step records: the validated answer, and every model call under `TraceStep.exchangeKey`, which
+/// retention clears.
 struct AnalysisTrace: Codable {
     var answer: ValidatedAnalysis?
-    var calls: [ModelCall]
+    var exchange: [ModelCall]
 }

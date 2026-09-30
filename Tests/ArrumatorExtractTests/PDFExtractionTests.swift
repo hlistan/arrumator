@@ -1,5 +1,6 @@
 import ArrumatorCore
 @testable import ArrumatorExtract
+import ArrumatorTesting
 import CoreGraphics
 import Foundation
 import PDFKit
@@ -7,7 +8,9 @@ import Testing
 
 @Suite("PDF extraction")
 struct PDFExtractionTests {
-    private let registry = ExtractorRegistry()
+    private let registry: ExtractorRegistry
+
+    init() throws { registry = try TestConfig.registry() }
 
     @Test("Text PDF: text layer, metadata, entities and label date")
     func textPDF() async throws {
@@ -20,23 +23,23 @@ struct PDFExtractionTests {
         let sink = MemoryTraceSink()
         let content = try await registry.extract(url, sha256: "abc", context: try TestConfig.context(),
                                                  trace: TraceContext(traceID: 1, sink: sink))
-        #expect(content.kind == .pdfText)
-        #expect(content.textOrigin == .textLayer)
-        #expect(content.pageCount == 2)
-        #expect(content.pagesOCRed.isEmpty)
-        #expect(content.text.contains("Fatura FT 2026/0042"))
-        #expect(content.metadata["pdf:title"] == "Fatura EDP")
-        #expect(content.metadata["pdf:author"] == "EDP")
-        #expect(content.language.primary == "pt")
-        #expect(content.entities.documentDate?.date == "2026-05-20")
-        #expect(content.entities.documentDate?.source == .label)
-        #expect(content.entities.stableKeys.contains(StableKey(kind: .iban, value: "PT50000201231234567890154")))
-        #expect(content.entities.stableKeys.contains(StableKey(kind: .ptNIF, value: "503504564")))
-        #expect(content.entities.amounts.contains(MoneyAmount(value: "45.90", currency: "EUR")))
-        #expect(content.source.sha256 == "abc")
-        #expect(content.extractorName == "pdf")
+        #expect(content.kind == .pdfText, "a PDF whose pages all have text is a text PDF")
+        #expect(content.textOrigin == .textLayer, "text comes from the text layer, with no OCR")
+        #expect(content.pageCount == 2, "every page is counted, not only the ones read")
+        #expect(content.pagesOCRed == [], "a page with a text layer is never OCRed")
+        #expect(content.text.contains("Fatura FT 2026/0042"), "the invoice number reaches the model as written")
+        #expect(content.metadata["pdf:title"] == "Fatura EDP", "the PDF's own title is kept as metadata")
+        #expect(content.metadata["pdf:author"] == "EDP", "the PDF's author is kept as metadata")
+        #expect(content.language.primary == "pt", "a Portuguese invoice is detected as Portuguese")
+        #expect(content.entities.documentDate?.date == "2026-05-20", "the issue date, not the due date, dates the document")
+        #expect(content.entities.documentDate?.source == .label, "the date comes from its label, Data de emissão")
+        #expect(content.entities.stableKeys.contains(StableKey(kind: .iban, value: "PT50000201231234567890154")),
+                "the IBAN in the text layer is a stable key")
+        #expect(content.entities.stableKeys.contains(StableKey(kind: .ptNIF, value: "503504564")), "the supplier's NIF is a stable key")
+        #expect(content.source.sha256 == "abc", "the content is tied to the file's hash it was read from")
+        #expect(content.extractorName == "pdf", "the trace names the PDF extractor")
         let stages = await sink.steps.map(\.stage)
-        #expect(stages == [.extract, .entities])
+        #expect(stages == [.extract, .entities], "a text PDF records no OCR step")
     }
 
     @Test("Scanned Russian PDF is OCRed and key words are recovered", .enabled(VisionOCR.unavailable) { await VisionOCR.available.value })
@@ -49,22 +52,24 @@ struct PDFExtractionTests {
         let sink = MemoryTraceSink()
         let content = try await registry.extract(url, sha256: "x", context: try TestConfig.context(),
                                                  trace: TraceContext(traceID: 7, sink: sink))
-        #expect(content.kind == .pdfScanned)
+        #expect(content.kind == .pdfScanned, "a PDF of page images is a scan")
         #expect(content.textOrigin == .ocr, "a scanned page is read by OCR (\(content.warningSummary))")
-        #expect(content.pagesOCRed == [1])
-        #expect(content.text.contains("Сбербанк"))
-        #expect(content.text.contains("оплату"))
-        #expect(content.language.primary == "ru")
-        #expect(content.entities.stableKeys.contains(StableKey(kind: .ruINN, value: "7707083893")))
-        #expect(content.entities.documentDate?.date == "2024-05-15")
+        #expect(content.pagesOCRed == [1], "the one scanned page is OCRed")
+        #expect(content.text.contains("Сбербанк"), "Cyrillic text is read from the scan (\(content.warningSummary))")
+        #expect(content.text.contains("оплату"), "the invoice wording is read from the scan")
+        #expect(content.language.primary == "ru", "OCR text in Russian is detected as Russian")
+        #expect(content.entities.stableKeys.contains(StableKey(kind: .ruINN, value: "7707083893")), "an ИНН read by OCR is a stable key")
+        #expect(content.entities.documentDate?.date == "2024-05-15", "a Russian date written in words dates the document")
         let ocr = try #require(content.ocr)
-        #expect(ocr.pages == [1])
-        #expect(ocr.meanConfidence > 0.3)
+        #expect(ocr.pages == [1], "the OCR statistics cover the page that was read")
+        #expect(ocr.meanConfidence > 0.3, "clean printed text is read with some confidence")
         let steps = await sink.steps
-        #expect(steps.map(\.stage) == [.ocr, .extract, .entities])
+        #expect(steps.map(\.stage) == [.ocr, .extract, .entities], "OCR is traced before extraction and entities")
         let ocrStep = try #require(steps.first)
-        #expect(ocrStep.output?.contains("\"page\":1") == true)
-        #expect(ocrStep.input?.contains("fewCharacters") == true)
+        let ocrOutput = try #require(ocrStep.output)
+        let ocrInput = try #require(ocrStep.input)
+        #expect(ocrOutput.contains("\"page\":1"), "the OCR step shows each page it read")
+        #expect(ocrInput.contains("fewCharacters"), "the OCR step says why the page counts as scanned")
     }
 
     @Test("Scanned Portuguese PDF is OCRed and key words are recovered", .enabled(VisionOCR.unavailable) { await VisionOCR.available.value })
@@ -75,12 +80,12 @@ struct PDFExtractionTests {
             "Total a pagar: 1.234,56 €", "Obrigado pela preferência",
         ]])
         let content = try await registry.extract(url, sha256: "x", context: try TestConfig.context(), trace: .disabled)
-        #expect(content.kind == .pdfScanned)
+        #expect(content.kind == .pdfScanned, "a PDF of page images is a scan")
         #expect(content.text.contains("Tributária"), "OCR reads the scanned page (\(content.warningSummary))")
-        #expect(content.text.contains("preferência"))
-        #expect(content.language.primary == "pt")
-        #expect(content.entities.documentDate?.date == "2026-05-20")
-        #expect(content.entities.stableKeys.contains(StableKey(kind: .ptNIF, value: "999999990")))
+        #expect(content.text.contains("preferência"), "accented Portuguese is read from the scan")
+        #expect(content.language.primary == "pt", "OCR text in Portuguese is detected as Portuguese")
+        #expect(content.entities.documentDate?.date == "2026-05-20", "a Portuguese date written in words dates the document")
+        #expect(content.entities.stableKeys.contains(StableKey(kind: .ptNIF, value: "999999990")), "a NIF read by OCR is a stable key")
     }
 
     @Test("Mixed PDF: text page plus scanned page", .enabled(VisionOCR.unavailable) { await VisionOCR.available.value })
@@ -93,11 +98,11 @@ struct PDFExtractionTests {
         let scan = try scratch.writeImagePDF("scan.pdf", pages: [["Anexo digitalizado", "Assinatura do presidente"]])
         let merged = try #require(PDFMerge.merge([text, scan], into: scratch.url("mixed.pdf")))
         let content = try await registry.extract(merged, sha256: "x", context: try TestConfig.context(), trace: .disabled)
-        #expect(content.kind == .pdfMixed)
+        #expect(content.kind == .pdfMixed, "a PDF with text and scanned pages is mixed")
         #expect(content.textOrigin == .mixed, "the scanned page is read by OCR, the other from its text (\(content.warningSummary))")
-        #expect(content.pagesOCRed == [2])
-        #expect(content.text.contains("Relatório anual"))
-        #expect(content.text.contains("Anexo digitalizado"))
+        #expect(content.pagesOCRed == [2], "only the scanned page is OCRed")
+        #expect(content.text.contains("Relatório anual"), "the text page is read from its text layer")
+        #expect(content.text.contains("Anexo digitalizado"), "the scanned page is read by OCR")
     }
 
     @Test("Encrypted PDF yields an encrypted warning, not an error")
@@ -105,10 +110,10 @@ struct PDFExtractionTests {
         let scratch = try Scratch()
         let url = try scratch.writeTextPDF("secret.pdf", pages: [["Confidential"]], password: "s3cret")
         let content = try await registry.extract(url, sha256: "x", context: try TestConfig.context(), trace: .disabled)
-        #expect(content.hasWarning(.encrypted))
-        #expect(content.textOrigin == .metadataOnly)
-        #expect(content.text.isEmpty)
-        #expect(content.entities.documentDate?.source == .fileCreated)
+        #expect(content.warnings.map(\.code) == [.encrypted], "a password-protected PDF is filed with a warning, not failed")
+        #expect(content.textOrigin == .metadataOnly, "a locked PDF is described by its metadata alone")
+        #expect(content.text == "", "nothing is read past the password")
+        #expect(content.entities.documentDate?.source == .fileCreated, "without text, the file's creation date dates it")
     }
 
     @Test("Corrupt PDF yields a corrupted warning, not an error")
@@ -116,17 +121,18 @@ struct PDFExtractionTests {
         let scratch = try Scratch()
         let url = try scratch.write("broken.pdf", "%PDF-1.7\nthis is not a real pdf body\n%%EOF")
         let content = try await registry.extract(url, sha256: "x", context: try TestConfig.context(), trace: .disabled)
-        #expect(content.hasWarning(.corrupted))
-        #expect(content.textOrigin == .metadataOnly)
+        #expect(content.warnings.map(\.code) == [.corrupted], "a broken PDF is filed with a warning, not failed")
+        #expect(content.textOrigin == .metadataOnly, "a PDF PDFKit cannot open is described by its metadata alone")
     }
 
     @Test("Per-file timeout is a hard ExtractionError.timeout")
     func timeout() async throws {
         let scratch = try Scratch()
         let url = try scratch.writeImagePDF("slow.pdf", pages: [["Página lenta"]])
-        let context = try TestConfig.context { extraction, _ in extraction.perFileTimeout = 0.001 }
-        await #expect {
-            _ = try await registry.extract(url, sha256: "x", context: context, trace: .disabled)
+        // On time that runs out at once, whatever the file: the deadline, not the machine's speed, decides.
+        let expiring = try TestConfig.registry(time: TestTime(.advances))
+        await #expect("a file that outlasts its deadline is a hard timeout, not a partial result") {
+            _ = try await expiring.extract(url, sha256: "x", context: try TestConfig.context(), trace: .disabled)
         } throws: { error in
             guard case .timeout? = error as? ExtractionError else { return false }
             return true
@@ -136,13 +142,15 @@ struct PDFExtractionTests {
     @Test("Scanned-page rules follow the configuration")
     func pageRules() throws {
         let config = try TestConfig.pipeline().extraction.pdf
-        #expect(PageTextQuality("abc").imagePageReason(config) { 0 } == .fewCharacters)
-        #expect(PageTextQuality(String(repeating: "12 34 56 78 ", count: 10)).imagePageReason(config) { 0 } == .lowLetterShare)
+        #expect(PageTextQuality("abc").imagePageReason(config) { 0 } == .fewCharacters, "a page with almost no text is scanned")
+        #expect(PageTextQuality(String(repeating: "12 34 56 78 ", count: 10)).imagePageReason(config) { 0 } == .lowLetterShare,
+                "a text layer of mostly digits is not trusted as the page's text")
         let garbled = String(repeating: "Texto normal ", count: 8) + String(repeating: "\u{FFFD}", count: 10)
-        #expect(PageTextQuality(garbled).imagePageReason(config) { 0 } == .replacementCharacters)
+        #expect(PageTextQuality(garbled).imagePageReason(config) { 0 } == .replacementCharacters, "a text layer of broken glyphs is scanned")
         let short = String(repeating: "Digitalizado ", count: 6)
-        #expect(PageTextQuality(short).imagePageReason(config) { 1 } == .fullPageImage)
-        #expect(PageTextQuality(short).imagePageReason(config) { 0.2 } == nil)
+        #expect(PageTextQuality(short).imagePageReason(config) { 1 } == .fullPageImage,
+                "a full-page image with a little text on it is a scan")
+        #expect(PageTextQuality(short).imagePageReason(config) { 0.2 } == nil, "short text beside a small image is a text page")
     }
 }
 

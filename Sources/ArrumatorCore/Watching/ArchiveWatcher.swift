@@ -4,17 +4,21 @@ import Foundation
 public actor SelfChangeRegistry {
     private var expected: [String: Date] = [:]
     private let ttl: Double
+    private let time: any TimeSource
 
     /// - Parameter ttl: how long an expectation stays valid; must exceed the FSEvents latency.
-    public init(ttl: Double) { self.ttl = ttl }
+    public init(ttl: Double, time: any TimeSource) {
+        self.ttl = ttl
+        self.time = time
+    }
 
     public func expect(_ paths: [String]) {
-        let until = Date().addingTimeInterval(ttl)
+        let until = time.now().addingTimeInterval(ttl)
         for p in paths { expected[URL(fileURLWithPath: p).standardizedFileURL.path] = until }
     }
 
     public func isExpected(_ path: String) -> Bool {
-        let now = Date()
+        let now = time.now()
         expected = expected.filter { $0.value > now }
         return expected[URL(fileURLWithPath: path).standardizedFileURL.path] != nil
     }
@@ -27,7 +31,7 @@ public enum ArchiveChange: Sendable, Hashable {
     case documentMissing(path: String)
     /// A file the app does not know appeared in the archive, outside its system folder.
     case untrackedFile(path: String)
-    /// A record file (`_documents.md`, the senders or a history file) was changed by something other than the app,
+    /// A record file (`_documents.md`, `_labels.md` or a history file) was changed by something other than the app,
     /// such as an edit by hand or a copy synchronised from another Mac, or events were lost; the index reads the
     /// record files that changed again.
     case recordsChanged

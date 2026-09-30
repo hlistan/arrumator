@@ -16,7 +16,7 @@ public struct LabelRule: ArrumatorRecord, Identifiable, Hashable {
 
     public mutating func didInsert(_ inserted: InsertionSuccess) { id = inserted.rowID }
 
-    public init(id: Int64? = nil, kind: LabelKind, value: String, action: LabelRuleAction, target: String?, createdAt: Date = Date()) {
+    public init(id: Int64? = nil, kind: LabelKind, value: String, action: LabelRuleAction, target: String?, createdAt: Date) {
         self.id = id
         self.kind = kind
         self.value = value

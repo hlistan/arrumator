@@ -51,7 +51,7 @@ final class AppModel {
     func start() async {
         guard runtime == nil else { return }
         do {
-            let runtime = try await ArrumatorRuntime.bootstrap(appVersion: Self.version, echoLogsToStderr: false)
+            let runtime = try await ArrumatorRuntime.bootstrap(appVersion: Self.version, environment: .current, echoLogsToStderr: false)
             self.runtime = runtime
             settings = await runtime.settings.current
             observe(runtime)
@@ -80,7 +80,7 @@ final class AppModel {
                 try await runtime.openArchive()
             } catch {
                 Log.error(.app, "Could not bring the index in line with the archive", ["error": error.localizedDescription])
-                await MainActor.run { self?.lastError = "Reading the archive: \(error.localizedDescription)" }
+                await MainActor.run { self?.lastError = Wording.failure(Wording.readArchiveAction, error.localizedDescription) }
             }
             await runtime.start()
             await MainActor.run { self?.watching = true }
@@ -110,7 +110,7 @@ final class AppModel {
             await refresh()
             if settings?.onboardingCompleted == true { startWatching(next) }
         } catch {
-            lastError = "Switch archives: \(error.localizedDescription)"
+            lastError = Wording.failure(Wording.switchArchivesAction, error.localizedDescription)
             Log.error(.ui, "Could not switch archives", ["error": error.localizedDescription])
         }
     }
@@ -141,10 +141,10 @@ final class AppModel {
         guard let runtime else { return }
         do {
             let events = try await runtime.services.history.events(
-                limit: 12, kinds: [.filed, .needsReview, .duplicate, .failed, .userMoved])
+                limit: runtime.config.interface.notificationEvents, kinds: [.filed, .needsReview, .duplicate, .failed, .userMoved])
             await notifications.announce(events, previous: recent, settings: settings)
             recent = events
-            reviewCount = try await runtime.services.documents.reviewQueue().count
+            reviewCount = try await runtime.services.documents.reviewCount()
             labelSuggestionCount = try await runtime.services.labels.suggestions().count
         } catch {
             Log.error(.ui, "Refresh failed", ["error": error.localizedDescription])
@@ -158,14 +158,10 @@ final class AppModel {
         }
     }
 
-    func togglePause() async {
-        let paused = !(settings?.paused ?? false)
-        await update { $0.paused = paused }
-        await runtime?.coordinator.wake()
-        if let runtime {
-            _ = try? await runtime.services.history.record(paused ? .paused : .resumed, actor: .user,
-                                                           summary: paused ? "Processing paused" : "Processing resumed")
-        }
+    /// Pauses or resumes filing, as `arrumatorcli settings --paused` does (`ArrumatorRuntime.setPaused`).
+    func setPaused(_ paused: Bool) async {
+        await perform(paused ? Wording.pause : Wording.resume) { try await $0.setPaused(paused) }
+        settings = await runtime?.settings.current
     }
 
     // MARK: Actions with user-visible errors
@@ -178,7 +174,7 @@ final class AppModel {
             try await action(runtime)
             lastError = nil
         } catch {
-            lastError = "\(what): \(error.localizedDescription)"
+            lastError = Wording.failure(what, error.localizedDescription)
             Log.error(.ui, what, ["error": error.localizedDescription])
         }
         await refresh()
@@ -193,7 +189,7 @@ final class AppModel {
             // The view asked again before this finished; the newer read is the one that matters.
             return nil
         } catch {
-            lastError = "\(what): \(error.localizedDescription)"
+            lastError = Wording.failure(what, error.localizedDescription)
             Log.error(.ui, what, ["error": error.localizedDescription])
             return nil
         }
@@ -258,23 +254,23 @@ final class AppModel {
     /// Why the app is not filing right now, or nil when everything is working.
     var attention: String? {
         if case let .failed(why) = phase { return why }
-        if settings?.onboardingCompleted == true, !watching { return "Waiting for access to your folders" }
-        if settings?.paused == true { return "Paused" }
-        if let reason = ingest.powerPauseReason { return "Waiting: \(reason)" }
+        if settings?.onboardingCompleted == true, !watching { return Wording.waitingForFolders }
+        if settings?.paused == true { return Wording.paused }
+        if let reason = ingest.powerPauseReason { return Wording.waiting(reason) }
         if ingest.waitingForOllama || !ollama.isReady { return ollama.summary }
         return nil
     }
 
     var statusLine: String {
         if case let .failed(why) = phase { return why }
-        if settings?.onboardingCompleted == true, !watching { return "Starting: waiting for folder access" }
-        if settings?.paused == true { return "Paused" }
-        if let reason = ingest.powerPauseReason { return "Waiting: \(reason)" }
-        if ingest.waitingForOllama { return "Waiting for Ollama" }
+        if settings?.onboardingCompleted == true, !watching { return Wording.startingForFolders }
+        if settings?.paused == true { return Wording.paused }
+        if let reason = ingest.powerPauseReason { return Wording.waiting(reason) }
+        if ingest.waitingForOllama { return Wording.waitingForOllama }
         if let path = ingest.currentPath {
-            return "\(ingest.currentStage?.rawValue.capitalized ?? "Working") \((path as NSString).lastPathComponent)"
+            return Wording.working(on: (path as NSString).lastPathComponent, stage: ingest.currentStage?.rawValue.capitalized)
         }
-        return ingest.queued > 0 ? "\(ingest.queued) queued" : "Idle"
+        return ingest.queued > 0 ? Wording.queued(ingest.queued) : Wording.idle
     }
 }
 

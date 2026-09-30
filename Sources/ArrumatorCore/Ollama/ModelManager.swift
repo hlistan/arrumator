@@ -1,8 +1,13 @@
 import Foundation
 
+/// What a model of the profile is used for.
+public enum ModelRole: String, Sendable, Hashable, Codable {
+    case chat, vision, embedding, fast
+}
+
 public struct ModelStatus: Sendable, Hashable, Codable {
     public var name: String
-    public var role: String
+    public var role: ModelRole
     public var installed: Bool
     public var sizeBytes: Int64?
 }
@@ -33,8 +38,8 @@ public actor ModelManager {
     public func status(for models: ResolvedModels) async throws -> [ModelStatus] {
         let installed = try await api.tags()
         let bySize = Dictionary(installed.map { (Self.normalized($0.name), $0.size) }, uniquingKeysWith: { a, _ in a })
-        let roles: [(String, String)] = [("chat", models.chat), ("vision", models.vision), ("embedding", models.embed),
-                                         ("fast", models.fast)]
+        let roles: [(ModelRole, String)] = [(.chat, models.chat), (.vision, models.vision), (.embedding, models.embed),
+                                            (.fast, models.fast)]
         return roles.map { role, name in
             let key = Self.normalized(name)
             return ModelStatus(name: name, role: role, installed: bySize.keys.contains(key), sizeBytes: bySize[key] ?? nil)
@@ -52,7 +57,7 @@ public actor ModelManager {
     public func pull(_ model: String) throws -> AsyncThrowingStream<OllamaPullProgress, any Error> {
         let values = try FileManager.default.homeDirectoryForCurrentUser
             .resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
-        let freeGB = Double(values.volumeAvailableCapacityForImportantUsage ?? 0) / 1_073_741_824
+        let freeGB = Double(values.volumeAvailableCapacityForImportantUsage ?? 0) / Units.bytesPerGigabyte
         guard freeGB > config.requiredFreeDiskGBAfterPull else {
             throw ModelManagerError.insufficientDisk(neededGB: config.requiredFreeDiskGBAfterPull, freeGB: freeGB)
         }
@@ -67,12 +72,14 @@ public actor ModelManager {
 public actor InferenceGate {
     private let api: any OllamaAPI
     private let retryDelays: [Double]
+    private let time: any TimeSource
     private let generation = AsyncSemaphore(permits: 1)
     private let embedding = AsyncSemaphore(permits: 1)
 
-    public init(api: any OllamaAPI, retryDelays: [Double]) {
+    public init(api: any OllamaAPI, retryDelays: [Double], time: any TimeSource) {
         self.api = api
         self.retryDelays = retryDelays
+        self.time = time
     }
 
     public nonisolated var client: any OllamaAPI { api }
@@ -80,8 +87,9 @@ public actor InferenceGate {
     public func chat(_ request: OllamaChatRequest) async throws -> OllamaChatResponse {
         let api = api
         let delays = retryDelays
+        let time = time
         return try await generation.withPermit {
-            try await Retry.run(delays: delays, shouldRetry: { ($0 as? OllamaError)?.isTransient ?? false },
+            try await Retry.run(delays: delays, time: time, shouldRetry: { ($0 as? OllamaError)?.isTransient ?? false },
                                 onRetry: { n, e in
                                     Log.warning(.ollama, "Retrying chat", ["attempt": String(n), "error": e.localizedDescription])
                                 }) {
@@ -93,8 +101,12 @@ public actor InferenceGate {
     public func embed(_ request: OllamaEmbedRequest) async throws -> OllamaEmbedResponse {
         let api = api
         let delays = retryDelays
+        let time = time
         return try await embedding.withPermit {
-            try await Retry.run(delays: delays, shouldRetry: { ($0 as? OllamaError)?.isTransient ?? false }) {
+            try await Retry.run(delays: delays, time: time, shouldRetry: { ($0 as? OllamaError)?.isTransient ?? false },
+                                onRetry: { n, e in
+                                    Log.warning(.ollama, "Retrying embedding", ["attempt": String(n), "error": e.localizedDescription])
+                                }) {
                 try await api.embed(request)
             }
         }

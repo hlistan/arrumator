@@ -6,21 +6,22 @@ struct OnboardingView: View {
     @State private var loginItem = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: Style.onboardingSpacing) {
             switch step {
             case 0: welcome
             case 1: folders
-            case 2: ModelSettingsView().frame(height: 330)
+            case 2:
+                if let settings = model.settings { ModelSettingsView(loaded: settings).frame(height: Style.onboardingModelsHeight) }
             default: finish
             }
             Spacer()
             HStack {
-                if step > 0 { Button("Back") { step -= 1 } }
+                if step > 0 { Button(Wording.back) { step -= 1 } }
                 Spacer()
                 if step < 3 {
-                    Button("Continue") { step += 1 }.keyboardShortcut(.defaultAction)
+                    Button(Wording.continueStep) { step += 1 }.keyboardShortcut(.defaultAction)
                 } else {
-                    Button("Start") {
+                    Button(Wording.start) {
                         Task {
                             try? LoginItem.set(loginItem)
                             await model.finishOnboarding()
@@ -32,37 +33,32 @@ struct OnboardingView: View {
                 }
             }
         }
-        .padding(24)
-        .frame(width: 620, height: 500)
+        .padding(Style.onboardingPadding)
+        .frame(width: Style.onboardingWindow.width, height: Style.onboardingWindow.height)
     }
 
     private var welcome: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Welcome to Arrumator").font(.largeTitle.bold())
-            Text("""
-                Drop any document into your Incoming folder. Arrumator reads it on this Mac, labels it with who sent it, \
-                what it is and whom it concerns, its dates, amounts and references, where it applies and its language, \
-                names it, and files it into your archive. You find it again by searching for any of its labels.
-                """)
-            Label("Everything runs locally with Ollama. No document ever leaves this computer.", systemImage: "lock.shield")
-            Label("No folders to keep tidy: every document sits at the top of the archive, found by its labels.", systemImage: "tag")
-            Label("Labels say who sent it, what it is, its dates, amounts, references and more; correct any of them.",
-                  systemImage: "square.and.pencil")
+        VStack(alignment: .leading, spacing: Style.onboardingStepSpacing) {
+            Text(Wording.welcome).font(.largeTitle.bold())
+            Text(Wording.welcomeIntro)
+            Label(Wording.welcomeLocal, systemImage: "lock.shield")
+            Label(Wording.welcomeNoFolders, systemImage: "tag")
+            Label(Wording.welcomeLabels, systemImage: "square.and.pencil")
         }
     }
 
     private var folders: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Choose your folders").font(.title.bold())
-            GeneralSettings().frame(height: 300)
+        VStack(alignment: .leading, spacing: Style.onboardingStepSpacing) {
+            Text(Wording.chooseFolders).font(.title.bold())
+            if let settings = model.settings { GeneralSettings(loaded: settings).frame(height: Style.onboardingFoldersHeight) }
         }
     }
 
     private var finish: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Ready").font(.largeTitle.bold())
-            Text("Arrumator lives in the menu bar. Open it to see what was filed, search by label, and answer documents that need you.")
-            Toggle("Open Arrumator at login", isOn: $loginItem)
+        VStack(alignment: .leading, spacing: Style.onboardingStepSpacing) {
+            Text(Wording.ready).font(.largeTitle.bold())
+            Text(Wording.readyIntro)
+            Toggle(Wording.openAppAtLogin, isOn: $loginItem)
         }
     }
 }

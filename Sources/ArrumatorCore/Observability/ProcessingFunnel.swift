@@ -13,12 +13,15 @@ public enum FunnelSeverity: String, Sendable, Codable, Hashable {
 
 /// Why a document stopped at a step instead of going further.
 public struct FunnelStop: Sendable, Codable, Hashable, Identifiable {
+    /// Where the documents that stopped are now.
+    public var status: DocumentStatus
     public var reason: String
     public var count: Int
     public var severity: FunnelSeverity
-    public var id: String { reason }
+    public var id: DocumentStatus { status }
 
-    public init(reason: String, count: Int, severity: FunnelSeverity) {
+    public init(status: DocumentStatus, reason: String, count: Int, severity: FunnelSeverity) {
+        self.status = status
         self.reason = reason
         self.count = count
         self.severity = severity
@@ -30,6 +33,8 @@ public struct FunnelStepStats: Sendable, Codable, Hashable, Identifiable {
     public var id: String
     public var title: String
     public var detail: String
+    /// The trace stages the step covers (`stats.funnel.steps`), which say what it is whatever it is called.
+    public var stages: [TraceStage]
     public var reached: Int
     public var passed: Int
     public var stoppedHere: [FunnelStop]
@@ -87,9 +92,10 @@ extension StatsService {
     }
 
     /// Builds the funnel for documents that arrived inside the window.
-    public func funnel(days: Int, now: Date = Date()) async throws -> ProcessingFunnel {
+    public func funnel(days: Int) async throws -> ProcessingFunnel {
         let cfg = config.funnel
-        let cutoff = now.addingTimeInterval(-Double(days) * 86_400)
+        let now = time.now()
+        let cutoff = now.addingTimeInterval(-Double(days) * Units.secondsPerDay)
         return try await database.reader.read { db in
             let documents = try Row.fetchAll(db, sql: """
                 SELECT d.id AS id, d.status AS status,
@@ -102,7 +108,7 @@ extension StatsService {
 
             // Every stage a document recorded, and what each cost.
             let traceIDs = documents.compactMap { $0["trace_id"] as Int64? }
-            var stagesByTrace: [Int64: [String: (status: String, ms: Double)]] = [:]
+            var stagesByTrace: [Int64: [String: (status: TraceStatus, ms: Double)]] = [:]
             if !traceIDs.isEmpty {
                 let placeholders = databaseQuestionMarks(count: traceIDs.count)
                 for row in try Row.fetchAll(db, sql: """
@@ -111,13 +117,12 @@ extension StatsService {
                     """, arguments: StatementArguments(traceIDs)) {
                     let id: Int64 = row["trace_id"]
                     let stage: String = row["stage"]
-                    let status: String = row["status"]
+                    guard let status = TraceStatus(rawValue: row["status"]) else { continue }
                     let ms: Double = row["ms"] ?? 0
                     var stages = stagesByTrace[id] ?? [:]
                     // An error anywhere in a stage is what matters; durations add up.
                     let previous = stages[stage]
-                    let worst = Self.worse(previous?.status, status)
-                    stages[stage] = (worst, (previous?.ms ?? 0) + ms)
+                    stages[stage] = (max(previous?.status ?? status, status), (previous?.ms ?? 0) + ms)
                     stagesByTrace[id] = stages
                 }
             }
@@ -128,61 +133,55 @@ extension StatsService {
 
     private static func emptySteps(_ cfg: FunnelConfig) -> [FunnelStepStats] {
         cfg.steps.map {
-            FunnelStepStats(id: $0.id, title: $0.title, detail: $0.detail, reached: 0, passed: 0,
+            FunnelStepStats(id: $0.id, title: $0.title, detail: $0.detail, stages: $0.stages, reached: 0, passed: 0,
                             stoppedHere: [], warnings: 0, errors: 0, medianMs: 0, p95Ms: 0, ofAll: 0)
         }
     }
 
-    /// `error` beats `warn` beats `ok` beats `skipped`.
-    private static func worse(_ a: String?, _ b: String) -> String {
-        let rank = ["skipped": 0, "ok": 1, "warn": 2, "error": 3]
-        guard let a, (rank[a] ?? 0) >= (rank[b] ?? 0) else { return b }
-        return a
-    }
-
-    private static func assemble(documents: [Row], stagesByTrace: [Int64: [String: (status: String, ms: Double)]],
+    private static func assemble(documents: [Row], stagesByTrace: [Int64: [String: (status: TraceStatus, ms: Double)]],
                                  cfg: FunnelConfig, days: Int, now: Date) -> ProcessingFunnel {
         let stepStages = cfg.steps.map { Set($0.stages.map(\.rawValue)) }
         var reached = [Int](repeating: 0, count: cfg.steps.count)
         var warnings = [Int](repeating: 0, count: cfg.steps.count)
         var errors = [Int](repeating: 0, count: cfg.steps.count)
         var durations = [[Double]](repeating: [], count: cfg.steps.count)
-        var stops = [[String: (count: Int, severity: FunnelSeverity)]](repeating: [:], count: cfg.steps.count)
+        var stops = [[DocumentStatus: Int]](repeating: [:], count: cfg.steps.count)
 
         for document in documents {
-            let status = DocumentStatus(rawValue: document["status"] ?? "") ?? .processing
+            guard let status = DocumentStatus(rawValue: document["status"] ?? "") else {
+                Log.warning(.db, "Unknown document status left out of the funnel", ["doc": String(document["id"] as Int64? ?? 0)])
+                continue
+            }
             let stages = (document["trace_id"] as Int64?).flatMap { stagesByTrace[$0] } ?? [:]
 
             // How far it got: the last step with a recorded stage. Arrival is implied by the document existing.
             var furthest = 0
             for (index, wanted) in stepStages.enumerated() {
-                let recorded = stages.filter { wanted.contains($0.key) && $0.value.status != "skipped" }
+                let recorded = stages.filter { wanted.contains($0.key) && $0.value.status != .skipped }
                 guard !recorded.isEmpty else { continue }
                 furthest = max(furthest, index)
-                if recorded.values.contains(where: { $0.status == "error" }) {
+                if recorded.values.contains(where: { $0.status == .error }) {
                     // A step that fails fast would otherwise read as a fast step.
                     errors[index] += 1
                 } else {
                     durations[index].append(recorded.values.reduce(0) { $0 + $1.ms })
-                    if recorded.values.contains(where: { $0.status == "warn" }) { warnings[index] += 1 }
+                    if recorded.values.contains(where: { $0.status == .warn }) { warnings[index] += 1 }
                 }
             }
             for index in 0...furthest { reached[index] += 1 }
-            if status != .filed || furthest < cfg.steps.count - 1 {
-                let reason = stopReason(for: status)
-                let previous = stops[furthest][reason.text]?.count ?? 0
-                stops[furthest][reason.text] = (previous + 1, reason.severity)
-            }
+            if status != .filed || furthest < cfg.steps.count - 1 { stops[furthest][status, default: 0] += 1 }
         }
 
         let steps = cfg.steps.enumerated().map { index, step -> FunnelStepStats in
-            let next = index + 1 < reached.count ? reached[index + 1] : reached[index] - stops[index].values.reduce(0) { $0 + $1.count }
+            let next = index + 1 < reached.count ? reached[index + 1] : reached[index] - stops[index].values.reduce(0, +)
             let sorted = durations[index].sorted()
             return FunnelStepStats(
-                id: step.id, title: step.title, detail: step.detail, reached: reached[index],
+                id: step.id, title: step.title, detail: step.detail, stages: step.stages, reached: reached[index],
                 passed: max(0, min(next, reached[index])),
-                stoppedHere: stops[index].map { FunnelStop(reason: $0.key, count: $0.value.count, severity: $0.value.severity) }
-                    .sorted { $0.count > $1.count },
+                stoppedHere: stops[index].map { status, count in
+                    let reason = stopReason(for: status)
+                    return FunnelStop(status: status, reason: reason.text, count: count, severity: reason.severity)
+                }.sorted { ($0.count, $1.status.rawValue) > ($1.count, $0.status.rawValue) },
                 warnings: warnings[index], errors: errors[index],
                 medianMs: percentile(sorted, 0.5), p95Ms: percentile(sorted, 0.95), ofAll: documents.count)
         }

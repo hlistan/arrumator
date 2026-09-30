@@ -23,3 +23,18 @@ public protocol DocumentAnalyzing: Sendable {
     func embedding(for content: ExtractedContent, senders: [String], settings: AppSettings, config: PipelineConfig,
                    trace: TraceContext) async throws -> (vector: [Float], model: String)?
 }
+
+/// The time of day and the passing of time. Everything that stamps a record, schedules work or waits takes one, so a
+/// test sets the time and waits for nothing (AGENTS.md §3, determinism). `SystemTime` is the one the app runs on.
+public protocol TimeSource: Sendable {
+    func now() -> Date
+    /// Suspends for `seconds`; throws `CancellationError` when the task is cancelled.
+    func sleep(seconds: Double) async throws
+}
+
+/// The Mac's clock.
+public struct SystemTime: TimeSource {
+    public init() {}
+    public func now() -> Date { Date() }
+    public func sleep(seconds: Double) async throws { try await Task.sleep(for: .seconds(seconds)) }
+}

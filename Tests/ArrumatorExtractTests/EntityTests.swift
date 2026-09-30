@@ -1,23 +1,25 @@
 import ArrumatorCore
 @testable import ArrumatorExtract
+import ArrumatorTesting
 import Foundation
 import Testing
 
 @Suite("Entities and document dates")
 struct EntityTests {
-    /// Fixed "today" so plausibility windows do not drift.
-    private let now: Date = {
+    /// Fixed "today" so plausibility windows do not drift, in a calendar of its own.
+    private let calendar: Calendar = {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = .current
-        return calendar.date(from: DateComponents(year: 2026, month: 9, day: 22)) ?? Date()
+        return calendar
     }()
+    private var now: Date { calendar.date(from: DateComponents(year: 2026, month: 9, day: 22)) ?? TestTime.start }
 
     private func resolve(_ text: String, metadata: [MetadataDate] = [], created: Date? = nil,
                          modified: Date? = nil) throws -> DateResolution {
         let entities = try TestConfig.pipeline().entities
-        let scan = EntityExtractor(config: entities).scan(text, now: now)
+        let scan = EntityExtractor(config: entities).scan(text, now: now, calendar: calendar)
         let evidence = DateEvidence(firstPageLength: nil, metadataDates: metadata, fileCreated: created,
-                                    fileModified: modified, now: now)
+                                    fileModified: modified, now: now, calendar: calendar)
         return DocumentDateResolver(config: entities).resolve(scan.dateCandidates, in: text, evidence: evidence)
     }
 
@@ -30,11 +32,11 @@ struct EntityTests {
         Customer DOB: 01/02/1985
         """
         let resolution = try resolve(text)
-        #expect(resolution.chosen?.date == "2024-03-12")
-        #expect(resolution.chosen?.source == .label)
+        #expect(resolution.chosen?.date == "2024-03-12", "the invoice date dates the document, day first")
+        #expect(resolution.chosen?.source == .label, "it wins by its label")
         let due = resolution.scored.first { $0.date == "2024-04-11" }
-        #expect(due?.label?.lowercased() == "due date")
-        #expect((due?.score ?? 99) < (resolution.chosen?.score ?? 0))
+        #expect(due?.label?.lowercased() == "due date", "the due date is recognised by its label")
+        #expect((due?.score ?? 99) < (resolution.chosen?.score ?? 0), "and scores below the invoice date")
     }
 
     @Test("Russian: «от 15 мая 2024 г.» wins over срок оплаты and дата рождения")
@@ -46,10 +48,10 @@ struct EntityTests {
         Дата рождения: 01.01.1980
         """
         let resolution = try resolve(text)
-        #expect(resolution.chosen?.date == "2024-05-15")
-        #expect(resolution.chosen?.source == .label)
-        #expect(resolution.scored.first { $0.date == "2024-05-30" }?.label == "Срок оплаты")
-        #expect(resolution.scored.first { $0.date == "1980-01-01" }?.eligible == false)
+        #expect(resolution.chosen?.date == "2024-05-15", "«от» with a month in words dates a Russian invoice")
+        #expect(resolution.chosen?.source == .label, "it wins by its label")
+        #expect(resolution.scored.first { $0.date == "2024-05-30" }?.label == "Срок оплаты", "the payment deadline is recognised by its label")
+        #expect(resolution.scored.first { $0.date == "1980-01-01" }?.eligible == false, "a date of birth decades back is outside the plausible years")
     }
 
     @Test("Portuguese: data de emissão wins even after the due date")
@@ -61,37 +63,39 @@ struct EntityTests {
         Data de nascimento: 03/04/1979
         """
         let resolution = try resolve(text)
-        #expect(resolution.chosen?.date == "2026-05-20")
-        #expect(resolution.chosen?.source == .label)
-        #expect(resolution.scored.first { $0.date == "2026-06-30" }?.label == "vencimento")
+        #expect(resolution.chosen?.date == "2026-05-20", "the issue date wins even though the due date comes first")
+        #expect(resolution.chosen?.source == .label, "it wins by its label")
+        #expect(resolution.scored.first { $0.date == "2026-06-30" }?.label == "vencimento", "the due date is recognised by its label")
     }
 
     @Test("A lone birth date is never chosen; falls back to file dates")
     func birthOnly() throws {
         let created = now.addingTimeInterval(-86_400 * 3)
         let resolution = try resolve("Nome: Maria Silva\nData de nascimento: 03/04/2015", created: created, modified: now)
-        #expect(resolution.scored.first?.eligible == true)
-        #expect(resolution.scored.first?.label == "Data de nascimento")
-        #expect(resolution.chosen?.source == .fileCreated)
-        #expect(resolution.chosen?.date == CalendarDay(date: created, calendar: .current).iso)
+        #expect(resolution.scored.first?.eligible == true, "a child's birth date is in the plausible years")
+        #expect(resolution.scored.first?.label == "Data de nascimento", "it is recognised as a birth date by its label")
+        #expect(resolution.chosen?.source == .fileCreated, "so the birth label keeps it from dating the document, and the file date does")
+        #expect(resolution.chosen?.date == CalendarDay(date: created, calendar: .current).iso, "the file's creation day, in local time")
     }
 
     @Test("EXIF date is used without text dates and boosts an equal text date")
     func metadataDates() throws {
         let exif = MetadataDate(day: try #require(CalendarDay(year: 2023, month: 7, day: 14)), source: .exif,
                                 label: "EXIF DateTimeOriginal")
-        #expect(try resolve("Whiteboard notes", metadata: [exif]).chosen?.source == .exif)
-        #expect(try resolve("Whiteboard notes", metadata: [exif]).chosen?.date == "2023-07-14")
+        #expect(try resolve("Whiteboard notes", metadata: [exif]).chosen?.source == .exif, "with no date in the text, the photo is dated when it was taken")
+        #expect(try resolve("Whiteboard notes", metadata: [exif]).chosen?.date == "2023-07-14", "the EXIF day is the date")
         let resolution = try resolve("Receipt\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n14.07.2023 total", metadata: [exif])
-        #expect(resolution.scored.first?.reasons.contains("matchesMetadata") == true)
-        #expect(resolution.chosen?.date == "2023-07-14")
+        let textDate = try #require(resolution.scored.first)
+        #expect(textDate.reasons.contains("matchesMetadata"), "a text date equal to the EXIF date is boosted")
+        #expect(resolution.chosen?.date == "2023-07-14", "the boost lets an unlabelled date far down the page win")
     }
 
     @Test("Crowded statement lines are penalised")
     func crowded() throws {
         let text = "Statement\n01.03.2024 02.03.2024 03.03.2024 movements"
         let resolution = try resolve(text)
-        #expect(resolution.scored.allSatisfy { $0.reasons.contains { $0.hasPrefix("crowdedLine") } })
+        #expect(resolution.scored.map { $0.reasons.contains("crowdedLine 3") } == [true, true, true],
+                "each date on a line of statement movements is penalised, so none passes for the issue date")
     }
 
     @Test("Months named in any language and form, CJK, ISO and numeric dates")
@@ -109,34 +113,23 @@ struct EntityTests {
         for expected in ["2025-01-01", "2025-03-04", "2024-12-12", "2025-03-05", "2025-02-07", "2026-05-20",
                          "2026-05-21", "2026-01-31", "2025-12-31", "2025-05-13", "2025-03-08", "2025-09-03", "2024-03-03",
                          "2024-04-01", "2024-05-15", "2024-03-09", "2024-06-07", "2024-08-09", "2023-09-24", "2023-10-11"] {
-            #expect(days.contains(expected), "missing \(expected)")
+            #expect(days.contains(expected), "\(expected) is found, however its month is written")
         }
         // 31.02.2025 must not come back as a rolled-over 3 March.
-        #expect(!days.contains("2025-03-03"))
-        #expect(!days.contains { $0.hasPrefix("2025-02-3") })
-        #expect(!days.contains("2024-05-01"))
+        #expect(!days.contains("2025-03-03"), "an impossible day is dropped, not rolled over into March")
+        #expect(!days.contains { $0.hasPrefix("2025-02-3") }, "no 30th or 31st of February is reported")
+        #expect(!days.contains("2024-05-01"), "a month and year alone is not a day")
     }
 
-    @Test("Money in EUR, RUB, BRL and USD notations")
-    func money() {
-        let amounts = EntityExtractor.amounts(in: """
-        Total a pagar: 1.234,56 €; Итого: 12 500,00 руб.; R$ 99,90; $1,234.56; EUR 10; 300 ₽
-        """)
-        let pairs = Set(amounts.map { "\($0.value) \($0.currency)" })
-        #expect(pairs == ["1234.56 EUR", "12500.00 RUB", "99.90 BRL", "1234.56 USD", "10 EUR", "300 RUB"])
-    }
-
-    @Test("E-mails, URLs, phones and stable keys; phones never duplicate identifiers")
+    @Test("Identifiers are found with their checksums; nothing else a document says is taken for one")
     func scan() throws {
         let entities = try TestConfig.pipeline().entities
         let scan = EntityExtractor(config: entities).scan("""
         Contact: Faturacao@EDP.pt, https://www.edp.pt/faturas
         Tel. +351 210 002 800
         IBAN PT50 0002 0123 1234 5678 9015 4
-        """, now: now)
-        #expect(scan.emails == ["faturacao@edp.pt"])
-        #expect(scan.urls.contains { $0.contains("edp.pt/faturas") })
-        #expect(scan.phones.count == 1)
-        #expect(scan.stableKeys.map(\.kind) == [.iban])
+        """, now: now, calendar: calendar)
+        #expect(scan.stableKeys.map(\.kind) == [.iban], "the IBAN, checked by its mod-97 remainder, and not the phone number")
+        #expect(scan.stableKeys.first?.value == "PT50000201231234567890154", "written without its spaces, as it is matched")
     }
 }

@@ -41,20 +41,20 @@ struct EmailExtractor: FileExtractor {
         var headerLines: [String] = []
         for (header, key) in [("From", "from"), ("To", "to"), ("Cc", "cc"), ("Subject", "subject")] {
             guard let value = message.decodedHeader(header), !value.isEmpty else { continue }
-            metadata["email:\(key)"] = value
+            metadata[MetadataKey.email(key)] = value
             headerLines.append("\(header): \(value)")
         }
         if let rawDate = message.header("Date") {
             if let date = Self.parseDate(rawDate) {
                 let iso = CalendarDay(date: date, calendar: .current).iso
-                metadata["email:date"] = date.formatted(.iso8601)
+                metadata[MetadataKey.emailDate] = date.formatted(.iso8601)
                 headerLines.append("Date: \(iso)")
             } else {
-                metadata["email:date"] = rawDate
+                metadata[MetadataKey.emailDate] = rawDate
                 headerLines.append("Date: \(rawDate)")
             }
         }
-        if let id = message.header("Message-ID") { metadata["email:messageId"] = id }
+        if let id = message.header("Message-ID") { metadata[MetadataKey.emailMessageID] = id }
         if !attachments.isEmpty { headerLines.append("Attachments: " + attachments.joined(separator: ", ")) }
 
         let text = (headerLines + ["", body]).joined(separator: "\n")

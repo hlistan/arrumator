@@ -1,23 +1,36 @@
 import Foundation
 
 public enum TraceStage: String, Sendable, Codable, CaseIterable {
-    case stability, hash, dedupe, extract, ocr, vlm, entities, correspondent, analyse, consolidate, embed, name, place, index, learn
+    case hash, dedupe, extract, ocr, vlm, entities, analyse, consolidate, embed, name, place, index
 
     /// The step records what the document says: prompts holding its text, the model's answers drawn from it, or the
     /// labels made of those answers.
     public var holdsDocumentContent: Bool { [.analyse, .vlm, .consolidate].contains(self) }
+
+    /// The step talked to a model, and keeps the prompts and raw answers under `TraceStep.exchangeKey` of its output.
+    public var exchangesWithModel: Bool { [.analyse, .vlm].contains(self) }
 }
 
-public enum TraceStatus: String, Sendable, Codable {
-    case ok, warn, error, skipped
+public enum TraceStatus: String, Sendable, Codable, Comparable {
+    case skipped, ok, warn, error
+
+    /// `error` is worse than `warn`, worse than `ok`, worse than `skipped`.
+    public static func < (lhs: TraceStatus, rhs: TraceStatus) -> Bool {
+        let order: [TraceStatus] = [.skipped, .ok, .warn, .error]
+        return (order.firstIndex(of: lhs) ?? 0) < (order.firstIndex(of: rhs) ?? 0)
+    }
 }
 
 public enum TraceSource: String, Sendable, Codable {
-    case ingest, eval, replay, review, cli
+    case ingest, eval, replay, cli
 }
 
 /// One recorded pipeline step. Payloads are JSON strings so any Encodable can be stored.
 public struct TraceStep: Sendable, Codable {
+    /// The key of a step's output under which a step that talked to a model keeps what was sent and what came back:
+    /// the part retention clears, leaving what the step concluded.
+    public static let exchangeKey = "exchange"
+
     public var stage: TraceStage
     public var status: TraceStatus
     public var startedAt: Date
@@ -66,7 +79,7 @@ public struct TraceContext: Sendable {
                        output: (any Encodable)? = nil, error: String? = nil) async {
         guard isEnabled else { return }
         let step = TraceStep(stage: stage, status: status, startedAt: startedAt,
-                             durationMs: Date().timeIntervalSince(startedAt) * 1000,
+                             durationMs: startedAt.milliseconds(until: Date()),
                              input: input.map { JSON.string($0) }, output: output.map { JSON.string($0) }, error: error)
         await record(step)
     }
@@ -85,7 +98,7 @@ public struct TraceContext: Sendable {
             let value = try await body()
             if isEnabled {
                 let step = TraceStep(stage: stage, status: status(value), startedAt: start,
-                                     durationMs: Date().timeIntervalSince(start) * 1000, input: inputJSON,
+                                     durationMs: start.milliseconds(until: Date()), input: inputJSON,
                                      output: output(value).map { JSON.string($0) })
                 await record(step)
             }
@@ -93,7 +106,7 @@ public struct TraceContext: Sendable {
         } catch {
             if isEnabled {
                 await record(TraceStep(stage: stage, status: .error, startedAt: start,
-                                       durationMs: Date().timeIntervalSince(start) * 1000, input: inputJSON,
+                                       durationMs: start.milliseconds(until: Date()), input: inputJSON,
                                        error: String(describing: error)))
             }
             throw error

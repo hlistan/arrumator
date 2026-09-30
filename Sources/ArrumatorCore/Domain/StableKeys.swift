@@ -1,7 +1,7 @@
 // swiftlint:disable line_length - each identifier pattern is one regex literal, read whole
 import Foundation
 
-/// Detection, validation and normalisation of stable identifiers used for deterministic correspondent matching:
+/// Detection, validation and normalisation of stable identifiers, which the model is shown with the document:
 /// IBAN (mod-97), Portuguese NIF (mod-11), Russian ИНН/ОГРН/ОГРНИП (checksums), КПП, БИК, 20-digit Russian
 /// accounts, EU VAT numbers, and labelled account/customer and policy/contract numbers (EN/RU/PT).
 ///

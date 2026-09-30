@@ -2,65 +2,75 @@ import AppKit
 import ArrumatorCore
 import SwiftUI
 
+/// The settings, shown once they are loaded: every value on these pages is the one in force, never one of the view's.
 struct SettingsView: View {
+    @Environment(AppModel.self) private var model
+
     var body: some View {
-        TabView {
-            GeneralSettings().tabItem { Label("General", systemImage: "gearshape") }
-            FilingSettings().tabItem { Label("Filing", systemImage: "folder") }
-            ModelSettingsView().tabItem { Label("Models", systemImage: "cpu") }
-            AdvancedSettings().tabItem { Label("Advanced", systemImage: "wrench.and.screwdriver") }
-            ProcessingLogView().tabItem { Label("Processing log", systemImage: "text.alignleft") }
+        Group {
+            if let settings = model.settings {
+                TabView {
+                    GeneralSettings(loaded: settings).tabItem { Label(Wording.generalTab, systemImage: "gearshape") }
+                    FilingSettings(loaded: settings).tabItem { Label(Wording.filingTab, systemImage: "folder") }
+                    ModelSettingsView(loaded: settings).tabItem { Label(Wording.modelsTab, systemImage: "cpu") }
+                    AdvancedSettings(loaded: settings).tabItem { Label(Wording.advancedTab, systemImage: "wrench.and.screwdriver") }
+                    ProcessingLogView().tabItem { Label(Wording.processingLogTab, systemImage: "text.alignleft") }
+                }
+            } else {
+                ProgressView()
+            }
         }
-        .frame(width: 900, height: 620)
+        .frame(width: Style.settingsWindow.width, height: Style.settingsWindow.height)
     }
 }
 
-/// Binding into `AppSettings` that saves on change.
+/// Binding into the settings in force that saves on change. `loaded` is what the page was opened with, which the
+/// settings never go back from being, so the binding has a value without making one up.
 @MainActor
-func setting<T: Sendable>(_ model: AppModel, _ keyPath: WritableKeyPath<AppSettings, T> & Sendable, default value: T) -> Binding<T> {
-    Binding(get: { model.settings?[keyPath: keyPath] ?? value },
+func setting<T: Sendable>(_ model: AppModel, _ loaded: AppSettings, _ keyPath: WritableKeyPath<AppSettings, T> & Sendable) -> Binding<T> {
+    Binding(get: { (model.settings ?? loaded)[keyPath: keyPath] },
             set: { newValue in Task { await model.update { $0[keyPath: keyPath] = newValue } } })
 }
 
 struct GeneralSettings: View {
     @Environment(AppModel.self) private var model
+    let loaded: AppSettings
     @State private var loginItem = LoginItem.isEnabled
     @State private var loginError: String?
 
     var body: some View {
         Form {
             Section {
-                pathRow("Incoming", path: model.settings?.incomingPath) { path in await model.update { $0.incomingPath = path } }
-                pathRow("Archive", path: model.settings?.archivePath, busy: model.switchingArchive) { path in
+                pathRow(Wording.incomingFolder, path: model.settings?.incomingPath) { path in await model.update { $0.incomingPath = path } }
+                pathRow(Wording.archiveFolder, path: model.settings?.archivePath, busy: model.switchingArchive) { path in
                     await model.switchArchive(to: path)
                 }
             } header: {
-                Text("Folders")
+                Text(Wording.folders)
             } footer: {
-                Text("Each archive keeps its own history. Choosing another archive files into it from now on; "
-                    + "choosing this one again brings everything back.")
+                Text(Wording.foldersFooter)
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
-            Section("Background") {
-                Toggle("Show icon in the Dock", isOn: setting(model, \.showInDock, default: true))
+            Section(Wording.background) {
+                Toggle(Wording.showInDock, isOn: setting(model, loaded, \.showInDock))
                 if model.menuBarIconHidden {
-                    Label("Your menu bar is full, so Arrumator's icon there is hidden. Keep the Dock icon on, or remove other menu bar items.",
-                          systemImage: "exclamationmark.triangle")
+                    Label(Wording.menuBarFull, systemImage: "exclamationmark.triangle")
                         .font(.callout).foregroundStyle(.secondary)
                 }
-                Toggle("Open at login", isOn: $loginItem).onChange(of: loginItem) { _, on in
+                Toggle(Wording.openAtLogin, isOn: $loginItem).onChange(of: loginItem) { _, on in
                     do { try LoginItem.set(on) } catch {
                         loginError = error.localizedDescription
                         loginItem = LoginItem.isEnabled
                     }
                 }
-                if let loginError { Text(loginError).foregroundStyle(.red).font(.caption) }
-                Toggle("Pause processing", isOn: setting(model, \.paused, default: false))
-                Toggle("Pause on battery when low", isOn: setting(model, \.pauseOnBattery, default: true))
+                if let loginError { Text(loginError).foregroundStyle(Palette.problem).font(.caption) }
+                Toggle(Wording.pauseProcessing, isOn: Binding(get: { (model.settings ?? loaded).paused },
+                                                         set: { paused in Task { await model.setPaused(paused) } }))
+                Toggle(Wording.pauseOnBattery, isOn: setting(model, loaded, \.pauseOnBattery))
             }
-            Section("Notifications") {
-                Toggle("When a document is filed", isOn: setting(model, \.notifyOnFiled, default: false))
-                Toggle("When a document needs review", isOn: setting(model, \.notifyOnReview, default: true))
+            Section(Wording.notifications) {
+                Toggle(Wording.notifyWhenFiled, isOn: setting(model, loaded, \.notifyOnFiled))
+                Toggle(Wording.notifyWhenReview, isOn: setting(model, loaded, \.notifyOnReview))
             }
         }
         .formStyle(.grouped)
@@ -70,9 +80,9 @@ struct GeneralSettings: View {
         LabeledContent(title) {
             HStack {
                 if busy { ProgressView().controlSize(.small) }
-                Text(path ?? "—").lineLimit(1).truncationMode(.middle).foregroundStyle(.secondary)
-                Button("Choose…") {
-                    if let chosen = FolderPicker.choose(title: "Choose the \(title) folder", startingAt: path) { Task { await save(chosen) } }
+                Text(path ?? Wording.noValue).lineLimit(1).truncationMode(.middle).foregroundStyle(.secondary)
+                Button(Wording.choose) {
+                    if let chosen = FolderPicker.choose(title: Wording.chooseFolder(title), startingAt: path) { Task { await save(chosen) } }
                 }
                 .disabled(busy)
             }
@@ -82,15 +92,16 @@ struct GeneralSettings: View {
 
 struct FilingSettings: View {
     @Environment(AppModel.self) private var model
+    let loaded: AppSettings
 
     var body: some View {
         Form {
-            Section("Files") {
-                Toggle("Rename files", isOn: setting(model, \.renameFiles, default: true))
-                Toggle("Transliterate names to Latin letters", isOn: setting(model, \.transliterate, default: false))
-                Picker("Exact duplicates", selection: setting(model, \.duplicateAction, default: .fileInArchive)) {
-                    Text("File copies into the archive").tag(DuplicateAction.fileInArchive)
-                    Text("Leave copies in Incoming").tag(DuplicateAction.leaveInIncoming)
+            Section(Wording.files) {
+                Toggle(Wording.renameFiles, isOn: setting(model, loaded, \.renameFiles))
+                Toggle(Wording.transliterate, isOn: setting(model, loaded, \.transliterate))
+                Picker(Wording.exactDuplicates, selection: setting(model, loaded, \.duplicateAction)) {
+                    Text(Wording.fileCopies).tag(DuplicateAction.fileInArchive)
+                    Text(Wording.leaveCopies).tag(DuplicateAction.leaveInIncoming)
                 }
             }
         }
@@ -100,6 +111,7 @@ struct FilingSettings: View {
 
 struct ModelSettingsView: View {
     @Environment(AppModel.self) private var model
+    let loaded: AppSettings
     @State private var status: [ModelStatus] = []
     @State private var downloading: String?
     @State private var progress: Double?
@@ -111,41 +123,41 @@ struct ModelSettingsView: View {
 
     var body: some View {
         Form {
-            Section("Ollama") {
-                LabeledContent("Status", value: model.ollama.summary)
+            Section(Wording.ollama) {
+                LabeledContent(Wording.status, value: model.ollama.summary)
                 HStack {
-                    TextField("Server", text: $server).onSubmit { connect() }
-                    Button("Use") { connect() }.disabled(server == model.runtime?.ollama.baseURL.absoluteString)
+                    TextField(Wording.server, text: $server).onSubmit { connect() }
+                    Button(Wording.useServer) { connect() }.disabled(server == model.runtime?.ollama.baseURL.absoluteString)
                 }
                 if let serverError { Text(serverError).font(.caption).foregroundStyle(Palette.attention) }
                 Text(Wording.ollamaServerNote).font(.caption).foregroundStyle(.secondary)
-                Picker("Management", selection: setting(model, \.ollamaManagement, default: .launchApp)) {
-                    Text("Start the Ollama app when needed").tag(OllamaManagement.launchApp)
-                    Text("Run 'ollama serve' myself (managed)").tag(OllamaManagement.spawnServe)
-                    Text("Never start it").tag(OllamaManagement.external)
+                Picker(Wording.management, selection: setting(model, loaded, \.ollamaManagement)) {
+                    Text(Wording.launchOllamaApp).tag(OllamaManagement.launchApp)
+                    Text(Wording.spawnServe).tag(OllamaManagement.spawnServe)
+                    Text(Wording.neverStart).tag(OllamaManagement.external)
                 }
                 .disabled(!onThisMac)
                 .help(Wording.managementOnThisMacOnly)
-                Button("Start / check Ollama") { Task { _ = await model.runtime?.lifecycle.ensureRunning(); await load() } }
+                Button(Wording.startOllama) { Task { _ = await model.runtime?.lifecycle.ensureRunning(); await load() } }
             }
             Section(Wording.modelsRun(at: model.runtime?.ollama.baseURL)) {
-                Picker("Profile", selection: setting(model, \.models.profile, default: "standard")) {
+                Picker(Wording.profile, selection: setting(model, loaded, \.models.profile)) {
                     ForEach(model.runtime?.config.modelProfiles.sorted { $0.key < $1.key } ?? [], id: \.key) { Text($0.value.label).tag($0.key) }
                 }
                 ForEach(status, id: \.self) { m in
                     HStack {
-                        Image(systemName: m.installed ? "checkmark.circle.fill" : "arrow.down.circle").foregroundStyle(m.installed ? .green : .orange)
-                        Text("\(m.role): \(m.name)")
+                        Image(systemName: m.installed ? "checkmark.circle.fill" : "arrow.down.circle").foregroundStyle(m.installed ? Palette.fine : Palette.attention)
+                        Text(Wording.model(role: m.role.rawValue, name: m.name))
                         Spacer()
                         if !m.installed {
-                            Button(downloading == m.name ? "Downloading…" : "Download") { Task { await pull(m.name) } }
+                            Button(downloading == m.name ? Wording.downloading : Wording.download) { Task { await pull(m.name) } }
                                 .disabled(downloading != nil)
                         }
                     }
                 }
                 if let progress { ProgressView(value: progress) }
                 if let message { Text(message).font(.caption).foregroundStyle(.secondary) }
-                Text("Downloading a model needs the internet once; reading and filing documents never does.")
+                Text(Wording.downloadNote)
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
@@ -173,9 +185,9 @@ struct ModelSettingsView: View {
     }
 
     private func load() async {
-        guard let runtime = model.runtime, let settings = model.settings, model.ollama.isReady,
-              let resolved = try? runtime.config.models(for: settings.models) else { return }
-        status = await model.load("Check models") { try await $0.models.status(for: resolved) } ?? []
+        guard model.ollama.isReady else { return }
+        let selection = (model.settings ?? loaded).models
+        status = await model.load(Wording.checkModelsAction) { try await $0.models.status(for: try $0.config.models(for: selection)) } ?? []
     }
 
     private func pull(_ name: String) async {
@@ -186,9 +198,8 @@ struct ModelSettingsView: View {
             for try await p in try await runtime.models.pull(name) {
                 progress = p.fraction
                 message = p.status
-                if let error = p.error { throw OllamaError.http(status: 500, body: error) }
             }
-            message = "\(name) installed"
+            message = Wording.installed(name)
         } catch {
             message = error.localizedDescription
         }
@@ -198,6 +209,7 @@ struct ModelSettingsView: View {
 
 struct AdvancedSettings: View {
     @Environment(AppModel.self) private var model
+    let loaded: AppSettings
     @State private var exportMessage: String?
     @State private var includeText = false
     @State private var rebuildMessage: String?
@@ -205,31 +217,30 @@ struct AdvancedSettings: View {
 
     var body: some View {
         Form {
-            Section("Diagnostics") {
-                Picker("Log detail", selection: setting(model, \.logLevel, default: .info)) {
+            Section(Wording.diagnostics) {
+                Picker(Wording.logDetail, selection: setting(model, loaded, \.logLevel)) {
                     ForEach(LogLevel.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                 }
-                Stepper("Keep full model prompts for \(model.settings?.traceRawRetentionDays ?? 0) days",
-                        value: setting(model, \.traceRawRetentionDays, default: 180), in: 1...3_650, step: 30)
-                Toggle("Include document text in diagnostics", isOn: $includeText)
-                Button("Export diagnostics…") { Task { await export() } }
+                Stepper(Wording.keepPrompts(days: (model.settings ?? loaded).traceRawRetentionDays),
+                        value: setting(model, loaded, \.traceRawRetentionDays), in: Style.retentionDays, step: Style.retentionDaysStep)
+                Toggle(Wording.includeText, isOn: $includeText)
+                Button(Wording.exportDiagnostics) { Task { await export() } }
                 if let exportMessage { Text(exportMessage).font(.caption) }
             }
-            Section("Index") {
-                Text("Everything Arrumator knows is kept in Markdown files in the archive; the archive's index only holds "
-                    + "them for search. Rebuilding reads the archive again, then reads each document's text again in the background.")
+            Section(Wording.index) {
+                Text(Wording.indexNote)
                     .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                Button("Rebuild Index From Archive…") { confirmingRebuild = true }
-                    .confirmationDialog("Rebuild the index from the archive?", isPresented: $confirmingRebuild) {
-                        Button("Rebuild") { Task { await rebuild() } }
+                Button(Wording.rebuildIndex) { confirmingRebuild = true }
+                    .confirmationDialog(Wording.rebuildQuestion, isPresented: $confirmingRebuild) {
+                        Button(Wording.rebuild) { Task { await rebuild() } }
                     } message: {
-                        Text("Nothing in the archive changes. Search by words and by meaning fills in again as documents are read.")
+                        Text(Wording.rebuildNote)
                     }
                 if let rebuildMessage { Text(rebuildMessage).font(.caption) }
             }
-            Section("Files") {
-                Button("Open logs folder") { if let dir = model.runtime?.paths.logsDirectory { model.open(dir.path) } }
-                Button("Open data folder (indexes, settings, pipeline.json overrides)") {
+            Section(Wording.files) {
+                Button(Wording.openLogsFolder) { if let dir = model.runtime?.paths.logsDirectory { model.open(dir.path) } }
+                Button(Wording.openDataFolder) {
                     if let dir = model.runtime?.paths.supportDirectory { model.open(dir.path) }
                 }
             }
@@ -238,22 +249,16 @@ struct AdvancedSettings: View {
     }
 
     private func rebuild() async {
-        let summary = await model.load("Rebuild the index") { try await $0.records.rebuildIndex() }
-        rebuildMessage = summary.map { "\($0.summary). \($0.queued) documents are being read again." }
+        let summary = await model.load(Wording.rebuildIndexAction) { try await $0.records.rebuildIndex() }
+        rebuildMessage = summary.map { Wording.rebuilt($0.summary, queued: $0.queued) }
     }
 
     private func export() async {
-        guard let runtime = model.runtime, let settings = model.settings else { return }
         let panel = NSSavePanel()
-        panel.nameFieldStringValue = "arrumator-diagnostics.zip"
+        panel.nameFieldStringValue = Wording.diagnosticsFileName
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        do {
-            let exporter = DiagnosticsExporter(database: runtime.database, paths: runtime.paths, config: runtime.config.stats)
-            let contents = try await exporter.export(to: url, doctor: await runtime.runDoctor(), settings: settings,
-                                                     includeDocumentText: includeText)
-            exportMessage = "Saved \(contents.traces) traces and \(contents.logFiles.count) log files."
-        } catch {
-            exportMessage = error.localizedDescription
-        }
+        let includeText = includeText
+        let contents = await model.load(Wording.exportDiagnosticsAction) { try await $0.exportDiagnostics(to: url, includeDocumentText: includeText) }
+        exportMessage = contents.map { Wording.exported(traces: $0.traces, logFiles: $0.logFiles.count) }
     }
 }

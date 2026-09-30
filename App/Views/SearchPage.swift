@@ -7,9 +7,9 @@ struct SearchPage: View {
     @State private var results: SearchResults?
 
     var body: some View {
-        Page(title: "Search", symbol: "magnifyingglass", tint: .secondary, notes: note) {
+        Page(title: Wording.search, symbol: "magnifyingglass", tint: .secondary, notes: note) {
             if let results, results.hits.isEmpty {
-                EmptyState(symbol: "magnifyingglass", text: "No documents match “\(model.searchText)”.")
+                EmptyState(symbol: "magnifyingglass", text: Wording.noMatches(model.searchText))
             } else if let results {
                 VStack(alignment: .leading, spacing: 0) {
                     DocumentList(documents: results.hits.map(\.document),
@@ -23,7 +23,7 @@ struct SearchPage: View {
     /// Said only when search is working with less than it could.
     private var note: String? {
         guard let results, !results.semanticUsed else { return nil }
-        return "Matching words only: \(results.semanticUnavailableReason ?? "search by meaning is unavailable")."
+        return Wording.wordsOnly(results.semanticUnavailableReason)
     }
 
     private func search() async {
@@ -35,8 +35,8 @@ struct SearchPage: View {
         }
         let query = model.searchText
         if let settings = model.settings {
-            _ = await model.load("Prepare search") { try await $0.prepareSearch(settings) }
+            _ = await model.load(Wording.prepareSearchAction) { try await $0.prepareSearch(settings) }
         }
-        results = await model.load("Search") { try await $0.search.search(SearchQuery(text: query)) }
+        results = await model.load(Wording.searchAction) { try await $0.search.search(SearchQuery(text: query)) }
     }
 }

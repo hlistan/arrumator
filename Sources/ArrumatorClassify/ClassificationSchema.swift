@@ -96,16 +96,10 @@ public struct AnswerValidator: Sendable {
         self.labels = labels
     }
 
-    static func stripThinking(_ text: String) -> String {
-        var t = text.replacingOccurrences(of: "(?s)<think>.*?</think>", with: "", options: .regularExpression)
-        if let start = t.firstIndex(of: "{"), let end = t.lastIndex(of: "}") { t = String(t[start...end]) }
-        return t.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
     public func validate(_ text: String) throws -> ValidatedAnalysis {
         let raw: AnalysisAnswer
         do {
-            raw = try JSONDecoder().decode(AnalysisAnswer.self, from: Data(Self.stripThinking(text).utf8))
+            raw = try JSONDecoder().decode(AnalysisAnswer.self, from: Data(ModelOutput.jsonObject(text).utf8))
         } catch let DecodingError.keyNotFound(key, _) {
             throw AnswerValidationError.invalid(["\(key.stringValue) is missing; give [] when the document shows none"])
         } catch {

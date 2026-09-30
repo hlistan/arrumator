@@ -8,7 +8,8 @@ don't link to the command from elsewhere. From a clone, `swift run arrumatorcli 
 
 Every command below takes `--json` (print JSON instead of text, where the command reports something) and `--verbose`
 (echo log lines to stderr). `arrumatorcli --version` prints the version; `arrumatorcli help <command>` prints a command's
-help. `run`, `logs` and `models pull` always print text, and `eval` writes its JSON report with `--report`.
+help. `run` and `models pull` always print text, `logs --json` prints each log line as the JSON object it is kept as,
+and `eval` writes its JSON report with `--report`.
 
 A command opens the archive named in your settings, and can write that archive's record files and create the
 archive's `System` folder. To experiment, set `ARRUMATOR_HOME` to a scratch folder and put a `settings.json` there
@@ -20,10 +21,10 @@ whose `incomingPath` and `archivePath` point at scratch folders too: `ARRUMATOR_
 
 | Command | What it does |
 |---|---|
-| `arrumatorcli doctor` | Check the environment: folders, database, Ollama, models, disk, network. Exits with 1 when a check fails. |
+| `arrumatorcli doctor` | Check the environment: folders, the archive's index, Ollama, models, disk, network. Exits with 1 when a check fails; Ollama not running is a warning. |
 | `arrumatorcli run` | Run headless: watch Incoming and file documents until interrupted. |
-| `arrumatorcli ingest <files>… [--dry-run]` | File documents now: read, label and name them, and move them to the top of the archive. `--dry-run` reads and labels without moving files or recording anything, and shows the labels, the name and how the document was read. |
-| `arrumatorcli settings [--incoming <folder>] [--profile <profile>] [--ollama launchApp\|spawnServe\|external] [--ollama-url <url>] [--paused true\|false]` | Show or change settings. `--profile` is a model profile from `pipeline.json` (`standard`, `balanced`, `lowMemory`); `--ollama-url` must be this Mac or a machine on the local network, such as `http://192.168.1.20:11434`. Switch archives with `arrumatorcli archive switch`. |
+| `arrumatorcli ingest <files>… [--dry-run]` | File documents now: read, label and name them, and move them to the top of the archive, then show the documents they became. `--dry-run` reads and labels without moving files or recording anything, and shows the labels, the name and how the document was read. |
+| `arrumatorcli settings [--incoming <folder>] [--profile <profile>] [--ollama launchApp\|spawnServe\|external] [--ollama-url <url>] [--paused true\|false] [--show-in-dock true\|false] [--rename-files true\|false] [--transliterate true\|false] [--duplicate-action fileInArchive\|leaveInIncoming] [--notify-on-filed true\|false] [--notify-on-review true\|false] [--pause-on-battery true\|false] [--log-level <level>] [--trace-retention-days <days>]` | Show or change settings, every one Settings in the app changes. `--profile` is a model profile from `pipeline.json` (`standard`, `balanced`, `lowMemory`); one it does not define is refused and nothing is saved. `--ollama-url` must be this Mac or a machine on the local network, such as `http://192.168.1.20:11434`. `--paused` pauses or resumes filing and records it in History, as the app does. `--log-level` is the lowest level logged (error, warning, info, debug, trace); `--trace-retention-days` how long a reading's prompts and raw answers are kept in its trace. Switch archives with `arrumatorcli archive switch`. |
 | `arrumatorcli models [status]` | Status of the configured models. |
 | `arrumatorcli models pull <model>` | Download a model. This needs the internet; recognition never does. |
 
@@ -34,8 +35,8 @@ whose `incomingPath` and `archivePath` point at scratch folders too: `ARRUMATOR_
 | `arrumatorcli search <query>… [--no-semantic]` | Search the archive: documents containing the words first, then documents alike in meaning, each with its labels. `field:word` and `field:"a phrase"` search one field: `filename`, `body`, or a kind of label: `sender`, `party`, `type`, `topic`, `object`, `reference`, `date`, `period`, `deadline`, `amount`, `jurisdiction`, `language`. `--no-semantic` searches the words only. |
 | `arrumatorcli labels [show] <document> [--add <kind>=<value>]… [--remove <kind>=<value>]…` | A document's labels, kind by kind ([the kinds](how-it-works.md#labels)). `--add sender=EDP` gives it a label and `--remove topic=energy` takes one off, both repeatable, each recorded as a correction; a value that is no label of its kind is dropped, and a document keeps one type and one date. |
 | `arrumatorcli labels unlabelled` | Read every document that has no labels yet with the model, such as one the model gave no answer for, which also names it again where it is. |
-| `arrumatorcli extract <file>` | Show what the extractors read from a file, with no model involved. |
-| `arrumatorcli history [--limit <n>] [--doc <document>]` | Recent events: arrivals, readings, filings, corrections (50 unless `--limit`), optionally of one document. |
+| `arrumatorcli extract <file>` | Show what the extractors read from a file, with no model involved: its type, language, date, identifiers and warnings, and the first `interface.extractPreviewChars` characters of its text. |
+| `arrumatorcli history [--limit <n>] [--doc <document>]` | Recent events: arrivals, readings, filings, corrections (`interface.pageSize` of them unless `--limit`), optionally of one document. |
 | `arrumatorcli trace <document> [--full]` | How a document was processed: every stage, its inputs, outputs and timing. `--full` adds the prompts and raw model responses. |
 | `arrumatorcli replay <document> [--model <model>]` | Read a stored document again with the model, optionally another chat model, and compare its name and labels with what it has, without touching files. |
 
@@ -62,7 +63,7 @@ punctuated.
 | Command | What it does |
 |---|---|
 | `arrumatorcli review [list]` | Documents waiting for you, with the reason. |
-| `arrumatorcli review confirm <document>` | Confirm a document as it is: its name and labels are right. One waiting for you is filed. |
+| `arrumatorcli review confirm <document>` | Confirm a document as it is: its name and labels are right. One waiting for you is filed. This and the commands below print the document as it is afterwards. |
 | `arrumatorcli review rename <document> <name>` | Give a document a new file name, without extension (recorded as a correction). |
 | `arrumatorcli review retry <document>` | Read a document again with the model, for example after changing models: its labels and name. One in the archive is renamed where it is; one back in Incoming is filed at the top of the archive. |
 | `arrumatorcli review hold <document>` | Leave a document where it is for later. |
@@ -80,7 +81,7 @@ punctuated.
 
 | Command | What it does |
 |---|---|
-| `arrumatorcli funnel [--days <n>]` | How far documents got through the pipeline and where they stopped, for those that arrived in the last 30 days unless `--days`. |
+| `arrumatorcli funnel [--days <n>]` | How far documents got through the pipeline and where they stopped, for those that arrived in the last `stats.defaultWindowDays` days unless `--days`. |
 | `arrumatorcli stats` | How the archive is labelled and where the pipeline spends its time: statuses, labelled documents, labels by kind, corrections and confirmations, rules about labels and labels tidied in readings, latency, OCR quality. |
 | `arrumatorcli logs [--category <category>] [--level <level>] [--minutes <n>] [--follow]` | Read the structured logs (JSONL, one file per day). `--category` is one of app, watch, ingest, extract, classify, fileops, ollama, index, search, ui, cli, db, power; `--level` the lowest level shown (error, warning, info, debug, trace; info unless set); `--minutes` only newer lines; `--follow` keeps printing new ones. |
 | `arrumatorcli diagnostics <output> [--include-document-text]` | Write a zip with logs, recent traces, doctor report and settings. `--include-document-text` also includes the prompts and model answers that contain document text, and the labels tidied from those answers. |

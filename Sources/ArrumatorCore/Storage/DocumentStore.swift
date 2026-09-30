@@ -59,16 +59,15 @@ public enum DocumentOrder: String, Sendable, CaseIterable {
 
 public struct DocumentStore: Sendable {
     public let database: AppDatabase
-    public init(database: AppDatabase) { self.database = database }
+    public let time: any TimeSource
+
+    public init(database: AppDatabase, time: any TimeSource) {
+        self.database = database
+        self.time = time
+    }
 
     public func document(id: Int64) async throws -> DocumentRecord? {
         try await database.reader.read { db in try DocumentRecord.fetchOne(db, key: id) }
-    }
-
-    public func documents(ids: [Int64]) async throws -> [Int64: DocumentRecord] {
-        try await database.reader.read { db in
-            Dictionary(uniqueKeysWithValues: try DocumentRecord.fetchAll(db, keys: ids).compactMap { d in d.id.map { ($0, d) } })
-        }
     }
 
     public func document(path: String) async throws -> DocumentRecord? {
@@ -99,8 +98,23 @@ public struct DocumentStore: Sendable {
         }
     }
 
+    /// The statuses of a document that waits for the user.
+    private static var reviewable: Set<DocumentStatus> { Set(DocumentStatus.allCases.filter(\.isReviewable)) }
+
+    /// Every document waiting for the user, newest first.
     public func reviewQueue() async throws -> [DocumentRecord] {
-        try await list(DocumentFilter(statuses: Set(DocumentStatus.allCases.filter(\.isReviewable))), limit: 10_000)
+        try await database.reader.read { db in
+            let (conditions, args) = try DocumentFilter(statuses: Self.reviewable).sql(db)
+            return try DocumentRecord.fetchAll(db, sql: "SELECT d.* FROM documents d WHERE 1=1\(conditions) ORDER BY \(DocumentOrder.recentlyAdded.sql)",
+                                               arguments: args)
+        }
+    }
+
+    /// How many documents wait for the user: what the sidebar counts.
+    public func reviewCount() async throws -> Int {
+        try await database.reader.read { db in
+            try DocumentRecord.filter(Self.reviewable.map(\.rawValue).contains(Column("status"))).fetchCount(db)
+        }
     }
 
     /// Documents the model has not labelled yet whose text was read, oldest first: those filed before documents were
@@ -113,9 +127,10 @@ public struct DocumentStore: Sendable {
 
     @discardableResult
     public func save(_ document: DocumentRecord) async throws -> DocumentRecord {
-        try await database.writer.write { db in
+        let now = time.now()
+        return try await database.writer.write { db in
             var d = document
-            d.updatedAt = Date()
+            d.updatedAt = now
             try d.save(db)
             return d
         }

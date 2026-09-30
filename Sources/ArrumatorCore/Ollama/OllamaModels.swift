@@ -9,6 +9,8 @@ public enum OllamaError: Error, LocalizedError, Equatable {
     case decoding(String)
     case timeout(String)
     case emptyResponse
+    /// Ollama reported a failure while downloading a model, in the progress it streams.
+    case pullFailed(model: String, message: String)
 
     public var errorDescription: String? {
         switch self {
@@ -20,6 +22,7 @@ public enum OllamaError: Error, LocalizedError, Equatable {
         case let .decoding(m): "Unexpected Ollama response: \(m)"
         case let .timeout(what): "Ollama timed out: \(what)"
         case .emptyResponse: "Ollama returned an empty response"
+        case let .pullFailed(model, message): "Downloading \(model) failed: \(message)"
         }
     }
 
@@ -71,24 +74,30 @@ public struct OllamaShowResponse: Sendable, Codable, Hashable {
     public var supportsThinking: Bool { capabilities?.contains("thinking") ?? false }
 }
 
+/// Who speaks in a chat, as Ollama's chat API names them.
+public enum OllamaRole: String, Sendable, Codable, Hashable {
+    case system, user, assistant
+}
+
 public struct OllamaMessage: Sendable, Codable, Hashable {
-    public var role: String
+    public var role: OllamaRole
     public var content: String
     /// Base64-encoded images for vision models.
     public var images: [String]?
     public var thinking: String?
 
-    public init(role: String, content: String, images: [String]? = nil) {
+    public init(role: OllamaRole, content: String, images: [String]?) {
         self.role = role
         self.content = content
         self.images = images
         thinking = nil
     }
 
-    public static func system(_ text: String) -> OllamaMessage { OllamaMessage(role: "system", content: text) }
+    public static func system(_ text: String) -> OllamaMessage { OllamaMessage(role: .system, content: text, images: nil) }
     public static func user(_ text: String, images: [String]? = nil) -> OllamaMessage {
-        OllamaMessage(role: "user", content: text, images: images)
+        OllamaMessage(role: .user, content: text, images: images)
     }
+    public static func assistant(_ text: String) -> OllamaMessage { OllamaMessage(role: .assistant, content: text, images: nil) }
 }
 
 public struct OllamaChatRequest: Sendable, Codable, Hashable {
@@ -118,7 +127,7 @@ extension OllamaChatRequest {
         var entries: [JSONEntry] = [
             JSONEntry("model", .string(model)),
             JSONEntry("messages", .array(messages.map { m in
-                var e: [JSONEntry] = [JSONEntry("role", .string(m.role)), JSONEntry("content", .string(m.content))]
+                var e: [JSONEntry] = [JSONEntry("role", .string(m.role.rawValue)), JSONEntry("content", .string(m.content))]
                 if let images = m.images, !images.isEmpty { e.append(JSONEntry("images", .array(images.map(JSONValue.string)))) }
                 return .orderedObject(e)
             })),

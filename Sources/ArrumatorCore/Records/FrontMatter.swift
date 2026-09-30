@@ -14,8 +14,8 @@ public enum FrontMatterError: Error, LocalizedError {
     }
 }
 
-/// Markdown whose YAML front matter carries the data the app reads, followed by a body written for people. `_about.md`
-/// and the record files are read and written the same way.
+/// Markdown whose YAML front matter carries the data the app reads, followed by a body written for people: every record
+/// file of the archive is read and written this way.
 public enum FrontMatter {
     static let fence = "---"
 

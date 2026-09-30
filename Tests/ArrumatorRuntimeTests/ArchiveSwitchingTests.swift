@@ -1,5 +1,6 @@
 import ArrumatorCore
 import ArrumatorRuntime
+import ArrumatorTesting
 import Foundation
 import Testing
 
@@ -19,7 +20,7 @@ import Testing
 
         let second = try await first.switchArchive(to: home.folder("Second").path)
         try await second.openArchive()
-        #expect(second.archive == home.folder("Second"))
+        #expect(second.archive == home.folder("Second"), "the runtime opens the archive switched to")
         #expect(await second.settings.current.archiveURL == home.folder("Second"), "the settings name the archive switched to")
         #expect(second.index != first.index, "each archive has its own index")
         #expect(try await marks(second).isEmpty, "one archive's history is not another's")
@@ -49,8 +50,8 @@ import Testing
         try FileManager.default.removeItem(at: home.paths.indexesDirectory)
 
         let rebuilt = try await home.open()
-        #expect(rebuilt.opening == .created)
-        #expect(try await marks(rebuilt) == ["Kept in the archive"])
+        #expect(rebuilt.opening == .created, "a lost index is made anew")
+        #expect(try await marks(rebuilt) == ["Kept in the archive"], "and the history comes back from the archive")
     }
 
     @Test func theIndexOfEarlierVersionsBecomesTheArchivesOwn() async throws {
@@ -58,15 +59,17 @@ import Testing
         defer { home.cleanup() }
         let single = home.paths.supportDirectory.appendingPathComponent("arrumator.sqlite")
         do {
-            let (database, _) = try AppDatabase.open(at: single, setAsideSuffix: "unreadable") { false }
-            try await HistoryStore(database: database).record(.paused, summary: "Written before")
+            let config = try PipelineConfig.bundledDefaults()
+            let (database, _) = try AppDatabase.open(at: single, config: config.database, setAsideSuffix: config.records.setAsideSuffix,
+                                                     time: TestTime(.advances)) { false }
+            try await HistoryStore(database: database, time: TestTime(.advances)).record(.paused, summary: "Written before")
         }
 
         let runtime = try await home.open()
         #expect(runtime.opening == .existing, "the index was moved, not rebuilt")
-        #expect(try await marks(runtime) == ["Written before"])
-        #expect(!FileManager.default.fileExists(atPath: single.path))
-        #expect(FileManager.default.fileExists(atPath: runtime.index.path))
+        #expect(try await marks(runtime) == ["Written before"], "its history comes with it")
+        #expect(!FileManager.default.fileExists(atPath: single.path), "the old index is not left behind")
+        #expect(FileManager.default.fileExists(atPath: runtime.index.path), "it is the archive's own index now")
     }
 
     @Test func theSameFolderSpelledAnotherWayIsTheSameArchive() async throws {
@@ -97,8 +100,10 @@ import Testing
         let runtime = try await home.open()
         let file = home.root.appendingPathComponent("note.txt")
         try Data("x".utf8).write(to: file)
-        await #expect(throws: ArchiveSwitchError.self) { _ = try await runtime.switchArchive(to: home.folder("First").path) }
-        await #expect(throws: ArchiveSwitchError.self) { _ = try await runtime.switchArchive(to: file.path) }
+        await #expect(throws: ArchiveSwitchError.self, "the archive already open is no switch") {
+            _ = try await runtime.switchArchive(to: home.folder("First").path)
+        }
+        await #expect(throws: ArchiveSwitchError.self, "a file is no archive") { _ = try await runtime.switchArchive(to: file.path) }
         await #expect(throws: ArchiveSwitchError.self, "its files would be filed again") {
             _ = try await runtime.switchArchive(to: home.folder("Incoming").appendingPathComponent("Archive").path)
         }

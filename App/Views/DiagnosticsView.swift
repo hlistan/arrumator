@@ -26,19 +26,19 @@ struct ProcessingLogView: View {
             Divider()
             if !steps.isEmpty { summary }
             Table(visible) {
-                TableColumn("Time") { Text($0.ts.formatted(date: .omitted, time: .standard)).monospacedDigit() }
-                    .width(80)
-                TableColumn("Level") { entry in
+                TableColumn(Wording.logTime) { Text($0.ts.formatted(date: .omitted, time: .standard)).monospacedDigit() }
+                    .width(Style.logTimeColumnWidth)
+                TableColumn(Wording.logLevel) { entry in
                     Text(entry.level.rawValue)
                         .foregroundStyle(Self.colour(entry.level))
                 }
-                .width(60)
-                TableColumn("Part") { Text($0.cat.rawValue).foregroundStyle(.secondary) }.width(70)
-                TableColumn("What happened") { entry in
+                .width(Style.logLevelColumnWidth)
+                TableColumn(Wording.logPart) { Text($0.cat.rawValue).foregroundStyle(.secondary) }.width(Style.logPartColumnWidth)
+                TableColumn(Wording.logWhat) { entry in
                     Text(entry.msg).lineLimit(1)
                 }
-                TableColumn("Detail") { entry in
-                    Text(entry.fields.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: "  "))
+                TableColumn(Wording.logDetailColumn) { entry in
+                    Text(Wording.logFields(entry.fields))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .textSelection(.enabled)
@@ -47,8 +47,8 @@ struct ProcessingLogView: View {
             .font(.callout.monospaced())
             .overlay {
                 if visible.isEmpty {
-                    ContentUnavailableView("Nothing logged yet", systemImage: "text.alignleft",
-                                           description: Text("Lines appear as files are processed."))
+                    ContentUnavailableView(Wording.nothingLogged, systemImage: "text.alignleft",
+                                           description: Text(Wording.linesAppear))
                 }
             }
         }
@@ -59,21 +59,21 @@ struct ProcessingLogView: View {
     }
 
     private var controls: some View {
-        HStack(spacing: 8) {
-            Picker("Step", selection: $step) {
-                Text("Every step").tag(Self.allSteps)
+        HStack(spacing: Style.logControlsSpacing) {
+            Picker(Wording.step, selection: $step) {
+                Text(Wording.everyStep).tag(Self.allSteps)
                 ForEach(steps) { Text($0.title).tag($0.id) }
             }
-            .frame(width: 280)
-            Picker("Detail", selection: $level) {
+            .frame(width: Style.logStepPickerWidth)
+            Picker(Wording.logDetailPicker, selection: $level) {
                 ForEach(LogLevel.allCases, id: \.self) { Text($0.rawValue).tag($0) }
             }
-            .frame(width: 150)
-            TextField("Filter", text: $filter).textFieldStyle(.roundedBorder).frame(minWidth: 120)
+            .frame(width: Style.logLevelPickerWidth)
+            TextField(Wording.filter, text: $filter).textFieldStyle(.roundedBorder).frame(minWidth: Style.logFilterMinWidth)
             Spacer()
-            Button("Open logs folder") { if let dir = model.runtime?.paths.logsDirectory { model.open(dir.path) } }
+            Button(Wording.openLogsFolder) { if let dir = model.runtime?.paths.logsDirectory { model.open(dir.path) } }
         }
-        .padding(8)
+        .padding(Style.logControlsSpacing)
     }
 
     /// Where the noise is: problems counted per funnel step, so the step worth working on is obvious.
@@ -84,28 +84,26 @@ struct ProcessingLogView: View {
             return (definition, lines.filter { $0.level == .error }.count, lines.filter { $0.level == .warning }.count)
         }
         return ScrollView(.horizontal) {
-            HStack(spacing: 6) {
+            HStack(spacing: Style.logSummarySpacing) {
                 ForEach(counts, id: \.0.id) { definition, errors, warnings in
                     Button {
                         step = step == definition.id ? Self.allSteps : definition.id
                     } label: {
-                        HStack(spacing: 5) {
+                        HStack(spacing: Style.logChipContentSpacing) {
                             Text(definition.title).lineLimit(1)
-                            if errors > 0 { Text("\(errors)").foregroundStyle(.red).monospacedDigit() }
-                            if warnings > 0 { Text("\(warnings)").foregroundStyle(.orange).monospacedDigit() }
-                            if errors == 0, warnings == 0 { Image(systemName: "checkmark").foregroundStyle(.green) }
+                            if errors > 0 { Text("\(errors)").foregroundStyle(Palette.problem).monospacedDigit() }
+                            if warnings > 0 { Text("\(warnings)").foregroundStyle(Palette.attention).monospacedDigit() }
+                            if errors == 0, warnings == 0 { Image(systemName: "checkmark").foregroundStyle(Palette.fine) }
                         }
                         .font(.caption)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
+                        .padding(Style.logChipInsets)
                         .background(step == definition.id ? AnyShapeStyle(.selection) : AnyShapeStyle(.quaternary),
                                     in: .capsule)
                     }
                     .buttonStyle(.plain)
                 }
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
+            .padding(Style.logSummaryInsets)
         }
         .scrollIndicators(.never)
     }
@@ -122,8 +120,8 @@ struct ProcessingLogView: View {
 
     private static func colour(_ level: LogLevel) -> Color {
         switch level {
-        case .error: .red
-        case .warning: .orange
+        case .error: Palette.problem
+        case .warning: Palette.attention
         default: .secondary
         }
     }

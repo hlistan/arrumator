@@ -1,5 +1,5 @@
 name: Bug report
-description: Something Arrumator did wrong, or a document it filed where it should not.
+description: Something Arrumator did wrong, or a document it read, labelled or named wrongly.
 labels: [bug]
 body:
   - type: markdown
@@ -19,7 +19,7 @@ body:
     attributes:
       label: How it was decided
       description: >
-        For a filing decision, the output of `arrumatorcli trace <document>` (without --full, which contains document
+        For how a document was read, the output of `arrumatorcli trace <document>` (without --full, which contains document
         text) helps most.
       render: text
   - type: input

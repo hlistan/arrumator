@@ -55,7 +55,7 @@ extension Text {
             var part = AttributedString(segment)
             if isMatch {
                 part.inlinePresentationIntent = .stronglyEmphasized
-                part.backgroundColor = .yellow.opacity(0.35)
+                part.backgroundColor = Palette.searchMatch
             }
             attributed += part
         }

@@ -31,12 +31,15 @@ public actor ArchiveRecords {
     private let settings: SettingsStore
     private let config: PipelineConfig
     private let registry: SelfChangeRegistry?
+    private let time: any TimeSource
 
-    public init(database: AppDatabase, settings: SettingsStore, config: PipelineConfig, registry: SelfChangeRegistry?) {
+    public init(database: AppDatabase, settings: SettingsStore, config: PipelineConfig, registry: SelfChangeRegistry?,
+                time: any TimeSource) {
         self.database = database
         self.settings = settings
         self.config = config
         self.registry = registry
+        self.time = time
     }
 
     private func layout(_ root: URL) -> ArchiveLayout {
@@ -242,9 +245,10 @@ public actor ArchiveRecords {
     /// and updates, and leaves the file marked so it is written with both.
     private func read(_ kind: RecordKind, url: URL, replacing: Bool) async throws {
         let parsed = try parse(kind, url: url)
+        let now = time.now()
         try await database.writer.write { db in
             try db.execute(sql: "PRAGMA defer_foreign_keys = ON")
-            try Self.apply(parsed, db: db, replacing: replacing)
+            try Self.apply(parsed, db: db, replacing: replacing, at: now)
             for (path, hash) in parsed.hashes { try Self.remember(db, path: path, hash: hash) }
             if replacing { try db.execute(sql: "DELETE FROM record_dirty WHERE key = ?", arguments: [kind.key]) }
         }
@@ -292,9 +296,9 @@ public actor ArchiveRecords {
     /// Puts parsed records into the index. Documents are only ever added or updated here: an entry missing from a
     /// file does not delete a document, whose entry is written back instead. Other files replace their table when
     /// `replacing`, and otherwise add and update their rows.
-    private static func apply(_ parsed: Parsed, db: Database, replacing: Bool) throws {
+    private static func apply(_ parsed: Parsed, db: Database, replacing: Bool, at now: Date) throws {
         for (directory, entries) in parsed.documents {
-            for entry in entries { try upsert(entry, directory: directory, db: db) }
+            for entry in entries { try upsert(entry, directory: directory, db: db, at: now) }
         }
         for (month, entries) in parsed.history {
             if replacing {
@@ -319,8 +323,8 @@ public actor ArchiveRecords {
     }
 
     /// Adds or updates a document from its entry, keeping what the index caches about the file.
-    private static func upsert(_ entry: DocumentEntry, directory: URL, db: Database) throws {
-        var record = entry.record(directory: directory)
+    private static func upsert(_ entry: DocumentEntry, directory: URL, db: Database, at now: Date) throws {
+        var record = entry.record(directory: directory, now: now)
         let existing = try DocumentRecord.fetchOne(db, key: entry.id)
             ?? DocumentRecord.filter(Column("uid") == entry.uid).fetchOne(db)
         if let existing {
@@ -421,10 +425,11 @@ public actor ArchiveRecords {
         summary.events = parsed.history.reduce(0) { $0 + $1.entries.count }
         summary.labelRules = parsed.labelRules?.count ?? 0
         let ready = parsed
+        let now = time.now()
         try await database.writer.write { db in
             try db.execute(sql: "PRAGMA defer_foreign_keys = ON")
             for table in Self.rebuiltTables { try db.execute(sql: "DELETE FROM \(table)") }
-            try Self.apply(ready, db: db, replacing: false)
+            try Self.apply(ready, db: db, replacing: false, at: now)
             try db.execute(sql: "DELETE FROM record_files")
             for (path, hash) in ready.hashes { try Self.remember(db, path: path, hash: hash) }
             try db.execute(sql: "DELETE FROM record_dirty")
@@ -432,7 +437,7 @@ public actor ArchiveRecords {
         try await loadKnownHashes()
         try await locateDocuments(root: root, summary: &summary)
         try await queueReindex(summary: &summary)
-        try await HistoryStore(database: database).record(.rebuilt, summary: summary.summary, payload: summary)
+        try await HistoryStore(database: database, time: time).record(.rebuilt, summary: summary.summary, payload: summary)
         try await flush()
         Log.info(.db, "Index rebuilt from the archive", ["documents": String(summary.documents), "missing": String(summary.missing),
                                                          "adopted": String(summary.adopted)])
@@ -447,7 +452,7 @@ public actor ArchiveRecords {
     /// Finds documents whose file is not where their entry says by the identifier on each file, and takes in files
     /// that no entry describes.
     private func locateDocuments(root: URL, summary: inout RebuildSummary) async throws {
-        let documents = try await DocumentStore(database: database).list(DocumentFilter(), limit: Int.max)
+        let documents = try await DocumentStore(database: database, time: time).list(DocumentFilter(), limit: Int.max)
         let byUID = Dictionary(documents.map { ($0.uid, $0) }, uniquingKeysWith: { a, _ in a })
         let skip = SkipRules(watcher: config.watcher)
         var found: [String: String] = [:]
@@ -459,7 +464,7 @@ public actor ArchiveRecords {
                 untracked.append(url.path)
             }
         }
-        let store = DocumentStore(database: database)
+        let store = DocumentStore(database: database, time: time)
         for var document in documents where document.status != .missing && !FileManager.default.fileExists(atPath: document.path) {
             if let path = found[document.uid] {
                 document.path = path
@@ -471,7 +476,7 @@ public actor ArchiveRecords {
             _ = try await store.save(document)
         }
         // A file put into the archive by hand is read and labelled where it is; the system folder holds no documents.
-        let jobs = JobStore(database: database)
+        let jobs = JobStore(database: database, time: time)
         let layout = layout(root)
         let incoming = await settings.current.incomingURL.path + "/"
         for path in untracked where !layout.isSystem(URL(fileURLWithPath: path)) && !path.hasPrefix(incoming) {
@@ -492,8 +497,8 @@ public actor ArchiveRecords {
     }
 
     private func queueReindex(summary: inout RebuildSummary) async throws {
-        let jobs = JobStore(database: database)
-        for document in try await DocumentStore(database: database).list(DocumentFilter(), limit: Int.max)
+        let jobs = JobStore(database: database, time: time)
+        for document in try await DocumentStore(database: database, time: time).list(DocumentFilter(), limit: Int.max)
         where document.status != .missing && FileManager.default.fileExists(atPath: document.path) {
             if try await jobs.enqueue(path: document.path, kind: .reindex, docID: document.id) != nil { summary.queued += 1 }
         }

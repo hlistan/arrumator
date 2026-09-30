@@ -26,16 +26,19 @@ public struct TraceHeader: Sendable {
 public struct TraceRecorder: TraceSink {
     public let database: AppDatabase
     public let appVersion: String
+    public let time: any TimeSource
 
-    public init(database: AppDatabase, appVersion: String) {
+    public init(database: AppDatabase, appVersion: String, time: any TimeSource) {
         self.database = database
         self.appVersion = appVersion
+        self.time = time
     }
 
     public func start(_ header: TraceHeader) async throws -> TraceContext {
+        let now = time.now()
         let id = try await database.writer.write { db in
             var t = TraceRecord(id: nil, docId: header.docID, jobId: header.jobID, attempt: header.attempt,
-                                source: header.source.rawValue, startedAt: Date(), finishedAt: nil, outcome: nil,
+                                source: header.source.rawValue, startedAt: now, finishedAt: nil, outcome: nil,
                                 appVersion: appVersion, promptVersion: header.promptVersion, modelChat: header.models?.chat,
                                 modelVision: header.models?.vision, modelEmbed: header.models?.embed,
                                 settingsJson: JSON.string(header.settings), totalMs: nil)
@@ -50,7 +53,7 @@ public struct TraceRecorder: TraceSink {
             try await database.writer.write { db in
                 let seq = try Int.fetchOne(db, sql: "SELECT COALESCE(MAX(seq), 0) + 1 FROM trace_steps WHERE trace_id = ?",
                                            arguments: [traceID]) ?? 1
-                var r = TraceStepRecord(id: nil, traceId: traceID, seq: seq, stage: step.stage.rawValue, status: step.status.rawValue,
+                var r = TraceStepRecord(id: nil, traceId: traceID, seq: seq, stage: step.stage.rawValue, status: step.status,
                                         startedAt: step.startedAt, durationMs: step.durationMs, inputJson: step.input,
                                         outputJson: step.output, error: step.error)
                 try r.insert(db)
@@ -63,13 +66,13 @@ public struct TraceRecorder: TraceSink {
 
     public func finish(_ context: TraceContext, outcome: String, docID: Int64?) async {
         guard let id = context.traceID else { return }
+        let now = time.now()
         do {
             try await database.writer.write { db in
                 guard var t = try TraceRecord.fetchOne(db, key: id) else { return }
-                let now = Date()
                 t.finishedAt = now
                 t.outcome = outcome
-                t.totalMs = now.timeIntervalSince(t.startedAt) * 1000
+                t.totalMs = t.startedAt.milliseconds(until: now)
                 if let docID { t.docId = docID }
                 try t.update(db)
             }
@@ -92,15 +95,20 @@ public struct TraceRecorder: TraceSink {
         }
     }
 
-    /// Clears raw prompt/response payloads older than `days`, keeping structured outputs.
+    /// Clears what steps that talked to a model sent it and got back (`TraceStep.exchangeKey`: the prompts, which hold
+    /// the document's text, and the raw answers) in traces older than `days`, keeping what each step concluded.
+    /// Returns how many steps it cleared.
     public func trimRawPayloads(olderThanDays days: Int) async throws -> Int {
-        let cutoff = Date().addingTimeInterval(-Double(days) * 86_400).timeIntervalSince1970
+        let cutoff = time.now().addingTimeInterval(-Double(days) * Units.secondsPerDay)
+        let stages = TraceStage.allCases.filter(\.exchangesWithModel).map(\.rawValue)
+        let path = "$." + TraceStep.exchangeKey
         return try await database.writer.write { db in
             try db.execute(sql: """
-                UPDATE trace_steps SET input_json = NULL
-                WHERE stage IN ('llm','vlm') AND input_json IS NOT NULL
+                UPDATE trace_steps SET output_json = json_remove(output_json, ?)
+                WHERE stage IN (\(databaseQuestionMarks(count: stages.count))) AND json_valid(output_json)
+                AND json_type(output_json, ?) IS NOT NULL
                 AND trace_id IN (SELECT id FROM traces WHERE started_at < ?)
-                """, arguments: [cutoff])
+                """, arguments: StatementArguments([path] + stages + [path, cutoff.unixSeconds]))
             return db.changesCount
         }
     }

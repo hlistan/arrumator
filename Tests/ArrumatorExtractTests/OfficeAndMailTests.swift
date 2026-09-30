@@ -5,7 +5,9 @@ import Testing
 
 @Suite("Office documents, e-mail and archives")
 struct OfficeAndMailTests {
-    private let registry = ExtractorRegistry()
+    private let registry: ExtractorRegistry
+
+    init() throws { registry = try TestConfig.registry() }
 
     @Test("docx through textutil, with core properties")
     func docx() async throws {
@@ -17,16 +19,16 @@ struct OfficeAndMailTests {
         Renda mensal: 850,00 €
         """, title: "Contrato de arrendamento", author: "Maria Santos")
         let content = try await registry.extract(url, sha256: "x", context: try TestConfig.context(), trace: .disabled)
-        #expect(content.extractorName == "textutil")
-        #expect(content.kind == .textDocument)
-        #expect(content.textOrigin == .textLayer)
-        #expect(content.text.contains("Contrato de arrendamento"))
-        #expect(content.text.contains("Renda mensal"))
-        #expect(content.metadata["doc:title"] == "Contrato de arrendamento")
-        #expect(content.metadata["doc:creator"] == "Maria Santos")
-        #expect(content.entities.documentDate?.date == "2025-03-01")
-        #expect(content.language.primary == "pt")
-        #expect(content.warnings.isEmpty)
+        #expect(content.extractorName == "textutil", "a .docx is read by textutil")
+        #expect(content.kind == .textDocument, "a .docx is a text document")
+        #expect(content.textOrigin == .textLayer, "a .docx's text is its own, with no OCR")
+        #expect(content.text.contains("Contrato de arrendamento"), "the first paragraph is read")
+        #expect(content.text.contains("Renda mensal"), "the last paragraph is read too")
+        #expect(content.metadata["doc:title"] == "Contrato de arrendamento", "the core-properties title is kept as metadata")
+        #expect(content.metadata["doc:creator"] == "Maria Santos", "the core-properties author is kept as metadata")
+        #expect(content.entities.documentDate?.date == "2025-03-01", "a Portuguese date written in words dates the contract")
+        #expect(content.language.primary == "pt", "a Portuguese contract is detected as Portuguese")
+        #expect(content.warnings.map(\.code) == [], "a well-formed .docx is read without warnings")
     }
 
     @Test("xlsx: sheet names, shared and inline strings as TSV, limits")
@@ -34,24 +36,25 @@ struct OfficeAndMailTests {
         let scratch = try Scratch()
         let url = try scratch.writeZip("contas.xlsx", files: XLSXFixture.files)
         let content = try await registry.extract(url, sha256: "x", context: try TestConfig.context(), trace: .disabled)
-        #expect(content.extractorName == "xlsx")
-        #expect(content.kind == .spreadsheet)
-        #expect(content.structure?.sheetNames == ["Faturas", "Resumo"])
-        #expect(content.text.contains("## Faturas"))
-        #expect(content.text.contains("Fornecedor\tValor"))
-        #expect(content.text.contains("EDP Comercial\t45.9"))
-        #expect(content.text.contains("Galp\t\tinline note"))
-        #expect(content.structure?.tables.count == 2)
+        #expect(content.extractorName == "xlsx", "a .xlsx is read by the built-in reader")
+        #expect(content.kind == .spreadsheet, "a .xlsx is a spreadsheet")
+        #expect(content.structure?.sheetNames == ["Faturas", "Resumo"], "sheet names come in workbook order")
+        #expect(content.text.contains("## Faturas"), "each sheet starts with its name as a heading")
+        #expect(content.text.contains("Fornecedor\tValor"), "shared strings are resolved, cells separated by tabs")
+        #expect(content.text.contains("EDP Comercial\t45.9"), "numbers are kept as stored")
+        #expect(content.text.contains("Galp\t\tinline note"), "an empty cell keeps its column, and inline strings are read")
+        #expect(content.structure?.tables.count == 2, "each sheet is one table")
 
         let limited = try TestConfig.context { extraction, _ in
             extraction.xlsx.maxSheets = 1
             extraction.xlsx.maxRows = 2
         }
         let capped = try await registry.extract(url, sha256: "x", context: limited, trace: .disabled)
-        #expect(!capped.text.contains("Galp"))
-        #expect(!capped.text.contains("## Resumo"))
-        #expect(capped.structure?.sheetNames == ["Faturas", "Resumo"])
-        #expect(capped.hasWarning(.textTruncated))
+        #expect(!capped.text.contains("Galp"), "rows past maxRows are left out")
+        #expect(!capped.text.contains("## Resumo"), "sheets past maxSheets are left out")
+        #expect(capped.structure?.sheetNames == ["Faturas", "Resumo"], "every sheet name is listed, even of sheets left out")
+        #expect(capped.warnings.map(\.detail) == ["sheet Faturas: first 2 rows", "first 1 of 2 sheets"],
+                "what was cut is noted, so the model knows it saw part of the workbook")
     }
 
     @Test("pptx: slides in numeric order, then notes")
@@ -59,18 +62,18 @@ struct OfficeAndMailTests {
         let scratch = try Scratch()
         let url = try scratch.writeZip("deck.pptx", files: PPTXFixture.files)
         let content = try await registry.extract(url, sha256: "x", context: try TestConfig.context(), trace: .disabled)
-        #expect(content.extractorName == "pptx")
-        #expect(content.kind == .presentation)
-        #expect(content.structure?.slideCount == 3)
+        #expect(content.extractorName == "pptx", "a .pptx is read by the built-in reader")
+        #expect(content.kind == .presentation, "a .pptx is a presentation")
+        #expect(content.structure?.slideCount == 3, "notes slides are not counted as slides")
         let text = content.text
         let first = try #require(text.range(of: "Quarterly review"))
         let second = try #require(text.range(of: "Second slide"))
         let tenth = try #require(text.range(of: "Tenth slide"))
         let notes = try #require(text.range(of: "Speaker note one"))
-        #expect(first.lowerBound < second.lowerBound)
-        #expect(second.lowerBound < tenth.lowerBound)
-        #expect(tenth.lowerBound < notes.lowerBound)
-        #expect(text.contains("Quarterly review\nRevenue up"))
+        #expect(first.lowerBound < second.lowerBound, "slide 1 comes before slide 2")
+        #expect(second.lowerBound < tenth.lowerBound, "slides are ordered by number, so slide10 comes after slide2")
+        #expect(tenth.lowerBound < notes.lowerBound, "speaker notes come after every slide")
+        #expect(text.contains("Quarterly review\nRevenue up"), "runs join into one line, and each paragraph is a line")
     }
 
     @Test("eml: RFC 2047 subject, KOI8-R quoted-printable body, RFC 2231 attachment name")
@@ -78,13 +81,12 @@ struct OfficeAndMailTests {
         let scratch = try Scratch()
         let url = try scratch.write("mail.eml", data: try EMLFixture.message())
         let content = try await registry.extract(url, sha256: "x", context: try TestConfig.context(), trace: .disabled)
-        #expect(content.kind == .email)
-        #expect(content.metadata["email:subject"] == "Fatura nº 123 — EDP от 15 мая")
-        #expect(content.metadata["email:from"] == "ПАО Сбербанк <info@sberbank.ru>")
-        #expect(content.text.contains("Уважаемый клиент"))
-        #expect(content.attachments == ["Счёт.pdf", "photo.jpg"])
-        #expect(content.entities.documentDate?.date == "2024-05-15")
-        #expect(content.entities.emails.contains("info@sberbank.ru"))
+        #expect(content.kind == .email, "an .eml is an e-mail")
+        #expect(content.metadata[MetadataKey.emailSubject] == "Fatura nº 123 — EDP от 15 мая", "a folded subject of RFC 2047 words is decoded and joined")
+        #expect(content.metadata[MetadataKey.emailFrom] == "ПАО Сбербанк <info@sberbank.ru>", "the sender's encoded name is decoded")
+        #expect(content.text.contains("Уважаемый клиент"), "a KOI8-R quoted-printable body is decoded")
+        #expect(content.attachments == ["Счёт.pdf", "photo.jpg"], "attachment names are decoded from filename* and from name, in order")
+        #expect(content.entities.documentDate?.date == "2024-05-15", "an e-mail is dated the day it was sent")
     }
 
     @Test("eml with only an HTML body is stripped to text; .msg is metadata-only")
@@ -99,15 +101,15 @@ struct OfficeAndMailTests {
         <html><head><style>p{color:red}</style></head><body><p>Hello &amp; welcome</p><p>Line&nbsp;two</p></body></html>
         """)
         let content = try await registry.extract(html, sha256: "x", context: try TestConfig.context(), trace: .disabled)
-        #expect(content.text.contains("Hello & welcome"))
-        #expect(!content.text.contains("<p>"))
-        #expect(!content.text.contains("color:red"))
+        #expect(content.text.contains("Hello & welcome"), "an HTML body becomes text with its entities decoded")
+        #expect(!content.text.contains("<p>"), "tags are stripped")
+        #expect(!content.text.contains("color:red"), "style sheets are not text")
 
         let msg = try scratch.write("outlook.msg", data: Data([0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]))
         let msgContent = try await registry.extract(msg, sha256: "x", context: try TestConfig.context(), trace: .disabled)
-        #expect(msgContent.kind == .email)
-        #expect(msgContent.hasWarning(.unsupportedFormat))
-        #expect(msgContent.textOrigin == .metadataOnly)
+        #expect(msgContent.kind == .email, "an Outlook .msg is still an e-mail")
+        #expect(msgContent.warnings.map(\.code) == [.unsupportedFormat], "an Outlook .msg cannot be read, and the warning says so")
+        #expect(msgContent.textOrigin == .metadataOnly, "an Outlook .msg is described by its metadata alone")
     }
 
     @Test("zip: entry listing without unpacking; other archives metadata-only")
@@ -115,16 +117,16 @@ struct OfficeAndMailTests {
         let scratch = try Scratch()
         let url = try scratch.writeZip("bundle.zip", files: ["fatura.pdf": "%PDF-1.4", "fotos/praia.jpg": "jpeg"])
         let content = try await registry.extract(url, sha256: "x", context: try TestConfig.context(), trace: .disabled)
-        #expect(content.kind == .archive)
-        #expect(content.textOrigin == .metadataOnly)
-        #expect(Set(content.attachments) == ["fatura.pdf", "fotos/praia.jpg"])
-        #expect(content.text.contains("fotos/praia.jpg"))
-        #expect(content.metadata["archive:entries"] == "2")
+        #expect(content.kind == .archive, "a .zip is an archive")
+        #expect(content.textOrigin == .metadataOnly, "a zip is listed, not unpacked")
+        #expect(Set(content.attachments) == ["fatura.pdf", "fotos/praia.jpg"], "every entry is listed with its path")
+        #expect(content.text.contains("fotos/praia.jpg"), "the listing is the text the model sees")
+        #expect(content.metadata["archive:entries"] == "2", "the entry count is kept as metadata")
 
         let gzip = try scratch.write("logs.tar.gz", data: Data([0x1F, 0x8B, 0x08, 0x00]))
         let gzContent = try await registry.extract(gzip, sha256: "x", context: try TestConfig.context(), trace: .disabled)
-        #expect(gzContent.kind == .archive)
-        #expect(gzContent.hasWarning(.unsupportedFormat))
+        #expect(gzContent.kind == .archive, "a .tar.gz is an archive")
+        #expect(gzContent.warnings.map(\.code) == [.unsupportedFormat], "only zips are listed; other archives say so")
     }
 }
 

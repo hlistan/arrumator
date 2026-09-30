@@ -25,14 +25,14 @@ public struct Placer: Sendable {
     }
 
     public func execute(_ plan: PlacementPlan, source: URL, sha256: String, documentUID: String,
-                        originalName: String) throws -> MoveResult {
+                        originalName: String, filedAt: Date) throws -> MoveResult {
         let result = try operations.move(source, toDirectory: URL(fileURLWithPath: plan.directory, isDirectory: true),
                                          filename: plan.filename, expectedSHA256: sha256)
         let dest = URL(fileURLWithPath: result.to)
         do {
             try Xattr.set(Xattr.documentID, documentUID, on: dest)
             try Xattr.set(Xattr.originalName, originalName, on: dest)
-            try Xattr.set(Xattr.filedAt, Date().formatted(.iso8601), on: dest)
+            try Xattr.set(Xattr.filedAt, filedAt.formatted(.iso8601), on: dest)
         } catch {
             Log.warning(.fileops, "Could not tag filed document", ["path": dest.path, "error": error.localizedDescription])
         }

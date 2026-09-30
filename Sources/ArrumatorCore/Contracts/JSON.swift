@@ -26,9 +26,26 @@ public enum JSON {
         return String(decoding: data, as: UTF8.self)
     }
 
+    /// Decodes JSON the app stored itself; nil for none. Stored JSON that cannot be read is logged with its type and
+    /// the field that failed, never its value, which may hold the document's text (AGENTS.md §4.1), and read as none.
     public static func decode<T: Decodable>(_ type: T.Type, from string: String?) -> T? {
-        guard let string, let data = string.data(using: .utf8) else { return nil }
-        return try? decoder.decode(type, from: data)
+        guard let string else { return nil }
+        do {
+            return try decoder.decode(type, from: Data(string.utf8))
+        } catch {
+            Log.error(.db, "Stored JSON could not be read", ["type": String(describing: type), "field": field(of: error)])
+            return nil
+        }
+    }
+
+    /// Where decoding failed, as a dotted path of coding keys.
+    static func field(of error: any Error) -> String {
+        let path: [any CodingKey] = switch error as? DecodingError {
+        case let .typeMismatch(_, context), let .valueNotFound(_, context), let .dataCorrupted(context): context.codingPath
+        case let .keyNotFound(key, context): context.codingPath + [key]
+        case nil, .some: []
+        }
+        return path.isEmpty ? "(root)" : path.map { $0.intValue.map(String.init) ?? $0.stringValue }.joined(separator: ".")
     }
 }
 

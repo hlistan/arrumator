@@ -2,7 +2,7 @@ import Foundation
 
 /// Every tunable of the pipeline. Values come from bundled `Defaults/pipeline.json`, deep-merged with the user's
 /// `pipeline.json` and `ARRUMATOR_PIPELINE_CONFIG`; `ARRUMATOR_OLLAMA_URL` overrides the endpoint.
-public struct PipelineConfig: Sendable, Codable, Hashable {
+public struct PipelineConfig: Sendable, Codable, Hashable, ValidatedConfiguration {
     public var ollama: OllamaConfig
     public var modelProfiles: [String: ModelProfile]
     public var watcher: WatcherConfig
@@ -18,8 +18,25 @@ public struct PipelineConfig: Sendable, Codable, Hashable {
     public var power: PowerConfig
     public var stats: StatsConfig
     public var interface: InterfaceConfig
+    public var maintenance: MaintenanceConfig
+    public var database: DatabaseConfig
 
-    public static func load(paths: AppPaths, environment: RuntimeEnvironment = .current) throws -> PipelineConfig {
+    public var problems: [String] {
+        var problems: [String] = []
+        if ingest.maxAttempts < 1 { problems.append("ingest.maxAttempts must be at least 1") }
+        if analysis.repairAttempts < 0 { problems.append("analysis.repairAttempts cannot be negative") }
+        if analysis.excerptTailDivisor < 2 { problems.append("analysis.excerptTailDivisor must be at least 2, so the head keeps the most") }
+        if labels.maxPerKind < 1 { problems.append("labels.maxPerKind must be at least 1") }
+        if !stats.windowsDays.all.contains(stats.defaultWindowDays) {
+            problems.append("stats.defaultWindowDays must be one of stats.windowsDays")
+        }
+        if search.bm25Weights.count != SearchService.columns.count {
+            problems.append("search.bm25Weights needs one weight for each of the \(SearchService.columns.count) full-text columns")
+        }
+        return problems
+    }
+
+    public static func load(paths: AppPaths, environment: RuntimeEnvironment) throws -> PipelineConfig {
         var overrides: [JSONValue] = []
         if let user = try ConfigLoader.overrideValue(at: paths.pipelineOverrideURL) { overrides.append(user) }
         if let path = environment.pipelineOverridePath,
@@ -43,8 +60,7 @@ public struct PipelineConfig: Sendable, Codable, Hashable {
             embed: selection.embedModel ?? profile.embedModel,
             fast: selection.fastModel ?? profile.fastModel,
             numCtx: profile.numCtx, fastNumCtx: profile.fastNumCtx,
-            keepAliveChat: profile.keepAliveChat, keepAliveEmbed: profile.keepAliveEmbed,
-            residentBudgetGB: profile.residentBudgetGB)
+            keepAliveChat: profile.keepAliveChat, keepAliveEmbed: profile.keepAliveEmbed)
     }
 }
 
@@ -58,7 +74,6 @@ public struct ModelProfile: Sendable, Codable, Hashable {
     public var fastNumCtx: Int
     public var keepAliveChat: String
     public var keepAliveEmbed: String
-    public var residentBudgetGB: Double
 }
 
 public struct ResolvedModels: Sendable, Codable, Hashable {
@@ -71,7 +86,6 @@ public struct ResolvedModels: Sendable, Codable, Hashable {
     public var fastNumCtx: Int
     public var keepAliveChat: String
     public var keepAliveEmbed: String
-    public var residentBudgetGB: Double
 
     /// The context images are described with: that of the role the vision model also plays, so Ollama keeps one
     /// loaded model instead of reloading it with another context for every image (a request without one gets the
@@ -91,13 +105,14 @@ public struct OllamaConfig: Sendable, Codable, Hashable {
     public var appBundleIdentifier: String
     public var appBinarySubpath: String
     public var binarySearchPaths: [String]
+    /// Variables `ollama serve` is started with besides `OLLAMA_HOST`, which is the address the app talks to.
     public var serveEnvironment: [String: String]
     public var timeouts: Timeouts
     public var retryDelays: [Double]
     public var healthPollStarting: Double
     public var healthPollSteady: Double
     public var startTimeout: Double
-    public var restartBackoff: [Double]
+    public var restartBackoff: NonEmpty<Double>
     public var maxRestartsPerHour: Int
     public var requiredFreeDiskGBAfterPull: Double
 }
@@ -111,7 +126,8 @@ public struct WatcherConfig: Sendable, Codable, Hashable {
     public var ignoredNames: [String]
     public var ignoredExtensions: [String]
     public var ignoredNameSubstrings: [String]
-    /// Prefix + extension of app-managed files (`_about.md`, `_INDEX.md`) that are never ingested.
+    /// Prefix + extension of the archive's record files (`_documents.md`, `_labels.md`, history files), and of those
+    /// earlier versions left, which are never read as documents.
     public var managedFilePrefix: String
     public var managedFileExtension: String
     /// How long the app's own file operations are ignored by the archive watcher (must exceed FSEvents latency).
@@ -135,7 +151,9 @@ public struct RecordsConfig: Sendable, Codable, Hashable {
 
 public struct IngestConfig: Sendable, Codable, Hashable {
     public var maxAttempts: Int
-    public var retryDelays: [Double]
+    /// Seconds before each retry of a failed job, the last one for every retry after; also how long a job waits for
+    /// Ollama to come back.
+    public var retryDelays: NonEmpty<Double>
     public var watchdogMinutes: Double
 }
 
@@ -256,7 +274,11 @@ public struct AnalysisConfig: Sendable, Codable, Hashable {
     /// Stamped on every trace, so a change to the prompt shows in what it recorded.
     public var promptVersion: Int
     public var excerptChars: Int
+    /// The end of the document gets `1 / excerptTailDivisor` of `excerptChars`: totals and signatures are there.
+    public var excerptTailDivisor: Int
     public var embeddingSummaryChars: Int
+    /// Identifiers the text a document's embedding is made from lists, the first found first.
+    public var embeddingIdentifiersLimit: Int
     public var embeddingNumCtx: Int
     public var llmOptions: LLMOptions
     public var vlmNumPredict: Int
@@ -324,6 +346,8 @@ public struct LoggingConfig: Sendable, Codable, Hashable {
     public var keepDays: Int
     public var maxBytes: Int64
     public var bufferLimit: Int
+    /// Seconds between looks for new lines while `arrumatorcli logs --follow` runs.
+    public var followInterval: Double
 }
 
 public enum ThermalLevel: String, Sendable, Codable, Hashable, CaseIterable {
@@ -350,7 +374,9 @@ public struct PowerConfig: Sendable, Codable, Hashable {
 
 public struct StatsConfig: Sendable, Codable, Hashable {
     /// The periods, in days, Statistics offers to look back over.
-    public var windowsDays: [Int]
+    public var windowsDays: NonEmpty<Int>
+    /// The period Statistics and `arrumatorcli funnel` show unless told otherwise; one of `windowsDays`.
+    public var defaultWindowDays: Int
     public var diagnosticsTraceLimit: Int
     public var funnel: FunnelConfig
 }
@@ -365,6 +391,23 @@ public struct InterfaceConfig: Sendable, Codable, Hashable {
     public var sidebarLabelsPerKind: Int
     /// Recently processed documents listed in the menu bar.
     public var menuBarRecent: Int
+    /// The latest filings, and documents waiting for the user, looked at for notifications each time the history grows.
+    public var notificationEvents: Int
+    /// Characters of a file's text `arrumatorcli extract` prints.
+    public var extractPreviewChars: Int
+}
+
+/// The app's housekeeping: pruning logs, trimming model exchanges from old traces, rescheduling stuck jobs, writing
+/// record files a change marked.
+public struct MaintenanceConfig: Sendable, Codable, Hashable {
+    /// Seconds between rounds.
+    public var interval: Double
+}
+
+/// The archive's index (docs/storage.md).
+public struct DatabaseConfig: Sendable, Codable, Hashable {
+    /// Seconds a write waits for another process holding the index, the app or `arrumatorcli`, before it fails.
+    public var busyTimeout: Double
 }
 
 /// One step of the processing funnel: the trace stages it covers, and how it is described to the user.
@@ -383,4 +426,18 @@ public struct FunnelConfig: Sendable, Codable, Hashable {
     /// Below this many documents in the window, percentages are noise, so only counts are shown.
     public var minimumForShares: Int
     public var steps: [FunnelStepConfig]
+}
+
+extension PipelineConfig {
+    /// What extraction is given for a file under `settings`: its tunables, and the vision model when images may be
+    /// described. The ingest pipeline and `arrumatorcli ingest --dry-run` extract alike with it.
+    public func extractionContext(settings: AppSettings) throws -> ExtractionContext {
+        ExtractionContext(config: extraction, entities: entities, vision: settings.enableVLM ? try visionOptions(settings: settings) : nil)
+    }
+
+    private func visionOptions(settings: AppSettings) throws -> VisionModelOptions {
+        let resolved = try models(for: settings.models)
+        return VisionModelOptions(model: resolved.vision, keepAlive: resolved.keepAliveChat, numPredict: analysis.vlmNumPredict,
+                                  numCtx: resolved.visionNumCtx, options: analysis.llmOptions)
+    }
 }

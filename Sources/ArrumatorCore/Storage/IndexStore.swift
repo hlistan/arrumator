@@ -5,7 +5,12 @@ import GRDB
 /// Maintains the full-text (FTS5 via triggers) and vector index for documents.
 public struct IndexStore: Sendable {
     public let database: AppDatabase
-    public init(database: AppDatabase) { self.database = database }
+    public let time: any TimeSource
+
+    public init(database: AppDatabase, time: any TimeSource) {
+        self.database = database
+        self.time = time
+    }
 
     /// Indexes a document's text with its labels, replacing what was indexed for it.
     public func upsertText(docID: Int64, filename: String, body: String, summary: String?, metadata: [String: String],
@@ -26,15 +31,16 @@ public struct IndexStore: Sendable {
     /// Makes a document's labels its own: on its row, which writes them into its record file, and in the full-text
     /// index, in one transaction.
     public func saveLabels(_ labels: [DocumentLabel], docID: Int64) async throws {
-        try await database.writer.write { db in try Self.saveLabels(db, labels, docID: docID) }
+        let now = time.now()
+        try await database.writer.write { db in try Self.saveLabels(db, labels, docID: docID, at: now) }
     }
 
     /// Saves a document's labels inside an existing transaction, so a change to many documents commits as one.
-    static func saveLabels(_ db: Database, _ labels: [DocumentLabel], docID: Int64) throws {
+    static func saveLabels(_ db: Database, _ labels: [DocumentLabel], docID: Int64, at now: Date) throws {
         let assignments = LabelKind.allCases.map { "\($0.rawValue) = ?" }.joined(separator: ", ")
         let values: [(any DatabaseValueConvertible)?] = LabelKind.allCases.map { DocumentLabel.searchText(labels, kind: $0) } + [docID]
         try db.execute(sql: "UPDATE documents SET labels_json = ?, updated_at = ? WHERE id = ?",
-                       arguments: [JSON.string(labels), Date().unixSeconds, docID])
+                       arguments: [JSON.string(labels), now.unixSeconds, docID])
         try db.execute(sql: "UPDATE document_text SET \(assignments) WHERE doc_id = ?", arguments: StatementArguments(values))
     }
 
@@ -53,12 +59,13 @@ public struct IndexStore: Sendable {
 
     public func upsertEmbedding(docID: Int64, model: String, vector: [Float], sourceText: String) async throws {
         let hash = SHA256.hash(data: Data(sourceText.utf8)).map { String(format: "%02x", $0) }.joined()
+        let now = time.now()
         try await database.writer.write { db in
             try db.execute(sql: "DELETE FROM embeddings WHERE doc_id = ? AND model = ?", arguments: [docID, model])
             var e = EmbeddingRecord(id: nil, docId: docID, chunkIndex: 0, model: model, dim: vector.count,
-                                    vector: VectorCodec.encode(vector), textHash: hash, createdAt: Date())
+                                    vector: VectorCodec.encode(vector), textHash: hash, createdAt: now)
             try e.insert(db)
-            try db.execute(sql: "UPDATE documents SET embedded_at = ? WHERE id = ?", arguments: [Date().timeIntervalSince1970, docID])
+            try db.execute(sql: "UPDATE documents SET embedded_at = ? WHERE id = ?", arguments: [now.unixSeconds, docID])
         }
     }
 

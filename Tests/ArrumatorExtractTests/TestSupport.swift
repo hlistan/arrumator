@@ -171,6 +171,14 @@ enum TestConfig {
         return ExtractionContext(config: extraction, entities: entities, vision: vision)
     }
 
+    /// The registry the app wires, with Vision's own recognizer and the real shell. Its deadlines are measured on time
+    /// that never comes (`TestTime(.blocks)`), so real OCR and tools finish however slow the machine; pass
+    /// `TestTime(.advances)` for deadlines that expire at once.
+    static func registry(ollama: (any OllamaAPI)? = nil, recognizer: any TextRecognizing = VisionTextRecognizer(),
+                         time: TestTime = TestTime(.blocks)) throws -> ExtractorRegistry {
+        try ExtractorRegistry(ollama: ollama, recognizer: recognizer, shell: ShellRunner(time: time), time: time)
+    }
+
     static func visionOptions() throws -> VisionModelOptions {
         let pipeline = try pipeline()
         return VisionModelOptions(model: "gemma-test", keepAlive: "1m", numPredict: pipeline.analysis.vlmNumPredict, numCtx: 12288,

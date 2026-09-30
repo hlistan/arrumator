@@ -67,8 +67,11 @@ colours rather than the system accent, which macOS greys out whenever the window
   change (`events` table; History view; `arrumatorcli history`).
 - **Traces**: for every document, each stage's inputs, outputs and timing, including the exact prompts (with what the
   model was shown of the archive's labels), raw model responses and the labels the `consolidate` step changed ("How
-  was this read?"; `arrumatorcli trace <doc> --full`). `arrumatorcli replay` reads a document again with another model
-  without touching files.
+  was this read?"; `arrumatorcli trace <doc> --full`). The prompts and raw answers of a reading, and the raw answer of
+  an image description, are kept for Settings › Advanced › "Keep full model prompts" days (`traceRawRetentionDays`,
+  180 by default, or `arrumatorcli settings --trace-retention-days`); after that they are cleared once an hour
+  (`maintenance.interval`) and what the reading concluded stays. `arrumatorcli replay` reads a document again with
+  another model without touching files.
 - **Funnel**: counts, drop-off reasons and timings per step (`arrumatorcli funnel --days 30`).
 - **Processing log**: structured JSONL per day in `~/Library/Logs/Arrumator`, readable per funnel step under
   Settings › Processing log, so you can see which step is producing the errors and warnings
@@ -86,18 +89,28 @@ colours rather than the system accent, which macOS greys out whenever the window
 No tunable lives in code. Defaults are bundled in `Sources/ArrumatorCore/Resources/Defaults/`:
 
 - `settings.json`: your preferences (folders, Ollama server, model profile, file renaming and transliteration, what to
-  do with copies, notifications, …). The app stores only your changes, in
-  `~/Library/Application Support/Arrumator/settings.json`. Change them in Settings or with `arrumatorcli settings`.
-- `pipeline.json`: every pipeline tunable, in sections: `ollama` (timeouts, retries, how it is started),
+  do with copies, notifications, how long model prompts are kept in traces, …). The app stores only your changes, in
+  `~/Library/Application Support/Arrumator/settings.json`. Change them in Settings or with `arrumatorcli settings`,
+  which has an option for every one of them.
+- `pipeline.json`: every pipeline tunable, in sections: `ollama` (timeouts, retries, how it is started; `ollama serve`,
+  when the app starts it, listens on the address the app talks to, with `ollama.serveEnvironment` besides),
   `modelProfiles`, `watcher`, `records` (the names of the archive's record files and of its system and history folders,
   such as `records.labelRulesFileName`),
   `ingest` (attempts and retry delays), `extraction` (OCR and extraction limits), `entities` (dates and identifiers),
-  `analysis` (what the model is shown and how it is asked, such as `analysis.excerptChars` and
-  `analysis.repairAttempts`), `labels` (`labels.maxPerKind`, `labels.maxValueChars`, and `labels.vocabulary`: for each
-  kind kept one vocabulary, how alike labels must be written to be merged without asking or offered to merge and how
-  many in use the model is shown, and how many of your merges and unwanted labels it is shown), `naming`, `search`, `logging`,
-  `power`, `stats` and `interface` (how many rows a page loads, `interface.pageSize`, and how many labels of each kind the
-  sidebar lists). Override any subset in `~/Library/Application Support/Arrumator/pipeline.json`.
+  `analysis` (what the model is shown and how it is asked, such as `analysis.excerptChars`, of which the end of the
+  document gets `1 / analysis.excerptTailDivisor`, `analysis.repairAttempts`, and the identifiers a document's
+  embedding lists, `analysis.embeddingIdentifiersLimit`), `labels` (`labels.maxPerKind`, `labels.maxValueChars`, and
+  `labels.vocabulary`: for each kind kept one vocabulary, how alike labels must be written to be merged without asking
+  or offered to merge and how many in use the model is shown, and how many of your merges and unwanted labels it is
+  shown), `naming`, `search`, `logging` (with `logging.followInterval`, how often `arrumatorcli logs --follow` looks),
+  `power`, `stats` (the periods Statistics offers, and `stats.defaultWindowDays`, the one it and `arrumatorcli funnel`
+  show first), `interface` (how many rows a page loads, `interface.pageSize`, how many labels of each kind the sidebar
+  lists, how many recent events notifications are drawn from, `interface.notificationEvents`, and how much text
+  `arrumatorcli extract` prints, `interface.extractPreviewChars`), `maintenance` (how often the app prunes logs, trims
+  traces and reschedules stuck jobs, `maintenance.interval`) and `database` (how long a write waits for another process
+  using the index, `database.busyTimeout`). Override any subset in
+  `~/Library/Application Support/Arrumator/pipeline.json`. An override the app cannot run with, such as an empty
+  `ingest.retryDelays` or a negative `analysis.repairAttempts`, stops the app with the key and the reason.
 
 The Ollama server is set under Settings › Models › Ollama › Server, or with `arrumatorcli settings --ollama-url`. It must
 be this Mac, a private or link-local address, or a `.local` name; anything else is refused.
@@ -109,8 +122,7 @@ Environment variables:
 | `ARRUMATOR_HOME` | Relocates all state: indexes, settings and logs (`$ARRUMATOR_HOME/Logs`). It does not move the archive or Incoming, which `settings.json` names. |
 | `ARRUMATOR_OLLAMA_URL` | The Ollama server while set, in place of the setting; this Mac or the local network only. |
 | `ARRUMATOR_PIPELINE_CONFIG` | An extra `pipeline.json` override file, applied after yours. |
-| `ARRUMATOR_LOG_LEVEL` | `error`, `warning`, `info`, `debug` or `trace`. |
-| `ARRUMATOR_LIVE=1` | Enables the tests that need a running Ollama. |
+| `ARRUMATOR_LOG_LEVEL` | `error`, `warning`, `info`, `debug` or `trace`, over the setting; any other value stops the app with the reason. |
 
 ## Where everything is kept
 
@@ -120,10 +132,11 @@ it describes: a `_documents.md` in every directory holding documents, with each 
 (`_labels.md`).
 
 Each archive has its own SQLite index in `~/Library/Application Support/Arrumator/Indexes`, which only indexes those
-files and caches what can be recomputed, such as extracted text and embeddings. If it is lost, cannot be opened or
-cannot be migrated, the app rebuilds it from the archive and reads each document's text again in the background. You
-can edit the files by hand; the app reads the change back and never overwrites it. The design, and what a rebuild
-does and does not keep, is in [Storage](storage.md).
+files and caches what can be recomputed, such as extracted text and embeddings. If it is lost, damaged or cannot be
+migrated, the app rebuilds it from the archive and reads each document's text again in the background; one that is only
+locked by another process or on a full disk is left as it is, and the app says why it cannot start. You can edit the
+files by hand; the app reads the change back and never overwrites it, not even one it cannot read. The design, and what
+a rebuild does and does not keep, is in [Storage](storage.md).
 
 The app is not sandboxed: it watches folders you choose, writes extended attributes, and starts Ollama. It uses the
 hardened runtime and makes no network requests other than to your Ollama server.

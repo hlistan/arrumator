@@ -255,7 +255,9 @@ public actor SearchService {
         let meaningOnly = alike.filter { !found.contains($0.docID) }
         guard !meaningOnly.isEmpty else { return withWords }
         let ids = meaningOnly.map(\.docID)
-        let docs = try await DocumentStore(database: database).documents(ids: ids)
+        let docs = try await database.reader.read { [ids] db in
+            Dictionary(uniqueKeysWithValues: try DocumentRecord.fetchAll(db, keys: ids).compactMap { d in d.id.map { ($0, d) } })
+        }
         let bodies = try await database.reader.read { [ids] db in
             try Dictionary(uniqueKeysWithValues: Row.fetchAll(db, sql: """
                 SELECT doc_id, substr(body, 1, ?) AS b FROM document_text WHERE doc_id IN (\(ids.map { _ in "?" }.joined(separator: ",")))

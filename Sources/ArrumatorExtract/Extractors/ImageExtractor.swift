@@ -28,7 +28,7 @@ struct ImageExtractor: FileExtractor {
 
         // An image is recognised like one page, under the page OCR timeout; EXIF orientation is already applied,
         // so no orientation retry.
-        var pass = OCRPass(service: ocr, config: job.config)
+        var pass = OCRPass(service: ocr, config: job.config, time: job.time)
         let languages = LanguageDetector(config: job.config).ranked(for: job.source.stem)
         let result = try await pass.recognize(image, page: 1, languages: languages, timeout: job.config.pdf.ocrPageTimeout,
                                               orientationRetryBelow: nil)
@@ -94,8 +94,9 @@ struct ImageExtractor: FileExtractor {
             var height: Int
             var schema: JSONValue
         }
+        // The raw answer is kept under `TraceStep.exchangeKey`, which retention clears.
         struct Output: Encodable {
-            var raw: String?
+            var exchange: String?
             var visual: VisualSummary?
             var metrics: OllamaMetrics?
         }
@@ -103,7 +104,7 @@ struct ImageExtractor: FileExtractor {
                            input: Input(model: outcome.model, thinkDisabled: outcome.thinkDisabled,
                                         imageBytes: outcome.imageBytes, width: pixels.0, height: pixels.1,
                                         schema: VisionDescriber.schema),
-                           output: Output(raw: outcome.rawResponse, visual: outcome.summary, metrics: outcome.metrics),
+                           output: Output(exchange: outcome.rawResponse, visual: outcome.summary, metrics: outcome.metrics),
                            error: outcome.error)
     }
 

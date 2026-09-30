@@ -127,20 +127,21 @@ public final class Log: Sendable {
 
     public var logDirectory: URL? { state.withLock { $0.directory } }
 
-    /// Deletes JSONL files older than `days` or beyond `maxBytes` total (oldest first).
-    public func prune(_ config: LoggingConfig) {
+    /// Deletes JSONL files older than `days` before `now` or beyond `maxBytes` total (oldest first).
+    public func prune(_ config: LoggingConfig, now: Date) {
         let days = config.keepDays
         let maxBytes = config.maxBytes
         guard let dir = logDirectory,
               let files = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey])
                 .filter({ $0.pathExtension == "jsonl" }).sorted(by: { $0.lastPathComponent > $1.lastPathComponent })
         else { return }
-        let cutoff = Date().addingTimeInterval(-Double(days) * 86_400)
+        let cutoff = now.addingTimeInterval(-Double(days) * Units.secondsPerDay)
         var total: Int64 = 0
         for file in files {
             let values = try? file.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
             total += Int64(values?.fileSize ?? 0)
-            if (values?.contentModificationDate ?? Date()) < cutoff || total > maxBytes {
+            // A file whose date cannot be read is kept unless the size limit says otherwise.
+            if values?.contentModificationDate.map({ $0 < cutoff }) == true || total > maxBytes {
                 try? FileManager.default.removeItem(at: file)
             }
         }

@@ -18,24 +18,37 @@ import Testing
 
     @Test func theModelsNameIsUsedAndKeepsItsScript() {
         let name = builder.name(for: decision(named: "2026-07-31 Сбербанк - Выписка по счёту: июль"), source: source, transliterate: false)
-        #expect(name == "2026-07-31 Сбербанк - Выписка по счёту- июль.pdf")
+        #expect(name == "2026-07-31 Сбербанк - Выписка по счёту- июль.pdf", "the name stays in the document's own script, with no colon")
     }
 
     @Test func withoutAModelNameTheDocumentKeepsItsOwn() {
-        #expect(builder.name(for: decision(named: nil), source: source, transliterate: false) == "scan_0001.pdf")
-        #expect(builder.name(for: decision(named: "  "), source: source, transliterate: false) == "scan_0001.pdf")
+        #expect(builder.name(for: decision(named: nil), source: source, transliterate: false) == "scan_0001.pdf", "no name from the model")
+        #expect(builder.name(for: decision(named: "  "), source: source, transliterate: false) == "scan_0001.pdf", "a blank name is no name")
     }
 
     @Test func transliterationIsOptIn() {
         let name = builder.name(for: decision(named: "2026-01-01 Сбербанк - Выписка"), source: source, transliterate: true)
-        #expect(name.allSatisfy { $0.isASCII })
+        #expect(name == "2026-01-01 Sberbank - Vypiska.pdf", "asked for, the name is written in Latin letters")
     }
 
     @Test func modelNamesAreSanitisedAndBounded() throws {
         let config = try PipelineConfig.bundledDefaults().naming
-        #expect(builder.bounded("2026-07-05 EDP / Fatura: julho", fileExtension: "PDF") == "2026-07-05 EDP - Fatura- julho.pdf")
-        #expect(builder.bounded("name.pdf", fileExtension: "pdf") == "name.pdf")
+        #expect(builder.bounded("2026-07-05 EDP / Fatura: julho", fileExtension: "PDF") == "2026-07-05 EDP - Fatura- julho.pdf",
+                "a slash or colon never reaches the file system, and the extension is lower case")
+        #expect(builder.bounded("name.pdf", fileExtension: "pdf") == "name.pdf", "a name that already ends in its extension does not get it twice")
         let long = builder.bounded(String(repeating: "Выписка ", count: 60), fileExtension: "pdf")
-        #expect(long.count <= config.maxChars && long.utf8.count <= config.maxBytes && long.hasSuffix(".pdf"))
+        #expect(long.count <= config.maxChars && long.utf8.count <= config.maxBytes && long.hasSuffix(".pdf"),
+                "a long name is cut to what the file system allows, and keeps its extension")
+    }
+
+    @Test func aNameNeverLeavesItsDirectoryWhateverTheConfigurationForbids() throws {
+        var naming = try PipelineConfig.bundledDefaults().naming
+        naming.forbiddenCharacters = []
+        let permissive = FilenameBuilder(config: naming)
+        for written in ["../../Library/x", "/etc/passwd", "..", "a/../../b", "\u{0}evil"] {
+            let name = permissive.name(for: decision(named: written), source: source, transliterate: false)
+            #expect(!name.contains("/") && !name.contains("\u{0}") && name != "." && name != "..",
+                    "\(written) became \(name): the model supplies a file name, never a path, whatever pipeline.json says")
+        }
     }
 }

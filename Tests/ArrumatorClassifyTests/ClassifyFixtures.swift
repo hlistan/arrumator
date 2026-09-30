@@ -9,7 +9,7 @@ enum Fixtures {
                         date: String? = "2026-07-05") -> ExtractedContent {
         let source = SourceFile(path: "/tmp/\(name)", originalFilename: name, fileExtension: (name as NSString).pathExtension,
                                 utType: "com.adobe.pdf", byteSize: Int64(text.utf8.count), createdAt: nil, modifiedAt: nil,
-                                sha256: UUID().uuidString)
+                                sha256: name)
         let d = date.map { DetectedDate(date: $0, score: 3, source: .label, context: "Data de emissão") }
         return ExtractedContent(source: source, kind: .pdfText, textOrigin: .textLayer, text: text,
                                 language: LanguageGuess(primary: language, confidence: 0.99),
@@ -44,17 +44,11 @@ enum Fixtures {
         .jurisdiction: ["Portugal"], .language: ["pt"],
     ]
 
-    /// What the answer labels the document with, kinds in their order.
-    static let edpLabels = [
-        DocumentLabel(kind: .sender, value: "EDP Comercial"), DocumentLabel(kind: .party, value: "Maria Exemplo"),
-        DocumentLabel(kind: .type, value: "invoice"), DocumentLabel(kind: .topic, value: "utilities"),
-        DocumentLabel(kind: .topic, value: "electricity"),
-        DocumentLabel(kind: .object, value: "electricity supply point PT0002000012345678"),
-        DocumentLabel(kind: .reference, value: "invoice FT 2026/926804564"), DocumentLabel(kind: .date, value: "2026-07-05"),
-        DocumentLabel(kind: .period, value: "2026-06"), DocumentLabel(kind: .deadline, value: "2026-07-25"),
-        DocumentLabel(kind: .amount, value: "54.21 EUR"), DocumentLabel(kind: .jurisdiction, value: "Portugal"),
-        DocumentLabel(kind: .language, value: "pt"),
-    ]
+    /// What the answer labels the document with, kinds in their order: the EDP bill every suite knows
+    /// (`StubAnalyzer.edpBill`), with the broader topic the answer also gives before its own.
+    static let edpLabels = StubAnalyzer.edpBill.flatMap { label in
+        label == DocumentLabel(kind: .topic, value: "electricity") ? [DocumentLabel(kind: .topic, value: "utilities"), label] : [label]
+    }
 }
 
 /// The analyzer over an empty temporary archive with a mock Ollama.
@@ -70,7 +64,7 @@ struct ClassifyHarness {
         let mock = MockOllama(installed: ["ministral-3:14b", "bge-m3"], handler: handler)
         let prompts = PromptBuilder(library: try PromptLibrary.bundled(), config: env.config.analysis, labels: env.config.labels,
                                     naming: env.config.naming)
-        let analyzer = DocumentAnalyzer(gate: InferenceGate(api: mock, retryDelays: []),
+        let analyzer = DocumentAnalyzer(gate: InferenceGate(api: mock, retryDelays: [], time: env.time),
                                         models: ModelManager(api: mock, config: env.config.ollama), prompts: prompts)
         return ClassifyHarness(env: env, mock: mock, analyzer: analyzer, settings: await env.settings.current)
     }

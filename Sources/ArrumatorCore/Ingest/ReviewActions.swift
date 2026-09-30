@@ -59,17 +59,18 @@ public struct ReviewActions: Sendable {
         try await services.history.record(.needsReview, actor: .user, doc: docID, summary: "Left for later")
     }
 
-    /// Moves a filed document back to Incoming, held, so it is not filed again automatically.
+    /// Moves a filed document back to Incoming, held, so it is not filed again automatically. Incoming may be on
+    /// another volume than the archive; the move is then a copy checked against the document's hash before the
+    /// archive's file goes to the Trash (`FileOperations`), never a delete.
     public func undo(_ docID: Int64) async throws {
         var doc = try await document(docID)
         let settings = await services.settings.current
         guard FileManager.default.fileExists(atPath: doc.path) else { throw IngestError.sourceMissing(doc.path) }
         let from = doc.path
-        let operations = FileOperations(naming: services.config.naming)
-        let (destination, _) = try operations.uniqueDestination(directory: settings.incomingURL, filename: doc.originalFilename)
+        let operations = services.filer.placer.operations
+        let (destination, collision) = try operations.uniqueDestination(directory: settings.incomingURL, filename: doc.originalFilename)
         await services.filer.registry.expect([from, destination.path])
-        try FileManager.default.createDirectory(at: settings.incomingURL, withIntermediateDirectories: true)
-        try FileManager.default.moveItem(at: doc.url, to: destination)
+        _ = try operations.move(doc.url, to: destination, collision: collision, expectedSHA256: doc.sha256)
         doc.path = destination.path
         doc.status = .undone
         doc = try await services.documents.save(doc)
@@ -87,10 +88,10 @@ public struct ReviewActions: Sendable {
         if let fileName, !fileName.isEmpty {
             let target = services.filer.placer.builder.bounded(fileName, fileExtension: doc.url.pathExtension)
             if target != doc.filename {
-                let operations = FileOperations(naming: services.config.naming)
-                let (url, _) = try operations.uniqueDestination(directory: doc.url.deletingLastPathComponent(), filename: target)
+                let operations = services.filer.placer.operations
+                let (url, collision) = try operations.uniqueDestination(directory: doc.url.deletingLastPathComponent(), filename: target)
                 await services.filer.registry.expect([doc.path, url.path])
-                try FileManager.default.moveItem(at: doc.url, to: url)
+                _ = try operations.move(doc.url, to: url, collision: collision, expectedSHA256: doc.sha256)
                 doc.path = url.path
                 var analysis = doc.analysis ?? DocumentAnalysis()
                 analysis.fileName = (url.lastPathComponent as NSString).deletingPathExtension

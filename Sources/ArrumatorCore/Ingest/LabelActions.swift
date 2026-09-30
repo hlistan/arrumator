@@ -26,9 +26,11 @@ public struct LabelActionOutcome: Sendable, Codable, Hashable {
 /// `LabelGuidance`) and changes every document it concerns now, in one transaction with its History event.
 public struct LabelActions: Sendable {
     public let database: AppDatabase
+    public let time: any TimeSource
 
-    public init(database: AppDatabase) {
+    public init(database: AppDatabase, time: any TimeSource) {
         self.database = database
+        self.time = time
     }
 
     /// Writes `label` as `value` on every document that has it, written however, and in every reading from now on.
@@ -37,6 +39,7 @@ public struct LabelActions: Sendable {
         let from = try Self.normalized(label)
         let into = try Self.normalized(DocumentLabel(kind: label.kind, value: value))
         guard from.value != into.value else { throw LabelError.sameLabel(from.kind, from.value) }
+        let now = time.now()
         return try await database.writer.write { db in
             let rules = try LabelRule.fetchAll(db)
             for rule in rules where rule.action != .keepApart && rule.concerns(from) {
@@ -55,10 +58,10 @@ public struct LabelActions: Sendable {
                 rule.target = into.value
                 try rule.update(db)
             }
-            var rule = LabelRule(kind: from.kind, value: from.value, action: .merge, target: into.value)
+            var rule = LabelRule(kind: from.kind, value: from.value, action: .merge, target: into.value, createdAt: now)
             try rule.insert(db)
-            let documents = try Self.relabel(db, from, to: into.value)
-            try HistoryStore.insert(db, .labelsMerged, actor: .user,
+            let documents = try Self.relabel(db, from, to: into.value, at: now)
+            try HistoryStore.insert(db, .labelsMerged, at: now, actor: .user,
                                     summary: "Merged \(from.kind.rawValue) “\(from.value)” into “\(into.value)”"
                                         + Self.onDocuments(documents),
                                     payload: LabelActionOutcome(rule: rule, documents: documents))
@@ -70,14 +73,15 @@ public struct LabelActions: Sendable {
     @discardableResult
     public func ignore(_ label: DocumentLabel) async throws -> LabelActionOutcome {
         let unwanted = try Self.normalized(label)
+        let now = time.now()
         return try await database.writer.write { db in
             for rule in try LabelRule.fetchAll(db) where rule.action != .keepApart && rule.concerns(unwanted) {
                 _ = try rule.delete(db)
             }
-            var rule = LabelRule(kind: unwanted.kind, value: unwanted.value, action: .ignore, target: nil)
+            var rule = LabelRule(kind: unwanted.kind, value: unwanted.value, action: .ignore, target: nil, createdAt: now)
             try rule.insert(db)
-            let documents = try Self.relabel(db, unwanted, to: nil)
-            try HistoryStore.insert(db, .labelIgnored, actor: .user,
+            let documents = try Self.relabel(db, unwanted, to: nil, at: now)
+            try HistoryStore.insert(db, .labelIgnored, at: now, actor: .user,
                                     summary: "Ignored \(unwanted.kind.rawValue) “\(unwanted.value)”" + Self.onDocuments(documents, taken: true),
                                     payload: LabelActionOutcome(rule: rule, documents: documents))
             return LabelActionOutcome(rule: rule, documents: documents)
@@ -90,6 +94,7 @@ public struct LabelActions: Sendable {
         let a = try Self.normalized(label)
         let b = try Self.normalized(DocumentLabel(kind: label.kind, value: other))
         guard !LabelSimilarity.sameWriting(a.value, b.value) else { throw LabelError.sameLabel(a.kind, a.value) }
+        let now = time.now()
         return try await database.writer.write { db in
             for rule in try LabelRule.fetchAll(db) where rule.action == .merge
                 && ((rule.concerns(a) && rule.target.map { LabelSimilarity.sameWriting($0, b.value) } == true)
@@ -97,9 +102,9 @@ public struct LabelActions: Sendable {
                 _ = try rule.delete(db)
             }
             var rule = try LabelRule.fetchAll(db).first { $0.keepsApart(a.value, b.value, kind: a.kind) }
-                ?? LabelRule(kind: a.kind, value: a.value, action: .keepApart, target: b.value)
+                ?? LabelRule(kind: a.kind, value: a.value, action: .keepApart, target: b.value, createdAt: now)
             if rule.id == nil { try rule.insert(db) }
-            try HistoryStore.insert(db, .labelsKeptApart, actor: .user,
+            try HistoryStore.insert(db, .labelsKeptApart, at: now, actor: .user,
                                     summary: "Kept \(a.kind.rawValue) “\(a.value)” and “\(b.value)” apart",
                                     payload: LabelActionOutcome(rule: rule, documents: []))
             return LabelActionOutcome(rule: rule, documents: [])
@@ -109,10 +114,11 @@ public struct LabelActions: Sendable {
     /// Forgets a rule: readings from now on no longer follow it. Documents it already changed keep their labels.
     @discardableResult
     public func forget(rule id: Int64) async throws -> LabelActionOutcome {
-        try await database.writer.write { db in
+        let now = time.now()
+        return try await database.writer.write { db in
             guard let rule = try LabelRule.fetchOne(db, key: id) else { throw LabelError.ruleNotFound(id) }
             _ = try rule.delete(db)
-            try HistoryStore.insert(db, .labelRuleForgotten, actor: .user, summary: "Forgot: \(rule.summary)",
+            try HistoryStore.insert(db, .labelRuleForgotten, at: now, actor: .user, summary: "Forgot: \(rule.summary)",
                                     payload: LabelActionOutcome(rule: rule, documents: []))
             return LabelActionOutcome(rule: rule, documents: [])
         }
@@ -128,7 +134,7 @@ public struct LabelActions: Sendable {
 
     /// Writes `label`, written however, as `value` on every document that has it, or takes it off when `value` is nil.
     /// Returns the documents changed, in order.
-    private static func relabel(_ db: Database, _ label: DocumentLabel, to value: String?) throws -> [Int64] {
+    private static func relabel(_ db: Database, _ label: DocumentLabel, to value: String?, at now: Date) throws -> [Int64] {
         var changed: [Int64] = []
         let rows = try Row.fetchAll(db, sql: """
             SELECT DISTINCT d.id AS id, d.labels_json AS labels FROM documents d, json_each(d.labels_json) l
@@ -141,7 +147,7 @@ public struct LabelActions: Sendable {
                 return value.map { DocumentLabel(kind: existing.kind, value: $0) }
             }.distinct()
             guard updated != labels else { continue }
-            try IndexStore.saveLabels(db, updated, docID: id)
+            try IndexStore.saveLabels(db, updated, docID: id, at: now)
             changed.append(id)
         }
         return changed

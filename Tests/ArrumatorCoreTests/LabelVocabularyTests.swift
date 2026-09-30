@@ -20,7 +20,7 @@ import Testing
     }
 
     static func rule(_ id: Int64, _ kind: LabelKind, _ value: String, _ action: LabelRuleAction, _ target: String? = nil) -> LabelRule {
-        LabelRule(id: id, kind: kind, value: value, action: action, target: target)
+        LabelRule(id: id, kind: kind, value: value, action: action, target: target, createdAt: TestTime.start)
     }
 
     // MARK: How alike labels are written
@@ -34,16 +34,16 @@ import Testing
     }
 
     @Test func labelsWhoseNumbersDifferAreNeverAlike() {
-        #expect(LabelSimilarity.similarity("invoice FT 2026/926804564", "invoice FT 2026/926804565") == 0)
+        #expect(LabelSimilarity.similarity("invoice FT 2026/926804564", "invoice FT 2026/926804565") == 0, "two invoices a digit apart stay two")
         #expect(LabelSimilarity.similarity("apartment Rua das Flores 12", "apartment Rua das Flores 14") == 0,
                 "a number tells one address, account or invoice from the next")
     }
 
     @Test func otherwiseTheyAreComparedByJaroWinklerAsPublished() {
         // The examples in Winkler 1990, which defines the measure (docs/organizing-principles-sources.md).
-        #expect(abs(LabelSimilarity.similarity("MARTHA", "MARHTA") - 0.961) < 0.001)
-        #expect(abs(LabelSimilarity.similarity("DWAYNE", "DUANE") - 0.840) < 0.001)
-        #expect(abs(LabelSimilarity.similarity("DIXON", "DICKSONX") - 0.813) < 0.001)
+        #expect(abs(LabelSimilarity.similarity("MARTHA", "MARHTA") - 0.961) < 0.001, "Winkler's MARTHA/MARHTA is 0.961")
+        #expect(abs(LabelSimilarity.similarity("DWAYNE", "DUANE") - 0.840) < 0.001, "Winkler's DWAYNE/DUANE is 0.840")
+        #expect(abs(LabelSimilarity.similarity("DIXON", "DICKSONX") - 0.813) < 0.001, "Winkler's DIXON/DICKSONX is 0.813")
         #expect(LabelSimilarity.similarity("electricity", "electricty") >= 0.96, "a typo is nearly the same label")
         #expect(LabelSimilarity.similarity("income tax", "property tax") < 0.85, "a different subject is not")
     }
@@ -68,19 +68,20 @@ import Testing
         #expect(kept.labels == [Self.label(.sender, "EDP Energia"), Self.label(.party, "Maria Exemplo")],
                 "a merge applies however the model writes the label, and follows the merge of its target")
         #expect(kept.changes == [LabelChange(from: Self.label(.sender, "edp comercial"), to: Self.label(.sender, "EDP Energia"),
-                                             reason: .rule(id: 2))])
+                                             reason: .rule(id: 2))],
+                "the trace names the last rule that decided the writing")
     }
 
     @Test func aLabelTheUserDoesNotWantIsDroppedEvenAtTheEndOfAMerge() throws {
         let c = try Self.consolidator(rules: [Self.rule(1, .topic, "paperwork", .merge, "document"), Self.rule(2, .topic, "document", .ignore)])
         let kept = c.consolidate([Self.label(.topic, "Paperwork"), Self.label(.topic, "electricity")])
-        #expect(kept.labels == [Self.label(.topic, "electricity")])
+        #expect(kept.labels == [Self.label(.topic, "electricity")], "the unwanted label is dropped though a merge led to it")
         #expect(kept.changes.map(\.to) == [nil] && kept.changes.map(\.reason) == [.rule(id: 2)], "the trace says which rule dropped it")
     }
 
     @Test func aMergeOfOneWritingIntoAnotherDoesNotLoop() throws {
         let c = try Self.consolidator(rules: [Self.rule(1, .sender, "edp", .merge, "EDP")])
-        #expect(c.consolidate([Self.label(.sender, "Edp")]).labels == [Self.label(.sender, "EDP")])
+        #expect(c.consolidate([Self.label(.sender, "Edp")]).labels == [Self.label(.sender, "EDP")], "any writing of the label is merged")
         #expect(c.consolidate([Self.label(.sender, "EDP")]).changes.isEmpty, "the wanted writing is left as it is")
     }
 
@@ -89,7 +90,8 @@ import Testing
         let kept = c.consolidate([Self.label(.sender, "EDP-Comercial"), Self.label(.topic, "electricty")])
         #expect(kept.labels == [Self.label(.sender, "EDP Comercial"), Self.label(.topic, "electricity")],
                 "the most used writing of the same label, and a typo of a topic in use")
-        #expect(kept.changes.map(\.reason) == [.alike(similarity: 1), .alike(similarity: LabelSimilarity.similarity("electricty", "electricity"))])
+        #expect(kept.changes.map(\.reason) == [.alike(similarity: 1), .alike(similarity: LabelSimilarity.similarity("electricty", "electricity"))],
+                "the trace says how alike each was to the label in use")
         #expect(c.consolidate([Self.label(.sender, "edp comercial")]).labels == [Self.label(.sender, "EDP Comercial")],
                 "a writing in use becomes the writing more documents have")
         #expect(c.consolidate([Self.label(.sender, "EDP Comercial")]).changes.isEmpty, "the most used writing stays")
@@ -100,19 +102,20 @@ import Testing
         #expect(c.consolidate([Self.label(.party, "Mario Fernanda Exemplo")]).changes.isEmpty,
                 "two people may differ by a letter: only the same writing merges parties")
         #expect(c.consolidate([Self.label(.topic, "taxes")]).changes.isEmpty, "a broader or narrower topic is another topic")
-        #expect(c.consolidate([Self.label(.reference, "invoice 2026/2")]).changes.isEmpty)
+        #expect(c.consolidate([Self.label(.reference, "invoice 2026/2")]).changes.isEmpty, "another number is another invoice")
         #expect(c.consolidate([Self.label(.date, "2026-07-05")]).changes.isEmpty, "a kind with one form needs no vocabulary")
     }
 
     @Test func labelsKeptApartAreNeverMerged() throws {
         let c = try Self.consolidator(rules: [Self.rule(1, .topic, "electricity", .keepApart, "electricty")],
                                       vocabulary: [(.topic, "electricity", 3)])
-        #expect(c.consolidate([Self.label(.topic, "Electricty")]).changes.isEmpty)
+        #expect(c.consolidate([Self.label(.topic, "Electricty")]).changes.isEmpty, "the user's decision outweighs the likeness")
     }
 
     @Test func labelsThatBecomeOneAreKeptOnce() throws {
         let c = try Self.consolidator(rules: [Self.rule(1, .sender, "EDP Comercial", .merge, "EDP")])
-        #expect(c.consolidate([Self.label(.sender, "EDP"), Self.label(.sender, "EDP Comercial")]).labels == [Self.label(.sender, "EDP")])
+        #expect(c.consolidate([Self.label(.sender, "EDP"), Self.label(.sender, "EDP Comercial")]).labels == [Self.label(.sender, "EDP")],
+                "a document does not show the same label twice")
     }
 
     // MARK: What waits for the user
@@ -135,7 +138,7 @@ import Testing
         #expect(!suggestions.contains { ["property tax", "plumbing repair"].contains($0.value) },
                 "but not another subject sharing a word, nor a narrower topic, which the prompt asks for beside the broad one")
         #expect(!suggestions.contains { $0.kind == .reference }, "nor references, whose numbers differ")
-        #expect(suggestions.map(\.similarity) == suggestions.map(\.similarity).sorted(by: >))
+        #expect(suggestions.map(\.similarity) == suggestions.map(\.similarity).sorted(by: >), "the surest suggestions come first")
     }
 
     // MARK: The user's decisions
@@ -144,7 +147,7 @@ import Testing
     private func archive() async throws -> (Harness, [String: Int64]) {
         let edp = StubAnalyzer.edpBill
         let edpVariant = edp.map { $0.kind == .sender ? Self.label(.sender, "EDP-Comercial") : $0 }
-        let h = try await Harness.make(analyzer: LabelingTests.PerFileAnalyzer(labels: [
+        let h = try await Harness.make(analyzer: PerFileAnalyzer(labels: [
             "edp_july.txt": edp, "edp_august.txt": edpVariant, "meo.txt": LabelingTests.meoContract,
         ]))
         var ids: [String: Int64] = [:]
@@ -153,7 +156,7 @@ import Testing
     }
 
     private func search(_ h: Harness, _ query: String) async throws -> [Int64] {
-        try await SearchService(database: h.env.database, vectors: VectorIndex(), embedder: nil, config: h.env.config.search)
+        try await h.search
             .fullText(SearchQuery(text: query)).hits.map(\.id).sorted()
     }
 
@@ -164,8 +167,9 @@ import Testing
         #expect(try await h.services.labels.usage()[.sender]?.map(\.label.value) == ["EDP Comercial", "MEO"],
                 "the second writing was already made the first when the document was read")
 
-        let outcome = try await LabelActions(database: h.env.database).merge(Self.label(.sender, "EDP Comercial"), into: "EDP")
-        #expect(outcome.documents == edp && outcome.rule.action == .merge && outcome.rule.target == "EDP")
+        let outcome = try await h.labels.merge(Self.label(.sender, "EDP Comercial"), into: "EDP")
+        #expect(outcome.documents == edp && outcome.rule.action == .merge && outcome.rule.target == "EDP",
+                "both EDP documents are relabelled and the merge is kept as a rule")
         for id in edp {
             let labels = try #require(try await h.services.documents.document(id: id)?.labels)
             #expect(labels.values(.sender) == ["EDP"] && labels.count == StubAnalyzer.edpBill.count, "only the merged label changes")
@@ -173,21 +177,22 @@ import Testing
         #expect(try await search(h, "sender:\"EDP Comercial\"").isEmpty, "the old writing is no longer found")
         #expect(try await search(h, "sender:edp") == edp, "the new one is, on every document")
         let event = try #require(try await h.services.history.events(limit: 5, kinds: [.labelsMerged]).first)
-        #expect(event.actor == .user && event.summary == "Merged sender “EDP Comercial” into “EDP” on 2 documents")
+        #expect(event.actor == .user && event.summary == "Merged sender “EDP Comercial” into “EDP” on 2 documents",
+                "History says who merged what, on how many documents")
         #expect(try await h.services.labels.rules().map(\.id) == [outcome.rule.id], "the decision is kept as a rule")
     }
 
     @Test func everyReadingFromThenOnFollowsTheDecisionsAndIsToldOfThem() async throws {
         let (h, _) = try await archive()
         defer { h.env.cleanup() }
-        let actions = LabelActions(database: h.env.database)
+        let actions = h.labels
         try await actions.merge(Self.label(.sender, "EDP Comercial"), into: "EDP")
         try await actions.ignore(Self.label(.jurisdiction, "Portugal"))
 
         let analyzer = StubAnalyzer()
         var services = h.services
         services.analyzer = analyzer
-        let later = Harness(env: h.env, services: services, coordinator: IngestCoordinator(services: services))
+        let later = Harness(env: h.env, services: services)
         let document = try await later.ingest("edp_september.txt", text: "EDP electricity September")
         let labels = try #require(document.labels)
         #expect(labels.values(.sender) == ["EDP"], "the model's EDP Comercial is written as the user wants it")
@@ -207,7 +212,7 @@ import Testing
         #expect(consolidation.changes.count == 2, "the trace says what the rules changed")
         let event = try #require(try await h.services.history.events(limit: 30, kinds: [.analysed], docID: docID).first)
         #expect(JSON.decode(AnalysedPayload.self, from: event.payloadJson)?.changes == consolidation.changes, "and so does the history")
-        let insights = try await StatsService(database: h.env.database, config: h.env.config.stats).insights()
+        let insights = try await StatsService(database: h.env.database, config: h.env.config.stats, time: h.env.time).insights()
         #expect(insights.labelRules == ["merge": 1, "ignore": 1] && insights.labelsTidied == 3,
                 "Statistics counts the rules and every label they and the vocabulary tidied, the earlier writing included")
     }
@@ -215,23 +220,25 @@ import Testing
     @Test func ignoringALabelTakesItOffEveryDocument() async throws {
         let (h, ids) = try await archive()
         defer { h.env.cleanup() }
-        let outcome = try await LabelActions(database: h.env.database).ignore(Self.label(.jurisdiction, "portugal"))
-        #expect(outcome.documents.count == 2 && outcome.rule.value == "portugal")
+        let outcome = try await h.labels.ignore(Self.label(.jurisdiction, "portugal"))
+        let edp = try [#require(ids["edp_july.txt"]), #require(ids["edp_august.txt"])].sorted()
+        #expect(outcome.documents == edp && outcome.rule.value == "portugal", "both EDP documents lose the label, however the user wrote it")
         for id in ids.values {
-            #expect(try await h.services.documents.document(id: id)?.labels?.values(.jurisdiction).contains("Portugal") == false)
+            #expect(try await h.services.documents.document(id: id)?.labels?.values(.jurisdiction).contains("Portugal") == false,
+                    "no document keeps the ignored label")
         }
-        #expect(try await search(h, "jurisdiction:portugal").isEmpty)
+        #expect(try await search(h, "jurisdiction:portugal").isEmpty, "the ignored label is no longer found")
         #expect(try await h.services.history.events(limit: 5, kinds: [.labelIgnored]).first?.summary
-                == "Ignored jurisdiction “portugal” and took it off 2 documents")
+                == "Ignored jurisdiction “portugal” and took it off 2 documents", "History says what was ignored and on how many documents")
     }
 
     @Test func aNewDecisionReplacesTheOnesItContradicts() async throws {
         let (h, _) = try await archive()
         defer { h.env.cleanup() }
-        let actions = LabelActions(database: h.env.database)
+        let actions = h.labels
         try await actions.merge(Self.label(.topic, "power"), into: "electricity")
         try await actions.merge(Self.label(.topic, "energy"), into: "power")
-        #expect(try await h.services.labels.rules().map(\.target) == ["electricity", "power"])
+        #expect(try await h.services.labels.rules().map(\.target) == ["electricity", "power"], "each merge is kept as a rule")
         try await actions.merge(Self.label(.topic, "electricity"), into: "power")
         #expect(try await h.services.labels.rules().map(\.summary) == ["topic “energy” → “power”", "topic “electricity” → “power”"],
                 "merging back undoes the merge the other way, which would loop")
@@ -251,21 +258,22 @@ import Testing
     @Test func forgettingARuleStopsReadingsFollowingItAndLeavesDocumentsAsTheyAre() async throws {
         let (h, ids) = try await archive()
         defer { h.env.cleanup() }
-        let actions = LabelActions(database: h.env.database)
+        let actions = h.labels
         let merge = try await actions.merge(Self.label(.sender, "EDP Comercial"), into: "EDP")
         let forgotten = try await actions.forget(rule: try #require(merge.rule.id))
-        #expect(forgotten.rule.id == merge.rule.id && forgotten.rule.summary == merge.rule.summary)
-        #expect(try await h.services.labels.rules().isEmpty)
-        #expect(try await h.services.documents.document(id: try #require(ids["edp_july.txt"]))?.labels?.values(.sender) == ["EDP"])
+        #expect(forgotten.rule.id == merge.rule.id && forgotten.rule.summary == merge.rule.summary, "the rule forgotten is the one asked for")
+        #expect(try await h.services.labels.rules().isEmpty, "no rule is left for readings to follow")
+        #expect(try await h.services.documents.document(id: try #require(ids["edp_july.txt"]))?.labels?.values(.sender) == ["EDP"],
+                "documents keep the labels the rule gave them")
         #expect(try await h.services.history.events(limit: 5, kinds: [.labelRuleForgotten]).first?.summary
-                == "Forgot: sender “EDP Comercial” → “EDP”")
+                == "Forgot: sender “EDP Comercial” → “EDP”", "History says which rule was forgotten")
         await #expect(throws: LabelError.self, "a rule that is not there") { try await actions.forget(rule: 999) }
     }
 
     @Test func aDecisionMustBeAboutLabelsOfTheirKind() async throws {
         let (h, _) = try await archive()
         defer { h.env.cleanup() }
-        let actions = LabelActions(database: h.env.database)
+        let actions = h.labels
         await #expect(throws: LabelError.self, "no date") { try await actions.merge(Self.label(.date, "yesterday"), into: "2026-07-05") }
         await #expect(throws: LabelError.self, "nothing to merge") { try await actions.merge(Self.label(.sender, "EDP"), into: " EDP ") }
         await #expect(throws: LabelError.self, "one label") { try await actions.keepApart(Self.label(.sender, "EDP"), from: "edp") }
@@ -282,8 +290,8 @@ import Testing
         defer { h.env.cleanup() }
         var changes = h.env.database.activity().makeAsyncIterator()
         let first = try #require(await changes.next(), "the stream reports the history's state instead of ending")
-        try await LabelActions(database: h.env.database).ignore(Self.label(.topic, "electricity"))
+        try await h.labels.ignore(Self.label(.topic, "electricity"))
         let next = try #require(await changes.next(), "a decision about labels refreshes the app")
-        #expect(next > first)
+        #expect(next > first, "the stream moves on to the history's new state")
     }
 }

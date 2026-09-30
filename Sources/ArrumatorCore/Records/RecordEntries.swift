@@ -55,7 +55,7 @@ public struct DocumentEntry: Codable, Sendable, Hashable {
 
     /// The index row for this entry in `directory`. What the index caches about the file (its text, inode, times of
     /// extraction) starts empty and is filled in again when the document is read.
-    public func record(directory: URL, now: Date = Date()) -> DocumentRecord {
+    public func record(directory: URL, now: Date) -> DocumentRecord {
         DocumentRecord(id: id, uid: uid, path: directory.appendingPathComponent(file).path, originalFilename: originalName,
                        sha256: sha256, size: size, uttype: contentType, inode: nil, pageCount: pages, status: status, analysisJson: analysis.map { JSON.string($0) },
                        contentJson: nil, labelsJson: labels.map { JSON.string($0) }, duplicateOf: duplicateOf, lastTraceId: nil,

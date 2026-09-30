@@ -36,7 +36,7 @@ public actor MockOllama: OllamaAPI {
     public func chat(_ request: OllamaChatRequest) async throws -> OllamaChatResponse {
         chatRequests.append(request)
         let content = try handler(request)
-        return OllamaChatResponse(model: request.model, message: OllamaMessage(role: "assistant", content: content), done: true,
+        return OllamaChatResponse(model: request.model, message: .assistant(content), done: true,
                                   doneReason: "stop", totalDuration: 1_000_000, loadDuration: 0, promptEvalCount: 10,
                                   promptEvalDuration: 500_000, evalCount: 5, evalDuration: 500_000)
     }

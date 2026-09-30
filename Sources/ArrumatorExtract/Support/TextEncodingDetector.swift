@@ -123,13 +123,15 @@ struct TextEncodingDetector: Sendable {
         return visible == 0 ? 0 : Double(common - caseFlips) / Double(visible)
     }
 
-    /// The most frequent Russian letter bigrams (national corpus frequency lists).
+    /// The 50 most frequent Russian letter pairs, in order, as counted over 379,494,912 letter pairs of Russian
+    /// Wikipedia (Denny Vrandečić, "Letter pair frequency", http://simia.net/letters/bigrams.html). Scoring a
+    /// single-byte decoding by the frequency of its character pairs is how the Mozilla charset detector tells Cyrillic
+    /// encodings apart (Li and Momoi, "A composite approach to language/encoding detection", 19th International
+    /// Unicode Conference, 2001).
     private static let commonRussianBigrams: Set<String> = [
-        "ст", "но", "то", "на", "ен", "ов", "ни", "ра", "во", "ко", "ал", "ро", "пр", "по", "ор", "ер", "ан", "ре",
-        "ос", "ет", "от", "ла", "не", "ол", "ка", "ли", "ва", "ит", "ть", "ел", "ом", "ес", "ле", "та", "ль", "ин",
-        "ие", "де", "го", "ат", "ий", "ск", "ый", "ой", "ая", "ед", "ак", "ам", "ме", "ас", "ве", "да", "ил", "ри",
-        "те", "об", "ег", "ад", "ую", "ся", "ем", "ти", "ны", "ми", "ых", "их", "ку", "ду", "тв", "зн", "ча", "че",
-        "чи", "ще", "жи", "ши", "же", "ше", "уч", "лю", "ря", "мо", "мы", "ма", "ги", "бо", "бы",
+        "ст", "на", "но", "ен", "ко", "ни", "ра", "ов", "ро", "го", "ан", "то", "по", "од", "ер", "ре", "ос", "ор",
+        "та", "пр", "ск", "ал", "во", "ол", "ом", "ва", "ны", "те", "ка", "ри", "ел", "от", "не", "он", "ес", "ти",
+        "ве", "ин", "ет", "ог", "да", "ой", "ат", "ме", "ит", "де", "ки", "ар", "ис", "со",
     ]
 
     // MARK: Encodings

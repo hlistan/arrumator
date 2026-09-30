@@ -23,7 +23,10 @@ struct Stats: AsyncParsableCommand {
             out.append("Latency per stage (p50 / p95):")
             out += insights.latency.map { "  \($0.stage.padding(toLength: 13, withPad: " ", startingAt: 0)) \(Int($0.p50Ms)) / \(Int($0.p95Ms)) ms (\($0.count))" }
             if let ocr = insights.meanOCRConfidence { out.append(String(format: "Mean OCR confidence: %.2f", ocr)) }
-            if !insights.warnings.isEmpty { out.append("Extraction warnings: " + insights.warnings.map { "\($0.key) \($0.value)" }.joined(separator: ", ")) }
+            if !insights.warnings.isEmpty {
+                let warnings = insights.warnings.sorted { $0.key.rawValue < $1.key.rawValue }.map { "\($0.key.rawValue) \($0.value)" }
+                out.append("Extraction warnings: " + warnings.joined(separator: ", "))
+            }
             return out.joined(separator: "\n")
         }
     }
@@ -32,11 +35,11 @@ struct Stats: AsyncParsableCommand {
 struct Funnel: AsyncParsableCommand {
     static let configuration = CommandConfiguration(abstract: "How far documents got through the pipeline and where they stopped.")
     @OptionGroup var options: GlobalOptions
-    @Option(help: "Only documents that arrived in the last N days.") var days = 30
+    @Option(help: "Only documents that arrived in the last N days (stats.defaultWindowDays unless set).") var days: Int?
 
     func run() async throws {
         let runtime = try await options.runtime()
-        let funnel = try await runtime.stats.funnel(days: days)
+        let funnel = try await runtime.stats.funnel(days: days ?? runtime.config.stats.defaultWindowDays)
         options.emit(funnel) {
             var out = ["\(funnel.documents) documents in the last \(funnel.windowDays) days"]
             for step in funnel.steps {
@@ -64,13 +67,15 @@ struct Logs: AsyncParsableCommand {
     @Flag(help: "Keep printing new lines.") var follow = false
 
     func run() async throws {
-        let paths = AppPaths.resolve()
+        // Logs are read without opening the archive, so this reads the configuration alone.
+        let paths = AppPaths.resolve(.current)
+        let followInterval = try PipelineConfig.load(paths: paths, environment: .current).logging.followInterval
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .custom { d in
             let s = try d.singleValueContainer().decode(String.self)
             return try Date(s, strategy: .iso8601.year().month().day().time(includingFractionalSeconds: true))
         }
-        let cutoff = minutes.map { Date().addingTimeInterval(-$0 * 60) }
+        let cutoff = minutes.map { Date().addingTimeInterval(-$0 * Units.secondsPerMinute) }
         var offsets: [URL: UInt64] = [:]
         repeat {
             let files = ((try? FileManager.default.contentsOfDirectory(at: paths.logsDirectory, includingPropertiesForKeys: nil)) ?? [])
@@ -95,12 +100,9 @@ struct Logs: AsyncParsableCommand {
                     }
                 }
             }
-            if follow { try await Task.sleep(for: .seconds(Self.followInterval)) }
+            if follow { try await SystemTime().sleep(seconds: followInterval) }
         } while follow
     }
-
-    /// Polling interval for `--follow`.
-    static let followInterval: Double = 1
 }
 
 extension LogCategory: ExpressibleByArgument {}
@@ -120,8 +122,8 @@ struct Models: AsyncParsableCommand {
             let status = try await runtime.models.status(for: resolved)
             options.emit(status) {
                 (["Profile \(resolved.profileName)"] + status.map {
-                    "\($0.installed ? "✓" : "✗") \($0.role.padding(toLength: 10, withPad: " ", startingAt: 0)) \($0.name)"
-                        + ($0.sizeBytes.map { String(format: "  %.1f GB", Double($0) / 1_073_741_824) } ?? "")
+                    "\($0.installed ? "✓" : "✗") \($0.role.rawValue.padding(toLength: 10, withPad: " ", startingAt: 0)) \($0.name)"
+                        + ($0.sizeBytes.map { String(format: "  %.1f GB", Double($0) / Units.bytesPerGigabyte) } ?? "")
                 }).joined(separator: "\n")
             }
         }
@@ -152,10 +154,8 @@ struct Diagnostics: AsyncParsableCommand {
 
     func run() async throws {
         let runtime = try await options.runtime()
-        let settings = await runtime.settings.current
-        let exporter = DiagnosticsExporter(database: runtime.database, paths: runtime.paths, config: runtime.config.stats)
-        let contents = try await exporter.export(to: URL(fileURLWithPath: output.expandingTilde), doctor: await runtime.runDoctor(),
-                                                 settings: settings, includeDocumentText: includeDocumentText)
+        let contents = try await runtime.exportDiagnostics(to: URL(fileURLWithPath: output.expandingTilde),
+                                                           includeDocumentText: includeDocumentText)
         options.emit(contents) { "Wrote \(output): \(contents.logFiles.count) log files, \(contents.traces) traces" }
     }
 }

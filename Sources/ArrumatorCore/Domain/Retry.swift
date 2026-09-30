@@ -1,9 +1,9 @@
 import Foundation
 
 public enum Retry {
-    /// Runs `body`, retrying after each delay in `delays` while `shouldRetry` accepts the error.
-    public static func run<T: Sendable>(delays: [Double], shouldRetry: @Sendable (any Error) -> Bool,
-                                        onRetry: @Sendable (Int, any Error) -> Void = { _, _ in },
+    /// Runs `body`, retrying after each delay in `delays`, waited on `time`, while `shouldRetry` accepts the error.
+    public static func run<T: Sendable>(delays: [Double], time: any TimeSource, shouldRetry: @Sendable (any Error) -> Bool,
+                                        onRetry: @Sendable (Int, any Error) -> Void,
                                         _ body: () async throws -> T) async throws -> T {
         var attempt = 0
         while true {
@@ -12,7 +12,7 @@ public enum Retry {
             } catch {
                 guard attempt < delays.count, shouldRetry(error), !Task.isCancelled else { throw error }
                 onRetry(attempt + 1, error)
-                try await Task.sleep(for: .seconds(delays[attempt]))
+                try await time.sleep(seconds: delays[attempt])
                 attempt += 1
             }
         }

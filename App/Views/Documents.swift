@@ -12,7 +12,7 @@ struct DocumentList: View {
     var body: some View {
         ForEach(documents, id: \.id) { document in
             if let id = document.id, model.openDocument == id {
-                DocumentCard(documentID: id)
+                DocumentCard(documentID: id) { if model.openDocument == id { model.openDocument = nil } }
             } else {
                 row(document)
                     .onTapGesture { withAnimation(.snappy) { model.openDocument = document.id } }
@@ -33,6 +33,8 @@ struct DocumentList: View {
 struct DocumentCard: View {
     @Environment(AppModel.self) private var model
     let documentID: Int64
+    /// Closes the card on the page that opened it; each page keeps its own open card.
+    let onClose: () -> Void
     @State private var document: DocumentRecord?
     @State private var name = ""
     @State private var newKind = LabelKind.topic
@@ -41,7 +43,7 @@ struct DocumentCard: View {
     @FocusState private var editingName: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: Style.documentCardSpacing) {
             if let document {
                 header(document)
                 labels(document)
@@ -58,36 +60,36 @@ struct DocumentCard: View {
             if wasEditing { Task { await rename() } }
         }
         .sheet(isPresented: $showingTrace) {
-            TraceView(documentID: documentID).environment(model).frame(minWidth: 760, minHeight: 560)
+            TraceView(documentID: documentID).environment(model).frame(minWidth: Style.traceSheetMinimum.width, minHeight: Style.traceSheetMinimum.height)
         }
     }
 
     // MARK: Parts
 
     private func header(_ d: DocumentRecord) -> some View {
-        HStack(alignment: .top, spacing: 16) {
+        HStack(alignment: .top, spacing: Style.thumbnailSpacing) {
             FileThumbnail(url: d.url, size: Style.thumbnail)
                 .onTapGesture(count: 2) { model.open(d.path) }
-                .help("Double-click to open")
-            VStack(alignment: .leading, spacing: 6) {
-                TextField("Name", text: $name)
+                .help(Wording.doubleClickToOpen)
+            VStack(alignment: .leading, spacing: Style.cardHeaderSpacing) {
+                TextField(Wording.name, text: $name)
                     .textFieldStyle(.plain)
                     .font(.title3.weight(.semibold))
                     .focused($editingName)
                     .onSubmit { editingName = false }
                 placement(d)
-                Text("Arrived as \(d.originalFilename) · \(d.addedAt.formatted(date: .abbreviated, time: .shortened))")
+                Text(Wording.arrived(as: d.originalFilename, at: d.addedAt))
                     .font(.caption).foregroundStyle(.tertiary)
             }
             Spacer(minLength: 0)
             Button { close() } label: { Image(systemName: "xmark") }
-                .buttonStyle(.borderless).foregroundStyle(.secondary).help("Close")
+                .buttonStyle(.borderless).foregroundStyle(.secondary).help(Wording.close)
         }
     }
 
     /// Where it is, or what happened to it.
     private func placement(_ d: DocumentRecord) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: Style.placementSpacing) {
             Image(systemName: d.status.symbol).foregroundStyle(d.status.tint)
             Text(Wording.outcome(of: d, archive: model.settings?.archiveURL, incoming: model.settings?.incomingURL))
         }
@@ -97,11 +99,11 @@ struct DocumentCard: View {
     /// Every label, one row per kind it has, each removable, and a way to add one.
     private func labels(_ d: DocumentRecord) -> some View {
         let labels = d.labels ?? []
-        return Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 6) {
+        return Grid(alignment: .leading, horizontalSpacing: Style.cardGridColumnSpacing, verticalSpacing: Style.cardLabelRowSpacing) {
             ForEach(LabelKind.allCases.filter { kind in labels.contains { $0.kind == kind } }, id: \.self) { kind in
                 GridRow(alignment: .firstTextBaseline) {
                     label(Wording.labelKind(kind))
-                    HStack(spacing: 6) {
+                    HStack(spacing: Style.chipSpacing) {
                         ForEach(labels.filter { $0.kind == kind }, id: \.self) { item in
                             LabelChip(label: item) { save(labels.filter { $0 != item }) }
                         }
@@ -109,16 +111,16 @@ struct DocumentCard: View {
                 }
             }
             GridRow(alignment: .firstTextBaseline) {
-                label(labels.isEmpty ? "Labels" : "")
-                HStack(spacing: 6) {
-                    Picker("Kind", selection: $newKind) {
+                label(labels.isEmpty ? Wording.labelsHeading : "")
+                HStack(spacing: Style.inlineControlSpacing) {
+                    Picker(Wording.labelKindPicker, selection: $newKind) {
                         ForEach(LabelKind.allCases, id: \.self) { Text(Wording.labelKind($0)).tag($0) }
                     }
                     .labelsHidden().frame(width: Style.labelKindPickerWidth)
                     TextField(Wording.labelPrompt(newKind), text: $newValue)
                         .textFieldStyle(.roundedBorder)
                         .onSubmit { add(to: labels) }
-                    Button("Add") { add(to: labels) }
+                    Button(Wording.add) { add(to: labels) }
                         .disabled(newValue.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
                 .controlSize(.small)
@@ -129,10 +131,10 @@ struct DocumentCard: View {
     /// Who read the document, and anything that keeps it waiting for the user.
     @ViewBuilder private func reading(_ d: DocumentRecord) -> some View {
         if let analysis = d.analysis {
-            Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 4) {
+            Grid(alignment: .leading, horizontalSpacing: Style.cardGridColumnSpacing, verticalSpacing: Style.cardReadingRowSpacing) {
                 GridRow(alignment: .firstTextBaseline) {
-                    label("Read")
-                    VStack(alignment: .leading, spacing: 3) {
+                    label(Wording.readHeading)
+                    VStack(alignment: .leading, spacing: Style.readingLineSpacing) {
                         Text(Wording.reader(analysis))
                         ForEach(analysis.problems, id: \.self) { problem in
                             Text(problem).foregroundStyle(Palette.attention).fixedSize(horizontal: false, vertical: true)
@@ -145,24 +147,24 @@ struct DocumentCard: View {
     }
 
     private func actions(_ d: DocumentRecord) -> some View {
-        HStack(spacing: 14) {
-            Button("Open") { model.open(d.path) }
-            Button("Show in Finder") { model.reveal(d.path) }
-            Button("How Was This Read?") { showingTrace = true }
+        HStack(spacing: Style.actionSpacing) {
+            Button(Wording.open) { model.open(d.path) }
+            Button(Wording.showInFinder) { model.reveal(d.path) }
+            Button(Wording.howWasThisRead) { showingTrace = true }
             Spacer()
             switch d.status {
             case .filed:
-                Button("Undo Filing") { run("Undo") { try await $0.review.undo(documentID) } }
-                    .help("Move it back to Incoming")
-                Button("Looks Right") { run("Confirm") { try await $0.review.confirm(documentID) } }
-                    .help("Confirm its name and labels")
+                Button(Wording.undoFiling) { run(Wording.undoAction) { try await $0.review.undo(documentID) } }
+                    .help(Wording.undoFilingHelp)
+                Button(Wording.looksRight) { run(Wording.confirmAction) { try await $0.review.confirm(documentID) } }
+                    .help(Wording.confirmFiledHelp)
             case .needsReview, .failed:
-                Button("Leave for Later") { run("Hold") { try await $0.review.hold(documentID) } }
-                Button("Read Again") { run("Read again") { try await $0.review.retry(documentID) } }
-                Button("Looks Right") { run("Confirm") { try await $0.review.confirm(documentID) } }
-                    .help("Keep it in the archive as it is")
+                Button(Wording.leaveForLater) { run(Wording.holdAction) { try await $0.review.hold(documentID) } }
+                Button(Wording.readAgain) { run(Wording.readAgainAction) { try await $0.review.retry(documentID) } }
+                Button(Wording.looksRight) { run(Wording.confirmAction) { try await $0.review.confirm(documentID) } }
+                    .help(Wording.confirmWaitingHelp)
             case .held, .undone:
-                Button("Read Again") { run("Read again") { try await $0.review.retry(documentID) } }
+                Button(Wording.readAgain) { run(Wording.readAgainAction) { try await $0.review.retry(documentID) } }
             default:
                 EmptyView()
             }
@@ -187,7 +189,7 @@ struct DocumentCard: View {
     }
 
     private func save(_ labels: [DocumentLabel]) {
-        run("Change labels") { try await $0.review.edit(documentID, fileName: nil, labels: labels) }
+        run(Wording.changeLabelsAction) { try await $0.review.edit(documentID, fileName: nil, labels: labels) }
     }
 
     /// Renames the file when the user leaves the name, as Things saves a field; an unchanged name is left alone.
@@ -195,7 +197,7 @@ struct DocumentCard: View {
         guard let d = document else { return }
         let value = name.trimmingCharacters(in: .whitespaces)
         guard !value.isEmpty, value != (d.filename as NSString).deletingPathExtension else { return }
-        await model.perform("Rename") { try await $0.review.edit(documentID, fileName: value, labels: nil) }
+        await model.perform(Wording.renameAction) { try await $0.review.edit(documentID, fileName: value, labels: nil) }
     }
 
     private func run(_ what: String, _ action: @escaping @Sendable (ArrumatorRuntime) async throws -> Void) {
@@ -203,11 +205,11 @@ struct DocumentCard: View {
     }
 
     private func close() {
-        withAnimation(.snappy) { if model.openDocument == documentID { model.openDocument = nil } }
+        withAnimation(.snappy) { onClose() }
     }
 
     private func load() async {
-        document = await model.load("Load document") { try await $0.services.documents.document(id: documentID) } ?? nil
+        document = await model.load(Wording.loadDocumentAction) { try await $0.services.documents.document(id: documentID) } ?? nil
         guard let document, !editingName else { return }
         name = (document.filename as NSString).deletingPathExtension
     }
@@ -223,31 +225,31 @@ struct LabelChip: View {
     @State private var confirmingRemoval = false
 
     var body: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: Style.chipContentSpacing) {
             Text(Wording.label(label)).textSelection(.enabled)
             if hovering {
                 Button(action: remove) { Image(systemName: "xmark.circle.fill") }
-                    .buttonStyle(.plain).foregroundStyle(.secondary).help("Remove this label")
+                    .buttonStyle(.plain).foregroundStyle(.secondary).help(Wording.removeLabelHelp)
             }
         }
-        .padding(.horizontal, 7).padding(.vertical, 2)
+        .padding(Style.labelChipInsets)
         .background(Style.hover, in: .capsule)
         .onHover { hovering = $0 }
         .contextMenu {
             if model.runtime?.config.labels.vocabulary.kinds[label.kind] != nil {
-                Button("Show in Labels") { model.open(label: label) }
+                Button(Wording.showInLabels) { model.open(label: label) }
             }
-            Button("Show Documents") { model.browse(label) }
+            Button(Wording.showDocuments) { model.browse(label) }
             Divider()
-            Button("Remove from Every Document…") { confirmingRemoval = true }
+            Button(Wording.removeFromEveryDocument) { confirmingRemoval = true }
         }
-        .confirmationDialog("Remove “\(Wording.label(label))” from every document?", isPresented: $confirmingRemoval) {
-            Button("Remove Everywhere", role: .destructive) {
+        .confirmationDialog(Wording.removeEverywhereQuestion(Wording.label(label)), isPresented: $confirmingRemoval) {
+            Button(Wording.removeEverywhere, role: .destructive) {
                 let label = label
-                Task { await model.perform("Remove label") { try await $0.labels.ignore(label) } }
+                Task { await model.perform(Wording.removeLabelAction) { try await $0.labels.ignore(label) } }
             }
         } message: {
-            Text("Arrumator will not give this label again. You can forget this decision on the Labels page.")
+            Text(Wording.removedForGoodFromCard)
         }
     }
 }

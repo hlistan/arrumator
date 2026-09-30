@@ -10,23 +10,23 @@ struct LabelledPage: View {
 
     var body: some View {
         let selection = model.labelSelection
-        Page(title: selection.map(Wording.label).joined(separator: " · "), symbol: Destination.labelled.symbol,
+        Page(title: selection.map(Wording.label).joined(separator: Wording.labelSeparator), symbol: Destination.labelled.symbol,
              tint: Destination.labelled.tint) {
-            HStack(spacing: 6) {
+            HStack(spacing: Style.chipSpacing) {
                 ForEach(selection, id: \.self) { ChosenLabel(label: $0) }
             }
             if documents.isEmpty {
-                EmptyState(symbol: "tag", text: "No document has every one of these labels.")
+                EmptyState(symbol: "tag", text: Wording.noDocumentHasAll)
             }
             ProcessedDays(documents: documents)
             if let pageSize = model.runtime?.config.interface.pageSize, documents.count == pages * pageSize {
-                Button("Show More") { pages += 1 }.buttonStyle(.link)
+                Button(Wording.showMore) { pages += 1 }.buttonStyle(.link)
             }
         }
         .onChange(of: selection) { pages = 1 }
         .task(id: "\(pages)|\(selection)|\(model.activity)") {
             let pages = pages
-            guard let loaded = await model.load("Load labelled documents", { runtime in
+            guard let loaded = await model.load(Wording.loadLabelledAction, { runtime in
                 try await runtime.services.documents.list(DocumentFilter(labels: selection), order: .recentlyProcessed,
                                                           limit: pages * runtime.config.interface.pageSize)
             }) else { return }
@@ -41,14 +41,14 @@ private struct ChosenLabel: View {
     let label: DocumentLabel
 
     var body: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: Style.chipContentSpacing) {
             Text(Wording.labelKind(label.kind)).foregroundStyle(.secondary)
             Text(Wording.label(label))
             Button { model.choose(label) } label: { Image(systemName: "xmark.circle.fill") }
-                .buttonStyle(.plain).foregroundStyle(.secondary).help("Show documents without this label too")
+                .buttonStyle(.plain).foregroundStyle(.secondary).help(Wording.showWithoutLabel)
         }
         .font(.callout)
-        .padding(.horizontal, 8).padding(.vertical, 2)
+        .padding(Style.chosenLabelInsets)
         .background(Style.hover, in: .capsule)
     }
 }

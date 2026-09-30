@@ -68,18 +68,22 @@ Some working state is deliberately not kept in files and does not survive a rebu
    in: what the file changes wins, and what the index added is kept. Otherwise the file replaces what the index held
    for it. Removing a document's entry never removes the document; its entry is written back. A rule for labels
    changed by hand is followed by readings from then on; the documents it concerns keep the labels they have.
+   A file edited so that it can no longer be read, such as broken YAML, is not written over: the app says which file
+   and why, keeps what the index holds, and writes the directory's changes once the file reads again.
 
 The window in which a change exists only in the database is the time it takes to write one file, and a mark left by a
 crash in that window is written at the next start.
 
 ## Rebuilding
 
-The app rebuilds the index when the database is missing, cannot be opened or cannot be migrated, and on request
-(`arrumatorcli rebuild`, or Settings › Advanced). A database that cannot be opened is moved aside, never deleted, as
-`<name>.sqlite.unreadable-<date>`. That only happens when the archive has record files to rebuild from; otherwise
-the app stops and says why, rather than starting with an empty index. A rebuild on request first writes every change
-not yet in the files. Documents are then updated in place from their entries and keep their numbers, so their cached
-text, embeddings and traces stay attached; everything else recorded in files is replaced by what the files say.
+The app rebuilds the index when the database is missing, damaged or cannot be migrated, and on request (`arrumatorcli
+rebuild`, or Settings › Advanced). A database that is damaged or cannot be migrated is moved aside, never deleted, as
+`<name>.sqlite.unreadable-<date>`. That only happens when the archive has record files to rebuild from; otherwise the
+app stops and says why, rather than starting with an empty index. A database that cannot be opened only for the moment,
+because another process holds it longer than `database.busyTimeout`, the disk is full or the file may not be read, is
+never moved aside: the app stops and says why, and starts once that has passed. A rebuild on request first writes every
+change not yet in the files. Documents are then updated in place from their entries and keep their numbers, so their
+cached text, embeddings and traces stay attached; everything else recorded in files is replaced by what the files say.
 
 A rebuild reads every `_documents.md`, the history and the rules for labels. Documents whose file is not where their
 entry says are looked up by the identifier on the file. Files that have no entry, at the top of the archive or in a
@@ -99,5 +103,5 @@ Titles are not kept. The tables of folders, rules, filing memories, corrections,
 senders are dropped, as are history events of kinds that no longer exist. Every record file is written again in the new
 shape. Those older files, `_senders.md` among them, are left alone in the archive and no longer read. A `_documents.md`
 entry written by an earlier version that a rebuild reads without that migration (on another Mac, say) comes back
-without labels; its document is labelled when it is read again (`arrumatorcli labels --unlabelled`, once its text has
+without labels; its document is labelled when it is read again (`arrumatorcli labels unlabelled`, once its text has
 been read again). Read any document again (`arrumatorcli review retry`) to give it the full set of labels.

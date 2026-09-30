@@ -1,3 +1,4 @@
+import ArrumatorCore
 import CoreGraphics
 import CoreML
 import Foundation
@@ -5,7 +6,7 @@ import ImageIO
 import Vision
 
 /// Where Vision runs a recognition.
-enum OCRDevice: String, Sendable, Encodable {
+public enum OCRDevice: String, Sendable, Encodable {
     /// Vision's own choice: the Neural Engine or the GPU where the Mac has one.
     case automatic
     /// The CPU alone, for every stage of the request.
@@ -13,24 +14,37 @@ enum OCRDevice: String, Sendable, Encodable {
 }
 
 /// One recognised line and Vision's confidence in it (0…1).
-struct RecognizedLine: Sendable {
-    var text: String
-    var confidence: Double
+public struct RecognizedLine: Sendable {
+    public var text: String
+    public var confidence: Double
+
+    public init(text: String, confidence: Double) {
+        self.text = text
+        self.confidence = confidence
+    }
 }
 
 /// What one recognition found, before it is scored.
-struct RecognizedText: Sendable {
-    var text: String
-    var paragraphs: [String]
+public struct RecognizedText: Sendable {
+    public var text: String
+    public var paragraphs: [String]
     /// Tables rendered as TSV.
-    var tables: [String]
-    var lines: [RecognizedLine]
+    public var tables: [String]
+    public var lines: [RecognizedLine]
     /// Recognition languages in the order given to Vision.
-    var languages: [String]
+    public var languages: [String]
+
+    public init(text: String, paragraphs: [String], tables: [String], lines: [RecognizedLine], languages: [String]) {
+        self.text = text
+        self.paragraphs = paragraphs
+        self.tables = tables
+        self.lines = lines
+        self.languages = languages
+    }
 }
 
 /// Runs one text recognition. `OCRService` decides the engine, orientation and device; this only asks.
-protocol TextRecognizing: Sendable {
+public protocol TextRecognizing: Sendable {
     /// Whether `RecognizeDocumentsRequest` reads every one of these language codes that Vision reads at all.
     func documentsSupport(_ languages: [String]) -> Bool
     func recognize(_ image: CGImage, orientation: CGImagePropertyOrientation, engine: OCREngine, languages: [String],
@@ -38,16 +52,18 @@ protocol TextRecognizing: Sendable {
 }
 
 /// Vision's text recognition, always accurate, with language correction and automatic language detection.
-struct VisionTextRecognizer: TextRecognizing {
-    func documentsSupport(_ languages: [String]) -> Bool {
+public struct VisionTextRecognizer: TextRecognizing {
+    public init() {}
+
+    public func documentsSupport(_ languages: [String]) -> Bool {
         let documents = Set(RecognizeDocumentsRequest().supportedRecognitionLanguages.compactMap(\.languageCode?.identifier))
         let text = Set(RecognizeTextRequest().supportedRecognitionLanguages.compactMap(\.languageCode?.identifier))
         // A language no engine reads is left to automatic detection, and does not cost the document its tables.
         return languages.allSatisfy { documents.contains($0) || !text.contains($0) }
     }
 
-    func recognize(_ image: CGImage, orientation: CGImagePropertyOrientation, engine: OCREngine, languages: [String],
-                   on device: OCRDevice) async throws -> RecognizedText {
+    public func recognize(_ image: CGImage, orientation: CGImagePropertyOrientation, engine: OCREngine, languages: [String],
+                          on device: OCRDevice) async throws -> RecognizedText {
         switch engine {
         case .recognizeDocuments:
             var vision = RecognizeDocumentsRequest()

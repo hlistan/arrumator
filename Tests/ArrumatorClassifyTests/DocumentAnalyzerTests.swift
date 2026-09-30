@@ -24,7 +24,8 @@ import Testing
     @Test func everyKindOfLabelIsReadAndNormalised() throws {
         let v = try Self.defaultValidator().validate("<think>hmm</think>" + Fixtures.answer())
         #expect(v.labels == Fixtures.edpLabels, "a day-first date becomes ISO, and kinds come in their order")
-        #expect(v.fileName == "2026-07-05 EDP Comercial - Fatura eletricidade julho" && v.notes.isEmpty)
+        #expect(v.fileName == "2026-07-05 EDP Comercial - Fatura eletricidade julho" && v.notes.isEmpty,
+                "the file name is kept as the model gave it, and nothing is noted against a clean answer")
     }
 
     @Test func eachKindIsTidiedToOneLineWithoutRepeatsAndCappedMostSignificantFirst() throws {
@@ -36,7 +37,7 @@ import Testing
         let validated = try Self.validator().validate(answer)
         #expect(validated.labels.values(.party) == ["Maria Exemplo", "João Silva", "Ana Costa"],
                 "the same name however written is one label, and a kind keeps only the first maxPerKind")
-        #expect(validated.notes.contains { $0.contains("parties: more than 3") }, "what was dropped is noted for the trace")
+        #expect(validated.notes.contains("parties: more than 3, the rest dropped"), "what was dropped is noted for the trace")
         #expect(validated.labels.values(.object) == ["apartment Rua das Flores 12, Porto, with", "PT0002000012345678PT0002000012345678PT00"],
                 "a long label is cut after the last whole word that fits in maxValueChars, or at it when one word is longer")
     }
@@ -57,21 +58,23 @@ import Testing
         #expect(v.labels.values(.reference) == ["invoice 2026/17", "tax assessment for 2025"], "a reference has a number")
         #expect(v.labels.values(.topic) == ["electricity"], "topics are lowercase, once")
         #expect(v.labels.values(.language) == ["pt", "ru", "en"], "a language named in English or by any ISO 639 code is its code, once")
-        #expect(v.notes.contains("dates: “yesterday” is no date, dropped") && v.notes.contains("languages: “Klingonese” is no language, dropped"))
-        #expect(v.notes.contains("types: more than 1, the rest dropped"))
+        #expect(v.notes.contains("dates: “yesterday” is no date, dropped") && v.notes.contains("languages: “Klingonese” is no language, dropped"),
+                "the trace says which values were dropped and why")
+        #expect(v.notes.contains("types: more than 1, the rest dropped"), "and that a document has one type")
     }
 
     @Test func aDocumentShowingNothingSignificantHasNoLabels() throws {
         let empty = Dictionary(uniqueKeysWithValues: LabelKind.allCases.map { ($0, [String]()) })
         let validated = try Self.validator().validate(Fixtures.answer(empty))
-        #expect(validated.labels.isEmpty && validated.notes.isEmpty)
+        #expect(validated.labels.isEmpty && validated.notes.isEmpty, "empty lists are a valid answer, with nothing to note")
     }
 
     @Test func aMissingListOrAnAnswerThatIsNoJSONGoesBackToTheModel() throws {
-        #expect(throws: AnswerValidationError.invalid(["jurisdictions is missing; give [] when the document shows none"])) {
+        #expect(throws: AnswerValidationError.invalid(["jurisdictions is missing; give [] when the document shows none"]),
+                "the model is told which list is missing and what to give instead") {
             try Self.validator().validate(Fixtures.answer(omitting: .jurisdiction))
         }
-        #expect {
+        #expect("an answer that is no JSON is sent back as such") {
             try Self.validator().validate("Maria Exemplo, Portugal")
         } throws: { error in
             if case AnswerValidationError.notJSON = error { true } else { false }
@@ -86,9 +89,11 @@ import Testing
         let keys = ClassificationSchema.answerOrder.map(ClassificationSchema.labelsKey) + [ClassificationSchema.fileNameKey]
         let positions = try keys.map { key in try #require(body.range(of: "\"\(key)\"")?.lowerBound, "\(key) is asked for") }
         #expect(positions == positions.sorted(), "the model writes the sender, type and date before the rest, and the name last")
-        #expect(Set(ClassificationSchema.answerOrder) == Set(LabelKind.allCases) && ClassificationSchema.answerOrder.count == LabelKind.allCases.count)
-        #expect(schema["properties"]?["types"]?["maxItems"] == .number(1) && schema["properties"]?["dates"]?["maxItems"] == .number(1))
-        #expect(schema["properties"]?["topics"]?["maxItems"] == .number(Double(config.labels.maxPerKind)))
+        #expect(Set(ClassificationSchema.answerOrder) == Set(LabelKind.allCases) && ClassificationSchema.answerOrder.count == LabelKind.allCases.count,
+                "the schema asks for every kind, once")
+        #expect(schema["properties"]?["types"]?["maxItems"] == .number(1) && schema["properties"]?["dates"]?["maxItems"] == .number(1),
+                "one type and one date")
+        #expect(schema["properties"]?["topics"]?["maxItems"] == .number(Double(config.labels.maxPerKind)), "other kinds up to labels.maxPerKind")
         #expect(schema["properties"]?["types"]?["items"]?["enum"]?.arrayValue?.contains(.string("other")) == false,
                 "a document no type fits has none, rather than \"other\"")
     }
@@ -99,9 +104,12 @@ import Testing
         let h = try await ClassifyHarness.make { _ in Fixtures.answer() }
         defer { h.env.cleanup() }
         let outcome = try await h.analyse(Fixtures.content("fatura.pdf", text: Fixtures.edpText))
-        #expect(outcome.labels == Fixtures.edpLabels)
-        #expect(outcome.analysis == DocumentAnalysis(fileName: "2026-07-05 EDP Comercial - Fatura eletricidade julho", model: "ministral-3:14b"))
-        #expect(outcome.embedding != nil, "and its embedding is made for search by meaning")
+        #expect(outcome.labels == Fixtures.edpLabels, "the document is described by the labels the model gave")
+        #expect(outcome.analysis == DocumentAnalysis(fileName: "2026-07-05 EDP Comercial - Fatura eletricidade julho", model: "ministral-3:14b"),
+                "and named as the model named it, by the model that read it")
+        let embedded = try #require(await h.mock.embedRequests.first?.input.first)
+        #expect(outcome.embedding == VectorCodec.normalized(MockOllama.hashEmbedding(embedded, dimension: 256)),
+                "and its embedding, of the text sent to the embedding model, is made for search by meaning")
 
         let request = try #require(await h.mock.chatRequests.first)
         #expect(await h.mock.chatCount == 1, "one model call per document")
@@ -117,6 +125,21 @@ import Testing
         #expect(steps.map(\.status) == [.ok], "the exchange is recorded in the trace")
         #expect(steps.first?.output?.contains("Portugal") == true && steps.first?.output?.contains("\"system\"") == true,
                 "the trace holds the answer and the raw prompt")
+        let output = try JSON.decoder.decode(JSONValue.self, from: Data(try #require(steps.first?.output).utf8))
+        #expect(output[TraceStep.exchangeKey]?.arrayValue?.count == 1 && output["answer"] != nil,
+                "the prompt and raw answer sit under the key retention clears, apart from the answer it keeps")
+    }
+
+    @Test func aDocumentQuotingATemplatePlaceholderIsReadAsWritten() async throws {
+        let h = try await ClassifyHarness.make { _ in Fixtures.answer() }
+        defer { h.env.cleanup() }
+        let newsletter = "Dear {{first_name}}, your {{document}} and {{archive}} are ready.\n" + Fixtures.edpText
+        let outcome = try await h.analyse(Fixtures.content("newsletter.eml", text: newsletter))
+        #expect(outcome.labels == Fixtures.edpLabels,
+                "a merge field left unrendered in an e-mail is the document's text, not a placeholder of the app's prompt")
+        let user = try #require(await h.mock.chatRequests.first?.messages[1].content)
+        #expect(user.contains("Dear {{first_name}}, your {{document}} and {{archive}} are ready."),
+                "the model reads the text exactly as the document has it, and no value is substituted into it")
     }
 
     @Test func theModelIsToldTheArchivesLabelsAndTheUsersDecisions() async throws {
@@ -147,7 +170,7 @@ import Testing
         }
         defer { h.env.cleanup() }
         let outcome = try await h.analyse(Fixtures.content("fatura.pdf", text: Fixtures.edpText))
-        #expect(outcome.labels == Fixtures.edpLabels)
+        #expect(outcome.labels == Fixtures.edpLabels, "the repaired answer is the one kept")
         let repair = try #require(await h.mock.chatRequests.last?.messages.last?.content)
         #expect(repair.contains("languages is missing"), "the model is told what was wrong")
         #expect(await h.steps(.analyse).map(\.status) == [.warn], "a repaired answer is flagged in the trace")
@@ -160,7 +183,8 @@ import Testing
         #expect(outcome.labels == nil, "nil, not an empty list: the document was not labelled, rather than labelled with nothing")
         #expect(outcome.analysis == DocumentAnalysis(problems: ["the model gave no valid answer"]), "and it keeps its own name")
         let steps = await h.steps(.analyse)
-        #expect(steps.map(\.status) == [.error] && steps.first?.error?.contains("No valid answer") == true)
+        #expect(steps.map(\.status) == [.error] && steps.first?.error?.contains("No valid answer") == true,
+                "the trace records the failed reading and why")
     }
 
     @Test func aDocumentWithNoTextWaitsForTheUserUnderItsOwnName() async throws {
@@ -174,7 +198,7 @@ import Testing
     @Test func aModelThatCannotBeReachedIsNoAnswerTheDocumentWaitsForIt() async throws {
         let h = try await ClassifyHarness.make { _ in throw OllamaError.unreachable("connection refused") }
         defer { h.env.cleanup() }
-        await #expect(throws: OllamaError.unreachable("connection refused")) {
+        await #expect(throws: OllamaError.unreachable("connection refused"), "the document waits for the model instead of being filed unread") {
             try await h.analyse(Fixtures.content("fatura.pdf", text: Fixtures.edpText))
         }
     }

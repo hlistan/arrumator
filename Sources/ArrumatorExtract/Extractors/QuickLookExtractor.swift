@@ -22,7 +22,8 @@ struct QuickLookExtractor: FileExtractor {
         let config = job.config
         let preview: CGImage
         do {
-            preview = try await Deadline.run(seconds: config.toolTimeout) {
+            preview = try await Deadline.run(config.toolTimeout, time: job.time,
+                                             expired: { DeadlineExceeded(seconds: config.toolTimeout) }) {
                 try await Self.thumbnail(for: job.url, pixels: config.quickLookPixel)
             }
         } catch is CancellationError {
@@ -32,7 +33,7 @@ struct QuickLookExtractor: FileExtractor {
             draft.warnings.append(ExtractionWarning(.unsupportedFormat, "no Quick Look preview: \(error)"))
             return draft
         }
-        var pass = OCRPass(service: ocr, config: config)
+        var pass = OCRPass(service: ocr, config: config, time: job.time)
         let languages = LanguageDetector(config: config).ranked(for: job.source.stem)
         let result = try await pass.recognize(preview, page: 1, languages: languages, timeout: config.pdf.ocrPageTimeout,
                                               orientationRetryBelow: nil)

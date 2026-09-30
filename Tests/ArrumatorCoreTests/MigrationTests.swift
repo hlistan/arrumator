@@ -10,12 +10,35 @@ import Testing
     static let shipped = ["v1_initial", "v2_datesAsUnixSeconds", "v3_brainsAndRethink", "v4_renameBrainsToLogic",
                           "v5_logicEvents", "v6_archiveRecords", "v7_oneLogicPerArchive",
                           "v8_undoForgets", "v9_foldersOfAnyDepth", "v10_folderKinds", "v11_labelsNotFolders",
-                          "v12_labelRules"]
+                          "v12_labelRules", "v13_traceExchanges"]
 
     @Test func shippedIdentifiersNeverChange() {
         let registered = AppDatabase.migrator.migrations
         #expect(Array(registered.prefix(Self.shipped.count)) == Self.shipped,
                 "a shipped migration was renamed, removed or reordered; installed databases would re-run it and fail")
+    }
+
+    @Test func tracesOfEarlierReadingsKeepTheirExchangeWhereRetentionFindsIt() throws {
+        let queue = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(queue, upTo: "v12_labelRules")
+        try queue.write { db in
+            try db.execute(sql: """
+                INSERT INTO traces (id, attempt, source, started_at, app_version, prompt_version, settings_json)
+                  VALUES (1, 0, 'ingest', 0, 'old', 5, '{}');
+                INSERT INTO trace_steps (trace_id, seq, stage, status, started_at, duration_ms, output_json) VALUES
+                  (1, 1, 'analyse', 'ok', 0, 1, '{"answer":{"fileName":"EDP"},"calls":[{"user":"the text"}]}'),
+                  (1, 2, 'vlm', 'ok', 0, 1, '{"raw":"a receipt","visual":{"imageKind":"receipt"}}'),
+                  (1, 3, 'place', 'ok', 0, 1, '{"calls":"not a model exchange"}');
+                """)
+        }
+        try AppDatabase.migrator.migrate(queue)
+        try queue.read { db in
+            let outputs = try String.fetchAll(db, sql: "SELECT output_json FROM trace_steps ORDER BY seq")
+            #expect(outputs[0] == #"{"answer":{"fileName":"EDP"},"exchange":[{"user":"the text"}]}"#,
+                    "a reading's prompts and answers are under the key retention clears, its answer where it was")
+            #expect(outputs[1] == #"{"visual":{"imageKind":"receipt"},"exchange":"a receipt"}"#, "and so is an image description's")
+            #expect(outputs[2] == #"{"calls":"not a model exchange"}"#, "a step that talked to no model is left as it was")
+        }
     }
 
     @Test func theFullTextIndexHasTheColumnsSearchNames() throws {
@@ -96,7 +119,7 @@ import Testing
                           "correspondents"] {
                 #expect(try !db.tableExists(table), "\(table) is gone")
             }
-            #expect(try !db.columns(in: "traces").contains { $0.name == "logic_version" })
+            #expect(try !db.columns(in: "traces").contains { $0.name == "logic_version" }, "traces no longer name a logic that is gone")
             #expect(try String.fetchAll(db, sql: "SELECT stage FROM trace_steps") == [TraceStage.analyse.rawValue],
                     "an old model exchange is kept out of diagnostics like a new one")
             #expect(try EventRecord.order(Column("id")).fetchAll(db).map(\.kind) == [.filed], "events of kinds that are gone are dropped")
