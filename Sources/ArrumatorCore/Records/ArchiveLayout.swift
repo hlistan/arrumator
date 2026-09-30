@@ -1,7 +1,7 @@
 import Foundation
 
 /// Where things are in an archive. Documents are filed at its top, each directory holding documents lists them in
-/// its `_documents.md`, and the app's own files sit in one system folder: the history.
+/// its `_documents.md`, and the app's own files sit in one system folder: the history and the user's rules for labels.
 /// Nothing else is made: the archive has no folders of the app's making for documents.
 public struct ArchiveLayout: Sendable, Hashable {
     public let root: URL
@@ -16,6 +16,7 @@ public struct ArchiveLayout: Sendable, Hashable {
 
     public var system: URL { root.appendingPathComponent(records.systemFolderName, isDirectory: true) }
     public var history: URL { system.appendingPathComponent(records.historyFolderName, isDirectory: true) }
+    public var labelRules: URL { system.appendingPathComponent(records.labelRulesFileName) }
 
     /// The history of one month, `yyyy-MM`, named with the managed-file prefix so nothing ingests it.
     public func historyFile(month: String) -> URL {

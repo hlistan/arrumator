@@ -7,7 +7,7 @@ corrupting an index costs time, never information: the app rebuilds it from the 
 This is the pattern of plain-text vaults such as Obsidian, whose notes are the source of truth and whose metadata cache
 is disposable and rebuilt from the files ([Obsidian help: how Obsidian stores data](https://help.obsidian.md/Files+and+folders/How+Obsidian+stores+data)).
 Documents are filed at the top of the archive, each directory holding documents lists them beside them, and the
-history sits in one `System` folder at the top of the archive. The app makes no other folders.
+history and your rules for labels sit in one `System` folder at the top of the archive. The app makes no other folders.
 
 ## What lives where
 
@@ -15,6 +15,7 @@ history sits in one `System` folder at the top of the archive. The app makes no 
 |---|---|---|
 | The documents in a directory | `<directory>/_documents.md` | One entry per file in that directory: identity, original name, checksum, size, content type, pages, status, the labels that describe it (each a kind and a value; absent until the model has labelled it), and how it was read: the file name the model gave it, the model, and why it waits for you, if it does. The table below the data shows each file's date, sender, type and other labels. |
 | History | `System/History/_<year>-<month>.md` | One line per event, newest last. |
+| Rules for labels | `System/_labels.md` | Your decisions about labels ([how](how-it-works.md#keeping-labels-one-vocabulary)): each rule's number, kind, label, what it decides (`merge`, `ignore` or `keepApart`), the other label of a merge or of a pair kept apart, and when it was made. There is no file while there are no rules. |
 
 Every file starts with YAML front matter holding the exact data, followed by a Markdown rendering for people. The front
 matter is what the app reads; the rendering is regenerated on every write.
@@ -65,7 +66,8 @@ Some working state is deliberately not kept in files and does not survive a rebu
    files synchronised from another Mac, and anything else that changed the files behind the app's back.
 4. A file edited by hand is never overwritten. If the index has changes of its own for the same file, the edit is merged
    in: what the file changes wins, and what the index added is kept. Otherwise the file replaces what the index held
-   for it. Removing a document's entry never removes the document; its entry is written back.
+   for it. Removing a document's entry never removes the document; its entry is written back. A rule for labels
+   changed by hand is followed by readings from then on; the documents it concerns keep the labels they have.
 
 The window in which a change exists only in the database is the time it takes to write one file, and a mark left by a
 crash in that window is written at the next start.
@@ -79,12 +81,12 @@ the app stops and says why, rather than starting with an empty index. A rebuild 
 not yet in the files. Documents are then updated in place from their entries and keep their numbers, so their cached
 text, embeddings and traces stay attached; everything else recorded in files is replaced by what the files say.
 
-A rebuild reads every `_documents.md` and the history. Documents whose file is not where their entry says
-are looked up by the identifier on the file. Files that have no entry, at the top of the archive or in a folder of
-yours at any depth, are taken in where they are and read by the model; the `System` folder and an Incoming folder kept
-inside the archive are left out. Then, in the background and giving way to new arrivals, each document's text is
-extracted again and its embedding recomputed. The model is not asked again: labels come back from the entries. Search
-by words and by meaning fills in as that proceeds; filing works from the start.
+A rebuild reads every `_documents.md`, the history and the rules for labels. Documents whose file is not where their
+entry says are looked up by the identifier on the file. Files that have no entry, at the top of the archive or in a
+folder of yours at any depth, are taken in where they are and read by the model; the `System` folder and an Incoming
+folder kept inside the archive are left out. Then, in the background and giving way to new arrivals, each document's
+text is extracted again and its embedding recomputed. The model is not asked again: labels come back from the entries.
+Search by words and by meaning fills in as that proceeds; filing works from the start.
 
 ## Archives from earlier versions
 

@@ -77,8 +77,8 @@ struct ClassifyHarness {
 
     var trace: TraceContext { TraceContext(traceID: 1, sink: sink) }
 
-    func analyse(_ content: ExtractedContent) async throws -> AnalysisOutcome {
-        try await analyzer.analyse(content, settings: settings, config: env.config, trace: trace)
+    func analyse(_ content: ExtractedContent, guidance: LabelGuidance = .none) async throws -> AnalysisOutcome {
+        try await analyzer.analyse(content, guidance: guidance, settings: settings, config: env.config, trace: trace)
     }
 
     func steps(_ stage: TraceStage) async -> [TraceStep] { await sink.steps.filter { $0.stage == stage } }

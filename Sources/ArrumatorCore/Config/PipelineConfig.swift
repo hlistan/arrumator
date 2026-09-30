@@ -119,7 +119,7 @@ public struct WatcherConfig: Sendable, Codable, Hashable {
 }
 
 /// The archive's own files: a `_documents.md` beside the documents of each directory, and the `System` folder
-/// holding its history (docs/storage.md). Documents are filed at the top of the archive.
+/// holding its history and the user's rules for labels (docs/storage.md). Documents are filed at the top of the archive.
 public struct RecordsConfig: Sendable, Codable, Hashable {
     /// In every directory holding documents: one entry per document there.
     public var documentsFileName: String
@@ -127,6 +127,8 @@ public struct RecordsConfig: Sendable, Codable, Hashable {
     public var systemFolderName: String
     /// In the system folder: the history, one file per month named with the watcher's managed-file prefix.
     public var historyFolderName: String
+    /// In the system folder, named with the watcher's managed-file prefix: the user's rules for labels.
+    public var labelRulesFileName: String
     /// Added to the name of a database that could not be opened when it is moved aside.
     public var setAsideSuffix: String
 }
@@ -269,6 +271,29 @@ public struct LabelsConfig: Sendable, Codable, Hashable {
     public var maxPerKind: Int
     /// Longest a label may be; a longer one is cut at a word boundary.
     public var maxValueChars: Int
+    public var vocabulary: LabelVocabularyConfig
+}
+
+/// Keeping the archive's labels one vocabulary: what the model is shown of it, and which labels are one.
+public struct LabelVocabularyConfig: Sendable, Codable, Hashable {
+    /// The kinds kept consistent across the archive, and how. A kind whose values have one form (a type, a date, a period,
+    /// a deadline, an amount, a language) needs no entry.
+    public var kinds: [LabelKind: KindVocabularyConfig]
+    /// Labels the user merged into others that the model is shown, newest first.
+    public var promptPreferred: Int
+    /// Labels the user does not want that the model is shown, newest first.
+    public var promptUnwanted: Int
+    /// Pairs of alike labels offered to the user at once, the most alike first.
+    public var suggestionLimit: Int
+}
+
+public struct KindVocabularyConfig: Sendable, Codable, Hashable {
+    /// `LabelSimilarity` from which a label the model gives becomes the archive's label: 1 only when written the same way.
+    public var mergeSimilarity: Double
+    /// `LabelSimilarity` from which two labels in use are offered to the user to merge.
+    public var suggestSimilarity: Double
+    /// Labels of the kind in use that the model is shown, the most used first; 0 shows none.
+    public var promptLimit: Int
 }
 
 public struct NamingConfig: Sendable, Codable, Hashable {

@@ -20,10 +20,28 @@ public struct PromptBuilder: Sendable {
         try library.render("labels-system", ["max_per_kind": String(labels.maxPerKind), "max_name_chars": String(naming.maxChars)])
     }
 
-    /// The document, with what the extractor found in it.
-    public func analysisUser(content: ExtractedContent) throws -> String {
-        try library.render("document-user", ["document": documentBlock(content)])
+    /// The document, with what the extractor found in it, after what the archive's labels say, when they say anything.
+    public func analysisUser(content: ExtractedContent, guidance: LabelGuidance) throws -> String {
+        try library.render("document-user", ["archive": try archiveBlock(guidance), "document": documentBlock(content)])
     }
+
+    /// The labels the archive uses, by the answer's name for their kind, the user's merges and the labels the user does
+    /// not want, one per line; empty for an archive without any.
+    func archiveBlock(_ guidance: LabelGuidance) throws -> String {
+        guard !guidance.isEmpty else { return "" }
+        let key = ClassificationSchema.labelsKey
+        let used = ClassificationSchema.answerOrder.compactMap { kind in
+            guidance.used[kind].flatMap { $0.isEmpty ? nil : "- \(key(kind)): " + $0.joined(separator: "; ") }
+        }
+        let preferred = guidance.preferred.map { "- \(key($0.from.kind)): \($0.from.value) → \($0.to)" }
+        let unwanted = guidance.unwanted.map { "- \(key($0.kind)): \($0.value)" }
+        func lines(_ items: [String]) -> String { items.isEmpty ? Self.noLines : items.joined(separator: "\n") }
+        return try library.render("archive-labels", ["used": lines(used), "preferred": lines(preferred), "unwanted": lines(unwanted)])
+            + "\n\n"
+    }
+
+    /// What an empty list of the archive's labels reads as.
+    static let noLines = "-"
 
     public func repair(errors: String) throws -> String {
         try library.render("repair-user", ["errors": errors])

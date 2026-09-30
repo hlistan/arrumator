@@ -35,6 +35,8 @@ public final class ArrumatorRuntime: Sendable {
     public let services: PipelineServices
     public let coordinator: IngestCoordinator
     public let review: ReviewActions
+    /// What the user decides about labels for the whole archive.
+    public let labels: LabelActions
     public let reconciler: ArchiveReconciler
     public let incomingWatcher: IncomingWatcher
     public let archiveWatcher: ArchiveWatcher
@@ -161,6 +163,7 @@ public final class ArrumatorRuntime: Sendable {
             traces: traces, vectors: vectors)
         coordinator = IngestCoordinator(services: services)
         review = ReviewActions(services: services, coordinator: coordinator)
+        labels = LabelActions(database: database)
         reconciler = ArchiveReconciler(services: services, coordinator: coordinator)
         incomingWatcher = IncomingWatcher(config: config.watcher, skip: skip)
         archiveWatcher = ArchiveWatcher(config: config.watcher, records: config.records, skip: skip, registry: registry,

@@ -18,6 +18,8 @@ struct Stats: AsyncParsableCommand {
                     .joined(separator: ", "))
             }
             out.append("Corrected by you: \(insights.corrected) · confirmed: \(insights.confirmed)")
+            out.append("Rules about labels: " + LabelRuleAction.allCases.map { "\($0.rawValue) \(insights.labelRules[$0.rawValue] ?? 0)" }
+                .joined(separator: " · ") + " · labels tidied in readings: \(insights.labelsTidied)")
             out.append("Latency per stage (p50 / p95):")
             out += insights.latency.map { "  \($0.stage.padding(toLength: 13, withPad: " ", startingAt: 0)) \(Int($0.p50Ms)) / \(Int($0.p95Ms)) ms (\($0.count))" }
             if let ocr = insights.meanOCRConfidence { out.append(String(format: "Mean OCR confidence: %.2f", ocr)) }

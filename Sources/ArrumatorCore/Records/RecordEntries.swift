@@ -90,6 +90,30 @@ public struct EventEntry: Codable, Sendable, Hashable {
     }
 }
 
+/// One of the user's rules for labels, as `System/_labels.md` records it.
+public struct LabelRuleEntry: Codable, Sendable, Hashable {
+    public var id: Int64
+    public var kind: LabelKind
+    public var value: String
+    public var action: LabelRuleAction
+    public var target: String?
+    public var created: Date
+
+    public init?(_ rule: LabelRule) {
+        guard let id = rule.id else { return nil }
+        self.id = id
+        kind = rule.kind
+        value = rule.value
+        action = rule.action
+        target = rule.target
+        created = rule.createdAt
+    }
+
+    public var record: LabelRule {
+        LabelRule(id: id, kind: kind, value: value, action: action, target: target, createdAt: created)
+    }
+}
+
 /// The front matter of a file holding a list.
 struct RecordList<Entry: Codable & Sendable>: Codable, Sendable {
     var arrumator: Int

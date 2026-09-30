@@ -2,8 +2,9 @@ import ArrumatorCore
 import Foundation
 
 /// The production `DocumentAnalyzing`. The local model reads the document once, with the app's own prompt
-/// (`labels-system.md`), picks out its signals, which become its labels and all it is described by, and names its file.
-/// Every model call is recorded in the trace.
+/// (`labels-system.md`) and what the archive's labels and the user's decisions about them say (`archive-labels.md`),
+/// picks out its signals, which become its labels and all it is described by, and names its file. Every model call is
+/// recorded in the trace.
 public struct DocumentAnalyzer: DocumentAnalyzing {
     public let gate: InferenceGate
     public let models: ModelManager
@@ -15,7 +16,7 @@ public struct DocumentAnalyzer: DocumentAnalyzing {
         self.prompts = prompts
     }
 
-    public func analyse(_ content: ExtractedContent, settings: AppSettings, config: PipelineConfig,
+    public func analyse(_ content: ExtractedContent, guidance: LabelGuidance, settings: AppSettings, config: PipelineConfig,
                         trace: TraceContext) async throws -> AnalysisOutcome {
         let resolved = try config.models(for: settings.models)
         let tiers = LLMClassifier.Tier.distinct([
@@ -28,7 +29,7 @@ public struct DocumentAnalyzer: DocumentAnalyzing {
         var answer: ModelAnswer<ValidatedAnalysis>?
         do {
             answer = try await LLMClassifier(gate: gate, models: models, config: config.analysis).ask(
-                system: try prompts.analysisSystem(), user: try prompts.analysisUser(content: content),
+                system: try prompts.analysisSystem(), user: try prompts.analysisUser(content: content, guidance: guidance),
                 schema: ClassificationSchema.analysis(maxPerKind: config.labels.maxPerKind), tiers: tiers,
                 repairPrompt: { try prompts.repair(errors: $0) }, validate: { try validator.validate($0) })
             await trace.record(.analyse, status: (answer?.calls.count ?? 0) > 1 ? .warn : .ok, startedAt: started, input: input,

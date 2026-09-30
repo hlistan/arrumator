@@ -7,20 +7,26 @@ public enum RecordKind: Hashable, Sendable {
     case documents(directory: String)
     /// The history of one month, `yyyy-MM` in UTC.
     case history(month: String)
+    /// The user's rules for labels.
+    case labelRules
 
     static let documentsPrefix = "documents:"
     static let historyPrefix = "history:"
+    static let labelRulesKey = "labels"
 
     /// Documents keys end with a slash, as SQL derives the directory from a path.
     public var key: String {
         switch self {
         case let .documents(directory): Self.documentsPrefix + directory + "/"
         case let .history(month): Self.historyPrefix + month
+        case .labelRules: Self.labelRulesKey
         }
     }
 
     public init?(key: String) {
-        if key.hasPrefix(Self.documentsPrefix) {
+        if key == Self.labelRulesKey {
+            self = .labelRules
+        } else if key.hasPrefix(Self.documentsPrefix) {
             var directory = String(key.dropFirst(Self.documentsPrefix.count))
             if directory.hasSuffix("/") { directory.removeLast() }
             guard !directory.isEmpty else { return nil }

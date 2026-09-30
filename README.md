@@ -31,6 +31,10 @@ say what it is in one vocabulary, so a German electricity bill and a Japanese on
   and picks out who sent it, what type it is, its date, whom and what it concerns, its topics, references, period,
   deadlines, amounts, jurisdictions and languages: twelve kinds of label, drawn from archival metadata standards.
   Search by any of them (`sender:edp`, `deadline:2026-07`, `jurisdiction:portugal`) and correct any of them.
+- **Keeps labels one vocabulary, and learns from you.** A label written the way the archive already writes it becomes
+  that label, and labels that merely look alike wait for you on the Labels page. Merge two labels or remove one
+  everywhere, and every document, and every one read from then on, follows: the model is shown your decisions and the
+  archive's labels each time it reads.
 - **Names every file** from its date, its sender and what it is, such as `2026-07-05 EDP Comercial - Fatura
   eletricidade julho.pdf`, and files it at the top of the archive. The app makes no folders.
 - **Asks when it cannot read a document.** A file the model gave no answer for, or that is encrypted, damaged or
@@ -92,7 +96,7 @@ together; [docs/cli.md](docs/cli.md) explains how to use it. To build from sourc
 1. Put a document in `~/Documents/Incoming` (Settings › General changes both folders).
 2. Arrumator reads it, names it and files it at the top of `~/Documents/Archive`, and shows it in **Processed**.
 3. Open the document's row to see its labels and how it was read. Rename it, or take off or add a label, on its card
-   if something is wrong.
+   if something is wrong. On **Labels**, merge labels that mean the same, or remove one you never want.
 4. Documents it could not read wait in **Needs You**. Confirm them as they are, or have them read again.
 5. Search by any word, or by a kind of label: `sender:edp`, `party:"maria silva"`, `type:invoice`, `language:russian`.
 

@@ -32,11 +32,29 @@ whose `incomingPath` and `archivePath` point at scratch folders too: `ARRUMATOR_
 | Command | What it does |
 |---|---|
 | `arrumatorcli search <query>… [--no-semantic]` | Search the archive: documents containing the words first, then documents alike in meaning, each with its labels. `field:word` and `field:"a phrase"` search one field: `filename`, `body`, or a kind of label: `sender`, `party`, `type`, `topic`, `object`, `reference`, `date`, `period`, `deadline`, `amount`, `jurisdiction`, `language`. `--no-semantic` searches the words only. |
-| `arrumatorcli labels <document> [--add <kind>=<value>]… [--remove <kind>=<value>]…` / `arrumatorcli labels --unlabelled` | A document's labels, kind by kind ([the kinds](how-it-works.md#labels)). `--add sender=EDP` gives it a label and `--remove topic=energy` takes one off, both repeatable, each recorded as a correction; a value that is no label of its kind is dropped, and a document keeps one type and one date. `--unlabelled` reads every document that has no labels yet with the model, such as one the model gave no answer for, which also names it again where it is. |
+| `arrumatorcli labels [show] <document> [--add <kind>=<value>]… [--remove <kind>=<value>]…` | A document's labels, kind by kind ([the kinds](how-it-works.md#labels)). `--add sender=EDP` gives it a label and `--remove topic=energy` takes one off, both repeatable, each recorded as a correction; a value that is no label of its kind is dropped, and a document keeps one type and one date. |
+| `arrumatorcli labels unlabelled` | Read every document that has no labels yet with the model, such as one the model gave no answer for, which also names it again where it is. |
 | `arrumatorcli extract <file>` | Show what the extractors read from a file, with no model involved. |
 | `arrumatorcli history [--limit <n>] [--doc <document>]` | Recent events: arrivals, readings, filings, corrections (50 unless `--limit`), optionally of one document. |
 | `arrumatorcli trace <document> [--full]` | How a document was processed: every stage, its inputs, outputs and timing. `--full` adds the prompts and raw model responses. |
 | `arrumatorcli replay <document> [--model <model>]` | Read a stored document again with the model, optionally another chat model, and compare its name and labels with what it has, without touching files. |
+
+## The archive's labels
+
+What you decide about a label applies to every document that has it and to every document read from then on
+([keeping labels one vocabulary](how-it-works.md#keeping-labels-one-vocabulary)). Each decision is recorded in History.
+A label is written `<kind>=<value>`, such as `sender="EDP Comercial"`, and matched however it is cased, accented or
+punctuated.
+
+| Command | What it does |
+|---|---|
+| `arrumatorcli labels list [--kind <kind>]` | Every label the documents have, kind by kind, the most used first, with how many documents have it. `--kind` lists one kind. |
+| `arrumatorcli labels similar` | Labels written so alike they may be one, each with the label a merge would keep (the one more documents have) and how alike they are, the most alike first. |
+| `arrumatorcli labels merge <kind>=<value> --into <value>` | Merge a label into another of its kind: every document that has it gets the other instead, and so does every document read from now on. |
+| `arrumatorcli labels ignore <kind>=<value>` | Take a label off every document, and never give it again. |
+| `arrumatorcli labels keep-apart <kind>=<value> --from <value>` | Keep two alike labels apart: they are never merged, nor listed by `labels similar`. |
+| `arrumatorcli labels rules` | Your rules about labels, oldest first, with their numbers. |
+| `arrumatorcli labels forget <rule>` | Forget a rule: documents read from now on no longer follow it. Documents it changed keep their labels. |
 
 ## Documents that wait for you
 
@@ -62,7 +80,7 @@ whose `incomingPath` and `archivePath` point at scratch folders too: `ARRUMATOR_
 | Command | What it does |
 |---|---|
 | `arrumatorcli funnel [--days <n>]` | How far documents got through the pipeline and where they stopped, for those that arrived in the last 30 days unless `--days`. |
-| `arrumatorcli stats` | How the archive is labelled and where the pipeline spends its time: statuses, labelled documents, labels by kind, corrections and confirmations, latency, OCR quality. |
+| `arrumatorcli stats` | How the archive is labelled and where the pipeline spends its time: statuses, labelled documents, labels by kind, corrections and confirmations, rules about labels and labels tidied in readings, latency, OCR quality. |
 | `arrumatorcli logs [--category <category>] [--level <level>] [--minutes <n>] [--follow]` | Read the structured logs (JSONL, one file per day). `--category` is one of app, watch, ingest, extract, classify, fileops, ollama, index, search, ui, cli, db, power; `--level` the lowest level shown (error, warning, info, debug, trace; info unless set); `--minutes` only newer lines; `--follow` keeps printing new ones. |
-| `arrumatorcli diagnostics <output> [--include-document-text]` | Write a zip with logs, recent traces, doctor report and settings. `--include-document-text` also includes the prompts and model answers that contain document text. |
-| `arrumatorcli eval <fixtures> [--model <model>] [--profile <profile>] [--passes <n>] [--only <prefix>] [--report <path>] [--min-accuracy <x>]` | Measure how well documents are read on a fixture corpus (a folder with `expected.json`) in a throw-away archive, as described in [Evaluation](evaluation.md). It also prints, for each kind of label, the share of documents that got one. `--passes` runs the corpus again to show how consistently it is read; `--only pt/` runs part of it; `--report` writes the full report as JSON; `--min-accuracy` fails when the first pass reads fewer than that share of type, sender, date and title right. |
+| `arrumatorcli diagnostics <output> [--include-document-text]` | Write a zip with logs, recent traces, doctor report and settings. `--include-document-text` also includes the prompts and model answers that contain document text, and the labels tidied from those answers. |
+| `arrumatorcli eval <fixtures> [--model <model>] [--profile <profile>] [--passes <n>] [--only <prefix>] [--report <path>] [--min-accuracy <x>]` | Measure how well documents are read on a fixture corpus (a folder with `expected.json`) in a throw-away archive, as described in [Evaluation](evaluation.md). It also prints, for each kind of label, the share of documents that got one, how many ways each sender was written, and how many different labels of each kind the documents got. `--passes` runs the corpus again to show how consistently it is read; `--only pt/` runs part of it; `--report` writes the full report as JSON; `--min-accuracy` fails when the first pass reads fewer than that share of type, sender, date and title right. |

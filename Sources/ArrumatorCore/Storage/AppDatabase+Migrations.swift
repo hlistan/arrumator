@@ -600,6 +600,24 @@ extension AppDatabase {
             }
         }
 
+        /// The user's decisions about labels (docs/how-it-works.md#keeping-labels-one-vocabulary): a label merged into
+        /// another, one not wanted, two kept apart. They are the user's, so a change marks the archive's
+        /// `System/_labels.md`, which a rebuild reads back.
+        m.registerMigration("v12_labelRules") { db in
+            try db.execute(sql: """
+            CREATE TABLE label_rules (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              kind TEXT NOT NULL,
+              value TEXT NOT NULL,
+              action TEXT NOT NULL,
+              target TEXT,
+              created_at REAL NOT NULL);
+            CREATE TRIGGER label_rules_record_insert AFTER INSERT ON label_rules BEGIN INSERT INTO record_dirty(key, version) VALUES ('labels', 1) ON CONFLICT(key) DO UPDATE SET version = version + 1; END;
+            CREATE TRIGGER label_rules_record_update AFTER UPDATE ON label_rules BEGIN INSERT INTO record_dirty(key, version) VALUES ('labels', 1) ON CONFLICT(key) DO UPDATE SET version = version + 1; END;
+            CREATE TRIGGER label_rules_record_delete AFTER DELETE ON label_rules BEGIN INSERT INTO record_dirty(key, version) VALUES ('labels', 1) ON CONFLICT(key) DO UPDATE SET version = version + 1; END;
+            """)
+        }
+
         return m
     }
 }

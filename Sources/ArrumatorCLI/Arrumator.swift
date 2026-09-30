@@ -62,6 +62,23 @@ enum Terminal {
         return "\(label.value) (\(name))"
     }
 
+    /// Labels the model gave that became others: “sender EDP Comercial → EDP (rule #3)”.
+    static func changes(_ changes: [LabelChange]) -> String {
+        changes.map { change in
+            let reason = switch change.reason {
+            case let .rule(id: id): "rule #\(id)"
+            case let .alike(similarity: similarity): String(format: "alike %.2f", similarity)
+            }
+            return "\(change.from.kind.rawValue) \(change.from.value) → \(change.to?.value ?? "dropped") (\(reason))"
+        }.joined(separator: " · ")
+    }
+
+    /// What a decision about a label did.
+    static func outcome(_ outcome: LabelActionOutcome) -> String {
+        "Rule #\(outcome.rule.id ?? 0): \(outcome.rule.summary)"
+            + (outcome.documents.isEmpty ? "" : "; changed \(Format.count(outcome.documents.count, "document"))")
+    }
+
     static func table(_ rows: [[String]]) -> String {
         guard let first = rows.first else { return "" }
         let widths = (0..<first.count).map { i in rows.map { $0.indices.contains(i) ? $0[i].count : 0 }.max() ?? 0 }

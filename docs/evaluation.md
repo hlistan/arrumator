@@ -20,6 +20,8 @@ the real pipeline and the configured models, in a throw-away home and archive, a
 | labelled | Of the documents that should be filed, the share the model labelled at all, and how many labels each has. |
 | labels per kind | Of those labelled, the share with at least one label of each kind (`sender`, `party`, `type`, `topic`, `object`, `reference`, `date`, `period`, `deadline`, `amount`, `jurisdiction`, `language`): how much of the label set the prompt draws out. |
 | expected labels | Of the other labels the corpus expects a document to get (its parties, objects, references, periods, deadlines, amounts and jurisdictions), the share it got, in all and by kind. An amount must match in number and currency; a date or period must start with the expected value; anything else must contain the expected words, ignoring case, accents and spacing. |
+| sender writings | Of the senders the corpus expects on more than one document, how many ways each was written on average: 1 when every document from one sender got the same sender label. |
+| distinct labels | How many different labels of each kind the documents got in all, as a label list would show them: fewer, for as many expected labels found, is a tidier vocabulary. |
 
 Type, sender, date, title and language are scored only for documents the corpus expects to be filed. The median
 time per document is reported too. A second pass files the same documents again with different bytes, which shows
@@ -33,16 +35,31 @@ coverage alone.
 ## Results
 
 Measured on 2026-09-30 with the `standard` profile (`ministral-3:14b`, `bge-m3`) on an Ollama server on the local
-network, the full corpus, two passes, prompt version 5:
+network, the full corpus, two passes. Prompt version 6 shows the model the archive's labels and your decisions about
+them, and the labels it gives are tidied to the archive's ([keeping labels one
+vocabulary](how-it-works.md#keeping-labels-one-vocabulary)); version 5 did neither:
 
-| pass | status | type | sender | date | title | language | labels each | expected labels | median |
-|---|---|---|---|---|---|---|---|---|---|
-| 1 | 100% | 91% | 95% | 98% | 95% | 100% | 15.0 | 92% | 26.9 s |
-| 2 | 100% | 89% | 93% | 98% | 95% | 100% | 15.0 | 92% | 26.8 s |
+| prompt | pass | status | type | sender | date | title | language | labels each | expected labels | median |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 6 | 1 | 100% | 89% | 89% | 98% | 93% | 100% | 14.4 | 92% | 28.6 s |
+| 6 | 2 | 100% | 89% | 89% | 98% | 98% | 100% | 14.6 | 93% | 31.1 s |
+| 5 | 1 | 100% | 91% | 95% | 98% | 95% | 100% | 15.0 | 92% | 26.8 s |
+| 5 | 2 | 100% | 89% | 93% | 98% | 95% | 100% | 15.0 | 92% | 26.8 s |
 
-Expected labels found in pass 1, by kind: party 91%, object 91%, reference 100%, period 75%, deadline 91%, amount 100%,
-jurisdiction 100%. Share of labelled documents with at least one label of each kind: sender 98%, party 98%, type 98%,
-topic 100%, object 98%, reference 90%, date 98%, period 81%, deadline 52%, amount 81%, jurisdiction 98%, language 100%.
+How consistent the labels are, for the same documents:
+
+| prompt | pass | sender writings | senders | parties | topics | objects | references | jurisdictions |
+|---|---|---|---|---|---|---|---|---|
+| 6 | 1 | 1.25 | 49 | 26 | 63 | 105 | 97 | 26 |
+| 6 | 2 | 1.25 | 49 | 29 | 55 | 103 | 97 | 26 |
+| 5 | 1 | 1.38 | 53 | 37 | 91 | 121 | 84 | 39 |
+| 5 | 2 | 1.50 | 52 | 38 | 86 | 123 | 83 | 38 |
+
+Expected labels found in pass 1, by kind, are the same with both prompts: party 91%, object 91%, reference 100%,
+period 75%, deadline 91%, amount 100%, jurisdiction 100%. Share of labelled documents with at least one label of each
+kind, version 6 (version 5): sender 97% (98%), party 98% (98%), type 98% (98%), topic 100% (100%), object 91% (98%),
+reference 91% (90%), date 98% (98%), period 79% (81%), deadline 47% (52%), amount 81% (81%), jurisdiction 98% (98%),
+language 100% (100%).
 
 The prompt is generic: its fields are defined by meaning and format, with no example values from the corpus. On the 21
 international documents it reads as well as the previous prompt, whose examples came from the Portuguese and Russian
@@ -66,6 +83,40 @@ What the runs showed about the prompt:
   - Two names on one line are sometimes kept as one party ("Thomas und Anna Beispiel").
   - A period is sometimes written at month precision where the document gives days.
   - A private seller's contract names both parties as senders.
+
+### Keeping labels one vocabulary
+
+Version 6 reads with the same number of expected labels found (92% and 93% against 92%) and gives far fewer different
+labels for the same 62 documents: a third fewer topics and jurisdictions, a quarter fewer parties, and each sender
+that recurs is written fewer ways (1.25 against 1.38 and 1.50). The tidying after the model's answer changed only
+labels written the same way but for case or punctuation (`invoice: FS 0231/376823` became the archive's
+`invoice FS 0231/376823`, `Univerzita Karlova` its `UNIVERZITA KARLOVA`); none of its changes was wrong. Each reading
+takes a second or two more: the prompt is longer by the archive's labels.
+
+The sender score is 89% in both passes against 95% and 93%. Of the three documents version 6 reads differently in
+pass 1, one is read unstably by version 5 too (a passport's sender is `HMPO` in one pass and `UK Government` in the
+next); in the other two the model wrote a longer form than the corpus's (`Федеральная кадастровая палата по Москве`
+for `ФКП Росреестра`) or a shorter one than the one the archive already had (`ACME` beside `ACME LTD`). The regression
+is accepted for what the vocabulary gains; setting `labels.vocabulary.kinds.sender.promptLimit` to 0 stops showing
+the model the senders in use, if names matter more than their consistency.
+
+What the runs showed about telling the model of the archive:
+
+- **A list of labels in use makes the model label less, unless told it must not.** Told to "give a new label only
+  for something no listed label names", it gave fewer labels of every kind (13.4 each), fewer references (86% of the
+  expected), and no sender at all for three private landlords and sellers. Told instead that the lists never decide
+  what to label, only how a label is written, it labelled as fully as before.
+- **Naming the list inside a field forces its labels.** Adding "when the archive lists a sender label for it, give
+  that label" to the sender field made the model give a listed sender that was wrong (the tax authority for a pension
+  card) and drop senders it did not find listed, for five documents. The instruction stays in one paragraph after the
+  fields.
+- **Objects are not shown.** Almost every document has objects of its own, and listing those in use gave the model
+  nothing to reuse.
+- **Look Alike's thresholds.** On the labels the corpus got, every pair offered at `suggestSimilarity` was the same
+  thing written two ways for objects (the same account, meter, plate or policy), parties (`M. EXEMPLE JULIEN` and
+  `Julien Exemple`) and senders (`ACME LTD` and `ACME`). Topics at 0.85 offered only different subjects sharing a word
+  (`property tax` and `property sale`, 0.92) or a narrower topic beside a broad one (`plumbing repair`, 0.91), which
+  the prompt asks for; typos and plurals score 0.97 and above, so topics are offered from 0.94.
 
 ## Image descriptions and the model's context
 

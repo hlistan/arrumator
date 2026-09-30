@@ -51,10 +51,7 @@ struct DocumentCard: View {
                 ProgressView().frame(maxWidth: .infinity)
             }
         }
-        .padding(Style.cardPadding)
-        .background(Style.card, in: .rect(cornerRadius: Style.cardCornerRadius))
-        .shadow(color: Style.cardShadow, radius: Style.cardShadowRadius, y: Style.cardShadowOffset)
-        .padding(.vertical, 8)
+        .card()
         .onExitCommand { close() }
         .task(id: model.activity) { await load() }
         .onChange(of: editingName) { wasEditing, _ in
@@ -216,11 +213,14 @@ struct DocumentCard: View {
     }
 }
 
-/// One label on a card; under the pointer, a × takes it off the document.
+/// One label on a card; under the pointer, a × takes it off the document. Its menu opens it among the archive's labels,
+/// or removes it from every document for good.
 struct LabelChip: View {
+    @Environment(AppModel.self) private var model
     let label: DocumentLabel
     let remove: () -> Void
     @State private var hovering = false
+    @State private var confirmingRemoval = false
 
     var body: some View {
         HStack(spacing: 4) {
@@ -233,5 +233,21 @@ struct LabelChip: View {
         .padding(.horizontal, 7).padding(.vertical, 2)
         .background(Style.hover, in: .capsule)
         .onHover { hovering = $0 }
+        .contextMenu {
+            if model.runtime?.config.labels.vocabulary.kinds[label.kind] != nil {
+                Button("Show in Labels") { model.open(label: label) }
+            }
+            Button("Show Documents") { model.search(label) }
+            Divider()
+            Button("Remove from Every Document…") { confirmingRemoval = true }
+        }
+        .confirmationDialog("Remove “\(Wording.label(label))” from every document?", isPresented: $confirmingRemoval) {
+            Button("Remove Everywhere", role: .destructive) {
+                let label = label
+                Task { await model.perform("Remove label") { try await $0.labels.ignore(label) } }
+            }
+        } message: {
+            Text("Arrumator will not give this label again. You can forget this decision on the Labels page.")
+        }
     }
 }

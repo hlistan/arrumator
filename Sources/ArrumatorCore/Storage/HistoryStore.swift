@@ -1,7 +1,7 @@
 import Foundation
 import GRDB
 
-/// Append-only audit trail of everything that happens to documents, folders, rules and settings.
+/// Append-only audit trail of everything that happens to documents, labels and settings.
 public struct HistoryStore: Sendable {
     public let database: AppDatabase
     public init(database: AppDatabase) { self.database = database }

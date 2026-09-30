@@ -5,6 +5,8 @@ import GRDB
 public struct RebuildSummary: Sendable, Codable, Hashable {
     public var documents = 0
     public var events = 0
+    /// The user's rules for labels.
+    public var labelRules = 0
     /// Documents found somewhere other than where their entry said, by the identifier on the file.
     public var relocated = 0
     /// Documents whose file is nowhere in the archive.
@@ -16,7 +18,7 @@ public struct RebuildSummary: Sendable, Codable, Hashable {
 
     public var summary: String {
         "Rebuilt the index from the archive: \(Format.count(documents, "document")), "
-            + "\(Format.count(events, "history event")); "
+            + "\(Format.count(events, "history event")), \(Format.count(labelRules, "rule")) for labels; "
             + "\(relocated) found elsewhere, \(missing) missing, \(adopted) taken in"
     }
 }
@@ -114,6 +116,15 @@ public actor ArchiveRecords {
             guard !entries.isEmpty else { return try await remove(url) }
             return try await write(try FrontMatter.compose(RecordList(entries), body: RecordText.history(entries, month: month)),
                                    to: url)
+        case .labelRules:
+            let url = layout(root).labelRules
+            try await readIfEditedByHand(kind, url: url)
+            let entries = try await database.reader.read { db in
+                try LabelRule.order(Column("id")).fetchAll(db).compactMap(LabelRuleEntry.init)
+            }
+            guard !entries.isEmpty else { return try await remove(url) }
+            return try await write(try FrontMatter.compose(RecordList(entries), body: RecordText.labelRules(entries)),
+                                   to: try directoryMade(for: url))
         }
     }
 
@@ -244,11 +255,13 @@ public actor ArchiveRecords {
     struct Parsed: Sendable {
         var documents: [(directory: URL, entries: [DocumentEntry])] = []
         var history: [(month: String, entries: [EventEntry])] = []
+        var labelRules: [LabelRuleEntry]?
         var hashes: [String: String] = [:]
 
         mutating func merge(_ other: Parsed) {
             documents += other.documents
             history += other.history
+            labelRules = other.labelRules ?? labelRules
             hashes.merge(other.hashes) { _, new in new }
         }
     }
@@ -271,12 +284,14 @@ public actor ArchiveRecords {
         case .documents:
             parsed.documents = [(url.deletingLastPathComponent(), try list(DocumentEntry.self, url))]
         case let .history(month): parsed.history = [(month, try list(EventEntry.self, url))]
+        case .labelRules: parsed.labelRules = try list(LabelRuleEntry.self, url)
         }
         return parsed
     }
 
     /// Puts parsed records into the index. Documents are only ever added or updated here: an entry missing from a
-    /// file does not delete a document, whose entry is written back instead. Other files replace their table.
+    /// file does not delete a document, whose entry is written back instead. Other files replace their table when
+    /// `replacing`, and otherwise add and update their rows.
     private static func apply(_ parsed: Parsed, db: Database, replacing: Bool) throws {
         for (directory, entries) in parsed.documents {
             for entry in entries { try upsert(entry, directory: directory, db: db) }
@@ -289,6 +304,15 @@ public actor ArchiveRecords {
             for entry in entries {
                 var record = entry.record
                 if let doc = record.docId, try !DocumentRecord.exists(db, key: doc) { record.docId = nil }
+                try record.save(db)
+            }
+        }
+        if let entries = parsed.labelRules {
+            if replacing {
+                try db.execute(sql: "DELETE FROM label_rules WHERE id NOT IN (\(ids(entries.map(\.id))))")
+            }
+            for entry in entries {
+                var record = entry.record
                 try record.save(db)
             }
         }
@@ -331,7 +355,8 @@ public actor ArchiveRecords {
         let files: [(RecordKind, URL)] = Self.files(under: root).filter { $0.lastPathComponent == config.records.documentsFileName }.map {
             (.documents(directory: $0.deletingLastPathComponent().path), $0)
         }
-        return files + historyFiles(layout)
+        let rules = FileManager.default.fileExists(atPath: layout.labelRules.path) ? [(RecordKind.labelRules, layout.labelRules)] : []
+        return files + historyFiles(layout) + rules
     }
 
     /// The kind of a record file the index knew about, from where it was.
@@ -339,6 +364,7 @@ public actor ArchiveRecords {
         let url = URL(fileURLWithPath: path).standardizedFileURL
         let layout = layout(root)
         if url.lastPathComponent == config.records.documentsFileName { return .documents(directory: url.deletingLastPathComponent().path) }
+        if url.path == layout.labelRules.standardizedFileURL.path { return .labelRules }
         guard url.deletingLastPathComponent().path == layout.history.standardizedFileURL.path else { return nil }
         return layout.month(ofHistoryFile: url.lastPathComponent).map { .history(month: $0) }
     }
@@ -375,8 +401,8 @@ public actor ArchiveRecords {
         return try await rebuild()
     }
 
-    /// Reads the whole archive into the index, replacing what it held: documents and history, in one
-    /// transaction. Then documents are located by the identifier on each file, files without an entry
+    /// Reads the whole archive into the index, replacing what it held: documents, history and the rules for labels, in
+    /// one transaction. Then documents are located by the identifier on each file, files without an entry
     /// are taken in, and every document is queued to have its text read and its embedding computed again. Called on a
     /// new or set-aside index, whose tables are empty, and by `rebuildIndex`.
     @discardableResult
@@ -393,6 +419,7 @@ public actor ArchiveRecords {
         }
         summary.documents = parsed.documents.reduce(0) { $0 + $1.entries.count }
         summary.events = parsed.history.reduce(0) { $0 + $1.entries.count }
+        summary.labelRules = parsed.labelRules?.count ?? 0
         let ready = parsed
         try await database.writer.write { db in
             try db.execute(sql: "PRAGMA defer_foreign_keys = ON")
@@ -415,7 +442,7 @@ public actor ArchiveRecords {
     /// Tables a rebuild replaces with what the files say, and working state that cannot outlive the old index.
     /// Documents are updated in place instead, never deleted: their numbers come back unchanged, so their cached text,
     /// embeddings and traces stay attached.
-    static let rebuiltTables = ["events"]
+    static let rebuiltTables = ["events", "label_rules"]
 
     /// Finds documents whose file is not where their entry says by the identifier on each file, and takes in files
     /// that no entry describes.

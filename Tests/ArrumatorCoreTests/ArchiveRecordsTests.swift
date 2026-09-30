@@ -194,6 +194,35 @@ import Testing
                 "the file keeps the edit and gains what the index added")
     }
 
+    @Test func theUsersDecisionsAboutLabelsLiveInTheArchiveAndSurviveALostIndex() async throws {
+        let w = try await world()
+        defer { w.h.env.cleanup() }
+        let actions = LabelActions(database: w.h.env.database)
+        try await actions.merge(DocumentLabel(kind: .sender, value: "EDP Comercial"), into: "EDP")
+        try await actions.ignore(DocumentLabel(kind: .topic, value: "electricity"))
+        try await w.records.flush()
+        let url = w.h.env.layout.labelRules
+        let text = try String(contentsOf: url, encoding: .utf8)
+        #expect(text.contains("action: merge") && text.contains("target: EDP") && text.contains("| topic | electricity | not wanted |"),
+                "the rules are the user's, kept in the archive's system folder with a table for people")
+
+        let (database, records) = try freshIndex(w)
+        let summary = try await records.rebuild()
+        #expect(summary.labelRules == 2)
+        let rebuilt = try await LabelStore(database: database, config: w.h.env.config.labels).rules()
+        #expect(rebuilt.map(\.summary) == ["sender “EDP Comercial” → “EDP”", "topic “electricity” ignored"], "they come back with a lost index")
+        #expect(try await DocumentStore(database: database).list(DocumentFilter(), limit: 5).allSatisfy { $0.labels(.sender) == ["EDP"] },
+                "as do the labels they changed")
+
+        try text.replacingOccurrences(of: "target: EDP\n", with: "target: EDP Energia\n").write(to: url, atomically: true, encoding: .utf8)
+        try await w.records.reconcile()
+        #expect(try await w.h.services.labels.rules().first?.target == "EDP Energia", "a rule changed by hand is read back")
+
+        for rule in try await w.h.services.labels.rules() { try await actions.forget(rule: try #require(rule.id)) }
+        try await w.records.flush()
+        #expect(!FileManager.default.fileExists(atPath: url.path), "without rules there is no file")
+    }
+
     @Test func aDeletedRecordFileIsWrittenAgain() async throws {
         let w = try await world()
         defer { w.h.env.cleanup() }

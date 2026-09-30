@@ -24,10 +24,11 @@ struct Ingest: AsyncParsableCommand {
                     context: ExtractionContext(config: runtime.config.extraction, entities: runtime.config.entities,
                                                vision: settings.enableVLM ? try visionOptions(runtime, settings) : nil),
                     trace: trace)
-                let outcome = try await runtime.analyzer.analyse(content, settings: settings, config: runtime.config, trace: trace)
+                let reading = try await runtime.services.read(content, settings: settings, trace: trace)
                 let steps = await sink.steps
-                options.emit(DryRun(content: content, analysis: outcome.analysis, labels: outcome.labels, steps: steps)) {
-                    describe(outcome, content: content, steps: steps)
+                options.emit(DryRun(content: content, analysis: reading.outcome.analysis, labels: reading.outcome.labels,
+                                    changes: reading.changes, steps: steps)) {
+                    describe(reading, content: content, steps: steps)
                 }
             } else {
                 await runtime.coordinator.enqueue(url)
@@ -47,15 +48,17 @@ struct Ingest: AsyncParsableCommand {
         var analysis: DocumentAnalysis
         /// Nil when the model gave no valid answer.
         var labels: [DocumentLabel]?
+        /// Labels the model gave that the archive's vocabulary and the user's rules changed.
+        var changes: [LabelChange]
         var steps: [TraceStep]
     }
 
-    func describe(_ outcome: AnalysisOutcome, content: ExtractedContent, steps: [TraceStep]) -> String {
-        let a = outcome.analysis
+    func describe(_ reading: Reading, content: ExtractedContent, steps: [TraceStep]) -> String {
+        let a = reading.outcome.analysis
         return """
         \(content.source.originalFilename)
           content:   \(content.kind.rawValue), \(content.textOrigin.rawValue), \(content.text.count) chars, language \(content.language.primary)
-        \(Terminal.labelTable(outcome.labels, indent: 2))
+        \(Terminal.labelTable(reading.outcome.labels, indent: 2))\(reading.changes.isEmpty ? "" : "\n  tidied:    " + Terminal.changes(reading.changes))
           file name: \(a.fileName ?? "(keeps its name)")
           read by:   \(a.model ?? "—")\(a.problems.isEmpty ? "" : "; waits for you: " + a.problems.joined(separator: "; "))
           stages:    \(steps.map { "\($0.stage.rawValue) \(Int($0.durationMs))ms" }.joined(separator: ", "))
@@ -131,78 +134,6 @@ struct Search: AsyncParsableCommand {
     }
 }
 
-struct Labels: AsyncParsableCommand {
-    static let configuration = CommandConfiguration(
-        abstract: "Show a document's labels, correct them, or label every document that has none.")
-    @OptionGroup var options: GlobalOptions
-    @Option(help: "Give the document this label, as kind=value, such as sender=EDP or topic=electricity (repeatable).")
-    var add: [String] = []
-    @Option(help: "Take this label, as kind=value, off the document (repeatable).") var remove: [String] = []
-    @Flag(help: "Read every document that has no labels yet with the model, such as one the model gave no answer for.")
-    var unlabelled = false
-    @Argument(help: "Document id or file path.") var document: String?
-
-    func validate() throws {
-        guard (document == nil) == unlabelled else { throw ValidationError("Name one document, or pass --unlabelled alone.") }
-        if unlabelled && !(add.isEmpty && remove.isEmpty) { throw ValidationError("--add and --remove apply to one document.") }
-        _ = try (add + remove).map(Self.label)
-    }
-
-    /// `kind=value` as a label.
-    static func label(_ text: String) throws -> DocumentLabel {
-        let parts = text.split(separator: "=", maxSplits: 1).map(String.init)
-        guard parts.count == 2, let kind = LabelKind(rawValue: parts[0].trimmingCharacters(in: .whitespaces)) else {
-            throw ValidationError("“\(text)” is no kind=value; the kinds are " + LabelKind.allCases.map(\.rawValue).joined(separator: ", "))
-        }
-        return DocumentLabel(kind: kind, value: parts[1])
-    }
-
-    func run() async throws {
-        let runtime = try await options.runtime()
-        var ids: [Int64]
-        if let document {
-            let id = try await resolveDocument(document, runtime: runtime)
-            ids = [id]
-            if !(add.isEmpty && remove.isEmpty) {
-                let removed = Set(try remove.map(Self.label).compactMap { DocumentLabel.normalized($0.value, kind: $0.kind) })
-                let current = try await runtime.services.documents.document(id: id)?.labels ?? []
-                try await runtime.review.edit(id, fileName: nil, labels: current.filter { !removed.contains($0) } + (try add.map(Self.label)))
-            }
-        } else {
-            _ = await runtime.lifecycle.ensureRunning()
-            ids = try await runtime.services.documents.unlabelled()
-            for id in ids { try await runtime.review.retry(id) }
-            await runtime.coordinator.drain()
-        }
-        var rows: [Row] = []
-        for id in ids {
-            guard let doc = try await runtime.services.documents.document(id: id) else { throw ValidationError("No document \(id)") }
-            rows.append(Row(id: id, path: doc.path, labels: doc.labels))
-        }
-        if unlabelled {
-            options.emit(rows) {
-                (rows.map { "#\($0.id) \($0.path)\n    \(Terminal.labels($0.labels))" }
-                    + ["Labelled \(rows.filter { $0.labels != nil }.count) of \(Format.count(rows.count, "document"))"])
-                    .joined(separator: "\n")
-            }
-        } else if let row = rows.first {
-            options.emit(row) {
-                guard let labels = row.labels else {
-                    return "\(row.path)\nNot labelled yet; `arrumatorcli review retry \(row.id)` reads it again."
-                }
-                return row.path + "\n" + Terminal.labelTable(labels, indent: 2)
-            }
-        }
-    }
-
-    struct Row: Encodable {
-        var id: Int64
-        var path: String
-        /// Nil until the model has labelled the document.
-        var labels: [DocumentLabel]?
-    }
-}
-
 struct History: AsyncParsableCommand {
     static let configuration = CommandConfiguration(abstract: "Recent events: arrivals, readings, filings, corrections, what was learned.")
     @OptionGroup var options: GlobalOptions
@@ -271,7 +202,7 @@ struct Replay: AsyncParsableCommand {
         if let model { settings.models.chatModel = model }
         _ = await runtime.lifecycle.ensureRunning()
         let trace = try await runtime.services.startTrace(docID: docID, jobID: nil, attempt: 0, source: .replay, settings: settings)
-        let outcome = try await runtime.analyzer.analyse(content, settings: settings, config: runtime.config, trace: trace)
+        let outcome = try await runtime.services.read(content, settings: settings, trace: trace).outcome
         await runtime.traces.finish(trace, outcome: "replay", docID: docID)
         let original = Reading(analysis: stored.analysis, labels: stored.labels)
         let replay = Reading(analysis: outcome.analysis, labels: outcome.labels)

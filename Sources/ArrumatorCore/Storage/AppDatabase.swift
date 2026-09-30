@@ -116,12 +116,11 @@ extension AppDatabase {
         }
     }
 
-    /// Emits a new value whenever something is recorded in the history (filings, corrections, folders, rules,
-    /// proposals…). The UI refreshes on it instead of polling.
+    /// Emits a new value whenever something is recorded in the history (arrivals, readings, filings, corrections,
+    /// decisions about labels…). The UI refreshes on it instead of polling.
     public func activity() -> AsyncStream<Int64> {
         let observation = ValueObservation.tracking { db in
-            (try Int64.fetchOne(db, sql: "SELECT COALESCE(MAX(id), 0) FROM events") ?? 0)
-                + (try Int64.fetchOne(db, sql: "SELECT COUNT(*) FROM rules WHERE enabled = 1") ?? 0) * 1_000_000_000
+            try Int64.fetchOne(db, sql: "SELECT COALESCE(MAX(id), 0) FROM events") ?? 0
         }.removeDuplicates()
         let reader = reader
         return AsyncStream { continuation in

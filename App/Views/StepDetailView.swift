@@ -90,6 +90,8 @@ struct StepDetail: View {
         HStack(spacing: 18) {
             figure("Labelled", "\(insights.labelled)")
             figure("Not labelled yet", "\(insights.unlabelled)")
+            figure("Tidied to the archive's labels", "\(insights.labelsTidied)")
+            figure("Your rules for labels", "\(insights.labelRules.values.reduce(0, +))")
             Spacer()
         }
         if !insights.labelsByKind.isEmpty {

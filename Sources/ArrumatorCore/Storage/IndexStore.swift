@@ -26,14 +26,16 @@ public struct IndexStore: Sendable {
     /// Makes a document's labels its own: on its row, which writes them into its record file, and in the full-text
     /// index, in one transaction.
     public func saveLabels(_ labels: [DocumentLabel], docID: Int64) async throws {
+        try await database.writer.write { db in try Self.saveLabels(db, labels, docID: docID) }
+    }
+
+    /// Saves a document's labels inside an existing transaction, so a change to many documents commits as one.
+    static func saveLabels(_ db: Database, _ labels: [DocumentLabel], docID: Int64) throws {
         let assignments = LabelKind.allCases.map { "\($0.rawValue) = ?" }.joined(separator: ", ")
         let values: [(any DatabaseValueConvertible)?] = LabelKind.allCases.map { DocumentLabel.searchText(labels, kind: $0) } + [docID]
-        let arguments = StatementArguments(values)
-        try await database.writer.write { db in
-            try db.execute(sql: "UPDATE documents SET labels_json = ?, updated_at = ? WHERE id = ?",
-                           arguments: [JSON.string(labels), Date().unixSeconds, docID])
-            try db.execute(sql: "UPDATE document_text SET \(assignments) WHERE doc_id = ?", arguments: arguments)
-        }
+        try db.execute(sql: "UPDATE documents SET labels_json = ?, updated_at = ? WHERE id = ?",
+                       arguments: [JSON.string(labels), Date().unixSeconds, docID])
+        try db.execute(sql: "UPDATE document_text SET \(assignments) WHERE doc_id = ?", arguments: StatementArguments(values))
     }
 
     /// Updates the searchable file name after a rename, keeping the rest.

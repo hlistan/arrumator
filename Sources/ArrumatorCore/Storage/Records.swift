@@ -97,6 +97,14 @@ public enum EventKind: String, Sendable, Codable, CaseIterable {
     case settingsChanged, ollamaState, appStarted, paused, resumed
     /// The index was rebuilt from the archive's record files.
     case rebuilt
+    /// The user merged a label into another, on every document and in every reading from then on.
+    case labelsMerged
+    /// The user took a label off every document and does not want it given again.
+    case labelIgnored
+    /// The user kept two alike labels apart.
+    case labelsKeptApart
+    /// The user forgot a rule about labels; readings from then on no longer follow it.
+    case labelRuleForgotten
 }
 
 public enum EventActor: String, Sendable, Codable {

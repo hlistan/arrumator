@@ -49,6 +49,17 @@ public struct DocumentLabel: Sendable, Codable, Hashable {
 extension [DocumentLabel] {
     /// The values of the labels of `kind`, in order.
     public func values(_ kind: LabelKind) -> [String] { filter { $0.kind == kind }.map(\.value) }
+
+    /// Each label once, however its value is cased or accented, and the first of a single-valued kind.
+    public func distinct() -> [DocumentLabel] {
+        var seen = Set<String>()
+        var kinds = Set<LabelKind>()
+        return filter { label in
+            let key = label.kind.rawValue + ":" + label.value.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+            guard seen.insert(key).inserted else { return false }
+            return !label.kind.isSingle || kinds.insert(label.kind).inserted
+        }
+    }
 }
 
 extension DocumentLabel {

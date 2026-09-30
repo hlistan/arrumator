@@ -56,6 +56,21 @@ classification, and the fields document managers and key-information extraction 
 | When the model gives no valid answer, the document waits for the user rather than being guessed into shape | Selective prediction with LLMs: Chen et al., *Adaptation with Self-Evaluation to Improve Selective Prediction in LLMs*, 2023 — <https://arxiv.org/pdf/2310.11689> |
 | ISO 8601 dates at the start of file names | NIST, *Electronic File Organization Tips* (2016) — <https://www.nist.gov/system/files/documents/2022/03/30/ElectronicFileOrganizationTips-2016-03.pdf> ; UConn *File Naming and Date Formatting* — <https://guides.lib.uconn.edu/c.php?g=832372&p=8226285> |
 
+## Sources for keeping labels one vocabulary
+
+How the archive's labels are kept consistent, and how the user's decisions about them reach the model
+([how it works](how-it-works.md#keeping-labels-one-vocabulary), `LabelConsolidator`, `LabelSimilarity`,
+`archive-labels.md`).
+
+| Choice | Sources |
+|---|---|
+| Labels written two ways, or two labels for one thing, are the problem to solve: they split what belongs together and a search misses part of it | Golder & Huberman, *The Structure of Collaborative Tagging Systems*, 2005: "Synonymy … presents a greater problem for tagging systems because inconsistency among the terms used in tagging can make it very difficult for one to be sure that all the relevant items have been found" — <https://arxiv.org/abs/cs/0508082> |
+| Labels are compared by the Jaro-Winkler similarity, with Winkler's prefix bonus (scale 0.1, at most 4 characters), and its published examples are the tests' reference values | Winkler, *String Comparator Metrics and Enhanced Decision Rules in the Fellegi-Sunter Model of Record Linkage*, 1990, which extends Jaro's comparator for typographical variation in names and gives the examples MARTHA/MARHTA, DWAYNE/DUANE and DIXON/DICKSONX — <https://files.eric.ed.gov/fulltext/ED325505.pdf> |
+| Jaro-Winkler rather than an edit distance for names | Cohen, Ravikumar & Fienberg, *A Comparison of String Distance Metrics for Name-Matching Tasks*, IIWeb 2003: the Jaro variants are close to the best edit-distance-like method on average, better on several problems, and about ten times faster — <https://www.cs.cmu.edu/~wcohen/postscript/ijcai-ws-2003.pdf> |
+| Words are compared in sorted order, so `Silva, Maria` is `Maria Silva`, and labels whose numbers differ are never alike | Token order is a writing variant for names, as token-based comparison in the same study treats it; a number is what tells one account, invoice or address from the next, so no measure of writing may join two of them |
+| Only labels written the same way merge without asking for names; merely alike ones wait for the user | Two people or companies can differ by one letter; record linkage sends the uncertain band between match and non-match to clerical review (Winkler 1990, above) |
+| The user's decisions teach the model through its prompt, with the archive's labels as examples, rather than by retraining it | In-context learning: a large language model does a task from instructions and demonstrations given "purely via text interaction with the model", "without any gradient updates or fine-tuning" — Brown et al., *Language Models are Few-Shot Learners*, 2020 — <https://arxiv.org/abs/2005.14165> |
+
 ## Sources for search
 
 | Choice | Sources |

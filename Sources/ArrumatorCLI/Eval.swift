@@ -83,6 +83,11 @@ struct Eval: AsyncParsableCommand {
         /// Of the labels the corpus expects, the share found, in all and by kind.
         var expectedFound: Double
         var expectedFoundByKind: [String: Double]
+        /// Of the senders the corpus expects on more than one document, how many ways each was written on average: 1 when
+        /// every document from one sender got the same sender label.
+        var senderWritings: Double
+        /// How many different labels of each kind the documents got in all, as a label list would show them.
+        var distinctByKind: [String: Int]
         var medianSeconds: Double
 
         /// The share of details read right: type, sender, date and title together.
@@ -148,6 +153,9 @@ struct Eval: AsyncParsableCommand {
                   + LabelKind.allCases.compactMap { kind in
                       summary.expectedFoundByKind[kind.rawValue].map { String(format: "%@ %.0f%%", kind.rawValue, $0 * 100) }
                   }.joined(separator: " · ") + ")")
+            print(String(format: "sender writings: %.2f each · distinct labels: ", summary.senderWritings)
+                  + LabelKind.allCases.compactMap { kind in summary.distinctByKind[kind.rawValue].map { "\(kind.rawValue) \($0)" } }
+                  .joined(separator: " · "))
         }
         if let report {
             struct Report: Encodable { var rows: [Row]; var summaries: [Summary] }
@@ -231,12 +239,21 @@ struct Eval: AsyncParsableCommand {
         let byKind = Dictionary(grouping: checks) { String($0.key.prefix { $0 != ":" }) }
             .mapValues { rate($0.map(\.value)) }
         let seconds = rows.map(\.seconds).sorted()
+        let expectedSender = Dictionary(corpus.compactMap { f in f.expected.correspondent.map { (f.file, $0.lowercased()) } },
+                                        uniquingKeysWith: { a, _ in a })
+        let writings = Dictionary(grouping: labelled.filter { expectedSender[$0.file] != nil }) { expectedSender[$0.file] ?? "" }
+            .values.filter { $0.count > 1 }
+            .map { Double(Set($0.compactMap { $0.labels?.values(.sender).first }).count) }
+        let distinct = Dictionary(uniqueKeysWithValues: LabelKind.allCases.map { kind in
+            (kind.rawValue, Set(rows.flatMap { $0.labels?.values(kind) ?? [] }).count)
+        })
         return Summary(pass: pass, statusAccuracy: rate(rows.map(\.statusOK)), docTypeAccuracy: rate(rows.map(\.docTypeOK)),
                        correspondentAccuracy: rate(rows.map(\.correspondentOK)), dateAccuracy: rate(rows.map(\.dateOK)),
                        titleAccuracy: rate(rows.map(\.titleOK)), languageAccuracy: rate(rows.map(\.languageOK)),
                        labelled: filed.isEmpty ? 0 : Double(labelled.count) / Double(filed.count),
                        labelsPerDocument: labelled.isEmpty ? 0 : Double(labelled.compactMap(\.labels?.count).reduce(0, +)) / Double(labelled.count),
                        coverage: coverage, expectedFound: rate(checks.map(\.value)), expectedFoundByKind: byKind,
+                       senderWritings: writings.isEmpty ? 0 : writings.reduce(0, +) / Double(writings.count), distinctByKind: distinct,
                        medianSeconds: seconds.isEmpty ? 0 : seconds[seconds.count / 2])
     }
 }

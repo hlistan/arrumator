@@ -34,6 +34,19 @@ import Testing
                 "bm25() weighs columns by position; a column without a weight counts as 1 and a label would outrank the title")
     }
 
+    @Test func theVocabularyMergesOnlyWhatItWouldAlsoOffer() throws {
+        let vocabulary = try PipelineConfig.bundledDefaults().labels.vocabulary
+        for (kind, policy) in vocabulary.kinds {
+            #expect((0...1).contains(policy.suggestSimilarity) && (0...1).contains(policy.mergeSimilarity), "\(kind): a similarity")
+            #expect(policy.mergeSimilarity >= policy.suggestSimilarity,
+                    "\(kind): a label merged without asking is one the user would have been offered to merge")
+        }
+        #expect(throws: (any Error).self, "a kind that does not exist is refused, not ignored") {
+            try JSONDecoder().decode([LabelKind: KindVocabularyConfig].self,
+                                     from: Data(#"{"sendr": {"mergeSimilarity": 1, "suggestSimilarity": 1, "promptLimit": 0}}"#.utf8))
+        }
+    }
+
     @Test func deepMergeOverridesNestedKeysOnly() throws {
         let base: JSONValue = ["a": ["x": 1, "y": 2], "b": "keep"]
         let merged = ConfigLoader.deepMerge(base, ["a": ["y": 3]])

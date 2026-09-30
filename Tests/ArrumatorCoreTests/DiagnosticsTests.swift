@@ -12,13 +12,13 @@ import Testing
                         outputJson: #"[{"user":"\#(documentText)","response":"{\"subjects\":[\"Maria Exemplo\"]}"}]"#, error: nil)
     }
 
-    static let steps = [step(.extract, seq: 0), step(.analyse, seq: 1), step(.vlm, seq: 2), step(.place, seq: 3)]
+    static let steps = [step(.extract, seq: 0), step(.analyse, seq: 1), step(.vlm, seq: 2), step(.consolidate, seq: 3), step(.place, seq: 4)]
 
     @Test func withoutConsentNoModelExchangeLeavesTheMac() {
         let shared = DiagnosticsExporter.shareable(Self.steps, includeDocumentText: false)
-        for step in shared where [TraceStage.analyse.rawValue, TraceStage.vlm.rawValue].contains(step.stage) {
+        for step in shared where [TraceStage.analyse.rawValue, TraceStage.vlm.rawValue, TraceStage.consolidate.rawValue].contains(step.stage) {
             #expect(step.inputJson == nil && step.outputJson == nil,
-                    "\(step.stage) sent the document to the model and got answers drawn from it; both stay out")
+                    "\(step.stage) holds the document's text or the model's answers drawn from it; both stay out")
         }
         #expect(shared.map(\.stage) == Self.steps.map(\.stage) && shared.map(\.durationMs) == Self.steps.map(\.durationMs),
                 "every step is still there, with its timing")

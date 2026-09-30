@@ -110,6 +110,7 @@
     "documentsFileName": "_documents.md",
     "systemFolderName": "System",
     "historyFolderName": "History",
+    "labelRulesFileName": "_labels.md",
     "setAsideSuffix": "unreadable"
   },
   "ingest": {
@@ -248,7 +249,7 @@
     "minTextDateScore": 1
   },
   "analysis": {
-    "promptVersion": 5,
+    "promptVersion": 6,
     "excerptChars": 12000,
     "embeddingSummaryChars": 2000,
     "embeddingNumCtx": 2048,
@@ -266,7 +267,44 @@
   },
   "labels": {
     "maxPerKind": 5,
-    "maxValueChars": 80
+    "maxValueChars": 80,
+    "vocabulary": {
+      "kinds": {
+        "sender": {
+          "mergeSimilarity": 1,
+          "suggestSimilarity": 0.85,
+          "promptLimit": 40
+        },
+        "party": {
+          "mergeSimilarity": 1,
+          "suggestSimilarity": 0.9,
+          "promptLimit": 20
+        },
+        "topic": {
+          "mergeSimilarity": 0.96,
+          "suggestSimilarity": 0.94,
+          "promptLimit": 40
+        },
+        "object": {
+          "mergeSimilarity": 1,
+          "suggestSimilarity": 0.9,
+          "promptLimit": 0
+        },
+        "reference": {
+          "mergeSimilarity": 1,
+          "suggestSimilarity": 1,
+          "promptLimit": 0
+        },
+        "jurisdiction": {
+          "mergeSimilarity": 0.96,
+          "suggestSimilarity": 0.85,
+          "promptLimit": 15
+        }
+      },
+      "promptPreferred": 20,
+      "promptUnwanted": 20,
+      "suggestionLimit": 50
+    }
   },
   "naming": {
     "maxChars": 120,
@@ -388,9 +426,10 @@
         {
           "id": "analysed",
           "title": "Analysed",
-          "detail": "The local model read it and gave it its labels and its name.",
+          "detail": "The local model read it and gave it its labels and its name, kept one vocabulary with the archive's.",
           "stages": [
-            "analyse"
+            "analyse",
+            "consolidate"
           ],
           "logCategories": [
             "ollama",

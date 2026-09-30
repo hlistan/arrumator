@@ -1,10 +1,11 @@
 import Foundation
 
 public enum TraceStage: String, Sendable, Codable, CaseIterable {
-    case stability, hash, dedupe, extract, ocr, vlm, entities, correspondent, analyse, embed, name, place, index, learn
+    case stability, hash, dedupe, extract, ocr, vlm, entities, correspondent, analyse, consolidate, embed, name, place, index, learn
 
-    /// The step records a model exchange: prompts holding the document's text, and answers drawn from it.
-    public var exchangesDocumentText: Bool { [.analyse, .vlm].contains(self) }
+    /// The step records what the document says: prompts holding its text, the model's answers drawn from it, or the
+    /// labels made of those answers.
+    public var holdsDocumentContent: Bool { [.analyse, .vlm, .consolidate].contains(self) }
 }
 
 public enum TraceStatus: String, Sendable, Codable {

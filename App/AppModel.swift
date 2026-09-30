@@ -22,11 +22,15 @@ final class AppModel {
     var ollama = OllamaState.unknown
     var recent: [EventRecord] = []
     var reviewCount = 0
+    /// Pairs of alike labels waiting for the user to merge them or keep them apart.
+    var labelSuggestionCount = 0
     /// Bumped on every database change, and when another archive is opened; views reload with `.task(id:)`.
     var activity: Int64 = 0
     var destination: Destination = .incoming
     /// The document opened in place as a card. One at a time, as in Things.
     var openDocument: Int64?
+    /// The label opened in place as a card on the Labels page.
+    var openLabel: DocumentLabel?
     /// Text in the sidebar's search field; while it is not empty the main area shows results.
     var searchText = ""
     weak var presenter: (any WindowPresenting)?
@@ -138,6 +142,7 @@ final class AppModel {
             await notifications.announce(events, previous: recent, settings: settings)
             recent = events
             reviewCount = try await runtime.services.documents.reviewQueue().count
+            labelSuggestionCount = try await runtime.services.labels.suggestions().count
         } catch {
             Log.error(.ui, "Refresh failed", ["error": error.localizedDescription])
         }
@@ -195,7 +200,21 @@ final class AppModel {
     func go(_ destination: Destination) {
         self.destination = destination
         openDocument = nil
+        openLabel = nil
         searchText = ""
+    }
+
+    /// Shows a label opened in place on the Labels page.
+    func open(label: DocumentLabel) {
+        go(.labels)
+        openLabel = label
+        show(.main)
+    }
+
+    /// Searches for the documents that have a label, by its kind.
+    func search(_ label: DocumentLabel) {
+        go(destination)
+        searchText = "\(label.kind.rawValue):\"\(label.value.replacingOccurrences(of: "\"", with: " "))\""
     }
 
     /// Shows a document opened in place on a page, bringing the main window forward.
@@ -247,8 +266,8 @@ final class AppModel {
 
 /// What the main window shows. The sidebar lists `lists`; history and statistics are reached from the sidebar's menu.
 enum Destination: Hashable {
-    case incoming, review, processed
+    case incoming, review, processed, labels
     case history, statistics
 
-    static let lists: [Destination] = [.incoming, .review, .processed]
+    static let lists: [Destination] = [.incoming, .review, .processed, .labels]
 }

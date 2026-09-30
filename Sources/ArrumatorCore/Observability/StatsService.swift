@@ -20,6 +20,10 @@ public struct Insights: Sendable, Codable, Hashable {
     /// Documents whose name or details the user corrected, and those the user confirmed as they were.
     public var corrected: Int
     public var confirmed: Int
+    /// The user's rules about labels, by what they decide (`LabelRuleAction`).
+    public var labelRules: [String: Int]
+    /// Labels the model gave that the rules or the archive's vocabulary changed or dropped (`consolidate` steps traced).
+    public var labelsTidied: Int
     public var latency: [StageLatency]
     public var meanOCRConfidence: Double?
     public var warnings: [String: Int]
@@ -49,6 +53,11 @@ public struct StatsService: Sendable {
             let userEvents = { (kind: EventKind) in
                 try Int.fetchOne(db, sql: "SELECT COUNT(DISTINCT doc_id) FROM events WHERE kind = ?", arguments: [kind.rawValue]) ?? 0
             }
+            let labelRules = try Self.histogram(db, sql: "SELECT action, COUNT(*) FROM label_rules GROUP BY 1")
+            let labelsTidied = try Int.fetchOne(db, sql: """
+                SELECT COALESCE(SUM(json_array_length(output_json, '$.changes')), 0) FROM trace_steps
+                WHERE stage = ? AND output_json IS NOT NULL
+                """, arguments: [TraceStage.consolidate.rawValue]) ?? 0
             var durations: [String: [Double]] = [:]
             for row in try Row.fetchAll(db, sql: "SELECT stage, duration_ms FROM trace_steps WHERE status != 'skipped'") {
                 durations[row["stage"], default: []].append(row["duration_ms"])
@@ -68,6 +77,7 @@ public struct StatsService: Sendable {
                 """)
             return Insights(generatedAt: now, documents: documents, statuses: statuses, labelled: labelled, unlabelled: unlabelled,
                             labelsByKind: labelsByKind, corrected: try userEvents(.corrected), confirmed: try userEvents(.markedCorrect),
+                            labelRules: labelRules, labelsTidied: labelsTidied,
                             latency: latency, meanOCRConfidence: ocr, warnings: warnings)
         }
     }

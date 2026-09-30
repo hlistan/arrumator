@@ -11,9 +11,10 @@ import Testing
     struct PerFileAnalyzer: DocumentAnalyzing {
         let labels: [String: [DocumentLabel]]
 
-        func analyse(_ content: ExtractedContent, settings: AppSettings, config: PipelineConfig,
+        func analyse(_ content: ExtractedContent, guidance: LabelGuidance, settings: AppSettings, config: PipelineConfig,
                      trace: TraceContext) async throws -> AnalysisOutcome {
-            var outcome = try await StubAnalyzer(fileName: content.source.stem).analyse(content, settings: settings, config: config, trace: trace)
+            var outcome = try await StubAnalyzer(fileName: content.source.stem).analyse(content, guidance: guidance, settings: settings,
+                                                                                         config: config, trace: trace)
             outcome.labels = labels[content.source.originalFilename] ?? []
             return outcome
         }

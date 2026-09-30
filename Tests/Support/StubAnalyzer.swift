@@ -3,11 +3,16 @@ import Foundation
 
 /// Analyzer double: gives every document the labels it is set up with (by default those of an electricity bill from
 /// EDP to Maria Exemplo; nil for "the model gave no valid answer", which also makes it wait for the user), or throws
-/// `error`. It records an analysis step as the model's analyzer does, and remembers which files it read.
+/// `error`. It records an analysis step as the model's analyzer does, and remembers which files it read and what it was
+/// told of the archive's labels.
 public struct StubAnalyzer: DocumentAnalyzing {
     public actor Calls {
         public private(set) var files: [String] = []
-        func read(_ file: String) { files.append(file) }
+        public private(set) var guidance: [LabelGuidance] = []
+        func read(_ file: String, guidance: LabelGuidance) {
+            files.append(file)
+            self.guidance.append(guidance)
+        }
     }
 
     public let labels: [DocumentLabel]?
@@ -22,9 +27,9 @@ public struct StubAnalyzer: DocumentAnalyzing {
         self.error = error
     }
 
-    public func analyse(_ content: ExtractedContent, settings: AppSettings, config: PipelineConfig,
+    public func analyse(_ content: ExtractedContent, guidance: LabelGuidance, settings: AppSettings, config: PipelineConfig,
                         trace: TraceContext) async throws -> AnalysisOutcome {
-        await calls.read(content.source.originalFilename)
+        await calls.read(content.source.originalFilename, guidance: guidance)
         if let error { throw error }
         await trace.record(.analyse, status: labels == nil ? .error : .ok, startedAt: Date(), output: labels)
         let analysis = DocumentAnalysis(fileName: fileName, model: labels == nil ? nil : "stub",

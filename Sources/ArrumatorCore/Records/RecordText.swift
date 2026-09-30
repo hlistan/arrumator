@@ -26,6 +26,20 @@ enum RecordText {
         return lines.joined(separator: "\n") + "\n"
     }
 
+    static func labelRules(_ entries: [LabelRuleEntry]) -> String {
+        var lines = ["# Labels", "", note, "", "| Kind | Label | Decision | Since |", "|---|---|---|---|"]
+        for e in entries {
+            let decision = switch e.action {
+            case .merge: "written as \(e.target ?? "")"
+            case .ignore: "not wanted"
+            case .keepApart: "kept apart from \(e.target ?? "")"
+            }
+            lines.append("| \(e.kind.rawValue) | \(cell(e.value)) | \(cell(decision)) | "
+                + "\(e.created.formatted(.iso8601.year().month().day())) |")
+        }
+        return lines.joined(separator: "\n") + "\n"
+    }
+
     /// A table cell: a pipe or a line break would end it.
     private static func cell(_ text: String?) -> String {
         (text ?? "").replacingOccurrences(of: "|", with: "\\|").replacingOccurrences(of: "\n", with: " ")

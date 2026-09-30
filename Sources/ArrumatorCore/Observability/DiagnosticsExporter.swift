@@ -65,7 +65,7 @@ extension DiagnosticsExporter {
     public static func shareable(_ steps: [TraceStepRecord], includeDocumentText: Bool) -> [TraceStepRecord] {
         guard !includeDocumentText else { return steps }
         return steps.map { step in
-            guard TraceStage(rawValue: step.stage)?.exchangesDocumentText == true else { return step }
+            guard TraceStage(rawValue: step.stage)?.holdsDocumentContent == true else { return step }
             var shared = step
             shared.inputJson = nil
             shared.outputJson = nil

@@ -110,13 +110,35 @@ import Testing
             #expect(system.contains("- \(key):"), "the prompt explains \(key)")
         }
         #expect(system.contains("no folders") && !system.contains("{{"), "written for labelling, every placeholder filled")
-        #expect(!system.contains("KNOWN CORRESPONDENTS"), "the model is told of no senders the app knows")
         #expect(request.messages[1].content.contains("NIF 503504564   Cliente: Maria Exemplo"), "the model reads the document's text")
+        #expect(!request.messages[1].content.contains("## THIS ARCHIVE"), "an archive without labels has nothing to tell it")
 
         let steps = await h.steps(.analyse)
         #expect(steps.map(\.status) == [.ok], "the exchange is recorded in the trace")
         #expect(steps.first?.output?.contains("Portugal") == true && steps.first?.output?.contains("\"system\"") == true,
                 "the trace holds the answer and the raw prompt")
+    }
+
+    @Test func theModelIsToldTheArchivesLabelsAndTheUsersDecisions() async throws {
+        let h = try await ClassifyHarness.make { _ in Fixtures.answer() }
+        defer { h.env.cleanup() }
+        let guidance = LabelGuidance(
+            used: [.sender: ["EDP", "MEO"], .topic: ["electricity"]],
+            preferred: [LabelPreference(from: DocumentLabel(kind: .sender, value: "EDP Comercial"), to: "EDP")],
+            unwanted: [DocumentLabel(kind: .topic, value: "document")])
+        _ = try await h.analyse(Fixtures.content("fatura.pdf", text: Fixtures.edpText), guidance: guidance)
+        let request = try #require(await h.mock.chatRequests.first)
+        let user = request.messages[1].content
+        #expect(user.hasPrefix("## THIS ARCHIVE"), "before the document")
+        #expect(user.contains("- senders: EDP; MEO\n- topics: electricity"), "the labels in use, by the answer's name for their kind")
+        #expect(user.contains("- senders: EDP Comercial → EDP"), "how the user wants a label written")
+        #expect(user.contains("- topics: document"), "a label the user does not want")
+        #expect(user.contains("## DOCUMENT") && !user.contains("{{"), "every placeholder filled")
+        #expect(request.messages[0].content.contains("THIS ARCHIVE"), "the system prompt says how to use it")
+
+        _ = try await h.analyse(Fixtures.content("fatura.pdf", text: Fixtures.edpText), guidance: LabelGuidance(used: [.sender: ["EDP"]]))
+        let second = try #require(await h.mock.chatRequests.last?.messages[1].content)
+        #expect(second.contains("Labels its owner does not want:\n-\n"), "an empty list says so")
     }
 
     @Test func anInvalidAnswerIsRepairedByTheModel() async throws {

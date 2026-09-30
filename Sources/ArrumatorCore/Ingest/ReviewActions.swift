@@ -101,7 +101,7 @@ public struct ReviewActions: Sendable {
             }
         }
         if let labels {
-            let kept = Self.distinct(labels.compactMap { DocumentLabel.normalized($0.value, kind: $0.kind) })
+            let kept = labels.compactMap { DocumentLabel.normalized($0.value, kind: $0.kind) }.distinct()
             if kept != doc.labels {
                 try await services.index.saveLabels(kept, docID: docID)
                 edited["labels"] = kept.map { "\($0.kind.rawValue): \($0.value)" }.joined(separator: "; ")
@@ -110,16 +110,5 @@ public struct ReviewActions: Sendable {
         guard !edited.isEmpty else { return }
         try await services.history.record(.corrected, actor: .user, doc: docID,
                                           summary: "Corrected \(edited.keys.sorted().joined(separator: ", "))", payload: edited)
-    }
-
-    /// Each label once, however its value is written, and the first of a single-valued kind.
-    static func distinct(_ labels: [DocumentLabel]) -> [DocumentLabel] {
-        var seen = Set<String>()
-        var kinds = Set<LabelKind>()
-        return labels.filter { label in
-            let key = label.kind.rawValue + ":" + label.value.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
-            guard seen.insert(key).inserted else { return false }
-            return !label.kind.isSingle || kinds.insert(label.kind).inserted
-        }
     }
 }

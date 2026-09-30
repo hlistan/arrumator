@@ -56,22 +56,53 @@ public struct PipelineServices: Sendable {
                                            models: try? config.models(for: settings.models), settings: settings))
     }
 
+    public var labels: LabelStore { LabelStore(database: database, config: config.labels) }
+
+    /// Reads a document with the model, telling it of the archive's labels and the user's decisions about them, and
+    /// keeps its labels one vocabulary with the archive's (`LabelConsolidator`), recording what that changed in the
+    /// trace. Nothing is saved: dry runs and replays read this way too.
+    public func read(_ content: ExtractedContent, settings: AppSettings, trace: TraceContext) async throws -> Reading {
+        var outcome = try await analyzer.analyse(content, guidance: try await labels.guidance(), settings: settings, config: config,
+                                                 trace: trace)
+        guard let given = outcome.labels else { return Reading(outcome: outcome, changes: []) }
+        let consolidator = try await labels.consolidator()
+        let consolidation = await trace.measure(.consolidate, input: given, output: { (c: LabelConsolidation) in c }) {
+            consolidator.consolidate(given)
+        }
+        outcome.labels = consolidation.labels
+        return Reading(outcome: outcome, changes: consolidation.changes)
+    }
+
     /// Asks the model about a document and keeps what it says: the labels on the document and in the search index
     /// straight away, and a history event with what it was labelled with, or why it was not.
     public func analyse(docID: Int64, jobID: Int64?, content: ExtractedContent, settings: AppSettings,
                         trace: TraceContext) async throws -> AnalysisOutcome {
-        let outcome = try await analyzer.analyse(content, settings: settings, config: config, trace: trace)
+        let reading = try await read(content, settings: settings, trace: trace)
+        let outcome = reading.outcome
         if let labels = outcome.labels {
             try await index.saveLabels(labels, docID: docID)
             try await history.record(.analysed, doc: docID, job: jobID, trace: trace.traceID,
                                      summary: labels.isEmpty ? "Nothing worth a label" : labels.map(\.value).joined(separator: " · "),
-                                     payload: outcome.analysis)
+                                     payload: AnalysedPayload(analysis: outcome.analysis, changes: reading.changes))
         } else {
             try await history.record(.error, doc: docID, job: jobID, trace: trace.traceID,
                                      summary: "Not read: " + outcome.analysis.problems.joined(separator: "; "), payload: outcome.analysis)
         }
         return outcome
     }
+}
+
+/// A reading of a document: what the model gave it, its labels kept one vocabulary with the archive's, and what that
+/// changed of what the model gave.
+public struct Reading: Sendable, Codable {
+    public var outcome: AnalysisOutcome
+    public var changes: [LabelChange]
+}
+
+/// What the history keeps of a reading: how the document was read, and which of the model's labels became others.
+public struct AnalysedPayload: Sendable, Codable, Hashable {
+    public var analysis: DocumentAnalysis
+    public var changes: [LabelChange]
 }
 
 /// Runs ingest jobs one at a time through hashing → extracting → analysing → filing.

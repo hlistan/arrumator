@@ -18,7 +18,7 @@ public struct PromptLibrary: Sendable {
     private let templates: [String: String]
 
     public static func bundled() throws -> PromptLibrary {
-        let names = ["labels-system", "document-user", "repair-user"]
+        let names = ["labels-system", "archive-labels", "document-user", "repair-user"]
         var templates: [String: String] = [:]
         for name in names {
             guard let url = Bundle.module.url(forResource: name, withExtension: "md", subdirectory: "Prompts") else {

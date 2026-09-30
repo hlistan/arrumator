@@ -31,6 +31,7 @@ struct MainWindow: View {
             case .incoming: IncomingPage()
             case .review: ReviewPage()
             case .processed: ProcessedPage()
+            case .labels: LabelsPage()
             case .history: HistoryPage()
             case .statistics: StatisticsView()
             }
@@ -66,6 +67,7 @@ struct Sidebar: View {
         switch destination {
         case .incoming: model.ingest.queued
         case .review: model.reviewCount
+        case .labels: model.labelSuggestionCount
         default: 0
         }
     }

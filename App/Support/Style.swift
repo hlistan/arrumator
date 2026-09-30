@@ -23,6 +23,8 @@ enum Style {
     static let figureMinWidth: CGFloat = 92
     /// Width of the kind chooser where a label is added on a document's card.
     static let labelKindPickerWidth: CGFloat = 130
+    /// Width of the field where the label to merge into is written on a label's card.
+    static let mergeFieldWidth: CGFloat = 240
 
     static let page = Color(nsColor: .textBackgroundColor)
     static let card = Color(nsColor: .controlBackgroundColor)
@@ -36,6 +38,7 @@ extension Destination {
         case .incoming: "Incoming"
         case .review: "Needs You"
         case .processed: "Processed"
+        case .labels: "Labels"
         case .history: "History"
         case .statistics: "Statistics"
         }
@@ -46,6 +49,7 @@ extension Destination {
         case .incoming: "tray.and.arrow.down.fill"
         case .review: "questionmark.circle.fill"
         case .processed: "checkmark.circle.fill"
+        case .labels: "tag.fill"
         case .history: "clock.fill"
         case .statistics: "chart.bar.fill"
         }
@@ -57,6 +61,7 @@ extension Destination {
         case .incoming: .blue
         case .review: .orange
         case .processed: .green
+        case .labels: .purple
         case .history, .statistics: .secondary
         }
     }
@@ -170,6 +175,43 @@ enum Wording {
         }
     }
 
+    /// The labels of a kind, as the Labels page heads them.
+    static func labelKinds(_ kind: LabelKind) -> String {
+        switch kind {
+        case .sender: "Senders"
+        case .party: "People and Organisations"
+        case .type: "Types"
+        case .topic: "Topics"
+        case .object: "Things"
+        case .reference: "References"
+        case .date: "Dates"
+        case .period: "Periods"
+        case .deadline: "Deadlines"
+        case .amount: "Amounts"
+        case .jurisdiction: "Jurisdictions"
+        case .language: "Languages"
+        }
+    }
+
+    /// A decision about labels, as a sentence: "“EDP Comercial” is written “EDP”".
+    static func rule(_ rule: LabelRule) -> String {
+        let value = label(DocumentLabel(kind: rule.kind, value: rule.value))
+        let target = rule.target.map { label(DocumentLabel(kind: rule.kind, value: $0)) } ?? ""
+        return switch rule.action {
+        case .merge: "“\(value)” is written “\(target)”"
+        case .ignore: "“\(value)” is not wanted"
+        case .keepApart: "“\(value)” and “\(target)” are kept apart"
+        }
+    }
+
+    static func ruleSymbol(_ action: LabelRuleAction) -> String {
+        switch action {
+        case .merge: "arrow.triangle.merge"
+        case .ignore: "tag.slash"
+        case .keepApart: "arrow.left.and.right"
+        }
+    }
+
     /// What a new label of a kind looks like, shown in the empty field.
     static func labelPrompt(_ kind: LabelKind) -> String {
         switch kind {
@@ -223,6 +265,10 @@ enum EventStyle {
         case .retry: "arrow.clockwise"
         case .corrected, .userMoved, .userRenamed, .markedCorrect: "hand.point.up.left"
         case .undone: "arrow.uturn.backward"
+        case .labelsMerged: Wording.ruleSymbol(.merge)
+        case .labelIgnored: Wording.ruleSymbol(.ignore)
+        case .labelsKeptApart: Wording.ruleSymbol(.keepApart)
+        case .labelRuleForgotten: "arrow.uturn.backward"
         default: "circle"
         }
     }

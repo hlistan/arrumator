@@ -10,8 +10,8 @@ covers the app and its settings. [Storage](storage.md) covers where everything i
 new file in Incoming ──► wait until it stops changing ──► hash (an exact copy of a filed document is a duplicate)
    ──► extract: PDFKit text, Apple Vision OCR, textutil (doc/docx/rtf/odt/html), CoreXLSX, PPTX, e-mail,
        archives, media metadata, Quick Look previews, local vision model for photos; language, dates, identifiers
-   ──► analyse: the local model reads it once, with the app's own prompt, picks out its signals, which become its
-       labels, and names the file
+   ──► analyse: the local model reads it once, with the app's own prompt and the archive's labels, picks out its
+       signals, which become its labels, and names the file; your rules and the archive's vocabulary tidy the labels
    ──► file it at the top of the archive under that name, keeping the original name in an extended attribute, and
        add it to the search index (its words, its labels and its meaning)
 ```
@@ -41,7 +41,8 @@ document's trace records which device read each page.
 
 The model reads each document once, with a prompt of the app's own (`labels-system.md`), which you do not edit. It is
 given the document's text (an excerpt of `analysis.excerptChars` characters) and the dates and identifiers the
-extractor found, and it answers in a fixed schema: one list of signals for each kind of label, then the file name.
+extractor found, after what the archive's labels say ([below](#keeping-labels-one-vocabulary)), and it answers in a
+fixed schema: one list of signals for each kind of label, then the file name.
 Under constrained decoding the model writes the lists in the schema's order, so the facts a file name is made of come
 first (the sender, the type, the date) and the name last, built from them as `YYYY-MM-DD Sender - Description`, in the
 document's language.
@@ -101,6 +102,56 @@ labels are kept as the model's are: a date must be a date and a type one of the 
 date: on the card a new one replaces the old; from a terminal, remove the old one in the same command (`--remove
 type=invoice --add type=receipt`). Each correction is recorded in History. Renaming the document (on its card, or
 `review rename`) renames the file where it is.
+
+## Keeping labels one vocabulary
+
+Labels are only as good as they are consistent: a document labelled `EDP Comercial` is not found under `EDP`, and a
+topic written two ways splits what belongs together. This is the synonymy problem of every tagging system
+([sources](organizing-principles-sources.md#sources-for-keeping-labels-one-vocabulary)). Arrumator keeps the archive's
+labels one vocabulary in three ways, and learns from you as it goes.
+
+**The model is shown the archive's labels.** Every document is read with a section of the prompt
+(`archive-labels.md`) that lists the labels the archive already uses, the most used first, for the kinds
+`labels.vocabulary.kinds` names (`promptLimit` of each), how you asked labels to be written (your merges, the newest
+`labels.vocabulary.promptPreferred`) and the labels you do not want (the newest `labels.vocabulary.promptUnwanted`). The
+lists never decide what the model labels, only how: when the document's sender, a party, a topic or a jurisdiction is
+one the archive has a label for, the model gives that label as listed rather than another writing of the same name.
+Objects and references are not listed, as nearly every document has its own. That is how your decisions teach the
+model: by showing it examples in its prompt, without retraining it, so what it learns stays in your archive and follows
+you to another model.
+
+**Every label the model gives is tidied.** Your rules come first: a label you merged is written as you want it,
+following one merge into the next, and one you do not want is dropped. Then a label of a kind the vocabulary keeps
+(sender, party, topic, object, reference, jurisdiction) becomes the label the archive already uses when the two are
+written alike enough: `labels.vocabulary.kinds.<kind>.mergeSimilarity`. At 1, the default for names, objects and
+references, only labels written the same way but for case, accents, punctuation, spacing and word order are one
+(`EDP-Comercial, S.A.` is `EDP Comercial SA`); for topics and jurisdictions a typo is forgiven too (`electricty`). How
+alike two labels are written is their Jaro-Winkler similarity, the measure record linkage uses for names, over their
+words in sorted order; labels whose numbers differ are never alike. A label the archive already uses stays itself,
+unless more documents have it written another way. Only writing is compared, never meaning: that one label means
+another in other words is the model's judgment, or yours. What was changed, and by which rule, is in the document's
+trace (the `consolidate` step) and its History entry.
+
+**What is merely alike waits for you.** Labels in use written alike enough to be one
+(`labels.vocabulary.kinds.<kind>.suggestSimilarity`), but not enough to merge without asking, such as two names a
+letter apart, are listed under **Look Alike** on the Labels page, the most alike first, at most
+`labels.vocabulary.suggestionLimit`. The sidebar shows how many wait.
+
+What you decide becomes a rule, recorded in History and kept in the archive (`System/_labels.md`,
+[Storage](storage.md)):
+
+- **Merge** a label into another: every document that has it, written however, gets the other instead, and so does
+  every document read from then on. Merging back the other way replaces the first merge, and labels merged into the one
+  you merge follow it.
+- **Remove everywhere** (ignore) a label: it is taken off every document, and the model's answers lose it from then on.
+- **Keep apart** two alike labels: they are never merged and never offered to merge again.
+- **Forget** a rule: documents read from then on no longer follow it. Documents it already changed keep their labels.
+
+On the Labels page, open a label to merge it or remove it everywhere, open a pair under Look Alike to merge it either
+way or keep it apart, and forget a rule under What You Decided. A label's menu on a document's card opens it there, or
+removes it everywhere. From a terminal: `arrumatorcli labels merge`, `ignore`, `keep-apart`, `similar`, `rules` and
+`forget` ([command line](cli.md)). Rules are about writing, so they apply to labels of every kind; the page lists the
+kinds the vocabulary keeps, as the others have one form each.
 
 ## Documents that wait for you
 
