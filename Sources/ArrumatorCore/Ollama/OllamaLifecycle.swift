@@ -32,8 +32,11 @@ public struct OllamaInstallation: Sendable, Hashable, Codable {
 public actor OllamaLifecycle {
     private let api: any OllamaAPI
     private let config: OllamaConfig
+    private let time: any TimeSource
     private var management: OllamaManagement
     private var binaryOverride: String?
+    /// Where the app talks to Ollama; a server it spawns listens there.
+    private var address: URL
     private var process: Process?
     private var restarts: [Date] = []
     private var monitorTask: Task<Void, Never>?
@@ -46,16 +49,30 @@ public actor OllamaLifecycle {
         }
     }
 
-    public init(api: any OllamaAPI, config: OllamaConfig, management: OllamaManagement, binaryOverride: String?) {
+    public init(api: any OllamaAPI, config: OllamaConfig, management: OllamaManagement, binaryOverride: String?, address: URL,
+                time: any TimeSource) {
         self.api = api
         self.config = config
         self.management = management
         self.binaryOverride = binaryOverride
+        self.address = address
+        self.time = time
     }
 
-    public func configure(management: OllamaManagement, binaryOverride: String?) {
+    public func configure(management: OllamaManagement, binaryOverride: String?, address: URL) {
         self.management = management
         self.binaryOverride = binaryOverride
+        self.address = address
+    }
+
+    /// The variable `ollama serve` reads the address it listens on from (Ollama's `envconfig`).
+    static let hostVariable = "OLLAMA_HOST"
+
+    /// `host:port` for `OLLAMA_HOST`: the address the app talks to, so the server it spawns is the one it asks.
+    static func listenAddress(for url: URL) -> String? {
+        guard let host = url.host(percentEncoded: false) else { return nil }
+        let bracketed = host.contains(":") ? "[\(host)]" : host
+        return url.port.map { "\(bracketed):\($0)" } ?? bracketed
     }
 
     public func states() -> AsyncStream<OllamaState> {
@@ -143,9 +160,9 @@ public actor OllamaLifecycle {
             state = .unhealthy(error.localizedDescription)
             return state
         }
-        let deadline = Date().addingTimeInterval(config.startTimeout)
-        while Date() < deadline {
-            try? await Task.sleep(for: .seconds(config.healthPollStarting))
+        let deadline = time.now().addingTimeInterval(config.startTimeout)
+        while time.now() < deadline {
+            do { try await time.sleep(seconds: config.healthPollStarting) } catch { return state }
             if let v = try? await api.version() {
                 state = .ready(version: v)
                 return state
@@ -170,6 +187,7 @@ public actor OllamaLifecycle {
         p.arguments = ["serve"]
         var env = ProcessInfo.processInfo.environment
         for (k, v) in config.serveEnvironment { env[k] = v }
+        env[Self.hostVariable] = Self.listenAddress(for: address)
         p.environment = env
         p.standardOutput = FileHandle.nullDevice
         p.standardError = FileHandle.nullDevice
@@ -192,9 +210,10 @@ public actor OllamaLifecycle {
     public func startMonitoring() {
         monitorTask?.cancel()
         let steady = config.healthPollSteady
+        let time = time
         monitorTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(steady))
+                do { try await time.sleep(seconds: steady) } catch { return }
                 await self?.supervise()
             }
         }
@@ -202,16 +221,16 @@ public actor OllamaLifecycle {
 
     private func supervise() async {
         if await check().isReady || management == .external { return }
-        let hourAgo = Date().addingTimeInterval(-3_600)
+        let hourAgo = time.now().addingTimeInterval(-Units.secondsPerHour)
         restarts = restarts.filter { $0 > hourAgo }
         guard restarts.count < config.maxRestartsPerHour else {
             state = .unhealthy("gave up after \(restarts.count) restarts in the last hour")
             return
         }
-        let delay = config.restartBackoff[min(restarts.count, config.restartBackoff.count - 1)]
-        restarts.append(Date())
+        let delay = config.restartBackoff.clamped(restarts.count)
+        restarts.append(time.now())
         Log.info(.ollama, "Restarting Ollama", ["attempt": String(restarts.count), "delay": String(delay)])
-        try? await Task.sleep(for: .seconds(delay))
+        do { try await time.sleep(seconds: delay) } catch { return }
         await ensureRunning()
     }
 

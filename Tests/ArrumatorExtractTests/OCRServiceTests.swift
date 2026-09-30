@@ -1,5 +1,6 @@
 import ArrumatorCore
 @testable import ArrumatorExtract
+import ArrumatorTesting
 import CoreGraphics
 import Foundation
 import ImageIO
@@ -48,7 +49,7 @@ struct OCRServiceTests {
     @Test func aPageReadOnTheDefaultDeviceIsNotAskedAgain() async throws {
         let vision = ScriptedRecognizer([.automatic: .text("Fatura")])
         let result = try await OCRService(recognizer: vision).recognize(try page(), request: request)
-        #expect(result.text == "Fatura")
+        #expect(result.text == "Fatura", "the default device's text is the page's text")
         #expect(result.device == .automatic, "the Neural Engine or GPU is used wherever it works")
         #expect(await vision.devices == [.automatic], "a page that was read is not read a second time")
     }
@@ -58,7 +59,7 @@ struct OCRServiceTests {
         let result = try await OCRService(recognizer: vision).recognize(try page(), request: request)
         #expect(result.text == "Fatura", "a Mac whose accelerated path fails still gets its scans read")
         #expect(result.device == .cpu, "the trace says which device read the page")
-        #expect(await vision.devices == [.automatic, .cpu])
+        #expect(await vision.devices == [.automatic, .cpu], "the CPU is tried once, after the default device fails")
     }
 
     @Test func onceTheCPUWasNeededLaterPagesGoStraightToIt() async throws {
@@ -66,7 +67,7 @@ struct OCRServiceTests {
         let service = OCRService(recognizer: vision)
         _ = try await service.recognize(try page(), request: request)
         let second = try await service.recognize(try page(), request: request)
-        #expect(second.device == .cpu)
+        #expect(second.device == .cpu, "a later page is read on the CPU")
         #expect(await vision.devices == [.automatic, .cpu, .cpu],
                 "the failing path keeps failing until the process restarts, so it is not tried for every page")
     }
@@ -76,7 +77,7 @@ struct OCRServiceTests {
         await #expect(throws: CPUFailed.self, "the last error is the one reported as the page's OCR warning") {
             try await OCRService(recognizer: vision).recognize(try page(), request: request)
         }
-        #expect(await vision.devices == [.automatic, .cpu])
+        #expect(await vision.devices == [.automatic, .cpu], "each device is tried once, then the page fails")
     }
 
     @Test func cancellationIsNotRetried() async throws {
@@ -84,7 +85,7 @@ struct OCRServiceTests {
         await #expect(throws: CancellationError.self, "stopping a job stops its OCR, on no device") {
             try await OCRService(recognizer: vision).recognize(try page(), request: request)
         }
-        #expect(await vision.devices == [.automatic])
+        #expect(await vision.devices == [.automatic], "a cancelled read is not retried on the CPU")
     }
 
     @Test(.enabled(VisionOCR.unavailable) { await VisionOCR.available.value })
@@ -97,7 +98,7 @@ struct OCRServiceTests {
 
     @Test func thePageTraceRecordsTheDevice() async throws {
         let vision = ScriptedRecognizer([.automatic: .failure(AcceleratedPathFailed()), .cpu: .text("Fatura")])
-        var pass = OCRPass(service: OCRService(recognizer: vision), config: try TestConfig.pipeline().extraction)
+        var pass = OCRPass(service: OCRService(recognizer: vision), config: try TestConfig.pipeline().extraction, time: TestTime(.blocks))
         _ = try await pass.recognize(try page(), page: 1, languages: ["pt"], timeout: 30, orientationRetryBelow: nil)
         #expect(pass.pages.map(\.device) == ["cpu"], "How was this decided? shows the page was read on the CPU")
         #expect(pass.warnings.isEmpty, "a page the CPU read is no failure")

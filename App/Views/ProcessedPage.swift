@@ -11,16 +11,16 @@ struct ProcessedPage: View {
     var body: some View {
         Page(.processed) {
             if documents.isEmpty {
-                EmptyState(symbol: "checkmark.circle", text: "Nothing has been processed yet.")
+                EmptyState(symbol: "checkmark.circle", text: Wording.nothingProcessed)
             }
             ProcessedDays(documents: documents)
             if let pageSize = model.runtime?.config.interface.pageSize, documents.count == pages * pageSize {
-                Button("Show More") { pages += 1 }.buttonStyle(.link)
+                Button(Wording.showMore) { pages += 1 }.buttonStyle(.link)
             }
         }
         .task(id: "\(pages)|\(model.activity)") {
             let pages = pages
-            documents = await model.load("Load processed documents") {
+            documents = await model.load(Wording.loadProcessedAction) {
                 try await $0.services.documents.list(DocumentFilter(statuses: DocumentStatus.processed), order: .recentlyProcessed,
                                                      limit: pages * $0.config.interface.pageSize)
             } ?? []

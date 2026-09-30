@@ -43,13 +43,13 @@ line_length:
   warning: 200
   ignores_urls: true
 cyclomatic_complexity:
-  warning: 22
+  warning: 19
 function_body_length:
-  warning: 160
+  warning: 80
 type_body_length:
-  warning: 531
+  warning: 410
 file_length:
-  warning: 693
+  warning: 640
 function_parameter_count:
   warning: 14
 large_tuple:

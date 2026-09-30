@@ -12,7 +12,7 @@ public struct DateEvidence: Sendable {
     public var calendar: Calendar
 
     public init(firstPageLength: Int?, metadataDates: [MetadataDate], fileCreated: Date?, fileModified: Date?,
-                now: Date = Date(), calendar: Calendar = .current) {
+                now: Date, calendar: Calendar) {
         self.firstPageLength = firstPageLength
         self.metadataDates = metadataDates
         self.fileCreated = fileCreated

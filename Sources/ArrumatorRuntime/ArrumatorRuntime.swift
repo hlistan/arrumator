@@ -8,6 +8,10 @@ import Foundation
 /// with that archive's index; switching archives replaces it (`switchArchive`).
 public final class ArrumatorRuntime: Sendable {
     public let environment: RuntimeEnvironment
+    /// The log level `ARRUMATOR_LOG_LEVEL` sets over the settings', read once when the runtime starts.
+    public let logLevelOverride: LogLevel?
+    /// The clock every service stamps and waits by.
+    public let time: any TimeSource
     public let paths: AppPaths
     public let config: PipelineConfig
     public let appVersion: String
@@ -44,21 +48,23 @@ public final class ArrumatorRuntime: Sendable {
     public let doctor: Doctor
     private let tasks = BackgroundTasks()
 
-    public static func bootstrap(appVersion: String, environment: RuntimeEnvironment = .current,
+    public static func bootstrap(appVersion: String, environment: RuntimeEnvironment,
                                  echoLogsToStderr: Bool) async throws -> ArrumatorRuntime {
+        let time = SystemTime()
         let paths = AppPaths.resolve(environment)
         try paths.ensureDirectories()
+        let logLevelOverride = try environment.logLevel()
         let config = try PipelineConfig.load(paths: paths, environment: environment)
         let settings = try SettingsStore(paths: paths)
         let current = await settings.current
-        Log.shared.configure(directory: paths.logsDirectory, minLevel: environment.logLevel ?? current.logLevel,
+        Log.shared.configure(directory: paths.logsDirectory, minLevel: logLevelOverride ?? current.logLevel,
                              config: config.logging, echoToStderr: echoLogsToStderr)
-        Log.shared.prune(config.logging)
+        Log.shared.prune(config.logging, now: time.now())
         // The archive's folder names its index, so it exists before the index opens.
         try FileManager.default.createDirectory(at: current.archiveURL, withIntermediateDirectories: true)
         try paths.moveSingleIndex(to: try paths.indexURL(for: current.archiveURL))
-        return try ArrumatorRuntime(appVersion: appVersion, environment: environment, paths: paths, config: config,
-                                    settings: settings, archive: current.archiveURL,
+        return try ArrumatorRuntime(appVersion: appVersion, environment: environment, logLevelOverride: logLevelOverride,
+                                    time: time, paths: paths, config: config, settings: settings, archive: current.archiveURL,
                                     ollamaURL: try OllamaEndpoint.validated(environment.ollamaURL ?? current.ollamaURL))
     }
 
@@ -69,7 +75,8 @@ public final class ArrumatorRuntime: Sendable {
         let url = try OllamaEndpoint.validated(address)
         try ollama.connect(to: url)
         let updated = try await settings.update { $0.ollamaURL = url.absoluteString }
-        await lifecycle.configure(management: Self.management(for: updated, at: url), binaryOverride: updated.ollamaBinaryPath)
+        await lifecycle.configure(management: Self.management(for: updated, at: url), binaryOverride: updated.ollamaBinaryPath,
+                                  address: url)
         try await services.history.record(.settingsChanged, actor: .user, summary: "Ollama at \(url.absoluteString)",
                                           payload: ["ollamaURL": url.absoluteString])
         Log.info(.ollama, "Using Ollama", ["url": url.absoluteString])
@@ -101,20 +108,44 @@ public final class ArrumatorRuntime: Sendable {
         guard try paths.indexURL(for: target) != index else { throw ArchiveSwitchError.alreadyOpen(target.path) }
         guard !isInsideIncoming(target.path) else { throw ArchiveSwitchError.insideIncoming(archive: target.path, incoming: incoming.path) }
 
-        // The new index opens before anything stops, so a failure leaves this runtime as it was.
+        // The new index opens before anything stops, and whatever fails once this runtime has stopped starts it again,
+        // so a failed switch leaves the app on the archive it was on, running.
         let nextSettings = try SettingsStore(paths: paths)
-        let next = try ArrumatorRuntime(appVersion: appVersion, environment: environment, paths: paths, config: config,
-                                        settings: nextSettings, archive: target, ollamaURL: ollama.baseURL)
+        let next = try ArrumatorRuntime(appVersion: appVersion, environment: environment, logLevelOverride: logLevelOverride,
+                                        time: time, paths: paths, config: config, settings: nextSettings, archive: target,
+                                        ollamaURL: ollama.baseURL)
         await stop()
-        let waiting = try await JobStore(database: database).cancelActive(kinds: [.ingest])
-        try await services.history.record(
-            .settingsChanged, actor: .user,
-            summary: "Switched to the archive at \(target.path)" + (waiting > 0 ? "; \(Format.count(waiting, "file")) waiting in Incoming go there" : ""),
-            payload: ["archive": target.path])
-        try await records.flush()
-        try await nextSettings.update { $0.archivePath = target.path }
+        do {
+            let waiting = try await services.jobs.cancelActive(kinds: [.ingest])
+            try await services.history.record(
+                .settingsChanged, actor: .user,
+                summary: "Switched to the archive at \(target.path)" + (waiting > 0 ? "; \(Format.count(waiting, "file")) waiting in Incoming go there" : ""),
+                payload: ["archive": target.path])
+            try await records.flush()
+            try await nextSettings.update { $0.archivePath = target.path }
+        } catch {
+            Log.error(.app, "Could not switch archives; staying on this one", ["to": target.path, "error": error.localizedDescription])
+            await start()
+            throw error
+        }
         Log.info(.app, "Switched archives", ["from": archive.path, "to": target.path, "index": next.index.path])
         return next
+    }
+
+    /// Pauses or resumes filing, from the app or the command line alike: the setting, the worker woken to notice, and
+    /// the decision in History.
+    public func setPaused(_ paused: Bool) async throws {
+        try await settings.update { $0.paused = paused }
+        await coordinator.wake()
+        try await services.history.record(paused ? .paused : .resumed, actor: .user,
+                                          summary: paused ? "Processing paused" : "Processing resumed")
+    }
+
+    /// Writes a zip with logs, recent traces, the doctor's report and the settings; document text only when
+    /// `includeDocumentText`, as the user chose.
+    public func exportDiagnostics(to zip: URL, includeDocumentText: Bool) async throws -> DiagnosticsContents {
+        try await DiagnosticsExporter(database: database, paths: paths, config: config.stats)
+            .export(to: zip, doctor: await runDoctor(), settings: await settings.current, includeDocumentText: includeDocumentText)
     }
 
     /// Brings the index in line with the archive before anything else uses it: a new or set-aside index is rebuilt
@@ -130,46 +161,60 @@ public final class ArrumatorRuntime: Sendable {
         try await records.flush()
     }
 
-    private init(appVersion: String, environment: RuntimeEnvironment, paths: AppPaths, config: PipelineConfig,
-                 settings: SettingsStore, archive: URL, ollamaURL: URL) throws {
+    private init(appVersion: String, environment: RuntimeEnvironment, logLevelOverride: LogLevel?, time: any TimeSource,
+                 paths: AppPaths, config: PipelineConfig, settings: SettingsStore, archive: URL, ollamaURL: URL) throws {
         self.appVersion = appVersion
         self.environment = environment
+        self.logLevelOverride = logLevelOverride
+        self.time = time
         self.paths = paths
         self.config = config
         self.settings = settings
         self.archive = archive
         index = try paths.indexURL(for: archive)
-        (database, opening) = try AppDatabase.open(at: index, setAsideSuffix: config.records.setAsideSuffix) {
+        (database, opening) = try AppDatabase.open(at: index, config: config.database, setAsideSuffix: config.records.setAsideSuffix,
+                                                   time: time) {
             ArchiveRecords.mayHoldRecords(archive: archive, config: config)
         }
-        registry = SelfChangeRegistry(ttl: config.watcher.selfChangeTTLSeconds)
-        records = ArchiveRecords(database: database, settings: settings, config: config, registry: registry)
-        ollama = try OllamaConnection(config: config.ollama, url: ollamaURL)
-        gate = InferenceGate(api: ollama, retryDelays: config.ollama.retryDelays)
+        registry = SelfChangeRegistry(ttl: config.watcher.selfChangeTTLSeconds, time: time)
+        records = ArchiveRecords(database: database, settings: settings, config: config, registry: registry, time: time)
+        ollama = try OllamaConnection(config: config.ollama, url: ollamaURL, time: time)
+        gate = InferenceGate(api: ollama, retryDelays: config.ollama.retryDelays, time: time)
         models = ModelManager(api: ollama, config: config.ollama)
-        lifecycle = OllamaLifecycle(api: ollama, config: config.ollama, management: .external, binaryOverride: nil)
+        lifecycle = OllamaLifecycle(api: ollama, config: config.ollama, management: .external, binaryOverride: nil,
+                                    address: ollamaURL, time: time)
         prompts = PromptBuilder(library: try PromptLibrary.bundled(), config: config.analysis, labels: config.labels,
                                 naming: config.naming)
         analyzer = DocumentAnalyzer(gate: gate, models: models, prompts: prompts)
         let skip = SkipRules(watcher: config.watcher)
         vectors = VectorIndex()
         search = SearchService(database: database, vectors: vectors, embedder: nil, config: config.search)
-        traces = TraceRecorder(database: database, appVersion: appVersion)
+        traces = TraceRecorder(database: database, appVersion: appVersion, time: time)
         let placer = Placer(builder: FilenameBuilder(config: config.naming), operations: FileOperations(naming: config.naming))
+        let extractor = try ExtractorRegistry(ollama: GatedOllama(gate: gate), recognizer: VisionTextRecognizer(),
+                                              shell: ShellRunner(time: time), time: time)
         services = PipelineServices(
-            database: database, config: config, settings: settings, extractor: ExtractorRegistry(ollama: GatedOllama(gate: gate)),
-            analyzer: analyzer,
-            filer: DocumentFiler(database: database, placer: placer, index: IndexStore(database: database), registry: registry),
-            traces: traces, vectors: vectors)
+            database: database, config: config, settings: settings, extractor: extractor, analyzer: analyzer,
+            filer: DocumentFiler(database: database, placer: placer, index: IndexStore(database: database, time: time),
+                                 registry: registry, time: time),
+            traces: traces, vectors: vectors, time: time)
         coordinator = IngestCoordinator(services: services)
         review = ReviewActions(services: services, coordinator: coordinator)
-        labels = LabelActions(database: database)
+        labels = LabelActions(database: database, time: time)
         reconciler = ArchiveReconciler(services: services, coordinator: coordinator)
-        incomingWatcher = IncomingWatcher(config: config.watcher, skip: skip)
+        incomingWatcher = IncomingWatcher(config: config.watcher, skip: skip, time: time)
         archiveWatcher = ArchiveWatcher(config: config.watcher, records: config.records, skip: skip, registry: registry,
                                         database: database)
-        stats = StatsService(database: database, config: config.stats)
-        doctor = Doctor(database: database, paths: paths, appVersion: appVersion)
+        stats = StatsService(database: database, config: config.stats, time: time)
+        doctor = Doctor(database: database, paths: paths, appVersion: appVersion, time: time)
+    }
+
+    /// Records an event of the app's own in History. Nothing waits on these, so one that cannot be recorded is logged
+    /// with the reason instead of stopping what it describes.
+    private func audit(_ kind: EventKind, actor: EventActor, summary: String, payload: (any Encodable & Sendable)?) async {
+        do { try await services.history.record(kind, actor: actor, summary: summary, payload: payload) } catch {
+            Log.error(.db, "Could not record an event in the history", ["kind": kind.rawValue, "error": error.localizedDescription])
+        }
     }
 
     // MARK: Lifecycle
@@ -178,7 +223,7 @@ public final class ArrumatorRuntime: Sendable {
     public func start() async {
         let current = await settings.current
         Log.info(.app, "Arrumator starting", ["version": appVersion, "archive": current.archivePath, "incoming": current.incomingPath])
-        _ = try? await HistoryStore(database: database).record(.appStarted, summary: "Arrumator \(appVersion) started")
+        await audit(.appStarted, actor: .system, summary: "Arrumator \(appVersion) started", payload: nil)
         await apply(current)
         await tasks.run("ollama") { [lifecycle] in
             await lifecycle.ensureRunning()
@@ -206,31 +251,35 @@ public final class ArrumatorRuntime: Sendable {
                 }
             }
         }
-        await tasks.run("settings") { [settings, database, weak self] in
+        await tasks.run("settings") { [settings, weak self] in
+            var previous = current
             for await changed in await settings.changes() {
-                _ = try? await HistoryStore(database: database).record(.settingsChanged, actor: .user, summary: "Settings changed",
-                                                                        payload: changed)
+                // Pausing has its own event (`setPaused`); every other change is recorded as a settings change.
+                var pauseAlone = previous
+                pauseAlone.paused = changed.paused
+                let onlyPaused = pauseAlone == changed
+                previous = changed
+                if !onlyPaused {
+                    await self?.audit(.settingsChanged, actor: .user, summary: "Settings changed", payload: changed)
+                }
                 await self?.apply(changed)
             }
         }
-        await tasks.run("ollama-audit") { [lifecycle, database] in
+        await tasks.run("ollama-audit") { [lifecycle, weak self] in
             var previous: OllamaState?
             for await state in await lifecycle.states() where state != .unknown && state != .starting {
                 if let previous, previous.isReady == state.isReady { continue }
                 previous = state
-                _ = try? await HistoryStore(database: database).record(.ollamaState, summary: state.summary)
+                await self?.audit(.ollamaState, actor: .system, summary: state.summary, payload: nil)
             }
         }
-        await tasks.run("maintenance") { [weak self] in
+        await tasks.run("maintenance") { [time, config, weak self] in
             while !Task.isCancelled {
                 await self?.maintain()
-                try? await Task.sleep(for: .seconds(Self.maintenanceInterval))
+                do { try await time.sleep(seconds: config.maintenance.interval) } catch { return }
             }
         }
     }
-
-    /// Maintenance cadence (log pruning, trace trimming, stale-job watchdog).
-    static let maintenanceInterval: Double = 3_600
 
     public func stop() async {
         await tasks.cancelAll()
@@ -246,8 +295,9 @@ public final class ArrumatorRuntime: Sendable {
 
     /// Applies (changed) settings: Ollama management, watched folders, embedding model for search.
     public func apply(_ current: AppSettings) async {
-        await lifecycle.configure(management: Self.management(for: current, at: ollama.baseURL), binaryOverride: current.ollamaBinaryPath)
-        Log.shared.setMinLevel(environment.logLevel ?? current.logLevel)
+        await lifecycle.configure(management: Self.management(for: current, at: ollama.baseURL), binaryOverride: current.ollamaBinaryPath,
+                                  address: ollama.baseURL)
+        Log.shared.setMinLevel(logLevelOverride ?? current.logLevel)
         do {
             try await prepareSearch(current)
             try FileManager.default.createDirectory(at: current.archiveURL, withIntermediateDirectories: true)
@@ -265,20 +315,20 @@ public final class ArrumatorRuntime: Sendable {
         await search.setEmbedder(OllamaEmbedder(gate: gate, model: resolved.embed, keepAlive: resolved.keepAliveEmbed,
                                                 numCtx: config.analysis.embeddingNumCtx))
         if await vectors.model != resolved.embed {
-            await vectors.load(model: resolved.embed, rows: try await IndexStore(database: database).embeddings(model: resolved.embed))
+            await vectors.load(model: resolved.embed, rows: try await services.index.embeddings(model: resolved.embed))
         }
     }
 
     private func maintain() async {
         let current = await settings.current
-        Log.shared.prune(config.logging)
+        Log.shared.prune(config.logging, now: time.now())
         do {
             let trimmed = try await traces.trimRawPayloads(olderThanDays: current.traceRawRetentionDays)
             if trimmed > 0 { Log.info(.app, "Trimmed raw model payloads", ["steps": String(trimmed)]) }
-            let jobs = JobStore(database: database)
-            for var job in try await jobs.stale(olderThan: config.ingest.watchdogMinutes * 60, now: Date()) {
+            let jobs = services.jobs
+            for var job in try await jobs.stale(olderThan: config.ingest.watchdogMinutes * Units.secondsPerMinute) {
                 Log.warning(.ingest, "Watchdog: job stuck, rescheduling", ["job": String(job.id ?? 0), "state": job.state.rawValue])
-                job.nextRunAt = Date()
+                job.nextRunAt = time.now()
                 try await jobs.update(job)
             }
         } catch {

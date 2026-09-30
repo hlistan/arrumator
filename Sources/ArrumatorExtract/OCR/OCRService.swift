@@ -22,14 +22,9 @@ struct OCRPageResult: Sendable {
     var languages: [String]
 }
 
-enum OCREngine: String, Sendable, Encodable {
-    case recognizeDocuments = "vision.RecognizeDocumentsRequest"
-    case recognizeText = "vision.RecognizeTextRequest"
-}
-
 /// Options for one recognition.
 struct OCRRequest: Sendable {
-    /// Configured language codes (`en`, `ru`, `pt`), most likely first.
+    /// Language codes to expect, most likely first: the document's own, then `extraction.ocrLanguages`.
     var languages: [String]
     var lowConfidenceLine: Double
     /// Retry the other three orientations when the mean confidence is below this (nil = never).

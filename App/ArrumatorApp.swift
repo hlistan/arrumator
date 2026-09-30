@@ -17,19 +17,13 @@ enum ArrumatorMain {
 enum WindowID: String {
     case main, onboarding, settings
 
-    var title: String {
-        switch self {
-        case .main: "Arrumator"
-        case .onboarding: "Welcome to Arrumator"
-        case .settings: "Arrumator Settings"
-        }
-    }
+    var title: String { Wording.title(of: self) }
 
     var size: NSSize {
         switch self {
-        case .main: NSSize(width: 1_000, height: 700)
-        case .onboarding: NSSize(width: 620, height: 500)
-        case .settings: NSSize(width: 900, height: 620)
+        case .main: Style.mainWindow
+        case .onboarding: Style.onboardingWindow
+        case .settings: Style.settingsWindow
         }
     }
 }
@@ -85,7 +79,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Wind
 
     private func installStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        item.button?.image = NSImage(systemSymbolName: model.statusSymbol, accessibilityDescription: "Arrumator")
+        item.button?.image = NSImage(systemSymbolName: model.statusSymbol, accessibilityDescription: Wording.appName)
         item.button?.imagePosition = .imageLeading
         item.button?.target = self
         item.button?.action = #selector(togglePopover)
@@ -93,7 +87,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Wind
         item.behavior = .terminationOnRemoval
         statusItem = item
         popover.behavior = .transient
-        popover.contentSize = NSSize(width: 360, height: 420)
+        popover.contentSize = Style.popover
         popover.contentViewController = NSHostingController(rootView: MenuBarView().environment(model))
     }
 
@@ -133,8 +127,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Wind
             Task { @MainActor in
                 guard let self else { return }
                 self.statusItem?.button?.image = NSImage(systemSymbolName: self.model.statusSymbol,
-                                                         accessibilityDescription: "Arrumator")
-                self.statusItem?.button?.title = self.model.reviewCount > 0 ? " \(self.model.reviewCount)" : ""
+                                                         accessibilityDescription: Wording.appName)
+                self.statusItem?.button?.title = self.model.reviewCount > 0 ? Wording.statusItemCount(self.model.reviewCount) : ""
                 self.applyDockPolicy()
                 self.trackModel()
             }
@@ -166,7 +160,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Wind
         window.styleMask.insert(.miniaturizable)
         if id == .main {
             window.styleMask.insert(.resizable)
-            window.contentMinSize = NSSize(width: 760, height: 520)
+            window.contentMinSize = Style.mainWindowMinimum
         }
         window.center()
         window.setFrameAutosaveName("arrumator.\(id.rawValue)")
@@ -195,34 +189,34 @@ enum MainMenu {
         let main = NSMenu()
         let appItem = NSMenuItem()
         let app = NSMenu()
-        app.addItem(withTitle: "About Arrumator", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        app.addItem(withTitle: Wording.aboutApp, action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
         app.addItem(.separator())
-        app.addItem(item("Settings…", #selector(AppCommands.showSettings), ","))
+        app.addItem(item(Wording.settings, #selector(AppCommands.showSettings), ","))
         app.addItem(.separator())
-        app.addItem(withTitle: "Hide Arrumator", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
-        app.addItem(withTitle: "Quit Arrumator", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        app.addItem(withTitle: Wording.hideApp, action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        app.addItem(withTitle: Wording.quitApp, action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appItem.submenu = app
         main.addItem(appItem)
 
         let windowItem = NSMenuItem()
-        let window = NSMenu(title: "Window")
-        window.addItem(item("Arrumator", #selector(AppCommands.showMain), "0"))
-        window.addItem(item("Setup…", #selector(AppCommands.showOnboarding), ""))
+        let window = NSMenu(title: Wording.windowMenu)
+        window.addItem(item(Wording.appName, #selector(AppCommands.showMain), "0"))
+        window.addItem(item(Wording.setup, #selector(AppCommands.showOnboarding), ""))
         window.addItem(.separator())
-        window.addItem(withTitle: "Minimise", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
-        window.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        window.addItem(withTitle: Wording.minimise, action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        window.addItem(withTitle: Wording.close, action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
         windowItem.submenu = window
         main.addItem(windowItem)
 
         let editItem = NSMenuItem()
-        let edit = NSMenu(title: "Edit")
-        edit.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
-        edit.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "Z")
+        let edit = NSMenu(title: Wording.editMenu)
+        edit.addItem(withTitle: Wording.undo, action: Selector(("undo:")), keyEquivalent: "z")
+        edit.addItem(withTitle: Wording.redo, action: Selector(("redo:")), keyEquivalent: "Z")
         edit.addItem(.separator())
-        edit.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
-        edit.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
-        edit.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
-        edit.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        edit.addItem(withTitle: Wording.cut, action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        edit.addItem(withTitle: Wording.copy, action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        edit.addItem(withTitle: Wording.paste, action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        edit.addItem(withTitle: Wording.selectAll, action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         editItem.submenu = edit
         main.addItem(editItem)
         return main

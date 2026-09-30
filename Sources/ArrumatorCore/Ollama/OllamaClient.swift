@@ -5,20 +5,26 @@ import Foundation
 public struct OllamaClient: OllamaAPI {
     public let baseURL: URL
     private let config: OllamaConfig
+    private let time: any TimeSource
     private let session: URLSession
-    private let decoder: JSONDecoder
     private let encoder: JSONEncoder
 
-    public init(config: OllamaConfig, baseURL url: URL) throws {
+    /// Ollama's JSON is snake_case (https://github.com/ollama/ollama/blob/main/docs/api.md).
+    static let decoder: JSONDecoder = {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return decoder
+    }()
+
+    public init(config: OllamaConfig, baseURL url: URL, time: any TimeSource) throws {
         guard let host = url.host(percentEncoded: false)?.lowercased(), OllamaEndpoint.isLocal(host: host) else {
             throw OllamaError.nonLocalHost(url.host() ?? url.absoluteString)
         }
         NetworkGuardProtocol.configure(allowedHosts: [host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))])
         baseURL = url
         self.config = config
+        self.time = time
         session = URLSession(configuration: NetworkGuardProtocol.guardedConfiguration())
-        decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
         encoder = JSONEncoder()
         encoder.keyEncodingStrategy = .convertToSnakeCase
     }
@@ -65,16 +71,13 @@ public struct OllamaClient: OllamaAPI {
             return AsyncThrowingStream { $0.finish(throwing: error) }
         }
         let session = session
-        let decoder = decoder
         return AsyncThrowingStream { continuation in
             let task = Task {
                 do {
                     let (bytes, response) = try await session.bytes(for: request)
-                    try Self.check(response, body: "")
+                    if let failure = Self.failure(response, body: "", model: model) { throw failure }
                     for try await line in bytes.lines where !line.isEmpty {
-                        let progress = try decoder.decode(OllamaPullProgress.self, from: Data(line.utf8))
-                        if let error = progress.error { throw OllamaError.http(status: 500, body: error) }
-                        continuation.yield(progress)
+                        continuation.yield(try Self.progress(line, model: model))
                     }
                     continuation.finish()
                 } catch {
@@ -110,44 +113,57 @@ public struct OllamaClient: OllamaAPI {
 
     /// - timeout: the configured seconds, which bound the whole exchange as well as its idle time; 0 is none.
     private func send<T: Decodable>(_ request: URLRequest, model: String?, timeout: Double) async throws -> T {
-        let started = Date()
+        let started = time.now()
         let path = request.url?.path() ?? ""
         do {
             let session = session
-            let (data, response) = try await Deadline.run(timeout, expired: { OllamaError.timeout(path) }) {
+            let (data, response) = try await Deadline.run(timeout, time: time, expired: { OllamaError.timeout(path) }) {
                 try await session.data(for: request)
             }
             let body = String(decoding: data, as: UTF8.self)
-            if let http = response as? HTTPURLResponse, http.statusCode == 404, let model, body.contains("not found") {
-                throw OllamaError.modelNotFound(model)
-            }
-            try Self.check(response, body: body)
+            if let failure = Self.failure(response, body: body, model: model) { throw failure }
             Log.debug(.ollama, "HTTP \(request.httpMethod ?? "") \(path)", [
-                "model": model ?? "-", "ms": String(format: "%.0f", Date().timeIntervalSince(started) * 1000),
+                "model": model ?? "-", "ms": String(format: "%.0f", started.milliseconds(until: time.now())),
                 "bytes": String(data.count),
             ])
             guard !data.isEmpty else { throw OllamaError.emptyResponse }
             do {
-                return try decoder.decode(T.self, from: data)
+                return try Self.decoder.decode(T.self, from: data)
             } catch {
                 throw OllamaError.decoding("\(path): \(error)")
             }
         } catch {
             let mapped = Self.map(error)
             Log.warning(.ollama, "HTTP \(request.httpMethod ?? "") \(path) failed", [
-                "model": model ?? "-", "ms": String(format: "%.0f", Date().timeIntervalSince(started) * 1000),
+                "model": model ?? "-", "ms": String(format: "%.0f", started.milliseconds(until: time.now())),
                 "error": mapped.localizedDescription,
             ])
             throw mapped
         }
     }
 
-    private static func check(_ response: URLResponse, body: String) throws {
-        guard let http = response as? HTTPURLResponse else { return }
-        guard (200..<300).contains(http.statusCode) else { throw OllamaError.http(status: http.statusCode, body: body) }
+    /// HTTP statuses of success, and the one Ollama answers a model it does not have with.
+    static let successStatuses = 200..<300
+    static let notFoundStatus = 404
+    /// What Ollama's error body says of a model it does not have.
+    static let notFoundMessage = "not found"
+
+    /// The error an HTTP response stands for, or nil when it succeeded: a model Ollama does not have is `modelNotFound`,
+    /// any other failure `http` with its status and body.
+    static func failure(_ response: URLResponse, body: String, model: String?) -> OllamaError? {
+        guard let http = response as? HTTPURLResponse, !successStatuses.contains(http.statusCode) else { return nil }
+        if http.statusCode == notFoundStatus, let model, body.contains(notFoundMessage) { return .modelNotFound(model) }
+        return .http(status: http.statusCode, body: body)
     }
 
-    private static func map(_ error: any Error) -> any Error {
+    /// One line of a download's progress; a line that reports an error ends the download with it.
+    static func progress(_ line: String, model: String) throws -> OllamaPullProgress {
+        let progress = try decoder.decode(OllamaPullProgress.self, from: Data(line.utf8))
+        if let error = progress.error { throw OllamaError.pullFailed(model: model, message: error) }
+        return progress
+    }
+
+    static func map(_ error: any Error) -> any Error {
         if error is OllamaError { return error }
         if let urlError = error as? URLError {
             switch urlError.code {

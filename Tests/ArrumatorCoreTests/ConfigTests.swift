@@ -6,11 +6,30 @@ import Testing
 @Suite struct ConfigTests {
     @Test func bundledDefaultsDecode() throws {
         let config = try PipelineConfig.bundledDefaults()
-        #expect(config.modelProfiles.keys.contains("standard"))
-        #expect(config.extraction.ocrLanguages == ["en", "ru", "pt"])
         let settings = try AppSettings.bundledDefaults()
         let models = try config.models(for: settings.models)
-        #expect(!models.chat.isEmpty && !models.embed.isEmpty)
+        #expect(!models.chat.isEmpty && !models.embed.isEmpty, "the default settings name a profile the pipeline defines")
+        #expect(config.extraction.ocrLanguages.allSatisfy { Locale.LanguageCode($0).isISOLanguage },
+                "OCR hints are language codes Vision can be given")
+        #expect(config.problems.isEmpty, "the bundled defaults pass their own validation: \(config.problems)")
+    }
+
+    @Test func everyKeyOfTheDefaultsIsNeededSoNoneIsMissing() throws {
+        // Types declare no defaults (AGENTS.md §3), so leaving a key out of pipeline.json fails the load, naming it.
+        guard case var .object(pipeline) = try ConfigLoader.bundledValue("pipeline"),
+              case var .object(analysis) = pipeline["analysis"] else { throw ConfigError.missingResource("pipeline.json") }
+        analysis["excerptChars"] = nil
+        pipeline["analysis"] = .object(analysis)
+        #expect("a key left out of pipeline.json fails the load, naming it") {
+            try JSON.decoder.decode(PipelineConfig.self, from: JSON.encoder.encode(JSONValue.object(pipeline)))
+        } throws: { error in
+            String(describing: error).contains("excerptChars")
+        }
+        guard case var .object(settings) = try ConfigLoader.bundledValue("settings") else { throw ConfigError.missingResource("settings.json") }
+        settings["duplicateAction"] = nil
+        #expect(throws: DecodingError.self, "and so does a setting left out of settings.json") {
+            try JSON.decoder.decode(AppSettings.self, from: JSON.encoder.encode(JSONValue.object(settings)))
+        }
     }
 
     @Test func imagesAreDescribedWithTheContextTheirModelIsLoadedWithElsewhere() throws {
@@ -47,13 +66,37 @@ import Testing
         }
     }
 
+    @Test func aPipelineOverrideTheAppCannotRunWithIsRefused() async throws {
+        let env = try await TestEnvironment.make()
+        defer { env.cleanup() }
+        for override in [#"{"ingest": {"retryDelays": []}}"#, #"{"analysis": {"repairAttempts": -1}}"#,
+                         #"{"ingest": {"maxAttempts": 0}}"#] {
+            try Data(override.utf8).write(to: env.paths.pipelineOverrideURL)
+            #expect(throws: ConfigError.self, "\(override) would crash or stall the pipeline, so it stops the app with the reason") {
+                try PipelineConfig.load(paths: env.paths, environment: TestEnvironment.isolated)
+            }
+        }
+    }
+
+    @Test func aListThatMayNotBeEmptyPicksItsValuesAndRefusesToBeEmpty() throws {
+        let one = NonEmpty(2.0, [])
+        #expect([-1, 0, 1, 5].map(one.clamped) == [2, 2, 2, 2], "a single delay serves every retry")
+        let three = NonEmpty(2.0, [8, 30])
+        #expect([0, 1, 2, 3, 99].map(three.clamped) == [2, 8, 30, 30, 30], "the n-th retry waits the n-th delay, then the last one")
+        #expect(three.all == [2, 8, 30] && three.last == 30 && three.count == 3, "the list gives back every value, in order")
+        #expect(try JSONDecoder().decode(NonEmpty<Double>.self, from: Data("[1, 2]".utf8)) == NonEmpty(1, [2]), "a list read from JSON keeps its values")
+        #expect(throws: DecodingError.self, "an empty list is refused where it is read, not found empty when it is needed") {
+            try JSONDecoder().decode(NonEmpty<Double>.self, from: Data("[]".utf8))
+        }
+    }
+
     @Test func deepMergeOverridesNestedKeysOnly() throws {
         let base: JSONValue = ["a": ["x": 1, "y": 2], "b": "keep"]
         let merged = ConfigLoader.deepMerge(base, ["a": ["y": 3]])
-        #expect(merged["a"]?["x"] == 1)
-        #expect(merged["a"]?["y"] == 3)
-        #expect(merged["b"] == "keep")
-        #expect(ConfigLoader.diff(merged, from: base) == ["a": ["y": 3]])
+        #expect(merged["a"]?["x"] == 1, "a nested key the override leaves out keeps its value")
+        #expect(merged["a"]?["y"] == 3, "a nested key the override names takes its value")
+        #expect(merged["b"] == "keep", "a key beside the override is untouched")
+        #expect(ConfigLoader.diff(merged, from: base) == ["a": ["y": 3]], "the difference is only what the override changed")
     }
 
     @Test func settingsStoreWritesOnlyChanges() async throws {
@@ -61,10 +104,10 @@ import Testing
         defer { env.cleanup() }
         try await env.settings.update { $0.renameFiles = false }
         let saved = try JSON.decoder.decode(JSONValue.self, from: Data(contentsOf: env.paths.settingsURL))
-        #expect(saved["renameFiles"] == .bool(false))
-        #expect(saved["transliterate"] == nil)
+        #expect(saved["renameFiles"] == .bool(false), "the changed setting is written")
+        #expect(saved["transliterate"] == nil, "an unchanged setting is not, so a new default still reaches the user")
         let reloaded = try SettingsStore(paths: env.paths)
-        #expect(await reloaded.current.renameFiles == false)
+        #expect(await reloaded.current.renameFiles == false, "the change survives a restart")
     }
 
     @Test func ollamaAnswersOnThisMacOrTheLocalNetworkOnly() throws {
@@ -77,32 +120,32 @@ import Testing
                         "ftp://192.168.1.2", "not a url", "http://", "192.168.1.239:11434"] {
             #expect(throws: OllamaError.self, "\(address)") { _ = try OllamaEndpoint.validated(address) }
         }
-        #expect(OllamaEndpoint.isThisMac(try OllamaEndpoint.validated("http://localhost:11434")))
-        #expect(!OllamaEndpoint.isThisMac(try OllamaEndpoint.validated("http://192.168.1.239:11434")))
+        #expect(OllamaEndpoint.isThisMac(try OllamaEndpoint.validated("http://localhost:11434")), "localhost is this Mac")
+        #expect(!OllamaEndpoint.isThisMac(try OllamaEndpoint.validated("http://192.168.1.239:11434")), "an address on the local network is another machine")
         let config = try PipelineConfig.bundledDefaults().ollama
         #expect(throws: OllamaError.self, "the client itself refuses a host beyond the local network") {
-            try OllamaClient(config: config, baseURL: try #require(URL(string: "http://example.com:11434")))
+            try OllamaClient(config: config, baseURL: try #require(URL(string: "http://example.com:11434")), time: TestTime(.advances))
         }
     }
 
     @Test func networkGuardBlocksNonLocalRequests() async throws {
         let config = try PipelineConfig.bundledDefaults().ollama
-        _ = try OllamaClient(config: config, baseURL: try OllamaEndpoint.validated("http://192.168.1.239:11434"))
+        _ = try OllamaClient(config: config, baseURL: try OllamaEndpoint.validated("http://192.168.1.239:11434"), time: TestTime(.advances))
         NetworkGuardProtocol.resetViolations()
         let session = URLSession(configuration: NetworkGuardProtocol.guardedConfiguration())
-        await #expect(throws: (any Error).self) {
+        await #expect(throws: (any Error).self, "a request beyond the local network fails") {
             _ = try await session.data(from: URL(string: "https://example.com/")!)
         }
-        #expect(NetworkGuardProtocol.violations.contains { $0.contains("example.com") })
+        #expect(NetworkGuardProtocol.violations.contains { $0.contains("example.com") }, "and is recorded, so Doctor can report it")
     }
 }
 
 @Suite struct JSONTests {
     @Test func orderedObjectsKeepOrderAndEscape() {
         let v: JSONValue = .orderedObject([JSONEntry("z", 1), JSONEntry("a", "q\"\n\u{1}"), JSONEntry("m", [true, .null, 1.5])])
-        #expect(v.serialized() == #"{"z":1,"a":"q\"\n\u0001","m":[true,null,1.5]}"#)
+        #expect(v.serialized() == #"{"z":1,"a":"q\"\n\u0001","m":[true,null,1.5]}"#, "keys keep their order and control characters are escaped")
         let sorted: JSONValue = ["b": 1, "a": 2]
-        #expect(sorted.serialized() == #"{"a":2,"b":1}"#)
+        #expect(sorted.serialized() == #"{"a":2,"b":1}"#, "an unordered object is written with sorted keys, so the output is stable")
     }
 
     @Test func chatBodyPutsSchemaPropertiesInOrder() throws {
@@ -112,7 +155,7 @@ import Testing
             .body.serialized()
         let r = try #require(body.range(of: "correspondent"))
         let f = try #require(body.range(of: "file_name"))
-        #expect(r.lowerBound < f.lowerBound)
-        #expect(body.contains(#""think":false"#))
+        #expect(r.lowerBound < f.lowerBound, "the model is asked for the properties in the order the schema gives them")
+        #expect(body.contains(#""think":false"#), "thinking is turned off as asked")
     }
 }

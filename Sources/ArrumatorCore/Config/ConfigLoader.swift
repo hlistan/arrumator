@@ -27,12 +27,17 @@ public enum ConfigLoader {
     public static func load<T: Decodable>(_ type: T.Type, defaults name: String, overrides: [JSONValue] = []) throws -> T {
         var merged = try bundledValue(name)
         for o in overrides { merged = deepMerge(merged, o) }
+        let value: T
         do {
             let data = try JSON.encoder.encode(merged)
-            return try JSON.decoder.decode(T.self, from: data)
+            value = try JSON.decoder.decode(T.self, from: data)
         } catch {
             throw ConfigError.invalid(name: name, underlying: String(describing: error))
         }
+        if let validated = value as? any ValidatedConfiguration, !validated.problems.isEmpty {
+            throw ConfigError.invalid(name: name, underlying: validated.problems.joined(separator: "; "))
+        }
+        return value
     }
 
     public static func overrideValue(at url: URL) throws -> JSONValue? {
@@ -69,4 +74,44 @@ public enum ConfigLoader {
 extension String {
     /// Expands a leading `~` to the user's home directory.
     public var expandingTilde: String { (self as NSString).expandingTildeInPath }
+}
+
+/// A list configuration may not leave empty, such as retry delays the pipeline picks from: an empty one is refused
+/// when the configuration loads, with the key named, rather than found empty when the pipeline needs it.
+public struct NonEmpty<Element: Codable & Sendable & Hashable>: Codable, Sendable, Hashable {
+    public let first: Element
+    public let rest: [Element]
+
+    public init(_ first: Element, _ rest: [Element]) {
+        self.first = first
+        self.rest = rest
+    }
+
+    public var all: [Element] { [first] + rest }
+    public var last: Element { rest.last ?? first }
+    public var count: Int { rest.count + 1 }
+
+    /// The element at `index`, or the last one past the end: the n-th retry waits the n-th delay, and every retry after
+    /// the list the last one.
+    public func clamped(_ index: Int) -> Element {
+        let position = min(max(index, 0), rest.count)
+        return position == 0 ? first : rest[position - 1]
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let values = try [Element](from: decoder)
+        guard let first = values.first else {
+            throw DecodingError.dataCorrupted(DecodingError.Context(codingPath: decoder.codingPath,
+                                                                    debugDescription: "must list at least one value"))
+        }
+        self.init(first, Array(values.dropFirst()))
+    }
+
+    public func encode(to encoder: any Encoder) throws { try all.encode(to: encoder) }
+}
+
+/// Configuration that checks what types cannot say, such as a count that must be positive, once it is decoded.
+public protocol ValidatedConfiguration {
+    /// Why the values cannot be used, one reason each naming its key; empty when they can.
+    var problems: [String] { get }
 }

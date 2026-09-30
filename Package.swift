@@ -40,6 +40,7 @@ let package = Package(
                 .product(name: "CoreXLSX", package: "CoreXLSX"),
                 .product(name: "ZIPFoundation", package: "ZIPFoundation"),
             ],
+            resources: [.copy("Prompts")],
             swiftSettings: strict
         ),
         .target(
@@ -56,7 +57,7 @@ let package = Package(
         .executableTarget(
             name: "ArrumatorCLI",
             dependencies: [
-                "ArrumatorRuntime", "ArrumatorCore", "ArrumatorClassify",
+                "ArrumatorRuntime", "ArrumatorCore",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ],
             swiftSettings: strict
@@ -67,7 +68,10 @@ let package = Package(
                     swiftSettings: strict),
         .testTarget(name: "ArrumatorClassifyTests", dependencies: ["ArrumatorClassify", "ArrumatorCore", "ArrumatorTesting"],
                     swiftSettings: strict),
-        .testTarget(name: "ArrumatorRuntimeTests", dependencies: ["ArrumatorRuntime", "ArrumatorCore"], swiftSettings: strict),
+        .testTarget(name: "ArrumatorRuntimeTests", dependencies: ["ArrumatorRuntime", "ArrumatorCore", "ArrumatorTesting"],
+                    swiftSettings: strict),
+        // Runs the built command itself, so it depends on it to have it built beside the tests.
+        .testTarget(name: "ArrumatorCLITests", dependencies: ["ArrumatorCLI", "ArrumatorCore"], swiftSettings: strict),
     ],
     swiftLanguageModes: [.v6]
 )

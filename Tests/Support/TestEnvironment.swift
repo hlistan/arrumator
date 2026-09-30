@@ -10,6 +10,8 @@ public struct TestEnvironment: Sendable {
     public let database: AppDatabase
     public let config: PipelineConfig
     public let settings: SettingsStore
+    /// What everything built on this environment stamps and waits by; sleeping on it passes at once.
+    public let time: TestTime
 
     public static func make() async throws -> TestEnvironment {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("arrumator-test-\(UUID().uuidString)", isDirectory: true)
@@ -25,7 +27,7 @@ public struct TestEnvironment: Sendable {
         }
         let database = try AppDatabase.inMemory()
         return TestEnvironment(root: root, paths: paths, archive: archive, incoming: incoming, database: database, config: config,
-                               settings: settings)
+                               settings: settings, time: TestTime(.advances))
     }
 
     public func cleanup() {
@@ -40,6 +42,9 @@ public struct TestEnvironment: Sendable {
         try Data(text.utf8).write(to: url)
         return url
     }
+
+    /// An environment that reads none of the process's variables: tests never depend on how they were started.
+    public static let isolated = RuntimeEnvironment(home: nil, ollamaURL: nil, logLevelName: nil, pipelineOverridePath: nil)
 
     /// Where things are in the archive.
     public var layout: ArchiveLayout { ArchiveLayout(root: archive, records: config.records, watcher: config.watcher) }

@@ -53,7 +53,7 @@ fi
 
 echo "→ Arrumator $version, signed by ${DEVELOPER_ID:-an ad-hoc signature}"
 
-# The app. Release signs with the Developer ID identity project.yml names; ad hoc it is "-".
+# The app, signed with the identity chosen above: the certificate DEVELOPER_ID names, or ad hoc ("-").
 xcodegen generate --quiet
 # build_app <archs> <name>: builds the app for <archs> and zips it as dist/Arrumator-<version>-<name>.zip.
 build_app() {

@@ -22,7 +22,7 @@ import Testing
     ]
 
     private func archive() async throws -> (Harness, [String: Int64]) {
-        let h = try await Harness.make(analyzer: LabelingTests.PerFileAnalyzer(labels: Self.corpus))
+        let h = try await Harness.make(analyzer: PerFileAnalyzer(labels: Self.corpus))
         var ids: [String: Int64] = [:]
         for name in Self.corpus.keys.sorted() { ids[name] = try await h.ingest(name, text: "A document: \(name)").id }
         return (h, ids)
@@ -62,7 +62,7 @@ import Testing
         #expect(values(usage, .topic) == ["electricity", "telecommunications"], "not taxes")
         #expect(values(usage, .type) == ["invoice"], "the chosen label stays, as every document left has it; contract goes")
         #expect(usage[.jurisdiction]?.first?.documents == 2, "a label is counted over the chosen documents only, not all four")
-        #expect(usage[.sender]?.map(\.documents) == [1, 1])
+        #expect(usage[.sender]?.map(\.documents) == [1, 1], "each sender sent one of the invoices")
     }
 
     @Test func eachFurtherLabelNarrowsTheDocumentsAndTheLabelsAgain() async throws {
@@ -98,9 +98,10 @@ import Testing
     @Test func labelsNarrowTogetherWithStatusesAndSearch() async throws {
         let (h, all) = try await archive()
         defer { h.env.cleanup() }
-        #expect(try await documents(h, [Self.invoice], statuses: [.filed]) == ids(all, "edp_bill.txt", "meo_bill.txt"))
+        #expect(try await documents(h, [Self.invoice], statuses: [.filed]) == ids(all, "edp_bill.txt", "meo_bill.txt"),
+                "the invoices are both filed")
         #expect(try await documents(h, [Self.invoice], statuses: [.needsReview]).isEmpty, "both conditions hold at once")
-        let search = SearchService(database: h.env.database, vectors: VectorIndex(), embedder: nil, config: h.env.config.search)
+        let search = h.search
         let hits = try await search.fullText(SearchQuery(text: "document", filter: DocumentFilter(labels: [Self.edp]))).hits.map(\.id).sorted()
         #expect(hits == (try ids(all, "edp_bill.txt", "edp_contract.txt")), "search can be kept within the chosen labels")
     }
@@ -108,7 +109,7 @@ import Testing
     @Test func theScopeFollowsTheUsersDecisionsAboutLabels() async throws {
         let (h, all) = try await archive()
         defer { h.env.cleanup() }
-        _ = try await LabelActions(database: h.env.database).merge(Self.edp, into: "EDP")
+        _ = try await h.labels.merge(Self.edp, into: "EDP")
         #expect(try await documents(h, [Self.edp]).isEmpty, "a merged-away label no longer chooses anything")
         #expect(try await documents(h, [Self.label(.sender, "EDP")]) == ids(all, "edp_bill.txt", "edp_contract.txt"),
                 "the label it was merged into chooses its documents")

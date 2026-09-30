@@ -28,10 +28,16 @@ public struct FilenameBuilder: Sendable {
 
     private func fits(_ s: String) -> Bool { s.count <= config.maxChars && s.utf8.count <= config.maxBytes }
 
-    /// NFC, forbidden and control characters replaced, no leading dots, collapsed whitespace.
+    /// The character that separates the names of a path (POSIX): it never stays in a file name, whatever
+    /// `naming.forbiddenCharacters` lists, so a name from the model can never reach another directory (§4.5).
+    static let pathSeparator = "/"
+    /// What a forbidden character becomes.
+    static let replacement = "-"
+
+    /// NFC, path separators, forbidden and control characters replaced, no leading dots, collapsed whitespace.
     public func sanitize(_ s: String) -> String {
         var out = s.precomposedStringWithCanonicalMapping
-        for c in config.forbiddenCharacters { out = out.replacingOccurrences(of: c, with: "-") }
+        for c in [Self.pathSeparator] + config.forbiddenCharacters { out = out.replacingOccurrences(of: c, with: Self.replacement) }
         out = String(out.unicodeScalars.map { CharacterSet.controlCharacters.contains($0) ? " " : Character($0) })
         out = out.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
         while out.hasPrefix(".") { out.removeFirst() }

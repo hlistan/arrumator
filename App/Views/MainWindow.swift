@@ -7,7 +7,7 @@ struct MainWindow: View {
 
     var body: some View {
         NavigationSplitView {
-            Sidebar().navigationSplitViewColumnWidth(min: 200, ideal: 230, max: 300)
+            Sidebar().navigationSplitViewColumnWidth(min: Style.sidebarMinWidth, ideal: Style.sidebarIdealWidth, max: Style.sidebarMaxWidth)
         } detail: {
             page.frame(maxWidth: .infinity, maxHeight: .infinity).background(Style.page)
         }
@@ -15,7 +15,7 @@ struct MainWindow: View {
             if let error = model.lastError {
                 Label(error, systemImage: "exclamationmark.triangle")
                     .font(.callout)
-                    .padding(.horizontal, 12).padding(.vertical, 8)
+                    .padding(Style.errorBannerInsets)
                     .background(.regularMaterial, in: .capsule)
                     .padding()
                     .onTapGesture { model.lastError = nil }
@@ -93,14 +93,14 @@ struct Sidebar: View {
             SidebarLabel(label: item.label, chosen: model.labelSelection.contains(item.label))
         }
         if ordered.count > limit {
-            Button("Show More") { listedInFull.insert(kind) }
+            Button(Wording.showMore) { listedInFull.insert(kind) }
                 .buttonStyle(.plain).foregroundStyle(.secondary)
         }
     }
 
     private func loadLabels() async {
         let selection = model.labelSelection
-        guard let loaded = await model.load("Load labels", { try await $0.services.labels.usage(within: selection) }) else { return }
+        guard let loaded = await model.load(Wording.loadLabelsAction, { try await $0.services.labels.usage(within: selection) }) else { return }
         usage = loaded
     }
 
@@ -115,43 +115,46 @@ struct Sidebar: View {
 
     private var search: some View {
         @Bindable var model = model
-        return HStack(spacing: 6) {
+        return HStack(spacing: Style.searchFieldSpacing) {
             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-            TextField("Search", text: $model.searchText).textFieldStyle(.plain)
+            TextField(Wording.search, text: $model.searchText).textFieldStyle(.plain)
             if !model.searchText.isEmpty {
                 Button { model.searchText = "" } label: { Image(systemName: "xmark.circle.fill") }
                     .buttonStyle(.plain).foregroundStyle(.tertiary)
             }
         }
-        .padding(.horizontal, 8).padding(.vertical, 5)
-        .background(.quaternary.opacity(0.6), in: .rect(cornerRadius: 7))
-        .padding(.horizontal, 10).padding(.top, 6).padding(.bottom, 4)
+        .padding(Style.searchFieldInsets)
+        .background(.quaternary.opacity(Style.searchFieldFillOpacity), in: .rect(cornerRadius: Style.searchFieldCornerRadius))
+        .padding(Style.searchFieldMargins)
     }
 
     private var footer: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: Style.sidebarFooterSpacing) {
             if let attention = model.attention {
                 Text(attention).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer()
-            Button { Task { await model.togglePause() } } label: {
+            Button {
+                let paused = model.settings?.paused == true
+                Task { await model.setPaused(!paused) }
+            } label: {
                 Image(systemName: model.settings?.paused == true ? "play.fill" : "pause.fill")
             }
-            .help(model.settings?.paused == true ? "Resume filing" : "Pause filing")
+            .help(model.settings?.paused == true ? Wording.resumeFiling : Wording.pauseFiling)
             Menu {
-                Button("Statistics") { model.go(.statistics) }
-                Button("History") { model.go(.history) }
+                Button(Destination.statistics.title) { model.go(.statistics) }
+                Button(Destination.history.title) { model.go(.history) }
                 Divider()
-                Button("Open Incoming Folder") { if let path = model.settings?.incomingURL.path { model.open(path) } }
-                Button("Open Archive Folder") { if let path = model.settings?.archiveURL.path { model.open(path) } }
-                Button("Switch Archive…") {
-                    if let chosen = FolderPicker.choose(title: "Choose the archive to file into", startingAt: model.settings?.archivePath) {
+                Button(Wording.openIncomingFolder) { if let path = model.settings?.incomingURL.path { model.open(path) } }
+                Button(Wording.openArchiveFolder) { if let path = model.settings?.archiveURL.path { model.open(path) } }
+                Button(Wording.switchArchive) {
+                    if let chosen = FolderPicker.choose(title: Wording.chooseArchive, startingAt: model.settings?.archivePath) {
                         Task { await model.switchArchive(to: chosen) }
                     }
                 }
                 .disabled(model.switchingArchive)
                 Divider()
-                Button("Settings…") { model.show(.settings) }
+                Button(Wording.settings) { model.show(.settings) }
             } label: {
                 Image(systemName: "ellipsis.circle")
             }
@@ -159,7 +162,7 @@ struct Sidebar: View {
         }
         .buttonStyle(.borderless)
         .foregroundStyle(.secondary)
-        .padding(.horizontal, 12).padding(.vertical, 9)
+        .padding(Style.sidebarFooterInsets)
     }
 }
 
@@ -182,6 +185,6 @@ private struct SidebarLabel: View {
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .help(chosen ? "Show documents without this label too" : "Show only documents with this label")
+        .help(chosen ? Wording.showWithoutLabel : Wording.showOnlyWithLabel)
     }
 }

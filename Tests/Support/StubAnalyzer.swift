@@ -31,7 +31,7 @@ public struct StubAnalyzer: DocumentAnalyzing {
                         trace: TraceContext) async throws -> AnalysisOutcome {
         await calls.read(content.source.originalFilename, guidance: guidance)
         if let error { throw error }
-        await trace.record(.analyse, status: labels == nil ? .error : .ok, startedAt: Date(), output: labels)
+        await trace.record(.analyse, status: labels == nil ? .error : .ok, startedAt: TestTime.start, output: labels)
         let analysis = DocumentAnalysis(fileName: fileName, model: labels == nil ? nil : "stub",
                                         problems: labels == nil ? ["the model gave no valid answer"] : [])
         return AnalysisOutcome(analysis: analysis, labels: labels, embedding: [1, 0, 0], embeddingModel: Self.embeddingModel)

@@ -27,5 +27,5 @@ Anything that breaks the guarantees in [AGENTS.md §4](AGENTS.md#4-hard-rules-no
   being set to a host outside this Mac and the local network (`OllamaEndpoint.validated`, `NetworkGuardProtocol`);
 - document text written to logs, or to diagnostics without the user asking for it;
 - a way for a document's content or the model's output to delete a file, write outside the archive and Incoming, or
-  choose a path the app did not build from folder codes;
+  make a file name the model gave reach another directory;
 - a release artifact that does not match its `SHA256SUMS` or its build-provenance attestation.

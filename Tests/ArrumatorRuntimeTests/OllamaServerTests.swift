@@ -13,7 +13,7 @@ import Testing
         let runtime = try await home.open()
         #expect(runtime.ollama.baseURL.absoluteString == "http://127.0.0.1:11434", "this Mac until told otherwise")
         try await runtime.useOllama(at: Self.server)
-        #expect(runtime.ollama.baseURL.absoluteString == Self.server)
+        #expect(runtime.ollama.baseURL.absoluteString == Self.server, "the app talks to the server the user chose")
         let saved = await runtime.settings.current.ollamaURL
         #expect(saved == Self.server, "and remembered")
         await #expect(throws: OllamaError.self, "a server beyond the local network is refused") {
@@ -39,7 +39,7 @@ import Testing
         settings.ollamaManagement = .launchApp
         let local = try OllamaEndpoint.validated("http://127.0.0.1:11434")
         let remote = try OllamaEndpoint.validated(Self.server)
-        #expect(ArrumatorRuntime.management(for: settings, at: local) == .launchApp)
+        #expect(ArrumatorRuntime.management(for: settings, at: local) == .launchApp, "on this Mac, Ollama is started as the user chose")
         #expect(ArrumatorRuntime.management(for: settings, at: remote) == .external,
                 "a server on another machine is the user's to start and stop")
     }

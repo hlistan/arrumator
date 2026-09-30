@@ -13,38 +13,38 @@ struct TraceView: View {
     var body: some View {
         VStack(alignment: .leading) {
             HStack {
-                Picker("Run", selection: $traceID) {
+                Picker(Wording.run, selection: $traceID) {
                     ForEach(traces) { t in
-                        Text("\(t.startedAt.formatted(date: .abbreviated, time: .standard)) · \(t.source) · \(t.outcome ?? "…")").tag(Int64?.some(t.id ?? 0))
+                        Text(Wording.traceRun(t)).tag(Int64?.some(t.id ?? 0))
                     }
                 }
-                .frame(maxWidth: 480)
+                .frame(maxWidth: Style.traceRunPickerMaxWidth)
                 Spacer()
-                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button(Wording.done) { dismiss() }.keyboardShortcut(.cancelAction)
             }
             List(steps) { s in
                 DisclosureGroup {
-                    if let e = s.error { Text(e).foregroundStyle(.red).textSelection(.enabled) }
-                    if let i = s.inputJson { payload("Input", i) }
-                    if let o = s.outputJson { payload("Output", o) }
+                    if let e = s.error { Text(e).foregroundStyle(Palette.problem).textSelection(.enabled) }
+                    if let i = s.inputJson { payload(Wording.input, i) }
+                    if let o = s.outputJson { payload(Wording.output, o) }
                 } label: {
                     HStack {
-                        Text(s.stage).bold().frame(width: 100, alignment: .leading)
-                        Text(s.status).foregroundStyle(s.status == "error" ? .red : (s.status == "warn" ? .orange : .secondary))
+                        Text(s.stage).bold().frame(width: Style.traceStageWidth, alignment: .leading)
+                        Text(s.status.rawValue).foregroundStyle(s.status.tint)
                         Spacer()
-                        Text("\(Int(s.durationMs)) ms").monospacedDigit().foregroundStyle(.secondary)
+                        Text(Wording.milliseconds(Int(s.durationMs))).monospacedDigit().foregroundStyle(.secondary)
                     }
                 }
             }
         }
         .padding()
         .task {
-            traces = await model.load("Load traces") { try await $0.traces.traces(docID: documentID) } ?? []
+            traces = await model.load(Wording.loadTracesAction) { try await $0.traces.traces(docID: documentID) } ?? []
             traceID = traces.first?.id
         }
         .task(id: traceID) {
             guard let traceID else { return }
-            guard let loaded = await model.load("Load trace", { try await $0.traces.trace(id: traceID) }) ?? nil else { return }
+            guard let loaded = await model.load(Wording.loadTraceAction, { try await $0.traces.trace(id: traceID) }) ?? nil else { return }
             steps = loaded.1
         }
     }

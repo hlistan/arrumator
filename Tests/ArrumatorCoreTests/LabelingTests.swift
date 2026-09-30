@@ -7,22 +7,6 @@ import Testing
 /// Every document is read by the model before it is filed, and its labels become its own: kept on it, searchable
 /// kind by kind, and every step of it in the history, the trace and the funnel.
 @Suite struct LabelingTests {
-    /// Reads each file as the stub does, with the labels listed for its name, and none for the rest.
-    struct PerFileAnalyzer: DocumentAnalyzing {
-        let labels: [String: [DocumentLabel]]
-
-        func analyse(_ content: ExtractedContent, guidance: LabelGuidance, settings: AppSettings, config: PipelineConfig,
-                     trace: TraceContext) async throws -> AnalysisOutcome {
-            var outcome = try await StubAnalyzer(fileName: content.source.stem).analyse(content, guidance: guidance, settings: settings,
-                                                                                         config: config, trace: trace)
-            outcome.labels = labels[content.source.originalFilename] ?? []
-            return outcome
-        }
-
-        func embedding(for content: ExtractedContent, senders: [String], settings: AppSettings, config: PipelineConfig,
-                       trace: TraceContext) async throws -> (vector: [Float], model: String)? { nil }
-    }
-
     static let meoContract = [DocumentLabel(kind: .sender, value: "MEO"), DocumentLabel(kind: .party, value: "João Silva"),
                               DocumentLabel(kind: .object, value: "mobile line 912345678"), DocumentLabel(kind: .jurisdiction, value: "Spain"),
                               DocumentLabel(kind: .language, value: "es")]
@@ -50,7 +34,7 @@ import Testing
         defer { h.env.cleanup() }
         let document = try await h.ingest("note.txt", text: "Remember the milk")
         #expect(document.labels == [] && document.status == .filed, "labelled with nothing, which is not the same as not labelled")
-        #expect(try await h.services.documents.unlabelled().isEmpty)
+        #expect(try await h.services.documents.unlabelled().isEmpty, "so it is not offered to be labelled again")
     }
 
     @Test func withoutAValidAnswerTheDocumentIsUnlabelledAndTheHistorySaysWhy() async throws {
@@ -58,11 +42,11 @@ import Testing
         defer { h.env.cleanup() }
         let document = try await h.ingest("bill.txt", text: "EDP electricity July")
         let id = try #require(document.id)
-        #expect(document.labels == nil)
+        #expect(document.labels == nil, "no labels are guessed")
         #expect(try await h.services.documents.unlabelled() == [id], "so it can be labelled later")
         let events = try await h.services.history.events(limit: 20, docID: id)
-        #expect(events.contains { $0.kind == .error && $0.summary == "Not read: the model gave no valid answer" })
-        #expect(!events.contains { $0.kind == .analysed })
+        #expect(events.contains { $0.kind == .error && $0.summary == "Not read: the model gave no valid answer" }, "the history says why it was not read")
+        #expect(!events.contains { $0.kind == .analysed }, "and records no reading")
     }
 
     @Test func readingAnUnlabelledDocumentAgainLabelsIt() async throws {
@@ -76,8 +60,9 @@ import Testing
         #expect(try await services.jobs.active().map(\.state) == [.analysing], "read again from the text it arrived with")
         await coordinator.drain()
         let read = try #require(try await services.documents.document(id: id))
-        #expect(read.labels == StubAnalyzer.edpBill && read.status == .filed && read.analysis?.problems == [])
-        #expect(try await services.documents.unlabelled().isEmpty)
+        #expect(read.labels == StubAnalyzer.edpBill && read.status == .filed && read.analysis?.problems == [],
+                "read again, it is labelled and filed with nothing left for the user")
+        #expect(try await services.documents.unlabelled().isEmpty, "and it is no longer waiting for labels")
     }
 
     @Test func labelsAreSearchableKindByKind() async throws {
@@ -85,15 +70,15 @@ import Testing
         defer { h.env.cleanup() }
         var byName: [String: Int64] = [:]
         for name in ["edp.txt", "meo.txt"] { byName[name] = try await h.ingest(name, text: "A bill: \(name)").id }
-        let search = SearchService(database: h.env.database, vectors: VectorIndex(), embedder: nil, config: h.env.config.search)
+        let search = h.search
         func found(_ query: String) async throws -> [Int64] { try await search.fullText(SearchQuery(text: query)).hits.map(\.id) }
 
         #expect(try await found("jurisdiction:portugal") == [byName["edp.txt"]], "a label is found under its kind")
         #expect(try await found("party:\"joão silva\"") == [byName["meo.txt"]], "a whole name as a phrase, accents or not")
         #expect(try await found("sender:edp") == [byName["edp.txt"]], "the sender is a label like any other")
-        #expect(try await found("amount:54.21") == [byName["edp.txt"]])
+        #expect(try await found("amount:54.21") == [byName["edp.txt"]], "an amount by its value")
         #expect(try await found("deadline:2026-07") == [byName["edp.txt"]], "dates are found by their start")
-        #expect(try await found("object:912345678") == [byName["meo.txt"]])
+        #expect(try await found("object:912345678") == [byName["meo.txt"]], "an object by the number in it")
         #expect(try await found("language:portuguese") == [byName["edp.txt"]], "a language by its English name")
         #expect(try await found("language:es") == [byName["meo.txt"]], "and by its code")
         #expect(try await found("spain") == [byName["meo.txt"]], "a label is found without naming its kind too")
@@ -104,10 +89,10 @@ import Testing
         let h = try await Harness.make(analyzer: StubAnalyzer(labels: nil))
         defer { h.env.cleanup() }
         try await h.ingest("bill.txt", text: "EDP electricity July")
-        let funnel = try await StatsService(database: h.env.database, config: h.env.config.stats).funnel(days: 7)
+        let funnel = try await StatsService(database: h.env.database, config: h.env.config.stats, time: h.env.time).funnel(days: 7)
         let step = try #require(funnel.steps.first { $0.id == "analysed" })
         #expect(step.reached == 1 && step.errors == 1, "a document the model could not read counts as an error at this step")
-        let insights = try await StatsService(database: h.env.database, config: h.env.config.stats).insights()
-        #expect(insights.labelled == 0 && insights.unlabelled == 1)
+        let insights = try await StatsService(database: h.env.database, config: h.env.config.stats, time: h.env.time).insights()
+        #expect(insights.labelled == 0 && insights.unlabelled == 1, "Statistics counts it as waiting for labels")
     }
 }

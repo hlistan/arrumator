@@ -3,12 +3,17 @@ import GRDB
 
 public enum DatabaseOpeningError: Error, LocalizedError {
     case unreadable(String, String)
+    /// The index is sound, but cannot be opened now: another process holds it, the disk is full, or it may not be read.
+    case unavailable(String, String)
 
     public var errorDescription: String? {
         switch self {
         case let .unreadable(path, why):
             "The index at \(path) cannot be opened (\(why)), and the archive holds no record files to rebuild it from. "
                 + "Move the file away to start with an empty index."
+        case let .unavailable(path, why):
+            "The index at \(path) cannot be opened right now (\(why)). It is left as it is; quit whatever else uses it, "
+                + "free disk space or check its permissions, then try again."
         }
     }
 }
@@ -35,17 +40,20 @@ public struct AppDatabase: Sendable {
         public var needsRebuild: Bool { self != .existing }
     }
 
-    /// Opens (creating if needed) the on-disk database. One that cannot be opened or migrated is moved aside, never
+    /// Opens (creating if needed) the on-disk database. One that is damaged or cannot be migrated is moved aside, never
     /// deleted, when `canRebuild` says the archive holds the records to rebuild it from; otherwise the error stands, so
-    /// the app stops instead of starting empty.
-    public static func open(at url: URL, setAsideSuffix: String, canRebuild: () -> Bool) throws -> (AppDatabase, Opening) {
+    /// the app stops instead of starting empty. One that cannot be opened for the moment (`isPassing`) is never set
+    /// aside: rebuilding it would lose its traces and queue for a lock that would have been released.
+    public static func open(at url: URL, config: DatabaseConfig, setAsideSuffix: String, time: any TimeSource,
+                            canRebuild: () -> Bool) throws -> (AppDatabase, Opening) {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let existed = FileManager.default.fileExists(atPath: url.path)
         do {
-            return (try openPool(at: url), existed ? .existing : .created)
+            return (try openPool(at: url, config: config), existed ? .existing : .created)
         } catch {
+            if isPassing(error) { throw DatabaseOpeningError.unavailable(url.path, error.localizedDescription) }
             guard existed, canRebuild() else { throw DatabaseOpeningError.unreadable(url.path, error.localizedDescription) }
-            let stamp = Date().formatted(.iso8601.year().month().day().time(includingFractionalSeconds: false)
+            let stamp = time.now().formatted(.iso8601.year().month().day().time(includingFractionalSeconds: false)
                 .timeSeparator(.omitted).dateTimeSeparator(.standard))
             let aside = url.deletingLastPathComponent().appendingPathComponent("\(url.lastPathComponent).\(setAsideSuffix)-\(stamp)")
             for suffix in [""] + companionSuffixes {
@@ -55,17 +63,29 @@ public struct AppDatabase: Sendable {
             }
             Log.error(.db, "Database could not be opened; moved aside and rebuilding from the archive",
                       ["path": aside.path, "error": error.localizedDescription])
-            return (try openPool(at: url), .setAside(aside))
+            return (try openPool(at: url, config: config), .setAside(aside))
         }
+    }
+
+    /// SQLite's results that say nothing about the database itself (https://sqlite.org/rescode.html): it is locked by
+    /// another connection, the disk is full or failing, the file may not be opened or written, or memory ran out.
+    private static let passingResults: [ResultCode] = [
+        .SQLITE_BUSY, .SQLITE_LOCKED, .SQLITE_FULL, .SQLITE_IOERR, .SQLITE_CANTOPEN, .SQLITE_PERM, .SQLITE_READONLY,
+        .SQLITE_NOMEM, .SQLITE_INTERRUPT,
+    ]
+
+    static func isPassing(_ error: any Error) -> Bool {
+        guard let error = error as? DatabaseError else { return false }
+        return passingResults.contains(error.resultCode.primaryResultCode)
     }
 
     /// The files SQLite keeps next to a database in WAL mode, named by adding these to its path.
     public static let companionSuffixes = ["-wal", "-shm"]
 
-    private static func openPool(at url: URL) throws -> AppDatabase {
+    private static func openPool(at url: URL, config database: DatabaseConfig) throws -> AppDatabase {
         var config = Configuration()
         config.foreignKeysEnabled = true
-        config.busyMode = .timeout(5)
+        config.busyMode = .timeout(database.busyTimeout)
         config.prepareDatabase { db in
             try db.execute(sql: "PRAGMA synchronous = NORMAL")
         }

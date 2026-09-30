@@ -14,18 +14,25 @@ public struct ExtractorRegistry: ContentExtracting {
     private let extractors: [any FileExtractor]
     private let previewer: QuickLookExtractor
     private let metadataOnly = MetadataOnlyExtractor()
+    private let time: any TimeSource
 
-    /// - Parameter ollama: local Ollama client used to describe images with sparse text; without it such images
-    ///   get a `vlmSkipped` warning.
-    public init(ollama: (any OllamaAPI)? = nil) {
-        let ocr = OCRService(recognizer: VisionTextRecognizer())
-        let vision = ollama.map { VisionDescriber(ollama: $0) }
+    /// - Parameters:
+    ///   - ollama: the Ollama client images with sparse text are described with; without it such images get a
+    ///     `vlmSkipped` warning.
+    ///   - recognizer: reads text in images (`VisionTextRecognizer` in the app).
+    ///   - shell: runs `textutil`.
+    ///   - time: what every deadline of extraction is measured by.
+    public init(ollama: (any OllamaAPI)?, recognizer: any TextRecognizing, shell: ShellRunner, time: any TimeSource) throws {
+        self.time = time
+        let ocr = OCRService(recognizer: recognizer)
+        let prompts = try VisionPrompts.bundled()
+        let vision = ollama.map { VisionDescriber(ollama: $0, prompts: prompts, time: time) }
         previewer = QuickLookExtractor(ocr: ocr, metadataOnly: metadataOnly)
         extractors = [
             PDFExtractor(ocr: ocr),
             ImageExtractor(ocr: ocr, vision: vision),
             PlainTextExtractor(),
-            TextutilExtractor(shell: ShellRunner()),
+            TextutilExtractor(shell: shell),
             XLSXExtractor(),
             PPTXExtractor(),
             EmailExtractor(),
@@ -43,7 +50,7 @@ public struct ExtractorRegistry: ContentExtracting {
         let config = context.config
         let tooLarge = inspected.source.byteSize > config.largeFileBytes
         let extractor: any FileExtractor = tooLarge ? metadataOnly : extractor(for: inspected.type)
-        let job = ExtractionJob(url: url, source: inspected.source, type: inspected.type, context: context, trace: trace)
+        let job = ExtractionJob(url: url, source: inspected.source, type: inspected.type, context: context, trace: trace, time: time)
         let input = ExtractTraceInput(filename: inspected.source.originalFilename, utType: inspected.type.identifier,
                                       byteSize: inspected.source.byteSize, whereFroms: inspected.source.whereFroms,
                                       extractor: extractor.name, extractorVersion: extractor.version,
@@ -58,10 +65,13 @@ public struct ExtractorRegistry: ContentExtracting {
             used = metadataOnly
         } else {
             do {
-                draft = try await Deadline.run(seconds: config.perFileTimeout) { try await extractor.extract(job) }
+                draft = try await Deadline.run(config.perFileTimeout, time: time,
+                                               expired: { ExtractionError.timeout(stage: "extract:\(extractor.name)") }) {
+                    try await extractor.extract(job)
+                }
                 used = extractor
             } catch {
-                if let failure = Self.hardFailure(error, extractor: extractor) {
+                if let failure = Self.hardFailure(error) {
                     await trace.record(.extract, status: .error, startedAt: started, input: input,
                                        error: failure.localizedDescription)
                     Log.error(.extract, "Extraction failed", [
@@ -99,11 +109,10 @@ public struct ExtractorRegistry: ContentExtracting {
     }
 
     /// Maps thrown errors to the hard failures that fail the job; `nil` means "soft: continue metadata-only".
-    private static func hardFailure(_ error: any Error, extractor: any FileExtractor) -> ExtractionError? {
+    private static func hardFailure(_ error: any Error) -> ExtractionError? {
         switch error {
         case let error as ExtractionError: error
         case is CancellationError: .cancelled
-        case is DeadlineExceeded: .timeout(stage: "extract:\(extractor.name)")
         default: nil
         }
     }
@@ -133,13 +142,14 @@ public struct ExtractorRegistry: ContentExtracting {
         timings["language"] = languageStarted.elapsedMs
 
         let entitiesStarted = Date()
-        let scan = EntityExtractor(config: context.entities).scan(text)
+        let now = time.now()
+        let scan = EntityExtractor(config: context.entities).scan(text, now: now, calendar: .current)
         let evidence = DateEvidence(firstPageLength: draft.firstPageLength, metadataDates: draft.metadataDates,
-                                    fileCreated: inspected.source.createdAt, fileModified: inspected.source.modifiedAt)
+                                    fileCreated: inspected.source.createdAt, fileModified: inspected.source.modifiedAt,
+                                    now: now, calendar: .current)
         let resolution = DocumentDateResolver(config: context.entities).resolve(scan.dateCandidates, in: text,
                                                                                 evidence: evidence)
-        let entities = Entities(dates: resolution.ranked, documentDate: resolution.chosen, amounts: scan.amounts,
-                                emails: scan.emails, urls: scan.urls, phones: scan.phones, stableKeys: scan.stableKeys)
+        let entities = Entities(dates: resolution.ranked, documentDate: resolution.chosen, stableKeys: scan.stableKeys)
         timings["entities"] = entitiesStarted.elapsedMs
         timings["total"] = started.elapsedMs
 
@@ -165,12 +175,8 @@ public struct ExtractorRegistry: ContentExtracting {
             let input = EntitiesTraceInput(textLength: text.count, firstPageLength: draft.firstPageLength,
                                            metadataDates: draft.metadataDates, fileCreated: inspected.source.createdAt,
                                            fileModified: inspected.source.modifiedAt)
-            let output = EntitiesTraceOutput(
-                dateCandidates: resolution.scored, chosen: resolution.chosen,
-                stableKeys: entities.stableKeys.map(\.token), amounts: entities.amounts.count,
-                currencies: entities.amounts.map(\.currency).uniqued(),
-                emailDomains: entities.emails.compactMap { $0.split(separator: "@").last.map(String.init) }.uniqued(),
-                urls: entities.urls.count, phones: entities.phones.count)
+            let output = EntitiesTraceOutput(dateCandidates: resolution.scored, chosen: resolution.chosen,
+                                             stableKeys: entities.stableKeys.map(\.token))
             await trace.record(TraceStep(stage: .entities, startedAt: entitiesStarted,
                                          durationMs: timings["entities"] ?? 0,
                                          input: JSON.string(input), output: JSON.string(output)))

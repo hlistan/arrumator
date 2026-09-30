@@ -95,7 +95,7 @@ it is cased, accented or punctuated.
 
 When the model finds nothing worth a label, the document is labelled with nothing, which is not the same as not
 labelled. A document without labels is labelled when it is read again: `arrumatorcli review retry <document>` for one,
-`arrumatorcli labels --unlabelled` for all of them.
+`arrumatorcli labels unlabelled` for all of them.
 
 ### Correcting labels
 

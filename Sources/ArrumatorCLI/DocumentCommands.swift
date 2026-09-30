@@ -14,15 +14,14 @@ struct Ingest: AsyncParsableCommand {
         let runtime = try await options.runtime()
         let settings = await runtime.settings.current
         _ = await runtime.lifecycle.ensureRunning()
+        var jobs: [Int64] = []
         for path in files {
             let url = URL(fileURLWithPath: path.expandingTilde).standardizedFileURL
             if dryRun {
                 let sink = MemoryTraceSink()
                 let trace = TraceContext(traceID: 0, sink: sink)
                 let content = try await runtime.services.extractor.extract(
-                    url, sha256: try HashService.sha256(of: url),
-                    context: ExtractionContext(config: runtime.config.extraction, entities: runtime.config.entities,
-                                               vision: settings.enableVLM ? try visionOptions(runtime, settings) : nil),
+                    url, sha256: try HashService.sha256(of: url), context: try runtime.config.extractionContext(settings: settings),
                     trace: trace)
                 let reading = try await runtime.services.read(content, settings: settings, trace: trace)
                 let steps = await sink.steps
@@ -30,13 +29,19 @@ struct Ingest: AsyncParsableCommand {
                                     changes: reading.changes, steps: steps)) {
                     describe(reading, content: content, steps: steps)
                 }
-            } else {
-                await runtime.coordinator.enqueue(url)
+            } else if let job = await runtime.coordinator.enqueue(url) {
+                jobs.append(job)
             }
         }
         if !dryRun {
             await runtime.coordinator.drain()
-            let docs = try await runtime.services.documents.list(DocumentFilter(), limit: files.count)
+            // The documents these files became, whatever else the archive holds.
+            var docs: [DocumentRecord] = []
+            for id in jobs {
+                if let doc = try await runtime.services.jobs.job(id: id)?.docId, let document = try await runtime.services.documents.document(id: doc) {
+                    docs.append(document)
+                }
+            }
             options.emit(docs) {
                 docs.map { "\($0.status.rawValue.padding(toLength: 11, withPad: " ", startingAt: 0)) \($0.path)" }.joined(separator: "\n")
             }
@@ -66,13 +71,6 @@ struct Ingest: AsyncParsableCommand {
     }
 }
 
-func visionOptions(_ runtime: ArrumatorRuntime, _ settings: AppSettings) throws -> VisionModelOptions {
-    let models = try runtime.config.models(for: settings.models)
-    return VisionModelOptions(model: models.vision, keepAlive: models.keepAliveChat,
-                              numPredict: runtime.config.analysis.vlmNumPredict, numCtx: models.visionNumCtx,
-                              options: runtime.config.analysis.llmOptions)
-}
-
 struct Extract: AsyncParsableCommand {
     static let configuration = CommandConfiguration(abstract: "Show what the extractors read from a file (no model decisions).")
     @OptionGroup var options: GlobalOptions
@@ -83,10 +81,9 @@ struct Extract: AsyncParsableCommand {
         let settings = await runtime.settings.current
         let url = URL(fileURLWithPath: file.expandingTilde)
         let content = try await runtime.services.extractor.extract(
-            url, sha256: try HashService.sha256(of: url),
-            context: ExtractionContext(config: runtime.config.extraction, entities: runtime.config.entities,
-                                       vision: settings.enableVLM ? try visionOptions(runtime, settings) : nil),
+            url, sha256: try HashService.sha256(of: url), context: try runtime.config.extractionContext(settings: settings),
             trace: .disabled)
+        let preview = runtime.config.interface.extractPreviewChars
         options.emit(content) {
             """
             \(content.source.originalFilename) — \(content.source.utType), \(content.source.byteSize) bytes
@@ -96,7 +93,7 @@ struct Extract: AsyncParsableCommand {
             identifiers \(content.entities.stableKeys.map(\.token).joined(separator: ", "))
             warnings \(content.warnings.map(\.code.rawValue).joined(separator: ", "))
             ---
-            \(content.text.prefix(2_000))
+            \(content.text.prefix(preview))
             """
         }
     }
@@ -137,12 +134,12 @@ struct Search: AsyncParsableCommand {
 struct History: AsyncParsableCommand {
     static let configuration = CommandConfiguration(abstract: "Recent events: arrivals, readings, filings, corrections, what was learned.")
     @OptionGroup var options: GlobalOptions
-    @Option(help: "Number of events.") var limit = 50
+    @Option(help: "Number of events (interface.pageSize unless set).") var limit: Int?
     @Option(help: "Only events of this document.") var doc: Int64?
 
     func run() async throws {
         let runtime = try await options.runtime()
-        let events = try await runtime.services.history.events(limit: limit, docID: doc)
+        let events = try await runtime.services.history.events(limit: limit ?? runtime.config.interface.pageSize, docID: doc)
         options.emit(events) {
             Terminal.table(events.reversed().map { [Format.date($0.at), $0.kind.rawValue, $0.actor.rawValue,
                                                   $0.docId.map { "#\($0)" } ?? "", $0.summary] })
@@ -169,7 +166,7 @@ struct Trace: AsyncParsableCommand {
             for s in steps {
                 let seq = String(s.seq).padding(toLength: 3, withPad: " ", startingAt: 0)
                 let stage = s.stage.padding(toLength: 13, withPad: " ", startingAt: 0)
-                let status = s.status.padding(toLength: 7, withPad: " ", startingAt: 0)
+                let status = s.status.rawValue.padding(toLength: 7, withPad: " ", startingAt: 0)
                 lines.append("\(seq) \(stage) \(status) \(Int(s.durationMs)) ms")
                 if let e = s.error { lines.append("      error: \(e)") }
                 if full {

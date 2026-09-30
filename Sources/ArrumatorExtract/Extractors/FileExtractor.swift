@@ -2,8 +2,8 @@ import ArrumatorCore
 import Foundation
 import UniformTypeIdentifiers
 
-/// One file-format family. Adding a format means adding one conforming type and registering it in
-/// `ExtractorRegistry.makeExtractors`; nothing else changes.
+/// One file-format family. Adding a format means adding one conforming type and listing it in `ExtractorRegistry.init`;
+/// nothing else changes.
 protocol FileExtractor: Sendable {
     /// Stable identifier recorded in `ExtractedContent.extractorName` and traces.
     var name: String { get }
@@ -23,6 +23,8 @@ struct ExtractionJob: Sendable {
     let type: UTType
     let context: ExtractionContext
     let trace: TraceContext
+    /// What deadlines are measured by.
+    let time: any TimeSource
 
     var config: ExtractionConfig { context.config }
 }
@@ -80,5 +82,6 @@ extension ContentKind {
 
 extension Date {
     /// Milliseconds elapsed since `self`.
-    var elapsedMs: Double { Date().timeIntervalSince(self) * 1000 }
+    /// Durations report how long the Mac worked, which only its own clock can tell.
+    var elapsedMs: Double { milliseconds(until: Date()) }
 }

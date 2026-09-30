@@ -9,7 +9,6 @@
       "/usr/local/bin/ollama"
     ],
     "serveEnvironment": {
-      "OLLAMA_HOST": "127.0.0.1:11434",
       "OLLAMA_MAX_LOADED_MODELS": "2"
     },
     "timeouts": {
@@ -46,8 +45,7 @@
       "numCtx": 12288,
       "fastNumCtx": 12288,
       "keepAliveChat": "10m",
-      "keepAliveEmbed": "30m",
-      "residentBudgetGB": 14
+      "keepAliveEmbed": "30m"
     },
     "balanced": {
       "label": "Balanced (ministral-3:8b + bge-m3, ~7 GB)",
@@ -58,11 +56,10 @@
       "numCtx": 12288,
       "fastNumCtx": 12288,
       "keepAliveChat": "10m",
-      "keepAliveEmbed": "30m",
-      "residentBudgetGB": 14
+      "keepAliveEmbed": "30m"
     },
     "lowMemory": {
-      "label": "Low memory (gemma4:e2b + bge-m3, ~5.5 GB)",
+      "label": "Low memory (gemma4:e2b-it-qat + bge-m3, ~5.5 GB)",
       "chatModel": "gemma4:e2b-it-qat",
       "visionModel": "gemma4:e2b-it-qat",
       "embedModel": "bge-m3",
@@ -70,8 +67,7 @@
       "numCtx": 12288,
       "fastNumCtx": 12288,
       "keepAliveChat": "10m",
-      "keepAliveEmbed": "30m",
-      "residentBudgetGB": 8
+      "keepAliveEmbed": "30m"
     }
   },
   "watcher": {
@@ -251,7 +247,9 @@
   "analysis": {
     "promptVersion": 6,
     "excerptChars": 12000,
+    "excerptTailDivisor": 6,
     "embeddingSummaryChars": 2000,
+    "embeddingIdentifiersLimit": 6,
     "embeddingNumCtx": 2048,
     "llmOptions": {
       "temperature": 0,
@@ -346,7 +344,8 @@
   "logging": {
     "keepDays": 14,
     "maxBytes": 209715200,
-    "bufferLimit": 5000
+    "bufferLimit": 5000,
+    "followInterval": 1
   },
   "power": {
     "pauseBelowBatteryPercent": 20,
@@ -359,6 +358,7 @@
       30,
       90
     ],
+    "defaultWindowDays": 30,
     "diagnosticsTraceLimit": 200,
     "funnel": {
       "minimumForShares": 20,
@@ -368,7 +368,6 @@
           "title": "Arrived",
           "detail": "A new file settled in the Incoming folder.",
           "stages": [
-            "stability",
             "hash"
           ],
           "logCategories": [
@@ -464,6 +463,14 @@
     "recentlyProcessed": 8,
     "pageSize": 100,
     "sidebarLabelsPerKind": 8,
-    "menuBarRecent": 5
+    "menuBarRecent": 5,
+    "notificationEvents": 12,
+    "extractPreviewChars": 2000
+  },
+  "maintenance": {
+    "interval": 3600
+  },
+  "database": {
+    "busyTimeout": 5
   }
 }

@@ -20,7 +20,7 @@ final class NotificationService {
             let wanted = (event.kind == .filed && settings.notifyOnFiled) || (event.kind == .needsReview && settings.notifyOnReview)
             guard wanted else { continue }
             let content = UNMutableNotificationContent()
-            content.title = event.kind == .filed ? "Filed" : "Needs your review"
+            content.title = event.kind == .filed ? Wording.notifyFiled : Wording.notifyReview
             content.body = event.summary
             try? await UNUserNotificationCenter.current().add(
                 UNNotificationRequest(identifier: "event-\(event.id ?? 0)", content: content, trigger: nil))

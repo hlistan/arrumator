@@ -28,7 +28,7 @@ struct ExtractTraceOutput: Encodable, Sendable {
     var metadata: [String: String]
     var attachments: Int
     var structure: ContentStructure?
-    var visualKind: String?
+    var visualKind: ImageKind?
     var warnings: [ExtractionWarning]
     var timings: [String: Double]
 }
@@ -47,9 +47,4 @@ struct EntitiesTraceOutput: Encodable, Sendable {
     var dateCandidates: [ScoredDate]
     var chosen: DetectedDate?
     var stableKeys: [String]
-    var amounts: Int
-    var currencies: [String]
-    var emailDomains: [String]
-    var urls: Int
-    var phones: Int
 }

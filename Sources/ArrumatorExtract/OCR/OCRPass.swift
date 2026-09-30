@@ -11,7 +11,7 @@ struct OCRPageTrace: Sendable, Encodable {
     var lowConfidenceShare: Double
     var orientation: String?
     var languages: [String]
-    var engine: String?
+    var engine: OCREngine?
     /// Where Vision ran: `automatic` (the Neural Engine or GPU) or `cpu`, after the default device failed.
     var device: String?
     var durationMs: Double
@@ -23,14 +23,16 @@ struct OCRPageTrace: Sendable, Encodable {
 struct OCRPass {
     private let service: OCRService
     private let config: ExtractionConfig
+    private let time: any TimeSource
     private let startedAt = Date()
     private(set) var pages: [OCRPageTrace] = []
     private(set) var warnings: [ExtractionWarning] = []
     private var engine: OCREngine?
 
-    init(service: OCRService, config: ExtractionConfig) {
+    init(service: OCRService, config: ExtractionConfig, time: any TimeSource) {
         self.service = service
         self.config = config
+        self.time = time
     }
 
     /// Recognises `image` as page `page` (1-based). Returns nil (and records a warning) when OCR fails or times
@@ -42,14 +44,14 @@ struct OCRPass {
                                  orientationRetryBelow: orientationRetryBelow)
         let service = service
         do {
-            let result = try await Deadline.run(seconds: timeout) {
+            let result = try await Deadline.run(timeout, time: time, expired: { DeadlineExceeded(seconds: timeout) }) {
                 try await service.recognize(image, request: request)
             }
             engine = result.engine
             pages.append(OCRPageTrace(page: page, chars: result.text.count, lines: result.lineCount,
                                       meanConfidence: result.meanConfidence,
                                       lowConfidenceShare: result.lowConfidenceShare, orientation: result.orientation,
-                                      languages: result.languages, engine: result.engine.rawValue,
+                                      languages: result.languages, engine: result.engine,
                                       device: result.device.rawValue,
                                       durationMs: started.elapsedMs, error: nil))
             return result
@@ -81,7 +83,7 @@ struct OCRPass {
         let mean = zip(recognised, chars).reduce(0) { $0 + $1.0.meanConfidence * $1.1 } / totalChars
         let totalLines = Double(recognised.reduce(0) { $0 + $1.lines })
         let low = recognised.reduce(0) { $0 + $1.lowConfidenceShare * Double($1.lines) } / totalLines
-        return OCRStats(engine: engine.rawValue, meanConfidence: mean, lowConfidenceShare: low,
+        return OCRStats(engine: engine, meanConfidence: mean, lowConfidenceShare: low,
                         pages: recognised.map(\.page), perPageConfidence: recognised.map(\.meanConfidence))
     }
 
@@ -108,7 +110,7 @@ struct OCRPass {
     }
 
     private struct TraceOutput: Encodable {
-        var engine: String?
+        var engine: OCREngine?
         var meanConfidence: Double?
         var lowConfidenceShare: Double?
         var pages: [OCRPageTrace]

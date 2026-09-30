@@ -25,11 +25,13 @@ public struct Doctor: Sendable {
     public let database: AppDatabase
     public let paths: AppPaths
     public let appVersion: String
+    public let time: any TimeSource
 
-    public init(database: AppDatabase, paths: AppPaths, appVersion: String) {
+    public init(database: AppDatabase, paths: AppPaths, appVersion: String, time: any TimeSource) {
         self.database = database
         self.paths = paths
         self.appVersion = appVersion
+        self.time = time
     }
 
     /// - Parameter ollamaURL: the server in use; one on another machine is the user's to install and run.
@@ -49,11 +51,8 @@ public struct Doctor: Sendable {
         do {
             let fts = try await database.reader.read { db in try Bool.fetchOne(db, sql: "SELECT sqlite_compileoption_used('ENABLE_FTS5')") }
             add("SQLite FTS5", fts ?? false, fts == true ? "available" : "missing")
-            let counts = try await database.reader.read { db in
-                (try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM documents") ?? 0,
-                 try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM folders WHERE is_archived = 0") ?? 0)
-            }
-            add("Database", true, "\(counts.0) documents, \(counts.1) folders")
+            let documents = try await database.reader.read { db in try DocumentRecord.fetchCount(db) }
+            add("Database", true, Format.count(documents, "document"))
         } catch {
             add("Database", false, error.localizedDescription)
         }
@@ -70,18 +69,18 @@ public struct Doctor: Sendable {
         if state.isReady, let resolved = try? config.models(for: settings.models) {
             modelStatus = (try? await models.status(for: resolved)) ?? []
             for m in modelStatus {
-                add("Model \(m.role)", m.installed, m.installed ? m.name : "\(m.name) is not installed", warnOnly: m.role == "fast")
+                add("Model \(m.role.rawValue)", m.installed, m.installed ? m.name : "\(m.name) is not installed", warnOnly: m.role == .fast)
             }
         }
         if local, let values = try? fm.homeDirectoryForCurrentUser.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]),
            let free = values.volumeAvailableCapacityForImportantUsage {
-            let gb = Double(free) / 1_073_741_824
+            let gb = Double(free) / Units.bytesPerGigabyte
             add("Free disk", gb > config.ollama.requiredFreeDiskGBAfterPull, String(format: "%.1f GB", gb), warnOnly: true)
         }
         let violations = NetworkGuardProtocol.violations
         add("Network stays local", violations.isEmpty,
             violations.isEmpty ? "no blocked requests; Ollama at \(ollamaURL.absoluteString)" : violations.joined(separator: ", "))
-        let report = DoctorReport(generatedAt: Date(), appVersion: appVersion,
+        let report = DoctorReport(generatedAt: time.now(), appVersion: appVersion,
                                   macOS: ProcessInfo.processInfo.operatingSystemVersionString,
                                   paths: ["support": paths.supportDirectory.path, "logs": paths.logsDirectory.path,
                                           "index": (try? paths.indexURL(for: settings.archiveURL))?.path ?? "none yet", "settings": paths.settingsURL.path],

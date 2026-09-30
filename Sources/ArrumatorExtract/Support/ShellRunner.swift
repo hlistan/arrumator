@@ -1,3 +1,4 @@
+import ArrumatorCore
 import Foundation
 import Synchronization
 
@@ -24,10 +25,15 @@ enum ShellError: Error, Sendable, CustomStringConvertible {
 /// Runs command-line tools (`/usr/bin/textutil`) with a timeout and an output cap. Both pipes are drained
 /// concurrently from the moment the process starts, so a chatty child can never block on a full pipe while we
 /// wait for it. On timeout the child gets SIGTERM, then SIGKILL after a grace period.
-actor ShellRunner {
+public actor ShellRunner {
+    private let time: any TimeSource
+
+    public init(time: any TimeSource) { self.time = time }
+
     func run(_ executable: URL, arguments: [String], timeout: Double, killGrace: Double,
              outputCap: Int) async throws -> ShellResult {
         let started = Date()
+        let time = time
         let process = Process()
         process.executableURL = executable
         process.arguments = arguments
@@ -49,10 +55,10 @@ actor ShellRunner {
         async let stderr = Self.drain(stderrPipe.fileHandleForReading, cap: outputCap)
         let timedOut = Flag()
         let watchdog = Task {
-            try await Task.sleep(for: .seconds(timeout))
+            try await time.sleep(seconds: timeout)
             timedOut.raise()
             kill(pid, SIGTERM)
-            try await Task.sleep(for: .seconds(killGrace))
+            try await time.sleep(seconds: killGrace)
             kill(pid, SIGKILL)
         }
         let status = await withTaskCancellationHandler {
@@ -65,7 +71,7 @@ actor ShellRunner {
         return ShellResult(status: status, stdout: out.data,
                            stderr: String(decoding: err.data, as: UTF8.self),
                            stdoutTruncated: out.truncated, timedOut: timedOut.isRaised,
-                           durationMs: Date().timeIntervalSince(started) * 1000)
+                           durationMs: started.elapsedMs)
     }
 
     /// Reads `handle` to EOF on a background thread, keeping at most `cap` bytes (the rest is discarded so the

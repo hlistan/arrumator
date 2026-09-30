@@ -1,5 +1,6 @@
 import Foundation
 import GRDB
+import UniformTypeIdentifiers
 
 public struct IngestStatus: Sendable, Hashable {
     /// Files waiting to be filed.
@@ -25,9 +26,11 @@ public struct PipelineServices: Sendable {
     public var filer: DocumentFiler
     public var traces: TraceRecorder
     public var vectors: VectorIndex
+    public var time: any TimeSource
 
     public init(database: AppDatabase, config: PipelineConfig, settings: SettingsStore, extractor: any ContentExtracting,
-                analyzer: any DocumentAnalyzing, filer: DocumentFiler, traces: TraceRecorder, vectors: VectorIndex) {
+                analyzer: any DocumentAnalyzing, filer: DocumentFiler, traces: TraceRecorder, vectors: VectorIndex,
+                time: any TimeSource) {
         self.database = database
         self.config = config
         self.settings = settings
@@ -36,12 +39,13 @@ public struct PipelineServices: Sendable {
         self.filer = filer
         self.traces = traces
         self.vectors = vectors
+        self.time = time
     }
 
-    public var documents: DocumentStore { DocumentStore(database: database) }
-    public var jobs: JobStore { JobStore(database: database) }
-    public var history: HistoryStore { HistoryStore(database: database) }
-    public var index: IndexStore { IndexStore(database: database) }
+    public var documents: DocumentStore { DocumentStore(database: database, time: time) }
+    public var jobs: JobStore { JobStore(database: database, time: time) }
+    public var history: HistoryStore { HistoryStore(database: database, time: time) }
+    public var index: IndexStore { IndexStore(database: database, time: time) }
 
     /// Where things are in the archive the settings name.
     public func layout(_ settings: AppSettings) -> ArchiveLayout {
@@ -180,10 +184,18 @@ public actor IngestCoordinator {
 
     /// Processes due jobs until none are left (CLI and tests).
     public func drain() async {
-        while let job = try? await services.jobs.nextDue(now: Date()) {
+        while let job = await nextDue() {
             await process(job)
         }
         await refreshQueueCount()
+    }
+
+    /// The next job due now; a job queue that cannot be read is logged, and waited out like an empty one.
+    private func nextDue() async -> JobRecord? {
+        do { return try await services.jobs.nextDue() } catch {
+            Log.error(.ingest, "Could not read the job queue", ["error": error.localizedDescription])
+            return nil
+        }
     }
 
     // MARK: Loop
@@ -194,28 +206,37 @@ public actor IngestCoordinator {
             let powerReason = PowerState.current().pauseReason(settings: settings, config: services.config.power)
             status.powerPauseReason = powerReason
             if !settings.paused, powerReason == nil, FileManager.default.fileExists(atPath: settings.archiveURL.path) {
-                if let job = try? await services.jobs.nextDue(now: Date()) {
+                if let job = await nextDue() {
                     await process(job)
                     continue
                 }
             }
             await refreshQueueCount()
-            let nextDue = (try? await services.jobs.earliestPending()) ?? nil
-            var wait = nextDue.map { $0.timeIntervalSinceNow }
+            var wait = await earliestPending().map { $0.timeIntervalSince(services.time.now()) }
             if powerReason != nil { wait = services.config.power.recheckSeconds }
             await waitForKick(timeout: wait.map { max(Self.minimumWait, $0) })
         }
     }
 
+    /// When the next active job is due; a queue that cannot be read waits for the next kick.
+    private func earliestPending() async -> Date? {
+        do { return try await services.jobs.earliestPending() } catch {
+            Log.error(.ingest, "Could not read the job queue", ["error": error.localizedDescription])
+            return nil
+        }
+    }
+
     private func waitForKick(timeout: Double?) async {
         let kicks = kicks
+        let time = services.time
         await withTaskGroup(of: Void.self) { group in
             group.addTask {
                 var it = kicks.makeAsyncIterator()
                 _ = await it.next()
             }
             if let timeout {
-                group.addTask { try? await Task.sleep(for: .seconds(timeout)) }
+                // Woken early by cancellation, the loop checks it and ends.
+                group.addTask { try? await time.sleep(seconds: timeout) }
             }
             await group.next()
             group.cancelAll()
@@ -223,7 +244,11 @@ public actor IngestCoordinator {
     }
 
     private func refreshQueueCount() async {
-        let active = (try? await services.jobs.active()) ?? []
+        let active: [JobRecord]
+        do { active = try await services.jobs.active() } catch {
+            Log.error(.ingest, "Could not count the job queue", ["error": error.localizedDescription])
+            return
+        }
         status.queued = active.filter { $0.kind != .reindex }.count
         status.reindexing = active.filter { $0.kind == .reindex }.count
     }
@@ -236,7 +261,7 @@ public actor IngestCoordinator {
                    FileManager.default.fileExists(atPath: target) {
                     Log.warning(.ingest, "Recovered job interrupted after move", ["job": String(job.id ?? 0), "target": target])
                 }
-                job.nextRunAt = Date()
+                job.nextRunAt = services.time.now()
                 try await services.jobs.update(job)
             }
         } catch {
@@ -318,8 +343,7 @@ public actor IngestCoordinator {
         guard let docID = job.docId, let sha = payload.sha256 else { throw IngestError.documentNotPersisted }
 
         if job.state == .extracting {
-            let context = ExtractionContext(config: services.config.extraction, entities: services.config.entities,
-                                            vision: settings.enableVLM ? try visionOptions(settings) : nil)
+            let context = try services.config.extractionContext(settings: settings)
             let content = try await services.extractor.extract(source, sha256: sha, context: context, trace: trace)
             payload.content = content
             try await storeExtraction(docID: docID, content: content)
@@ -342,18 +366,12 @@ public actor IngestCoordinator {
         }
     }
 
-    private func visionOptions(_ settings: AppSettings) throws -> VisionModelOptions {
-        let models = try services.config.models(for: settings.models)
-        return VisionModelOptions(model: models.vision, keepAlive: models.keepAliveChat,
-                                  numPredict: services.config.analysis.vlmNumPredict, numCtx: models.visionNumCtx,
-                                  options: services.config.analysis.llmOptions)
-    }
-
     private func ensureDocument(for job: JobRecord, source: URL, sha: String, fingerprint: FileFingerprint) async throws -> DocumentRecord {
         if let id = job.docId, let existing = try await services.documents.document(id: id) { return existing }
-        let uttype = (try? source.resourceValues(forKeys: [.contentTypeKey]).contentType?.identifier) ?? "public.data"
+        // A type the file system cannot tell is plain data, as UTType calls it.
+        let uttype = (try? source.resourceValues(forKeys: [.contentTypeKey]).contentType?.identifier) ?? UTType.data.identifier
         let record = DocumentRecord.arrived(path: source.path, sha256: sha, size: fingerprint.size, uttype: uttype,
-                                            inode: fingerprint.inode, modified: fingerprint.modified)
+                                            inode: fingerprint.inode, modified: fingerprint.modified, now: services.time.now())
         return try await services.documents.save(record)
     }
 
@@ -376,7 +394,7 @@ public actor IngestCoordinator {
             let analysis = DocumentAnalysis(problems: [summary])
             _ = try await services.filer.file(doc, source: Self.source(of: doc), analysis: analysis, status: .duplicate,
                                               directory: services.layout(settings).root, inPlace: false, actor: .system,
-                                              settings: settings, trace: trace, event: .duplicate)
+                                              settings: settings, trace: trace, event: .duplicate, recording: nil)
         } else {
             try await services.history.record(.duplicate, doc: docID, job: job.id, trace: trace.traceID, summary: summary,
                                               payload: ["original": String(original.id ?? 0), "path": doc.path])
@@ -401,8 +419,7 @@ public actor IngestCoordinator {
             return
         }
         try await save(&job, payload, state: .extracting)
-        let context = ExtractionContext(config: services.config.extraction, entities: services.config.entities,
-                                        vision: settings.enableVLM ? try visionOptions(settings) : nil)
+        let context = try services.config.extractionContext(settings: settings)
         let content = try await services.extractor.extract(document.url, sha256: document.sha256, context: context, trace: trace)
         try await storeExtraction(docID: docID, content: content)
         let senders = document.labels(.sender)
@@ -415,7 +432,8 @@ public actor IngestCoordinator {
 
     private func index(docID: Int64, content: ExtractedContent, senders: [String], vector: [Float], model: String,
                        trace: TraceContext) async throws {
-        let text = content.embeddingSummary(senders: senders, maxChars: services.config.analysis.embeddingSummaryChars)
+        let text = content.embeddingSummary(senders: senders, maxChars: services.config.analysis.embeddingSummaryChars,
+                                            identifiersLimit: services.config.analysis.embeddingIdentifiersLimit)
         try await trace.measure(.index, input: ["model": model]) {
             try await services.index.upsertEmbedding(docID: docID, model: model, vector: vector, sourceText: text)
             await services.vectors.upsert(docID: docID, vector: vector, model: model)
@@ -425,7 +443,7 @@ public actor IngestCoordinator {
     private func storeExtraction(docID: Int64, content: ExtractedContent) async throws {
         guard var doc = try await services.documents.document(id: docID) else { throw IngestError.documentNotFound(docID) }
         doc.pageCount = content.pageCount
-        doc.extractedAt = Date()
+        doc.extractedAt = services.time.now()
         doc.contentJson = DocumentStore.storedContentJSON(content)
         _ = try await services.documents.save(doc)
         try await services.index.upsertText(docID: docID, filename: doc.filename, body: content.text, summary: content.visual?.description,
@@ -437,22 +455,34 @@ public actor IngestCoordinator {
     /// Files the document under the name the model gave it: a new arrival at the top of the archive, a document read
     /// again where it is, one the user put in the archive left as it is. A document the model could not read waits
     /// for the user there.
+    ///
+    /// The job's destination is recorded in the transaction that records the filing, so a job that stopped after it,
+    /// on an error or a crash, finds it filed and finishes what is left instead of filing it again.
     private func fileDocument(_ job: inout JobRecord, payload: inout JobPayload, docID: Int64, content: ExtractedContent,
                               outcome: AnalysisOutcome, settings: AppSettings, trace: TraceContext) async throws {
         guard let document = try await services.documents.document(id: docID) else { throw IngestError.documentNotFound(docID) }
         let analysis = outcome.analysis
         let status: DocumentStatus = analysis.problems.isEmpty ? .filed : .needsReview
-        if job.kind != .adopt, document.path != job.sourcePath || !FileManager.default.fileExists(atPath: document.path) {
-            if let target = payload.targetPath, FileManager.default.fileExists(atPath: target), document.path == target {
-                Log.info(.ingest, "Filing already completed before interruption", ["doc": String(docID)])
-            } else if !FileManager.default.fileExists(atPath: document.path) {
-                throw IngestError.sourceMissing(document.path)
-            }
+        let filedRecord: DocumentRecord
+        if let target = payload.targetPath, document.path == target, FileManager.default.fileExists(atPath: target) {
+            Log.info(.ingest, "Filing already completed before the job stopped", ["doc": String(docID)])
+            filedRecord = document
+        } else {
+            guard FileManager.default.fileExists(atPath: document.path) else { throw IngestError.sourceMissing(document.path) }
+            let directory = job.kind == .ingest ? services.layout(settings).root : document.url.deletingLastPathComponent()
+            let (unfiledJob, unfiledPayload, now) = (job, payload, services.time.now())
+            filedRecord = try await services.filer.file(
+                document, source: content.source, analysis: analysis, status: status, directory: directory,
+                inPlace: job.kind == .adopt, actor: .system, settings: settings, trace: trace, event: nil,
+                recording: { db, filed in
+                    var filedPayload = unfiledPayload
+                    filedPayload.targetPath = filed.path
+                    var filedJob = unfiledJob
+                    filedJob.setPayload(filedPayload)
+                    filedJob.updatedAt = now
+                    try filedJob.update(db)
+                })
         }
-        let directory = job.kind == .ingest ? services.layout(settings).root : document.url.deletingLastPathComponent()
-        let filedRecord = try await services.filer.file(document, source: content.source, analysis: analysis, status: status,
-                                                        directory: directory, inPlace: job.kind == .adopt, actor: .system,
-                                                        settings: settings, trace: trace)
         payload.targetPath = filedRecord.path
         if var doc = try await services.documents.document(id: docID) {
             doc.lastTraceId = trace.traceID
@@ -481,40 +511,48 @@ public actor IngestCoordinator {
         job.setPayload(payload)
         if case OllamaError.modelNotFound = error {
             job.state = .held
-            try? await services.jobs.update(job)
-            _ = try? await services.history.record(.error, doc: job.docId, job: job.id, trace: trace.traceID,
-                                               summary: "Model missing: \(message)")
+            await keep(job, event: .error, summary: "Model missing: \(message)", trace: trace)
             await services.traces.finish(trace, outcome: "held", docID: job.docId)
             Log.error(.ingest, "Model missing; job held", ["job": String(job.id ?? 0), "error": message])
             return
         }
         if ollamaDown {
             status.waitingForOllama = true
-            job.nextRunAt = Date().addingTimeInterval(config.retryDelays.last ?? 0)
-            try? await services.jobs.update(job)
-            _ = try? await services.history.record(.retry, doc: job.docId, job: job.id, trace: trace.traceID,
-                                               summary: "Waiting for Ollama: \(message)")
+            job.nextRunAt = services.time.now().addingTimeInterval(config.retryDelays.last)
+            await keep(job, event: .retry, summary: "Waiting for Ollama: \(message)", trace: trace)
             await services.traces.finish(trace, outcome: "waiting", docID: job.docId)
             Log.warning(.ingest, "Ollama unavailable; will retry", ["job": String(job.id ?? 0), "error": message])
             return
         }
         job.attempt += 1
         if job.attempt < config.maxAttempts {
-            let delay = config.retryDelays[min(job.attempt - 1, config.retryDelays.count - 1)]
-            job.nextRunAt = Date().addingTimeInterval(delay)
-            try? await services.jobs.update(job)
-            _ = try? await services.history.record(.retry, doc: job.docId, job: job.id, trace: trace.traceID,
-                                               summary: "Attempt \(job.attempt) failed: \(message)")
+            job.nextRunAt = services.time.now().addingTimeInterval(config.retryDelays.clamped(job.attempt - 1))
+            await keep(job, event: .retry, summary: "Attempt \(job.attempt) failed: \(message)", trace: trace)
             await services.traces.finish(trace, outcome: "retry", docID: job.docId)
             Log.warning(.ingest, "Stage failed; retrying", ["job": String(job.id ?? 0), "stage": job.state.rawValue,
                                                             "attempt": String(job.attempt), "error": message])
             return
         }
         job.state = .failed
-        try? await services.jobs.update(job)
+        await keep(job, event: nil, summary: message, trace: trace)
         await parkFailedDocument(job: job, message: message, trace: trace)
         await services.traces.finish(trace, outcome: "failed", docID: job.docId)
         Log.error(.ingest, "Job failed", ["job": String(job.id ?? 0), "error": message])
+    }
+
+    /// Saves what a failure did to a job and records it in the history. Both are already the failure path, so neither
+    /// throws: what cannot be saved is logged, and the job is found again by the watchdog or at the next start.
+    private func keep(_ job: JobRecord, event: EventKind?, summary: String, trace: TraceContext) async {
+        do { try await services.jobs.update(job) } catch {
+            Log.error(.ingest, "Could not save a failed job", ["job": String(job.id ?? 0), "error": error.localizedDescription])
+        }
+        guard let event else { return }
+        do {
+            try await services.history.record(event, doc: job.docId, job: job.id, trace: trace.traceID, summary: summary)
+        } catch {
+            Log.error(.ingest, "Could not record a failure in the history", ["job": String(job.id ?? 0), "event": event.rawValue,
+                                                                             "error": error.localizedDescription])
+        }
     }
 
     /// Moves a new file that could not be processed into the archive, where it waits for the user, so Incoming stays
@@ -530,7 +568,7 @@ public actor IngestCoordinator {
             if FileManager.default.fileExists(atPath: document.path), job.kind == .ingest {
                 _ = try await services.filer.file(document, source: Self.source(of: document), analysis: analysis, status: .failed,
                                                   directory: services.layout(settings).root, inPlace: false, actor: .system,
-                                                  settings: settings, trace: trace, event: .failed)
+                                                  settings: settings, trace: trace, event: .failed, recording: nil)
             } else {
                 var failed = document
                 failed.status = .failed

@@ -4,6 +4,7 @@ import Foundation
 public actor IncomingWatcher {
     private let config: WatcherConfig
     private let skip: SkipRules
+    private let time: any TimeSource
     private var root: URL?
     private var stream: FSEventStream?
     private var pumpTask: Task<Void, Never>?
@@ -18,9 +19,10 @@ public actor IncomingWatcher {
         var firstSeen: Date
     }
 
-    public init(config: WatcherConfig, skip: SkipRules) {
+    public init(config: WatcherConfig, skip: SkipRules, time: any TimeSource) {
         self.config = config
         self.skip = skip
+        self.time = time
         (stableFiles, output) = AsyncStream<URL>.makeStream(bufferingPolicy: .unbounded)
     }
 
@@ -95,7 +97,7 @@ public actor IncomingWatcher {
             return
         }
         if candidates[url.path] == nil {
-            candidates[url.path] = Candidate(fingerprint: fp, stablePolls: 0, firstSeen: Date())
+            candidates[url.path] = Candidate(fingerprint: fp, stablePolls: 0, firstSeen: time.now())
             Log.debug(.watch, "Candidate", ["path": url.path, "size": String(fp.size)])
         }
         schedulePolling()
@@ -104,9 +106,10 @@ public actor IncomingWatcher {
     private func schedulePolling() {
         guard pollTask == nil, !candidates.isEmpty else { return }
         let interval = config.stabilityPollInterval
+        let time = time
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(interval))
+                do { try await time.sleep(seconds: interval) } catch { break }
                 guard let self, await self.poll() else { break }
             }
         }
@@ -114,7 +117,7 @@ public actor IncomingWatcher {
 
     /// One stability pass. Returns false when nothing is left to watch.
     private func poll() -> Bool {
-        let now = Date()
+        let now = time.now()
         for (path, candidate) in candidates {
             let url = URL(fileURLWithPath: path)
             guard let fp = try? FileFingerprint.of(url) else {

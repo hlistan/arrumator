@@ -22,7 +22,8 @@ cat > "$config" <<JSON
   "indexstores": ["$package_index", "$app_index"],
   "plists": ["$PWD/App/Info.plist"],
   "xibs": [], "xcdatamodels": [], "xcmappingmodels": [],
-  "test_targets": ["ArrumatorCoreTests", "ArrumatorExtractTests", "ArrumatorClassifyTests", "ArrumatorRuntimeTests"]
+  "test_targets": ["ArrumatorCoreTests", "ArrumatorExtractTests", "ArrumatorClassifyTests", "ArrumatorRuntimeTests",
+                   "ArrumatorCLITests"]
 }
 JSON
 

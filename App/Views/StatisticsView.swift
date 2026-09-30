@@ -8,22 +8,37 @@ import SwiftUI
 /// trapezoid, so early losses look larger than late ones and the filled areas mean nothing.
 struct StatisticsView: View {
     @Environment(AppModel.self) private var model
+
+    var body: some View {
+        if let config = model.runtime?.config.stats {
+            StatisticsPage(config: config)
+        } else {
+            ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+}
+
+/// Statistics over the periods `stats.windowsDays` offers, `stats.defaultWindowDays` first.
+private struct StatisticsPage: View {
+    @Environment(AppModel.self) private var model
+    let config: StatsConfig
     @State private var funnel: ProcessingFunnel?
     @State private var insights: Insights?
-    @State private var days = 30
+    @State private var chosenDays: Int?
     @State private var selected: String?
 
-    private var windows: [Int] { model.runtime?.config.stats.windowsDays ?? [7, 30, 90] }
-    private var minimumForShares: Int { model.runtime?.config.stats.funnel.minimumForShares ?? 20 }
+    private var days: Int { chosenDays ?? config.defaultWindowDays }
+    private var windows: [Int] { config.windowsDays.all }
+    private var minimumForShares: Int { config.funnel.minimumForShares }
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: Style.statsSpacing) {
                 if let funnel {
                     if funnel.documents == 0 {
-                        ContentUnavailableView("Nothing has come through yet", systemImage: "chart.bar",
-                                               description: Text("Statistics appear once files have been filed."))
-                            .frame(maxWidth: .infinity).padding(.vertical, 40)
+                        ContentUnavailableView(Wording.nothingCameThrough, systemImage: "chart.bar",
+                                               description: Text(Wording.statisticsAppear))
+                            .frame(maxWidth: .infinity).padding(.vertical, Style.statsPlaceholderPadding)
                     } else {
                         verdict(funnel)
                         FunnelSteps(funnel: funnel, selected: $selected,
@@ -34,41 +49,42 @@ struct StatisticsView: View {
                         EndedUp(steps: funnel.steps, documents: funnel.documents)
                     }
                 } else {
-                    ProgressView().frame(maxWidth: .infinity).padding(40)
+                    ProgressView().frame(maxWidth: .infinity).padding(Style.statsPlaceholderPadding)
                 }
             }
-            .padding(16)
+            .padding(Style.statsSpacing)
         }
         .safeAreaInset(edge: .top) { header }
         .task(id: "\(days)|\(model.activity)") {
-            funnel = await model.load("Load statistics") { try await $0.stats.funnel(days: days) }
-            insights = await model.load("Load statistics") { try await $0.stats.insights() }
+            let days = days
+            funnel = await model.load(Wording.loadStatisticsAction) { try await $0.stats.funnel(days: days) }
+            insights = await model.load(Wording.loadStatisticsAction) { try await $0.stats.insights() }
         }
     }
 
     private var header: some View {
         HStack {
-            Text("Statistics").font(.title3.bold())
+            Text(Destination.statistics.title).font(.title3.bold())
             Spacer()
-            Picker("Period", selection: $days) {
-                ForEach(windows, id: \.self) { Text("Last \($0) days").tag($0) }
+            Picker(Wording.period, selection: Binding(get: { days }, set: { chosenDays = $0 })) {
+                ForEach(windows, id: \.self) { Text(Wording.lastDays($0)).tag($0) }
             }
-            .labelsHidden().frame(width: 150)
+            .labelsHidden().frame(width: Style.statsPeriodPickerWidth)
         }
-        .padding(.horizontal, 16).padding(.vertical, 8)
+        .padding(Style.statsHeaderInsets)
         .background(.bar)
     }
 
     /// One sentence in plain words, so the screen can be read without decoding a chart.
     private func verdict(_ funnel: ProcessingFunnel) -> some View {
-        var parts: [String] = ["\(funnel.documents) files arrived in the last \(funnel.windowDays) days."]
+        var parts: [String] = [Wording.arrivedIn(funnel.documents, days: funnel.windowDays)]
         if let drop = funnel.biggestDropOff, let worst = drop.stoppedHere.first {
-            parts.append("Most that did not get filed stopped at \(drop.title.lowercased()): \(worst.count) \(worst.reason.lowercased()).")
+            parts.append(Wording.mostStopped(at: drop.title, count: worst.count, reason: worst.reason))
         } else {
-            parts.append("Every one of them was filed.")
+            parts.append(Wording.everyOneFiled)
         }
         if let slow = funnel.slowestStep {
-            parts.append("\(slow.title) is the slowest step, \(Format.duration(slow.medianMs)) for a typical file.")
+            parts.append(Wording.slowestStep(slow.title, duration: Format.duration(slow.medianMs)))
         }
         return Text(parts.joined(separator: " "))
             .font(.callout).foregroundStyle(.secondary)
@@ -82,74 +98,72 @@ private struct FunnelSteps: View {
     @Binding var selected: String?
     let showsShares: Bool
 
-    private static let barWidth: CGFloat = 220
-
     var body: some View {
         VStack(spacing: 0) {
             ForEach(Array(funnel.steps.enumerated()), id: \.element.id) { index, step in
                 Button {
                     selected = selected == step.id ? nil : step.id
                 } label: {
-                    HStack(spacing: 10) {
+                    HStack(spacing: Style.funnelColumnSpacing) {
                         Image(systemName: selected == step.id ? "chevron.down" : "chevron.right")
-                            .font(.caption2).foregroundStyle(.secondary).frame(width: 10)
-                        Text(step.title).frame(width: 230, alignment: .leading).lineLimit(1)
+                            .font(.caption2).foregroundStyle(.secondary).frame(width: Style.funnelChevronWidth)
+                        Text(step.title).frame(width: Style.funnelStepWidth, alignment: .leading).lineLimit(1)
                         bar(step)
-                        cell("\(step.reached)", width: 55)
-                        cell(step.dropped > 0 ? "\(step.dropped)" : "—", width: 60,
+                        cell("\(step.reached)", width: Style.funnelReachedWidth)
+                        cell(step.dropped > 0 ? "\(step.dropped)" : Wording.noValue, width: Style.funnelStoppedWidth,
                              colour: step.dropped > 0 ? .primary : .secondary)
-                        cell(showsShares ? Format.percent(step.cumulativeShare) : "—", width: 80)
-                        cell(step.medianMs > 0 ? Format.duration(step.medianMs) : "—", width: 70)
-                        cell(step.p95Ms > 0 ? Format.duration(step.p95Ms) : "—", width: 70)
-                        HStack(spacing: 6) {
-                            if step.errors > 0 { Label("\(step.errors)", systemImage: "xmark.octagon.fill").foregroundStyle(.red) }
-                            if step.warnings > 0 { Label("\(step.warnings)", systemImage: "exclamationmark.triangle").foregroundStyle(.orange) }
+                        cell(showsShares ? Format.percent(step.cumulativeShare) : Wording.noValue, width: Style.funnelShareWidth)
+                        cell(step.medianMs > 0 ? Format.duration(step.medianMs) : Wording.noValue, width: Style.funnelDurationWidth)
+                        cell(step.p95Ms > 0 ? Format.duration(step.p95Ms) : Wording.noValue, width: Style.funnelDurationWidth)
+                        HStack(spacing: Style.funnelProblemSpacing) {
+                            if step.errors > 0 { Label("\(step.errors)", systemImage: "xmark.octagon.fill").foregroundStyle(Palette.problem) }
+                            if step.warnings > 0 { Label("\(step.warnings)", systemImage: "exclamationmark.triangle").foregroundStyle(Palette.attention) }
                         }
                         .font(.caption)
                         Spacer(minLength: 0)
                     }
                     .font(.callout)
-                    .padding(.vertical, 7).padding(.horizontal, 10)
-                    .background(selected == step.id ? AnyShapeStyle(.selection.opacity(0.25)) : AnyShapeStyle(.clear))
+                    .padding(Style.funnelRowInsets)
+                    .background(selected == step.id ? AnyShapeStyle(.selection.opacity(Style.funnelSelectionOpacity)) : AnyShapeStyle(.clear))
                     .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
                 if index < funnel.steps.count - 1 { Divider() }
             }
         }
-        .background(.quaternary.opacity(0.3), in: .rect(cornerRadius: 10))
+        .background(.quaternary.opacity(Style.statsPanelFillOpacity), in: .rect(cornerRadius: Style.statsPanelCornerRadius))
         .safeAreaInset(edge: .top, spacing: 0) {
-            HStack(spacing: 10) {
-                Color.clear.frame(width: 10)
-                Text("Step").frame(width: 230, alignment: .leading)
-                Text("How far files got").frame(width: Self.barWidth, alignment: .leading)
-                cell("Reached", width: 55)
-                cell("Stopped", width: 60)
-                cell("Of all", width: 80)
-                cell("Typical", width: 70)
-                cell("Slowest", width: 70)
+            HStack(spacing: Style.funnelColumnSpacing) {
+                Color.clear.frame(width: Style.funnelChevronWidth)
+                Text(Wording.step).frame(width: Style.funnelStepWidth, alignment: .leading)
+                Text(Wording.howFarFilesGot).frame(width: Style.funnelBarWidth, alignment: .leading)
+                cell(Wording.reached, width: Style.funnelReachedWidth)
+                cell(Wording.stopped, width: Style.funnelStoppedWidth)
+                cell(Wording.ofAll, width: Style.funnelShareWidth)
+                cell(Wording.typical, width: Style.funnelDurationWidth)
+                cell(Wording.slowest, width: Style.funnelDurationWidth)
                 Spacer(minLength: 0)
             }
             .font(.caption).foregroundStyle(.secondary)
-            .padding(.vertical, 5).padding(.horizontal, 10)
+            .padding(Style.funnelHeaderInsets)
         }
     }
 
     /// Drawn rather than charted: the scale is shared across rows and the bar has to be visible at row height.
     private func bar(_ step: FunnelStepStats) -> some View {
         let widest = max(1, funnel.documents)
-        let passed = Self.barWidth * CGFloat(step.passed) / CGFloat(widest)
-        let dropped = Self.barWidth * CGFloat(max(0, step.dropped)) / CGFloat(widest)
+        let passed = Style.funnelBarWidth * CGFloat(step.passed) / CGFloat(widest)
+        let dropped = Style.funnelBarWidth * CGFloat(max(0, step.dropped)) / CGFloat(widest)
         return ZStack(alignment: .leading) {
-            RoundedRectangle(cornerRadius: 4).fill(Palette.track).frame(width: Self.barWidth, height: 12)
+            RoundedRectangle(cornerRadius: Style.statsBarCornerRadius).fill(Palette.track).frame(width: Style.funnelBarWidth, height: Style.funnelBarHeight)
             HStack(spacing: 0) {
                 Rectangle().fill(Palette.progress).frame(width: passed)
                 Rectangle().fill(Self.stopColour(step)).frame(width: dropped)
             }
-            .frame(height: 12)
-            .clipShape(.rect(cornerRadius: 4))
+            .frame(height: Style.funnelBarHeight)
+            .clipShape(.rect(cornerRadius: Style.statsBarCornerRadius))
         }
-        .frame(width: Self.barWidth, alignment: .leading)
+        .frame(width: Style.funnelBarWidth, alignment: .leading)
     }
 
     /// Red is kept for things that actually went wrong; a duplicate leaving early is the pipeline working.
@@ -185,7 +199,7 @@ private struct EndedUp: View {
         let stopped = totals.values.reduce(0) { $0 + $1.count }
         var all = totals.map { Slice(id: $0.key, count: $0.value.count, colour: Self.colour($0.value.severity)) }
             .sorted { $0.count > $1.count }
-        all.insert(Slice(id: "Filed", count: max(0, documents - stopped), colour: Palette.progress), at: 0)
+        all.insert(Slice(id: Wording.filedSlice, count: max(0, documents - stopped), colour: Palette.progress), at: 0)
         return all.filter { $0.count > 0 }
     }
 
@@ -198,22 +212,23 @@ private struct EndedUp: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Where files ended up").font(.headline)
+        VStack(alignment: .leading, spacing: Style.endedUpSpacing) {
+            Text(Wording.whereFilesEndedUp).font(.headline)
             GeometryReader { geo in
-                HStack(spacing: 1) {
+                HStack(spacing: Style.sliceGap) {
                     ForEach(slices) { slice in
                         Rectangle().fill(slice.colour)
-                            .frame(width: max(2, geo.size.width * CGFloat(slice.count) / CGFloat(max(1, documents))))
+                            .frame(width: max(Style.sliceMinWidth, geo.size.width * CGFloat(slice.count) / CGFloat(max(1, documents))))
                     }
                     Spacer(minLength: 0)
                 }
-                .clipShape(.rect(cornerRadius: 4))
+                .clipShape(.rect(cornerRadius: Style.statsBarCornerRadius))
             }
-            .frame(height: 18)
+            .frame(height: Style.endedUpBarHeight)
             ForEach(slices) { slice in
-                HStack(spacing: 8) {
-                    RoundedRectangle(cornerRadius: 2).fill(slice.colour).frame(width: 9, height: 9)
+                HStack(spacing: Style.legendSpacing) {
+                    RoundedRectangle(cornerRadius: Style.swatchCornerRadius).fill(slice.colour)
+                        .frame(width: Style.swatchSize.width, height: Style.swatchSize.height)
                     Text(slice.id).lineLimit(1)
                     Spacer()
                     Text("\(slice.count)").monospacedDigit().foregroundStyle(.secondary)
@@ -222,7 +237,7 @@ private struct EndedUp: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(.quaternary.opacity(0.3), in: .rect(cornerRadius: 10))
+        .padding(Style.statsPanelPadding)
+        .background(.quaternary.opacity(Style.statsPanelFillOpacity), in: .rect(cornerRadius: Style.statsPanelCornerRadius))
     }
 }

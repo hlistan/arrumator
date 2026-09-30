@@ -618,6 +618,18 @@ extension AppDatabase {
             """)
         }
 
+        /// A step that exchanged the document with a model keeps the prompts and raw answers under one key,
+        /// `TraceStep.exchangeKey`, which retention clears after `traceRawRetentionDays` (docs/using-arrumator.md). They
+        /// were `calls` for a reading and `raw` for an image description.
+        m.registerMigration("v13_traceExchanges") { db in
+            try db.execute(sql: """
+            UPDATE trace_steps SET output_json = json_set(json_remove(output_json, '$.calls'), '$.exchange', json(output_json -> '$.calls'))
+              WHERE stage = 'analyse' AND json_valid(output_json) AND json_type(output_json, '$.calls') IS NOT NULL;
+            UPDATE trace_steps SET output_json = json_set(json_remove(output_json, '$.raw'), '$.exchange', output_json ->> '$.raw')
+              WHERE stage = 'vlm' AND json_valid(output_json) AND json_type(output_json, '$.raw') IS NOT NULL;
+            """)
+        }
+
         return m
     }
 }

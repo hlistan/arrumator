@@ -10,15 +10,15 @@ import Testing
         func embed(_ texts: [String]) async throws -> [[Float]] { texts.map { MockOllama.hashEmbedding($0, dimension: 256) } }
     }
 
-    func insert(_ db: AppDatabase, title: String, body: String, correspondent: String) async throws -> Int64 {
-        let labels = [DocumentLabel(kind: .sender, value: correspondent)]
-        var record = DocumentRecord.arrived(path: "/tmp/\(title).pdf", sha256: UUID().uuidString, size: 1,
-                                            uttype: "com.adobe.pdf", inode: nil, modified: nil)
+    func insert(_ db: AppDatabase, title: String, body: String, sender: String) async throws -> Int64 {
+        let labels = [DocumentLabel(kind: .sender, value: sender)]
+        var record = DocumentRecord.arrived(path: "/tmp/\(title).pdf", sha256: title, size: 1,
+                                            uttype: "com.adobe.pdf", inode: nil, modified: nil, now: TestTime.start)
         record.labelsJson = JSON.string(labels)
         record.status = .filed
-        let doc = try await DocumentStore(database: db).save(record)
+        let doc = try await DocumentStore(database: db, time: TestTime(.advances)).save(record)
         let id = try #require(doc.id)
-        try await IndexStore(database: db).upsertText(docID: id, filename: doc.filename, body: body, summary: nil, metadata: [:],
+        try await IndexStore(database: db, time: TestTime(.advances)).upsertText(docID: id, filename: doc.filename, body: body, summary: nil, metadata: [:],
                                                       extractorVersion: "t", labels: labels)
         return id
     }
@@ -26,24 +26,24 @@ import Testing
     @Test func fullTextIsDiacriticAndCaseInsensitiveAcrossScripts() async throws {
         let db = try AppDatabase.inMemory()
         let edp = try await insert(db, title: "Fatura eletricidade", body: "EDP Comercial fatura de eletricidade, período de faturação julho",
-                                   correspondent: "EDP")
+                                   sender: "EDP")
         let sber = try await insert(db, title: "Выписка по счёту", body: "Сбербанк выписка по счёту за июль, ИНН 7707083893",
-                                    correspondent: "Sberbank")
+                                    sender: "Sberbank")
         let config = try PipelineConfig.bundledDefaults().search
         let search = SearchService(database: db, vectors: VectorIndex(), embedder: nil, config: config)
         let pt = try await search.fullText(SearchQuery(text: "FATURAÇÃO"))
-        #expect(pt.hits.map(\.id) == [edp])
+        #expect(pt.hits.map(\.id) == [edp], "case and accents do not matter")
         let ru = try await search.fullText(SearchQuery(text: "выпис"))
-        #expect(ru.hits.map(\.id) == [sber])
-        #expect(ru.hits.first?.snippet.contains(SearchHighlight.open) == true)
+        #expect(ru.hits.map(\.id) == [sber], "a Cyrillic word is found by its start")
+        #expect(ru.hits.first?.snippet.contains(SearchHighlight.open) == true, "the match is highlighted in the snippet")
         let field = try await search.fullText(SearchQuery(text: "sender:edp"))
-        #expect(field.hits.map(\.id) == [edp])
+        #expect(field.hits.map(\.id) == [edp], "a label is found under its kind")
     }
 
     @Test func hybridSearchFusesSemanticHits() async throws {
         let db = try AppDatabase.inMemory()
-        let a = try await insert(db, title: "Electricity bill", body: "electricity power invoice kilowatt", correspondent: "EDP")
-        let b = try await insert(db, title: "Mobile contract", body: "phone contract data plan", correspondent: "MEO")
+        let a = try await insert(db, title: "Electricity bill", body: "electricity power invoice kilowatt", sender: "EDP")
+        let b = try await insert(db, title: "Mobile contract", body: "phone contract data plan", sender: "MEO")
         let vectors = VectorIndex()
         let embedder = HashEmbedder()
         for (id, text) in [(a, "electricity power invoice kilowatt"), (b, "phone contract data plan")] {
@@ -51,9 +51,9 @@ import Testing
         }
         let search = SearchService(database: db, vectors: vectors, embedder: embedder, config: try PipelineConfig.bundledDefaults().search)
         let results = try await search.search(SearchQuery(text: "kilowatt power"))
-        #expect(results.semanticUsed)
-        #expect(results.hits.first?.id == a)
-        #expect(results.hits.first?.sources.contains(.semantic) == true)
+        #expect(results.semanticUsed, "the query is compared by meaning too")
+        #expect(results.hits.first?.id == a, "the document with the words and the meaning leads")
+        #expect(results.hits.first?.sources == [.fullText, .semantic], "it is found both by its words and by its meaning")
     }
 
     /// Maps every text to one fixed vector, so a test sets each document's similarity to the query exactly.
@@ -65,10 +65,10 @@ import Testing
 
     @Test func documentsWithTheWordsComeFirstThenThoseAlikeInMeaningBySimilarity() async throws {
         let db = try AppDatabase.inMemory()
-        let withWord = try await insert(db, title: "Meter reading", body: "kilowatt hours read on the meter", correspondent: "EDP")
-        let closest = try await insert(db, title: "Electricity bill", body: "power invoice for July", correspondent: "EDP")
-        let alike = try await insert(db, title: "Gas bill", body: "gas supply invoice", correspondent: "Galp")
-        let unrelated = try await insert(db, title: "Passport", body: "passport scan", correspondent: "Ministry")
+        let withWord = try await insert(db, title: "Meter reading", body: "kilowatt hours read on the meter", sender: "EDP")
+        let closest = try await insert(db, title: "Electricity bill", body: "power invoice for July", sender: "EDP")
+        let alike = try await insert(db, title: "Gas bill", body: "gas supply invoice", sender: "Galp")
+        let unrelated = try await insert(db, title: "Passport", body: "passport scan", sender: "Ministry")
         let vectors = VectorIndex()
         for (id, cosine) in [(withWord, Float(0)), (closest, 0.9), (alike, 0.6), (unrelated, 0.3)] {
             await vectors.upsert(docID: id, vector: [cosine, (1 - cosine * cosine).squareRoot()], model: "fixed")
@@ -79,19 +79,19 @@ import Testing
 
         let results = try await search.search(SearchQuery(text: "kilowatt"))
 
-        #expect(results.semanticUsed)
+        #expect(results.semanticUsed, "the query is compared by meaning too")
         #expect(results.hits.map(\.id) == [withWord, closest, alike],
                 "the document containing the word leads although it is least alike; the rest follow by similarity, and one below the floor is left out")
         #expect(results.hits.first?.sources == [.fullText], "the word match is not among the similar documents above the floor")
-        #expect(results.hits.dropFirst().allSatisfy { $0.sources == [.semantic] })
+        #expect(results.hits.dropFirst().allSatisfy { $0.sources == [.semantic] }, "the rest are found by meaning alone")
         #expect(results.hits.dropFirst().map(\.score) == [0.9, 0.6].map { Double(Float($0)) },
                 "a document found by meaning alone is scored by its similarity to the query")
     }
 
     @Test func withoutAWordMatchOnlyDocumentsAboveTheSimilarityFloorAreFound() async throws {
         let db = try AppDatabase.inMemory()
-        let near = try await insert(db, title: "Electricity bill", body: "power invoice", correspondent: "EDP")
-        let far = try await insert(db, title: "Passport", body: "passport scan", correspondent: "Ministry")
+        let near = try await insert(db, title: "Electricity bill", body: "power invoice", sender: "EDP")
+        let far = try await insert(db, title: "Passport", body: "passport scan", sender: "Ministry")
         let vectors = VectorIndex()
         await vectors.upsert(docID: near, vector: [0.8, 0.6], model: "fixed")
         await vectors.upsert(docID: far, vector: [0.2, (1 - 0.04 as Float).squareRoot()], model: "fixed")
@@ -108,14 +108,14 @@ import Testing
     }
 
     @Test func queryBuilderEscapes() {
-        #expect(FTSQueryBuilder.build("  ") == nil)
-        #expect(FTSQueryBuilder.build("a\"b") != nil)
-        #expect(FTSQueryBuilder.build("filename:fatura edp")?.contains("filename :") == true)
-        #expect(FTSQueryBuilder.build("\"nota de liquidação\"") == "\"nota de liquidação\"")
+        #expect(FTSQueryBuilder.build("  ") == nil, "a blank query searches for nothing")
+        #expect(FTSQueryBuilder.build("a\"b") == "\"a\" \"b\"", "a stray quote cannot break the query")
+        #expect(FTSQueryBuilder.build("filename:fatura edp") == "filename : \"fatura\" \"edp\" *", "a field names its column; the last word is a prefix")
+        #expect(FTSQueryBuilder.build("\"nota de liquidação\"") == "\"nota de liquidação\"", "a quoted phrase is searched as a phrase")
     }
 
     @Test func aLabelKindIsAFieldAndAFieldTakesAPhrase() {
-        #expect(FTSQueryBuilder.build("jurisdiction:\"Costa Rica\"") == "jurisdiction : \"Costa Rica\"")
+        #expect(FTSQueryBuilder.build("jurisdiction:\"Costa Rica\"") == "jurisdiction : \"Costa Rica\"", "a label kind is a column and takes a whole phrase")
         #expect(FTSQueryBuilder.build("Party:silva") == "party : \"silva\" *", "a field is named in any case; the last word is a prefix")
         #expect(FTSQueryBuilder.build("before\"a phrase\"") == "\"before\" \"a phrase\"", "a word before a phrase is a term of its own")
         #expect(FTSQueryBuilder.build("owner:\"x y\"") == "\"owner\" \"x y\"", "what is no column is a word")
@@ -128,9 +128,9 @@ import Testing
         await index.upsert(docID: 1, vector: [1, 0], model: "m")
         await index.upsert(docID: 2, vector: [0, 1], model: "m")
         await index.upsert(docID: 3, vector: VectorCodec.normalized([1, 1]), model: "m")
-        #expect(await index.topK([1, 0], k: 2).map(\.docID) == [1, 3])
+        #expect(await index.topK([1, 0], k: 2).map(\.docID) == [1, 3], "the nearest documents, nearest first")
         await index.remove(docID: 1)
-        #expect(await index.topK([1, 0], k: 1).map(\.docID) == [3])
-        #expect(await index.topK([1, 0], k: 5, allowed: [2]).map(\.docID) == [2])
+        #expect(await index.topK([1, 0], k: 1).map(\.docID) == [3], "a removed document is no longer found")
+        #expect(await index.topK([1, 0], k: 5, allowed: [2]).map(\.docID) == [2], "a search kept to some documents finds only those")
     }
 }

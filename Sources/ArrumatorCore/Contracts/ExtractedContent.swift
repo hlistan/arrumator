@@ -37,14 +37,20 @@ public enum TextOrigin: String, Sendable, Codable {
     case textLayer, ocr, mixed, vlmOnly, metadataOnly, none
 }
 
+/// The Vision request that recognised a document's text.
+public enum OCREngine: String, Sendable, Codable, Hashable {
+    case recognizeDocuments = "vision.RecognizeDocumentsRequest"
+    case recognizeText = "vision.RecognizeTextRequest"
+}
+
 public struct OCRStats: Sendable, Codable, Hashable {
-    public var engine: String
+    public var engine: OCREngine
     public var meanConfidence: Double
     public var lowConfidenceShare: Double
     public var pages: [Int]
     public var perPageConfidence: [Double]
 
-    public init(engine: String, meanConfidence: Double, lowConfidenceShare: Double, pages: [Int], perPageConfidence: [Double]) {
+    public init(engine: OCREngine, meanConfidence: Double, lowConfidenceShare: Double, pages: [Int], perPageConfidence: [Double]) {
         self.engine = engine
         self.meanConfidence = meanConfidence
         self.lowConfidenceShare = lowConfidenceShare
@@ -54,7 +60,8 @@ public struct OCRStats: Sendable, Codable, Hashable {
 }
 
 public struct LanguageGuess: Sendable, Codable, Hashable {
-    /// "en" | "ru" | "pt" | "other" | "und"
+    /// The ISO 639-1 code of the language most of the text is in, of any NaturalLanguage recognises; `und` when there is
+    /// too little text to tell.
     public var primary: String
     public var confidence: Double
     public var hypotheses: [String: Double]
@@ -69,7 +76,7 @@ public struct LanguageGuess: Sendable, Codable, Hashable {
 }
 
 public enum DateSource: String, Sendable, Codable {
-    case label, prominence, exif, pdfMeta, fileCreated, mtime, llm, rule, none
+    case label, prominence, exif, pdfMeta, fileCreated, mtime
 }
 
 public struct DetectedDate: Sendable, Codable, Hashable {
@@ -87,20 +94,12 @@ public struct DetectedDate: Sendable, Codable, Hashable {
     }
 }
 
-public struct MoneyAmount: Sendable, Codable, Hashable {
-    public var value: String
-    public var currency: String
-    public init(value: String, currency: String) {
-        self.value = value
-        self.currency = currency
-    }
-}
-
 public enum StableKeyKind: String, Sendable, Codable, CaseIterable {
     case iban, ptNIF, ruINN, ruOGRN, ruKPP, ruBIK, ruAccount, vatEU, accountNumber, policyOrContract
 }
 
-/// A checksum-validated or label-anchored identifier (IBAN, NIF, ИНН, …) used for deterministic matching.
+/// A checksum-validated or label-anchored identifier (IBAN, NIF, ИНН, …): shown to the model with the document, and
+/// part of the text its embedding is made from.
 public struct StableKey: Sendable, Codable, Hashable {
     public var kind: StableKeyKind
     public var value: String
@@ -111,23 +110,16 @@ public struct StableKey: Sendable, Codable, Hashable {
     public var token: String { "\(kind.rawValue):\(value)" }
 }
 
+/// What the extractor finds in a document's text without a model: its dates, the one it was issued on, and its
+/// identifiers. The model reads the rest.
 public struct Entities: Sendable, Codable, Hashable {
     public var dates: [DetectedDate]
     public var documentDate: DetectedDate?
-    public var amounts: [MoneyAmount]
-    public var emails: [String]
-    public var urls: [String]
-    public var phones: [String]
     public var stableKeys: [StableKey]
 
-    public init(dates: [DetectedDate] = [], documentDate: DetectedDate? = nil, amounts: [MoneyAmount] = [],
-                emails: [String] = [], urls: [String] = [], phones: [String] = [], stableKeys: [StableKey] = []) {
+    public init(dates: [DetectedDate] = [], documentDate: DetectedDate? = nil, stableKeys: [StableKey] = []) {
         self.dates = dates
         self.documentDate = documentDate
-        self.amounts = amounts
-        self.emails = emails
-        self.urls = urls
-        self.phones = phones
         self.stableKeys = stableKeys
     }
 
@@ -136,7 +128,7 @@ public struct Entities: Sendable, Codable, Hashable {
 
 public struct ContentStructure: Sendable, Codable, Hashable {
     public var paragraphCount: Int
-    /// First tables rendered as TSV (each ≤ 2 000 chars).
+    /// First tables rendered as TSV, each at most `extraction.tableSnippetChars`.
     public var tables: [String]
     public var sheetNames: [String]
     public var slideCount: Int?
@@ -149,15 +141,20 @@ public struct ContentStructure: Sendable, Codable, Hashable {
     }
 }
 
+/// What an image shows, as the vision model classes it (the `image_kind` its answer is constrained to).
+public enum ImageKind: String, CaseIterable, Sendable, Codable, Hashable {
+    case photo, screenshot, scannedDocument = "scanned_document", receipt, idCard = "id_card", whiteboard, diagram, other
+}
+
 public struct VisualSummary: Sendable, Codable, Hashable {
-    public var imageKind: String
+    public var imageKind: ImageKind
     public var description: String
     public var visibleTextSummary: String
     public var organisations: [String]
     public var unverifiedOrganisations: [String]
     public var dates: [String]
 
-    public init(imageKind: String, description: String, visibleTextSummary: String,
+    public init(imageKind: ImageKind, description: String, visibleTextSummary: String,
                 organisations: [String], unverifiedOrganisations: [String] = [], dates: [String]) {
         self.imageKind = imageKind
         self.description = description
@@ -168,12 +165,13 @@ public struct VisualSummary: Sendable, Codable, Hashable {
     }
 }
 
-public enum WarningCode: String, Sendable, Codable, CaseIterable {
+public enum WarningCode: String, Sendable, Codable, CaseIterable, CodingKeyRepresentable {
     case unsupportedFormat, corrupted, encrypted, tooLarge, toolFailed, ocrLowConfidence, ocrFailed
     case textTruncated, vlmFailed, vlmSkipped, encodingGuessed, emptyText, timeout
 }
 
-/// Soft, non-fatal extraction problem. Recorded, shown in the UI, and used by the calibrator.
+/// Soft, non-fatal extraction problem: recorded in the trace, told to the model with the document, and counted in
+/// Statistics.
 public struct ExtractionWarning: Sendable, Codable, Hashable {
     public var code: WarningCode
     public var detail: String
@@ -248,25 +246,24 @@ public struct ExtractedContent: Sendable, Codable {
 
     public func hasWarning(_ code: WarningCode) -> Bool { warnings.contains { $0.code == code } }
 
-    /// Share of the excerpt budget given to the end of the document (1/6).
-    private static let excerptTailDivisor = 6
-
-    /// Excerpt for the classification prompt: head + tail + first table, ≤ `maxChars`.
-    public func classificationExcerpt(maxChars: Int) -> String {
+    /// Excerpt for the prompt: the head and the tail of the text, at most `maxChars`, of which the tail gets
+    /// `1 / tailDivisor`.
+    public func classificationExcerpt(maxChars: Int, tailDivisor: Int) -> String {
         var body = text
         if let visual {
-            body = "[Image: \(visual.imageKind)] \(visual.description)\nVisible text: \(visual.visibleTextSummary)\n" + body
+            body = "[Image: \(visual.imageKind.rawValue)] \(visual.description)\nVisible text: \(visual.visibleTextSummary)\n" + body
         }
         guard body.count > maxChars else { return body }
         // Head carries titles, parties and dates; the tail carries totals and signatures.
         let separator = "\n…\n"
-        let tailCount = maxChars / Self.excerptTailDivisor
+        let tailCount = maxChars / tailDivisor
         let headCount = maxChars - tailCount - separator.count
         return String(body.prefix(headCount)) + separator + String(body.suffix(tailCount))
     }
 
-    /// Compact description used for embeddings, identical in shape for documents and memories.
-    public func embeddingSummary(senders: [String], maxChars: Int) -> String {
+    /// The text a document's embedding is made from: what it is, who sent it, its first `identifiersLimit` identifiers
+    /// and date, then its text, at most `maxChars` in all.
+    public func embeddingSummary(senders: [String], maxChars: Int, identifiersLimit: Int) -> String {
         var lines: [String] = []
         lines.append("filename: \(source.originalFilename)")
         var typeLine = "type: \(source.fileExtension.isEmpty ? kind.rawValue : source.fileExtension)"
@@ -275,18 +272,28 @@ public struct ExtractedContent: Sendable, Codable {
         lines.append(typeLine)
         if !senders.isEmpty { lines.append("from: " + senders.joined(separator: "; ")) }
         if !entities.stableKeys.isEmpty {
-            lines.append("identifiers: " + entities.stableKeys.prefix(6).map(\.token).joined(separator: "; "))
+            lines.append("identifiers: " + entities.stableKeys.prefix(identifiersLimit).map(\.token).joined(separator: "; "))
         }
         if let date = entities.documentDate?.date { lines.append("document date: \(date)") }
         lines.append("---")
         var body = text
         if let visual {
-            body = "\(visual.imageKind): \(visual.description) \(visual.visibleTextSummary)\n" + body
+            body = "\(visual.imageKind.rawValue): \(visual.description) \(visual.visibleTextSummary)\n" + body
         }
         let header = lines.joined(separator: "\n")
         let remaining = max(0, maxChars - header.count - 1)
         return header + "\n" + String(body.prefix(remaining))
     }
+}
+
+/// Keys of `ExtractedContent.metadata` that one module writes and another reads.
+public enum MetadataKey {
+    /// An e-mail's headers, decoded: `email:from`, `email:to`, `email:cc`, `email:subject`, and its date and message ID.
+    public static func email(_ header: String) -> String { "email:" + header }
+    public static let emailFrom = email("from")
+    public static let emailSubject = email("subject")
+    public static let emailDate = email("date")
+    public static let emailMessageID = email("messageId")
 }
 
 /// Per-call inputs for extraction: tunables plus the optional vision model for image understanding.

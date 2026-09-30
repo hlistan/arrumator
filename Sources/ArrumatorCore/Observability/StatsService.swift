@@ -26,20 +26,23 @@ public struct Insights: Sendable, Codable, Hashable {
     public var labelsTidied: Int
     public var latency: [StageLatency]
     public var meanOCRConfidence: Double?
-    public var warnings: [String: Int]
+    public var warnings: [WarningCode: Int]
 }
 
 public struct StatsService: Sendable {
     public let database: AppDatabase
     public let config: StatsConfig
+    public let time: any TimeSource
 
-    public init(database: AppDatabase, config: StatsConfig) {
+    public init(database: AppDatabase, config: StatsConfig, time: any TimeSource) {
         self.database = database
         self.config = config
+        self.time = time
     }
 
-    public func insights(now: Date = Date()) async throws -> Insights {
-        try await database.reader.read { db in
+    public func insights() async throws -> Insights {
+        let now = time.now()
+        return try await database.reader.read { db in
             let documents = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM documents") ?? 0
             let statuses = try Self.histogram(db, sql: "SELECT status, COUNT(*) FROM documents GROUP BY 1")
             let labelled = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM documents WHERE labels_json IS NOT NULL") ?? 0
@@ -59,7 +62,8 @@ public struct StatsService: Sendable {
                 WHERE stage = ? AND output_json IS NOT NULL
                 """, arguments: [TraceStage.consolidate.rawValue]) ?? 0
             var durations: [String: [Double]] = [:]
-            for row in try Row.fetchAll(db, sql: "SELECT stage, duration_ms FROM trace_steps WHERE status != 'skipped'") {
+            for row in try Row.fetchAll(db, sql: "SELECT stage, duration_ms FROM trace_steps WHERE status != ?",
+                                        arguments: [TraceStatus.skipped.rawValue]) {
                 durations[row["stage"], default: []].append(row["duration_ms"])
             }
             let latency = durations.map { stage, values -> StageLatency in
@@ -71,10 +75,17 @@ public struct StatsService: Sendable {
                 SELECT AVG(json_extract(content_json, '$.ocr.meanConfidence')) FROM documents
                 WHERE json_extract(content_json, '$.ocr.meanConfidence') IS NOT NULL
                 """)
-            let warnings = try Self.histogram(db, sql: """
+            var warnings: [WarningCode: Int] = [:]
+            for (code, count) in try Self.histogram(db, sql: """
                 SELECT json_extract(w.value, '$.code'), COUNT(*) FROM documents d, json_each(d.content_json, '$.warnings') w
                 WHERE d.content_json IS NOT NULL GROUP BY 1
-                """)
+                """) {
+                guard let known = WarningCode(rawValue: code) else {
+                    Log.warning(.db, "Unknown extraction warning in stored content", ["code": code])
+                    continue
+                }
+                warnings[known, default: 0] += count
+            }
             return Insights(generatedAt: now, documents: documents, statuses: statuses, labelled: labelled, unlabelled: unlabelled,
                             labelsByKind: labelsByKind, corrected: try userEvents(.corrected), confirmed: try userEvents(.markedCorrect),
                             labelRules: labelRules, labelsTidied: labelsTidied,

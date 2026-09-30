@@ -20,18 +20,19 @@ struct TextAndLanguageTests {
 
     @Test("Detects any language, not only the OCR hints; no letters is undetermined")
     func languages() throws {
-        let detector = LanguageDetector(config: try TestConfig.pipeline().extraction)
-        #expect(detector.detect(english).primary == "en")
-        #expect(detector.detect(russian).primary == "ru")
-        #expect(detector.detect(portuguese).primary == "pt")
-        #expect(detector.detect(portuguese).confidence > 0.5)
+        let config = try TestConfig.pipeline().extraction
+        let detector = LanguageDetector(config: config)
+        #expect(detector.detect(english).primary == "en", "English is detected as English")
+        #expect(detector.detect(russian).primary == "ru", "Russian is detected as Russian")
+        #expect(detector.detect(portuguese).primary == "pt", "Portuguese is detected as Portuguese")
+        #expect(detector.detect(portuguese).confidence > 0.5, "a paragraph of Portuguese is detected with confidence")
         #expect(detector.detect(german).primary == "de", "a language outside the hints is itself, not other")
         #expect(detector.detect(japanese).primary == "ja", "in any script")
         #expect(detector.detect(chinese).primary == "zh", "a script variant is its language's ISO 639-1 code")
-        #expect(detector.detect("12345 / 67.89").primary == "und")
-        #expect(detector.ranked(for: russian).first == "ru")
-        #expect(detector.ranked(for: german) == ["de", "en", "ru", "pt"], "a document's own language goes ahead of the hints")
-        #expect(detector.ranked(for: "").first == "en")
+        #expect(detector.detect("12345 / 67.89").primary == "und", "text without letters has no language")
+        #expect(detector.ranked(for: russian).first == "ru", "OCR tries the document's own language first")
+        #expect(detector.ranked(for: german) == ["de"] + config.ocrLanguages, "a document's own language goes ahead of the hints")
+        #expect(detector.ranked(for: "") == config.ocrLanguages, "without text, the hints alone, in their order")
     }
 
     private let german = """
@@ -43,43 +44,43 @@ struct TextAndLanguageTests {
     @Test("Below the confidence floor the primary language is 'other'")
     func otherLanguage() throws {
         let config = try TestConfig.context { extraction, _ in extraction.languageMinConfidence = 1.01 }.config
-        #expect(LanguageDetector(config: config).detect(english).primary == "other")
+        #expect(LanguageDetector(config: config).detect(english).primary == "other", "a guess below languageMinConfidence is not trusted")
     }
 
     @Test("KOI8-R and CP1251 are told apart by Russian bigrams")
     func cyrillicEncodings() async throws {
         let scratch = try Scratch()
         let koi8 = try #require(TextEncodingDetector.encoding(named: "koi8R"))
-        let registry = ExtractorRegistry()
+        let registry = try TestConfig.registry()
         let context = try TestConfig.context()
         for (name, encoding, iana) in [("koi8.txt", koi8, "koi8-r"), ("cp1251.txt", String.Encoding.windowsCP1251, "windows-1251")] {
             let url = try scratch.write(name, russian, encoding: encoding)
             let content = try await registry.extract(url, sha256: "x", context: context, trace: .disabled)
-            #expect(content.metadata["text:encoding"] == iana, "\(name)")
-            #expect(content.text.contains("Уважаемый клиент"), "\(name)")
-            #expect(content.hasWarning(.encodingGuessed))
-            #expect(content.language.primary == "ru")
+            #expect(content.metadata["text:encoding"] == iana, "\(name): the Cyrillic code page is told apart by Russian bigrams")
+            #expect(content.text.contains("Уважаемый клиент"), "\(name): the text is decoded, not mojibake")
+            #expect(content.warnings.map(\.code) == [.encodingGuessed], "\(name): a guessed encoding is noted, since it may be wrong")
+            #expect(content.language.primary == "ru", "\(name): the decoded text is detected as Russian")
         }
     }
 
     @Test("Latin-1 Portuguese is not mistaken for Cyrillic; UTF-8 needs no guess")
     func latinAndUTF8() async throws {
         let scratch = try Scratch()
-        let registry = ExtractorRegistry()
+        let registry = try TestConfig.registry()
         let context = try TestConfig.context()
         let latin = try scratch.write("latin1.txt", "Informação: fatura nº 12, emissão 20/05/2026. Obrigação cumprida.",
                                       encoding: .isoLatin1)
         let latinContent = try await registry.extract(latin, sha256: "x", context: context, trace: .disabled)
-        #expect(latinContent.text.contains("Informação"))
-        #expect(latinContent.metadata["text:encoding"] != "koi8-r")
-        #expect(latinContent.metadata["text:encoding"] != "windows-1251")
+        #expect(latinContent.text.contains("Informação"), "Latin-1 accents are decoded")
+        #expect(latinContent.metadata["text:encoding"] != "koi8-r", "Portuguese bytes are not read as KOI8-R")
+        #expect(latinContent.metadata["text:encoding"] != "windows-1251", "nor as CP1251")
 
         let utf8 = try scratch.write("utf8.md", "# Nota\n\n" + portuguese)
         let utf8Content = try await registry.extract(utf8, sha256: "x", context: context, trace: .disabled)
-        #expect(utf8Content.metadata["text:encoding"] == "utf-8")
-        #expect(!utf8Content.hasWarning(.encodingGuessed))
-        #expect(utf8Content.kind == .textDocument)
-        #expect(utf8Content.textOrigin == .textLayer)
+        #expect(utf8Content.metadata["text:encoding"] == "utf-8", "valid UTF-8 is read as UTF-8")
+        #expect(utf8Content.warnings.map(\.code) == [], "valid UTF-8 needs no guess, so nothing is noted")
+        #expect(utf8Content.kind == .textDocument, "Markdown is a text document")
+        #expect(utf8Content.textOrigin == .textLayer, "plain text is read as it is")
     }
 
     @Test("CSV keeps the header plus csvMaxRows rows as TSV, handling quotes and semicolons")
@@ -89,13 +90,14 @@ struct TextAndLanguageTests {
         for index in 1...10 { csv += "0\(index % 9 + 1)/05/2026;\"Pagamento; ref \(index)\";\(index),50\n" }
         let url = try scratch.write("movimentos.csv", csv)
         let context = try TestConfig.context { extraction, _ in extraction.csvMaxRows = 3 }
-        let content = try await ExtractorRegistry().extract(url, sha256: "x", context: context, trace: .disabled)
+        let content = try await TestConfig.registry().extract(url, sha256: "x", context: context, trace: .disabled)
         let lines = content.text.split(separator: "\n")
-        #expect(content.kind == .spreadsheet)
-        #expect(lines.count == 4)
-        #expect(lines.first == "Data\tDescrição\tValor")
-        #expect(lines[1].contains("Pagamento; ref 1"))
-        #expect(content.structure?.tables.first?.hasPrefix("Data\tDescrição") == true)
+        #expect(content.kind == .spreadsheet, "a CSV is a spreadsheet")
+        #expect(lines.count == 4, "the header and csvMaxRows rows are kept")
+        #expect(lines.first == "Data\tDescrição\tValor", "semicolon-separated cells become tab-separated")
+        #expect(lines[1] == "02/05/2026\tPagamento; ref 1\t1,50", "a quoted cell keeps its semicolon and loses its quotes")
+        let table = try #require(content.structure?.tables.first)
+        #expect(table.hasPrefix("Data\tDescrição\tValor\n"), "the table starts with its header row")
     }
 
     @Test("Russian plausibility separates real text from KOI8-R/CP1251 mix-ups, even for short samples")
@@ -104,9 +106,9 @@ struct TextAndLanguageTests {
         for sample in [russian, "Привет", "Счёт на оплату 15"] {
             let data = try #require(sample.data(using: koi8))
             let misread = try #require(String(data: data, encoding: .windowsCP1251))
-            #expect(TextEncodingDetector.russianPlausibility(sample) > TextEncodingDetector.russianPlausibility(misread))
+            #expect(TextEncodingDetector.russianPlausibility(sample) > TextEncodingDetector.russianPlausibility(misread), "\(sample): real Russian scores above its KOI8-R bytes read as CP1251")
         }
-        #expect(TextEncodingDetector.russianPlausibility("Informação cumprida") <= 0)
+        #expect(TextEncodingDetector.russianPlausibility("Informação cumprida") <= 0, "Latin text is not plausible Russian")
     }
 
     @Test("Short KOI8-R text is still decoded correctly")
@@ -114,9 +116,9 @@ struct TextAndLanguageTests {
         let scratch = try Scratch()
         let koi8 = try #require(TextEncodingDetector.encoding(named: "koi8R"))
         let url = try scratch.write("short.txt", "Счёт на оплату 15", encoding: koi8)
-        let content = try await ExtractorRegistry().extract(url, sha256: "x", context: try TestConfig.context(),
+        let content = try await TestConfig.registry().extract(url, sha256: "x", context: try TestConfig.context(),
                                                             trace: .disabled)
-        #expect(content.text == "Счёт на оплату 15")
-        #expect(content.metadata["text:encoding"] == "koi8-r")
+        #expect(content.text == "Счёт на оплату 15", "a few KOI8-R words are enough to decode them")
+        #expect(content.metadata["text:encoding"] == "koi8-r", "and the encoding is named")
     }
 }

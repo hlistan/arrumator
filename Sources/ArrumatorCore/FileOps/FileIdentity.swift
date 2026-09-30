@@ -6,15 +6,12 @@ public struct FileFingerprint: Sendable, Codable, Hashable {
     public var size: Int64
     public var modified: Date?
     public var inode: Int64?
-    public var volume: String?
 
     public static func of(_ url: URL) throws -> FileFingerprint {
         let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
-        let values = try? url.resourceValues(forKeys: [.volumeIdentifierKey])
         return FileFingerprint(size: (attrs[.size] as? NSNumber)?.int64Value ?? 0,
                                modified: attrs[.modificationDate] as? Date,
-                               inode: (attrs[.systemFileNumber] as? NSNumber)?.int64Value,
-                               volume: values?.volumeIdentifier.map { String(describing: $0) })
+                               inode: (attrs[.systemFileNumber] as? NSNumber)?.int64Value)
     }
 
     public static func inode(of url: URL) -> Int64? {

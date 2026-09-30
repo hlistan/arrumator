@@ -29,7 +29,9 @@ struct Review: AsyncParsableCommand {
         @Argument var document: String
         func run() async throws {
             let runtime = try await options.runtime()
-            try await runtime.review.confirm(try await resolveDocument(document, runtime: runtime))
+            let id = try await resolveDocument(document, runtime: runtime)
+            try await runtime.review.confirm(id)
+            try await report(id, runtime: runtime, options: options)
         }
     }
 
@@ -40,7 +42,9 @@ struct Review: AsyncParsableCommand {
         @Argument(help: "New file name without extension.") var name: String
         func run() async throws {
             let runtime = try await options.runtime()
-            try await runtime.review.edit(try await resolveDocument(document, runtime: runtime), fileName: name, labels: nil)
+            let id = try await resolveDocument(document, runtime: runtime)
+            try await runtime.review.edit(id, fileName: name, labels: nil)
+            try await report(id, runtime: runtime, options: options)
         }
     }
 
@@ -52,8 +56,10 @@ struct Review: AsyncParsableCommand {
         func run() async throws {
             let runtime = try await options.runtime()
             _ = await runtime.lifecycle.ensureRunning()
-            try await runtime.review.retry(try await resolveDocument(document, runtime: runtime))
+            let id = try await resolveDocument(document, runtime: runtime)
+            try await runtime.review.retry(id)
             await runtime.coordinator.drain()
+            try await report(id, runtime: runtime, options: options)
         }
     }
 
@@ -63,7 +69,9 @@ struct Review: AsyncParsableCommand {
         @Argument var document: String
         func run() async throws {
             let runtime = try await options.runtime()
-            try await runtime.review.hold(try await resolveDocument(document, runtime: runtime))
+            let id = try await resolveDocument(document, runtime: runtime)
+            try await runtime.review.hold(id)
+            try await report(id, runtime: runtime, options: options)
         }
     }
 
@@ -73,9 +81,17 @@ struct Review: AsyncParsableCommand {
         @Argument var document: String
         func run() async throws {
             let runtime = try await options.runtime()
-            try await runtime.review.undo(try await resolveDocument(document, runtime: runtime))
+            let id = try await resolveDocument(document, runtime: runtime)
+            try await runtime.review.undo(id)
+            try await report(id, runtime: runtime, options: options)
         }
     }
+}
+
+/// What a command that changed a document prints: the document as it is now.
+func report(_ id: Int64, runtime: ArrumatorRuntime, options: GlobalOptions) async throws {
+    guard let document = try await runtime.services.documents.document(id: id) else { throw ValidationError("No document \(id)") }
+    options.emit(document) { "#\(id) \(document.status.rawValue): \(document.path)" }
 }
 
 struct Rebuild: AsyncParsableCommand {

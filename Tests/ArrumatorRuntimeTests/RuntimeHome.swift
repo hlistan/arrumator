@@ -14,11 +14,9 @@ struct RuntimeHome {
     static func make() async throws -> RuntimeHome {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("arrumator-runtime-\(UUID().uuidString)",
                                                                                isDirectory: true)
-        var environment = RuntimeEnvironment.current
-        environment.home = root.appendingPathComponent("support").path
-        environment.ollamaURL = nil
-        environment.pipelineOverridePath = nil
-        environment.logLevel = .error
+        // Nothing of the process's own environment: the test runs the same however it was started.
+        let environment = RuntimeEnvironment(home: root.appendingPathComponent("support").path, ollamaURL: nil,
+                                             logLevelName: LogLevel.error.rawValue, pipelineOverridePath: nil)
         let home = RuntimeHome(root: root, environment: environment)
         try home.paths.ensureDirectories()
         try await SettingsStore(paths: home.paths).update {

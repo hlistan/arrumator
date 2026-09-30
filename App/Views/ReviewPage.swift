@@ -8,16 +8,15 @@ struct ReviewPage: View {
     @State private var documents: [DocumentRecord] = []
 
     var body: some View {
-        Page(.review, notes: documents.isEmpty ? nil : "Arrumator could not read these as it should. Confirm one as it is, "
-            + "correct its name and details, or have it read again.") {
+        Page(.review, notes: documents.isEmpty ? nil : Wording.reviewNotes) {
             if documents.isEmpty {
-                EmptyState(symbol: "checkmark.circle", text: "Nothing needs you.")
+                EmptyState(symbol: "checkmark.circle", text: Wording.nothingNeedsYou)
             } else {
                 VStack(alignment: .leading, spacing: 0) { DocumentList(documents: documents) }
             }
         }
         .task(id: model.activity) {
-            documents = await model.load("Load review queue") { try await $0.services.documents.reviewQueue() } ?? []
+            documents = await model.load(Wording.loadReviewQueueAction) { try await $0.services.documents.reviewQueue() } ?? []
         }
     }
 }

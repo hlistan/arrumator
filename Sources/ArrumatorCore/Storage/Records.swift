@@ -60,7 +60,7 @@ public struct DocumentRecord: ArrumatorRecord, Identifiable, Hashable {
 
     /// A newly arrived file, before extraction and classification.
     public static func arrived(path: String, sha256: String, size: Int64, uttype: String, inode: Int64?, modified: Date?,
-                               now: Date = Date()) -> DocumentRecord {
+                               now: Date) -> DocumentRecord {
         DocumentRecord(id: nil, uid: UUID().uuidString, path: path, originalFilename: (path as NSString).lastPathComponent,
                        sha256: sha256, size: size, uttype: uttype, inode: inode, pageCount: nil, status: .processing, analysisJson: nil,
                        contentJson: nil, labelsJson: nil, duplicateOf: nil, lastTraceId: nil, addedAt: now, filedAt: nil,
@@ -181,8 +181,9 @@ public struct TraceStepRecord: ArrumatorRecord, Identifiable, Hashable {
     public var id: Int64?
     public var traceId: Int64
     public var seq: Int
+    /// The stage as recorded: stages of earlier versions stay readable in old traces.
     public var stage: String
-    public var status: String
+    public var status: TraceStatus
     public var startedAt: Date
     public var durationMs: Double
     public var inputJson: String?

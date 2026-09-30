@@ -24,7 +24,8 @@ struct GlobalOptions: ParsableArguments {
     var verbose = false
 
     func runtime() async throws -> ArrumatorRuntime {
-        let runtime = try await ArrumatorRuntime.bootstrap(appVersion: Arrumator.version, echoLogsToStderr: verbose)
+        let runtime = try await ArrumatorRuntime.bootstrap(appVersion: Arrumator.version, environment: .current,
+                                                           echoLogsToStderr: verbose)
         try await runtime.openArchive()
         return runtime
     }
@@ -134,24 +135,53 @@ struct Run: AsyncParsableCommand {
 
 struct Settings: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
-        abstract: "Show or change settings (Incoming, model profile, …). Switch archives with `arrumatorcli archive switch`.")
+        abstract: "Show or change settings, as Settings in the app does. Switch archives with `arrumatorcli archive switch`.")
     @OptionGroup var options: GlobalOptions
     @Option(help: "Folder to watch for new files.") var incoming: String?
     @Option(help: "Model profile defined in pipeline.json (standard, balanced, lowMemory).") var profile: String?
     @Option(help: "Ollama management: launchApp, spawnServe, external.") var ollama: OllamaManagement?
     @Option(help: "Ollama server: this Mac or a machine on the local network, such as http://192.168.1.20:11434.") var ollamaURL: String?
     @Option(help: "Pause processing (true/false).") var paused: Bool?
+    @Option(help: "Show the app's icon in the Dock (true/false).") var showInDock: Bool?
+    @Option(help: "Give filed documents the name the model chose (true/false).") var renameFiles: Bool?
+    @Option(help: "Write file names in Latin letters (true/false).") var transliterate: Bool?
+    @Option(help: "What happens to an exact copy of a filed document: fileInArchive, leaveInIncoming.") var duplicateAction: DuplicateAction?
+    @Option(help: "Notify when a document is filed (true/false).") var notifyOnFiled: Bool?
+    @Option(help: "Notify when a document waits for you (true/false).") var notifyOnReview: Bool?
+    @Option(help: "Pause on battery when it runs low (true/false).") var pauseOnBattery: Bool?
+    @Option(help: "Lowest level logged: error, warning, info, debug, trace.") var logLevel: LogLevel?
+    @Option(help: "Days the prompts and raw model answers of a reading are kept in its trace.") var traceRetentionDays: Int?
 
     func run() async throws {
         let runtime = try await options.runtime()
-        let (incoming, profile, ollama, paused) = (incoming, profile, ollama, self.paused)
-        let updated = try await runtime.settings.update { s in
+        // A profile the pipeline does not define is refused before anything is saved.
+        if let profile {
+            var selection = await runtime.settings.current.models
+            selection.profile = profile
+            _ = try runtime.config.models(for: selection)
+        }
+        if let traceRetentionDays, traceRetentionDays < 1 {
+            throw ValidationError("--trace-retention-days must be at least 1")
+        }
+        let (incoming, profile, ollama) = (incoming, profile, ollama)
+        let (showInDock, renameFiles, transliterate, duplicateAction) = (showInDock, renameFiles, transliterate, duplicateAction)
+        let (notifyOnFiled, notifyOnReview, pauseOnBattery, logLevel) = (notifyOnFiled, notifyOnReview, pauseOnBattery, logLevel)
+        let traceRetentionDays = traceRetentionDays
+        try await runtime.settings.update { s in
             if let incoming { s.incomingPath = incoming }
             if let profile { s.models.profile = profile }
             if let ollama { s.ollamaManagement = ollama }
-            if let paused { s.paused = paused }
+            if let showInDock { s.showInDock = showInDock }
+            if let renameFiles { s.renameFiles = renameFiles }
+            if let transliterate { s.transliterate = transliterate }
+            if let duplicateAction { s.duplicateAction = duplicateAction }
+            if let notifyOnFiled { s.notifyOnFiled = notifyOnFiled }
+            if let notifyOnReview { s.notifyOnReview = notifyOnReview }
+            if let pauseOnBattery { s.pauseOnBattery = pauseOnBattery }
+            if let logLevel { s.logLevel = logLevel }
+            if let traceRetentionDays { s.traceRawRetentionDays = traceRetentionDays }
         }
-        _ = try runtime.config.models(for: updated.models)
+        if let paused { try await runtime.setPaused(paused) }
         if let ollamaURL {
             try await runtime.useOllama(at: ollamaURL)
             _ = await runtime.lifecycle.ensureRunning()
@@ -162,3 +192,4 @@ struct Settings: AsyncParsableCommand {
 }
 
 extension OllamaManagement: ExpressibleByArgument {}
+extension DuplicateAction: ExpressibleByArgument {}

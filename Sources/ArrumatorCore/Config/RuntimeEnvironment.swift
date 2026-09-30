@@ -7,20 +7,36 @@ public struct RuntimeEnvironment: Sendable {
     public var home: String?
     /// Overrides the Ollama endpoint; like the setting, it must pass `OllamaEndpoint.validated` (this Mac or the local network).
     public var ollamaURL: String?
-    public var logLevel: LogLevel?
+    /// `ARRUMATOR_LOG_LEVEL` as written; `logLevel()` reads it.
+    public var logLevelName: String?
     /// Extra pipeline override JSON file merged after the user's `pipeline.json`.
     public var pipelineOverridePath: String?
-    /// Enables tests and evals that talk to a live Ollama.
-    public var live: Bool
+
+    public init(home: String?, ollamaURL: String?, logLevelName: String?, pipelineOverridePath: String?) {
+        self.home = home
+        self.ollamaURL = ollamaURL
+        self.logLevelName = logLevelName
+        self.pipelineOverridePath = pipelineOverridePath
+    }
 
     public static var current: RuntimeEnvironment {
         let env = ProcessInfo.processInfo.environment
         return RuntimeEnvironment(
             home: env["ARRUMATOR_HOME"].flatMap { $0.isEmpty ? nil : $0.expandingTilde },
             ollamaURL: env["ARRUMATOR_OLLAMA_URL"].flatMap { $0.isEmpty ? nil : $0 },
-            logLevel: env["ARRUMATOR_LOG_LEVEL"].flatMap(LogLevel.init(rawValue:)),
-            pipelineOverridePath: env["ARRUMATOR_PIPELINE_CONFIG"].flatMap { $0.isEmpty ? nil : $0.expandingTilde },
-            live: env["ARRUMATOR_LIVE"] == "1")
+            logLevelName: env["ARRUMATOR_LOG_LEVEL"].flatMap { $0.isEmpty ? nil : $0 },
+            pipelineOverridePath: env["ARRUMATOR_PIPELINE_CONFIG"].flatMap { $0.isEmpty ? nil : $0.expandingTilde })
+    }
+
+    /// The level `ARRUMATOR_LOG_LEVEL` sets, nil when it is not set. A value that is no level stops the app with the
+    /// reason, rather than being ignored while the user waits for the detail they asked for.
+    public func logLevel() throws -> LogLevel? {
+        guard let logLevelName else { return nil }
+        guard let level = LogLevel(rawValue: logLevelName) else {
+            throw ConfigError.invalid(name: "ARRUMATOR_LOG_LEVEL", underlying: "“\(logLevelName)” is none of "
+                                          + LogLevel.allCases.map(\.rawValue).joined(separator: ", "))
+        }
+        return level
     }
 }
 
@@ -43,7 +59,7 @@ public struct AppPaths: Sendable {
         self.logsDirectory = logsDirectory
     }
 
-    public static func resolve(_ env: RuntimeEnvironment = .current) -> AppPaths {
+    public static func resolve(_ env: RuntimeEnvironment) -> AppPaths {
         if let home = env.home {
             let base = URL(fileURLWithPath: home, isDirectory: true)
             return AppPaths(supportDirectory: base, logsDirectory: base.appendingPathComponent("Logs", isDirectory: true))
@@ -56,8 +72,8 @@ public struct AppPaths: Sendable {
         return AppPaths(supportDirectory: support, logsDirectory: logs)
     }
 
-    /// Every archive has an index of its own, so switching archives never mixes the folders, logic or learned state of
-    /// one with another (docs/storage.md). It is named after the canonical path of the archive's folder, which must
+    /// Every archive has an index of its own, so switching archives never mixes the documents, labels or history of one
+    /// with another (docs/storage.md). It is named after the canonical path of the archive's folder, which must
     /// exist: two spellings of one folder, such as `/tmp` and `/private/tmp` or another case, name one index.
     public func indexURL(for archive: URL) throws -> URL {
         guard let path = archive.canonicalFolderPath else { throw ConfigError.archiveFolderMissing(archive.path) }

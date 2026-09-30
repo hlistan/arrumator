@@ -28,8 +28,8 @@ struct Page<Content: View>: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Style.sectionSpacing) {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(alignment: .firstTextBaseline, spacing: 10) {
+                VStack(alignment: .leading, spacing: Style.pageTitleSpacing) {
+                    HStack(alignment: .firstTextBaseline, spacing: Style.titleSymbolSpacing) {
                         Image(systemName: symbol)
                             .font(.system(size: Style.titleSymbolSize, weight: .semibold))
                             .foregroundStyle(tint)
@@ -67,13 +67,13 @@ struct PageSection<Content: View, Trailing: View>: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: Style.sectionHeadingSpacing) {
             HStack(alignment: .firstTextBaseline) {
                 Text(title).font(.system(size: Style.sectionTitleSize, weight: .semibold))
                 Spacer()
                 trailing().font(.callout)
             }
-            Divider().padding(.bottom, 2)
+            Divider().padding(.bottom, Style.sectionRuleGap)
             VStack(alignment: .leading, spacing: 0) { content() }
         }
     }
@@ -93,8 +93,8 @@ struct ListRow: View {
     @State private var hovering = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 9) {
+        VStack(alignment: .leading, spacing: Style.rowSubtitleSpacing) {
+            HStack(spacing: Style.rowSymbolSpacing) {
                 Group {
                     if busy {
                         ProgressView().controlSize(.small)
@@ -102,19 +102,19 @@ struct ListRow: View {
                         Image(systemName: symbol).foregroundStyle(tint)
                     }
                 }
-                .frame(width: 18)
-                Text(title).lineLimit(wraps ? 2 : 1).truncationMode(wraps ? .tail : .middle)
+                .frame(width: Style.rowSymbolWidth)
+                Text(title).lineLimit(wraps ? Style.rowTitleMaxLines : 1).truncationMode(wraps ? .tail : .middle)
                     .fixedSize(horizontal: false, vertical: wraps)
-                Spacer(minLength: 16)
+                Spacer(minLength: Style.rowDetailMinGap)
                 if let detail { Text(detail).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle) }
                 if let tag { Tag(tag) }
             }
             if let subtitle {
-                Text(highlighted: subtitle).font(.callout).foregroundStyle(.secondary).lineLimit(2).padding(.leading, 27)
+                Text(highlighted: subtitle).font(.callout).foregroundStyle(.secondary).lineLimit(Style.rowSubtitleMaxLines).padding(.leading, Style.rowSubtitleIndent)
             }
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, subtitle == nil && !wraps ? 0 : 5)
+        .padding(.horizontal, Style.rowHorizontalPadding)
+        .padding(.vertical, subtitle == nil && !wraps ? 0 : Style.rowVerticalPadding)
         .frame(minHeight: Style.rowHeight)
         .background(hovering ? Style.hover : .clear, in: .rect(cornerRadius: Style.rowCornerRadius))
         .contentShape(.rect)
@@ -131,9 +131,8 @@ struct Tag: View {
         Text(text)
             .font(.caption)
             .foregroundStyle(.secondary)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 1)
-            .background(.quaternary.opacity(0.7), in: .capsule)
+            .padding(Style.tagInsets)
+            .background(.quaternary.opacity(Style.tagFillOpacity), in: .capsule)
     }
 }
 
@@ -150,13 +149,13 @@ struct EmptyState<Action: View>: View {
     }
 
     var body: some View {
-        VStack(spacing: 10) {
-            Image(systemName: symbol).font(.system(size: 34)).foregroundStyle(.quaternary)
+        VStack(spacing: Style.emptyStateSpacing) {
+            Image(systemName: symbol).font(.system(size: Style.emptyStateSymbolSize)).foregroundStyle(.quaternary)
             Text(text).foregroundStyle(.secondary).multilineTextAlignment(.center)
             action().buttonStyle(.link)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 40)
+        .padding(.vertical, Style.emptyStatePadding)
     }
 }
 
@@ -166,7 +165,7 @@ struct Notice: View {
     var action: (title: String, run: () -> Void)?
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: Style.noticeSpacing) {
             Image(systemName: "info.circle").foregroundStyle(Palette.attention)
             Text(text).foregroundStyle(.secondary)
             if let action { Button(action.title, action: action.run).buttonStyle(.link) }

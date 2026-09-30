@@ -1,7 +1,7 @@
 # gitleaks (https://github.com/gitleaks/gitleaks) configuration, used by scripts/lint.sh, the Git hooks and CI.
 # It extends the built-in rules (API keys, tokens, private keys, …) with what this repository must never hold:
 # signing material and paths that name a person's account. Real documents (Tests/Fixtures/private) are kept out
-# by scripts/lint.sh instead: gitleaks skips PDFs and images, which is what they are.
+# by scripts/check-secrets.sh instead: gitleaks skips PDFs and images, which is what they are.
 
 title = "Arrumator"
 
