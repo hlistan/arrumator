@@ -21,6 +21,42 @@ public struct LabelUsage: Sendable, Codable, Hashable {
     }
 }
 
+/// The labels in use, kind by kind, each kind's most used first, as `LabelStore.usage(within:)` gives them: how the
+/// app's sidebar and `arrumatorcli labels browse` list them.
+extension [LabelKind: [LabelUsage]] {
+    /// The labels whose writing has `text` in it, kinds without one dropped. Case, accents and punctuation do not
+    /// matter, and a language is found by its English name too, as search finds it. Blank text keeps every label.
+    public func matching(_ text: String) -> Self {
+        let wanted = LabelUsage.searchKey(text)
+        guard !wanted.isEmpty else { return self }
+        return compactMapValues { usage in
+            let matched = usage.filter { LabelUsage.searchKey(DocumentLabel.searchText([$0.label], kind: $0.label.kind)).contains(wanted) }
+            return matched.isEmpty ? nil : matched
+        }
+    }
+
+    /// Every label in one list, the most used first. Labels as used keep the order of their kinds, then their own.
+    public func ranked() -> [LabelUsage] {
+        LabelKind.allCases.flatMap { self[$0] ?? [] }.enumerated()
+            .sorted { $0.element.documents != $1.element.documents ? $0.element.documents > $1.element.documents : $0.offset < $1.offset }
+            .map(\.element)
+    }
+
+    /// Every label, kind by kind when `groupedByKind` (`AppSettings.groupLabelsByKind`), else `ranked()`.
+    public func listed(groupedByKind: Bool) -> [LabelUsage] {
+        groupedByKind ? LabelKind.allCases.flatMap { self[$0] ?? [] } : ranked()
+    }
+}
+
+extension LabelUsage {
+    /// `text` folded for matching: lowercase, without accents, and with every run of anything but letters and digits one
+    /// space, so `tax return` finds `tax-return` and `edp comercial` finds `EDP-Comercial, S.A.`.
+    static func searchKey(_ text: String) -> String {
+        text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+            .split { !($0.isLetter || $0.isNumber) }.joined(separator: " ")
+    }
+}
+
 /// Two labels of one kind that look alike enough to be one, waiting for the user to merge them or keep them apart.
 /// `into` is the one more documents have, which a merge keeps.
 public struct LabelSuggestion: Sendable, Codable, Hashable, Identifiable {

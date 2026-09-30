@@ -26,22 +26,32 @@ Again** has the model read it again, **Leave for Later** holds it, and **Undo Fi
   merge it into another or remove it everywhere, or to show the documents that have it. **What You Decided** lists your
   rules, each with **Forget**.
 
-Below the lists, the sidebar lists the labels documents have, kind by kind (Senders, Types, Topics and so on), the most
-used first: `interface.sidebarLabelsPerKind` of each, with **Show More** for the rest, and each kind can be folded away.
-Click a label and the window shows the documents that have it, newest first and grouped by day, under the label as
-its title. The sidebar then lists only the labels those documents have, so each label clicked next narrows them down
-further: the documents shown have every label chosen. Chosen labels are marked in the sidebar and head the page; click
-one again, or its × on the page, to let go of it. Letting go of the last, or choosing a list, shows the lists again.
-"Show Documents" on a label's menu or card starts from that label alone. From a terminal, `arrumatorcli labels browse`
-does the same.
+Below the lists, the sidebar lists the labels documents have, each with how many of the documents in view have it, the
+most used first. They come in one list under **Most Used**, `interface.sidebarLabels` of them, or, with **Group Labels
+by Kind** in the menu at the sidebar's foot (`groupLabelsByKind`, `arrumatorcli settings --group-labels-by-kind`), kind
+by kind (Senders, Types, Topics and so on), `interface.sidebarLabelsPerKind` of each, each kind folding away; **Show
+More** lists the rest. Each kind has its colour, on its name heading its group and on its labels' tags, so a label shows
+its kind in the one list too; a label's help names its kind as well. These counts are the only ones on the sidebar
+besides those of what waits for you. Click a label and the window shows the documents that have it, newest first and
+grouped by day, under the label as its title. The sidebar then lists only the labels those documents have, so each
+label clicked next narrows them down further: the documents shown have every label chosen. Chosen labels come first,
+as every document shown has them, are marked in the sidebar and head the page; click one again, or its × on the page,
+to let go of it. Letting go of the last, or choosing a list, shows the lists again. "Show Documents" on a label's menu
+or card starts from that label alone. From a terminal, `arrumatorcli labels browse` does the same.
 
-Search sits at the top of the sidebar. It lists the documents that contain your words first, then those alike in
-meaning, such as the same kind of document in another language, most similar first. Words are looked for in the file
-name, the text and the labels; `field:word` or `field:"a phrase"` looks in one of them only: `filename`, `body`, or a
-kind of label, `sender`, `party`, `type`, `topic`, `object`, `reference`, `date`, `period`, `deadline`, `amount`,
-`jurisdiction` or `language`. Each field counts as much as its weight in `search.bm25Weights`, in that order. A document
-found by meaning alone must reach `search.semanticMinSimilarity` (calibrated in [Evaluation ›
-Search](evaluation.md#search)). **Statistics** and **History** are in the menu at its foot.
+The search at the top of the sidebar finds labels: as you type, the sidebar lists only the labels written with your
+text in them, every one it finds, whatever their case, accents or punctuation (`tax return` finds the type
+`tax-return`), and a language by its English name too. It searches the labels the sidebar offers, so with labels chosen,
+only those of the documents in view. `arrumatorcli labels browse --matching` does the same. **Statistics** and
+**History** are in the menu at the sidebar's foot.
+
+Documents are searched from a terminal, with `arrumatorcli search`. It lists the documents that contain your words
+first, then those alike in meaning, such as the same kind of document in another language, most similar first. Words
+are looked for in the file name, the text and the labels; `field:word` or `field:"a phrase"` looks in one of them only:
+`filename`, `body`, or a kind of label, `sender`, `party`, `type`, `topic`, `object`, `reference`, `date`, `period`,
+`deadline`, `amount`, `jurisdiction` or `language`. Each field counts as much as its weight in `search.bm25Weights`, in
+that order. A document found by meaning alone must reach `search.semanticMinSimilarity` (calibrated in [Evaluation ›
+Search](evaluation.md#search)).
 
 ### Statistics
 
@@ -89,7 +99,8 @@ colours rather than the system accent, which macOS greys out whenever the window
 No tunable lives in code. Defaults are bundled in `Sources/ArrumatorCore/Resources/Defaults/`:
 
 - `settings.json`: your preferences (folders, Ollama server, model profile, file renaming and transliteration, what to
-  do with copies, notifications, how long model prompts are kept in traces, …). The app stores only your changes, in
+  do with copies, notifications, how long model prompts are kept in traces, whether the sidebar groups labels by kind,
+  …). The app stores only your changes, in
   `~/Library/Application Support/Arrumator/settings.json`. Change them in Settings or with `arrumatorcli settings`,
   which has an option for every one of them.
 - `pipeline.json`: every pipeline tunable, in sections: `ollama` (timeouts, retries, how it is started; `ollama serve`,
@@ -104,13 +115,14 @@ No tunable lives in code. Defaults are bundled in `Sources/ArrumatorCore/Resourc
   or offered to merge and how many in use the model is shown, and how many of your merges and unwanted labels it is
   shown), `naming`, `search`, `logging` (with `logging.followInterval`, how often `arrumatorcli logs --follow` looks),
   `power`, `stats` (the periods Statistics offers, and `stats.defaultWindowDays`, the one it and `arrumatorcli funnel`
-  show first), `interface` (how many rows a page loads, `interface.pageSize`, how many labels of each kind the sidebar
-  lists, how many recent events notifications are drawn from, `interface.notificationEvents`, and how much text
-  `arrumatorcli extract` prints, `interface.extractPreviewChars`), `maintenance` (how often the app prunes logs, trims
-  traces and reschedules stuck jobs, `maintenance.interval`) and `database` (how long a write waits for another process
-  using the index, `database.busyTimeout`). Override any subset in
-  `~/Library/Application Support/Arrumator/pipeline.json`. An override the app cannot run with, such as an empty
-  `ingest.retryDelays` or a negative `analysis.repairAttempts`, stops the app with the key and the reason.
+  show first), `interface` (how many rows a page loads, `interface.pageSize`, how many labels the sidebar lists in one
+  list, `interface.sidebarLabels`, and of each kind when grouped, `interface.sidebarLabelsPerKind`, how many recent
+  events notifications are drawn from, `interface.notificationEvents`, and how much text `arrumatorcli extract` prints,
+  `interface.extractPreviewChars`), `maintenance` (how often the app prunes logs, trims traces and reschedules stuck
+  jobs, `maintenance.interval`) and `database` (how long a write waits for another process using the index,
+  `database.busyTimeout`). Override any subset in `~/Library/Application Support/Arrumator/pipeline.json`. An
+  override the app cannot run with, such as an empty `ingest.retryDelays` or a negative `analysis.repairAttempts`,
+  stops the app with the key and the reason.
 
 The Ollama server is set under Settings › Models › Ollama › Server, or with `arrumatorcli settings --ollama-url`. It must
 be this Mac, a private or link-local address, or a `.local` name; anything else is refused.

@@ -389,6 +389,9 @@ public struct InterfaceConfig: Sendable, Codable, Hashable {
     public var pageSize: Int
     /// Labels of each kind the sidebar lists, the most used first, before "Show More" lists the rest.
     public var sidebarLabelsPerKind: Int
+    /// Labels the sidebar lists in one list, when they are not grouped by kind, the most used first, before "Show More"
+    /// lists the rest.
+    public var sidebarLabels: Int
     /// Recently processed documents listed in the menu bar.
     public var menuBarRecent: Int
     /// The latest filings, and documents waiting for the user, looked at for notifications each time the history grows.

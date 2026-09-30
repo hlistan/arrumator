@@ -87,13 +87,14 @@ import Testing
         defer { home.cleanup() }
         let result = try run(home, ["settings", "--json", "--show-in-dock", "false", "--rename-files", "false", "--transliterate", "true",
                                     "--duplicate-action", "leaveInIncoming", "--notify-on-filed", "true", "--notify-on-review", "false",
-                                    "--pause-on-battery", "false", "--log-level", "debug", "--trace-retention-days", "30"])
+                                    "--pause-on-battery", "false", "--log-level", "debug", "--trace-retention-days", "30",
+                                    "--group-labels-by-kind", "true"])
         #expect(result.status == 0, "the command accepts every setting: \(result.stderr)")
         let changed = try JSON.decoder.decode(AppSettings.self, from: result.stdout)
         #expect(!changed.showInDock && !changed.renameFiles && changed.transliterate && changed.duplicateAction == .leaveInIncoming,
                 "the filing settings are the ones given")
         #expect(changed.notifyOnFiled && !changed.notifyOnReview && !changed.pauseOnBattery && changed.logLevel == .debug
-                    && changed.traceRawRetentionDays == 30, "and so are the rest")
+                    && changed.traceRawRetentionDays == 30 && changed.groupLabelsByKind, "and so are the rest")
         #expect(try settings(home) == changed, "and they are saved")
     }
 
@@ -117,6 +118,16 @@ import Testing
         #expect(stats?["warnings"] is [String: Any], "warnings are an object keyed by their code, as before they were typed")
         let funnel = try JSONSerialization.jsonObject(with: try run(home, ["funnel", "--json"]).stdout) as? [String: Any]
         #expect(funnel?["windowDays"] as? Int == 30, "the period is stats.defaultWindowDays unless --days says otherwise")
+    }
+
+    @Test func browsingLabelsTakesTheSidebarsSearchAndAnswersInJSON() throws {
+        let home = try Home.make()
+        defer { home.cleanup() }
+        let result = try run(home, ["labels", "browse", "--json", "--matching", "edp", "type=invoice"])
+        #expect(result.status == 0, "a search for labels is accepted beside the labels chosen: \(result.stderr)")
+        let scope = try JSONSerialization.jsonObject(with: result.stdout) as? [String: Any]
+        #expect(scope?["labels"] is [Any] && scope?["documents"] is [Any],
+                "the scope lists its documents and the labels to narrow them by, as before: \(result.text)")
     }
 
     @Test func logsAreReadAsJSONLinesWithoutOpeningTheArchive() throws {

@@ -110,7 +110,7 @@ struct ListRow: View {
                 if let tag { Tag(tag) }
             }
             if let subtitle {
-                Text(highlighted: subtitle).font(.callout).foregroundStyle(.secondary).lineLimit(Style.rowSubtitleMaxLines).padding(.leading, Style.rowSubtitleIndent)
+                Text(subtitle).font(.callout).foregroundStyle(.secondary).lineLimit(Style.rowSubtitleMaxLines).padding(.leading, Style.rowSubtitleIndent)
             }
         }
         .padding(.horizontal, Style.rowHorizontalPadding)
