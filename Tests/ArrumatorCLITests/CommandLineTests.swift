@@ -130,6 +130,33 @@ import Testing
                 "the scope lists its documents and the labels to narrow them by, as before: \(result.text)")
     }
 
+    @Test func searchTasksAreAskedChangedAndRemovedFromTheCommandLine() throws {
+        let home = try Home.make()
+        defer { home.cleanup() }
+        // No model answers here, so the task only joins the queue.
+        let asked = try run(home, ["tasks", "new", "--queue-only", "--json", "electricity", "invoices", "from", "2025"])
+        #expect(asked.status == 0, "a prompt in several words is one request: \(asked.stderr)")
+        let detail = try JSON.decoder.decode(SearchTaskDetail.self, from: asked.stdout)
+        #expect(detail.task.state == .queued && detail.task.prompt == "electricity invoices from 2025" && detail.tree.count == 0,
+                "it waits in the queue, having found nothing yet")
+        let id = String(detail.task.id)
+        let changed = try run(home, ["tasks", "update", id, "--json", "--title", "Bills", "--group-by", "sender,date", "--queue-only"])
+        let task = try JSON.decoder.decode(SearchTaskDetail.self, from: changed.stdout).task
+        #expect(task.name == "Bills" && task.grouping == [.sender, .date] && task.groupedByUser, "renamed and arranged as asked: \(changed.stderr)")
+        #expect(try run(home, ["tasks", "update", id, "--group-by", "colour"]).status != 0, "an arrangement by no kind of label is refused")
+        let listed = try JSON.decoder.decode([SearchTask].self, from: try run(home, ["tasks", "list", "--json"]).stdout)
+        #expect(listed.map(\.id) == [detail.task.id], "the task is listed")
+        let add = try run(home, ["tasks", "add", id, "999"])
+        #expect(add.status != 0 && add.stderr.contains("999"), "a document the archive does not have is refused by number: \(add.stderr)")
+        let export = try run(home, ["tasks", "export", id, "--to", home.root.appendingPathComponent("Out").path])
+        #expect(export.status != 0 && export.stderr.contains("no documents"), "an empty set has nothing to export: \(export.stderr)")
+        let removed = try JSON.decoder.decode(SearchTask.self, from: try run(home, ["tasks", "delete", id, "--json"]).stdout)
+        #expect(removed.id == detail.task.id, "removing prints the task removed")
+        #expect(try JSON.decoder.decode([SearchTask].self, from: try run(home, ["tasks", "--json"]).stdout).isEmpty, "and it is gone")
+        let events = try JSON.decoder.decode([EventRecord].self, from: try run(home, ["history", "--json"]).stdout)
+        #expect(Set(events.map(\.kind)) == [.taskCreated, .taskEdited, .taskRemoved], "each step is in History: \(events.map(\.kind))")
+    }
+
     @Test func logsAreReadAsJSONLinesWithoutOpeningTheArchive() throws {
         let home = try Home.make()
         defer { home.cleanup() }

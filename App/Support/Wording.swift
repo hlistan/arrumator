@@ -26,6 +26,7 @@ enum Wording {
         case .review: "Needs You"
         case .processed: "Processed"
         case .labels: "Labels"
+        case .tasks: "Tasks"
         case .labelled: "Labelled"
         case .history: "History"
         case .statistics: "Statistics"
@@ -105,6 +106,15 @@ enum Wording {
     static let loadStatisticsAction = "Load statistics"
     static let loadTracesAction = "Load traces"
     static let loadTraceAction = "Load trace"
+    static let askAction = "Ask for documents"
+    static let loadTasksAction = "Load tasks"
+    static let loadTaskAction = "Load task"
+    static let changeTaskAction = "Change task"
+    static let findAgainAction = "Find again"
+    static let addToTaskAction = "Add to task"
+    static let takeOutOfTaskAction = "Take out of task"
+    static let exportAction = "Export"
+    static let removeTaskAction = "Remove task"
 
     // MARK: Shared across pages
 

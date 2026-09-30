@@ -40,6 +40,16 @@ enum RecordText {
         return lines.joined(separator: "\n") + "\n"
     }
 
+    static func searchTasks(_ entries: [SearchTaskEntry]) -> String {
+        var lines = ["# Search tasks", "", note, "", "| # | Task | Asked | State | Documents | Exports |", "|---|---|---|---|---|---|"]
+        for e in entries {
+            let name = [e.title, e.plan?.title].compactMap { $0 }.first { !$0.isEmpty } ?? e.prompt
+            lines.append("| \(e.id) | \(cell(name)) | \(cell(e.prompt)) | \(e.state.rawValue) | "
+                + "\(e.documents.filter { $0.inclusion != .removed }.count) | \(cell(e.exports.map(\.path).joined(separator: ", "))) |")
+        }
+        return lines.joined(separator: "\n") + "\n"
+    }
+
     /// A table cell: a pipe or a line break would end it.
     private static func cell(_ text: String?) -> String {
         (text ?? "").replacingOccurrences(of: "|", with: "\\|").replacingOccurrences(of: "\n", with: " ")

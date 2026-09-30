@@ -301,3 +301,78 @@ extension Wording {
 
     static func milliseconds(_ ms: Int) -> String { "\(ms) ms" }
 }
+
+// MARK: Tasks
+
+extension Wording {
+    static let tasksNotes = "Ask for the documents you need, in your own words. Arrumator reads the request with the local model, "
+        + "finds the documents, and arranges them by their labels. Look them over, add or take out any, then export them."
+    static let askPrompt = "Which documents do you need? Such as: electricity and water bills from 2025, by sender"
+    static let find = "Find"
+    static let noTasksYet = "No tasks yet. Ask for documents above."
+    static let earlierTasks = "Earlier"
+    static let asked = "Asked"
+    static let lookedFor = "Looked for"
+    static let arrangedBy = "Arranged by"
+    static let notArranged = "Not arranged"
+    static let arrangeAsAsked = "As Asked"
+    static let arrangeAsAskedHelp = "Arrange the documents as the request asked"
+    static let addLevel = "Add a level"
+    static let findAgain = "Find Again"
+    static let findAgainHelp = "Read the request again and find its documents, keeping what you added and took out"
+    static let addDocuments = "Add Documents…"
+    static let addDocumentsHelp = "Choose labels in the sidebar to find documents, and add them to this task"
+    static let exportMenu = "Export"
+    static let exportToFolder = "To a Folder…"
+    static let exportAsZip = "As a ZIP Archive…"
+    static let chooseExportFolder = "Choose where to put the export"
+    static let removeTask = "Remove Task…"
+    static let removeTaskConfirm = "Remove Task"
+    static let removeTaskNote = "What it exported stays where it was put."
+    static let exportsHeading = "Exports"
+    static let noLongerThere = "no longer there"
+    static let takeOutHelp = "Take it out of this task"
+    static let addToTaskHelp = "Add it to the task"
+    static let inTaskHelp = "In the task; click to take it out"
+    static let addAllShown = "Add All With These Labels"
+    static let doneAdding = "Done"
+    static let nothingFound = "Nothing found. Change the request, or add documents yourself."
+
+    /// Asks before a task is removed.
+    static func removeTaskQuestion(_ name: String) -> String { "Remove “\(name)”?" }
+
+    /// Heads the pages that narrow documents down while they are added to a task.
+    static func addingTo(_ task: String) -> String { "Adding documents to “\(task)”. Choose labels in the sidebar to narrow them down." }
+
+    /// Where a task is, at the end of its row.
+    static func taskOutcome(_ task: SearchTask) -> String {
+        switch task.state {
+        case .queued: "Waiting to be read"
+        case .interpreting: "Reading the request"
+        case .failed: "Could not read the request"
+        case .ready: Format.count(task.documents.count, "document")
+            + (task.exports.isEmpty ? "" : labelSeparator + "exported \(task.exports.count == 1 ? "once" : "\(task.exports.count) times")")
+        }
+    }
+
+    /// What a plan looks for: “Invoice · electricity · 2025; words: meter”.
+    static func plan(_ plan: SearchPlan) -> String {
+        let labels = plan.labels.map { item in SearchPlan.timeKinds.contains(item.kind) ? item.value : label(item) }.joined(separator: labelSeparator)
+        let words = plan.words.isEmpty ? "" : "words: " + plan.words.joined(separator: ", ")
+        return [labels, words].filter { !$0.isEmpty }.joined(separator: "; ")
+    }
+
+    /// A group of a task's set, as the label its documents share, or that they have none of the kind.
+    static func group(_ group: LabelGroup) -> String {
+        guard let kind = group.kind else { return "" }
+        guard let value = group.value else { return "No \(labelKind(kind).lowercased())" }
+        return SearchPlan.timeKinds.contains(kind) ? value : label(DocumentLabel(kind: kind, value: value))
+    }
+
+    /// An export, as a task's card lists it.
+    static func export(_ export: SearchTaskExport) -> String {
+        let format = export.format == .zip ? "ZIP archive" : "folder"
+        return "\(export.at.formatted(date: .abbreviated, time: .shortened)) · \(format) · \(Format.count(export.files.count, "document"))"
+            + (export.skipped.isEmpty ? "" : ", \(export.skipped.count) not copied")
+    }
+}

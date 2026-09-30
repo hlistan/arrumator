@@ -25,6 +25,8 @@ enum Palette {
     static let processedList = Color.green
     /// The Labels list, and the page of the documents with the labels chosen in the sidebar.
     static let labelsList = Color.purple
+    /// The Tasks list.
+    static let tasksList = Color.teal
 
     // MARK: Kinds of label
 

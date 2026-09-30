@@ -1,0 +1,387 @@
+import ArrumatorCore
+import ArrumatorRuntime
+import SwiftUI
+
+/// Search tasks: a field to ask for documents in one's own words, then the tasks, those still in the queue first and the
+/// rest newest first. A task opens in place as a card with its documents arranged by their labels, to look over, add to,
+/// take from and export (`SearchTaskActions`).
+struct TasksPage: View {
+    @Environment(AppModel.self) private var model
+    @State private var tasks: [SearchTask] = []
+    @State private var prompt = ""
+
+    private var active: [SearchTask] { tasks.filter(\.state.isActive) }
+    private var earlier: [SearchTask] { tasks.filter { !$0.state.isActive } }
+
+    var body: some View {
+        Page(.tasks, notes: Wording.tasksNotes) {
+            HStack(alignment: .firstTextBaseline, spacing: Style.askSpacing) {
+                TextField(Wording.askPrompt, text: $prompt, axis: .vertical)
+                    .lineLimit(1...Style.askMaxLines)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit(ask)
+                Button(Wording.find, action: ask).disabled(prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+            if tasks.isEmpty {
+                EmptyState(symbol: Destination.tasks.symbol, text: Wording.noTasksYet)
+            }
+            if !active.isEmpty {
+                PageSection(Wording.inProgress) { ForEach(active) { row($0) } }
+            }
+            if !earlier.isEmpty {
+                PageSection(Wording.earlierTasks) { ForEach(earlier) { row($0) } }
+            }
+        }
+        .task(id: model.activity) { await load() }
+    }
+
+    @ViewBuilder private func row(_ task: SearchTask) -> some View {
+        if model.openTask == task.id {
+            TaskCard(taskID: task.id) { if model.openTask == task.id { model.openTask = nil } }
+        } else {
+            ListRow(symbol: task.state.symbol, tint: task.state.tint, title: task.name, detail: Wording.taskOutcome(task),
+                    subtitle: task.name == task.prompt ? nil : task.prompt, busy: task.state == .interpreting)
+                .onTapGesture { withAnimation(.snappy) { model.openTask = task.id } }
+        }
+    }
+
+    private func ask() {
+        let asked = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !asked.isEmpty else { return }
+        prompt = ""
+        Task {
+            guard let task = await model.load(Wording.askAction, { try await $0.searchTasks.create(prompt: asked) }) else { return }
+            await load()
+            model.openTask = task.id
+        }
+    }
+
+    private func load() async {
+        tasks = await model.load(Wording.loadTasksAction) { try await $0.searchTasks.store.tasks() } ?? tasks
+    }
+}
+
+/// A task opened in place: what it asks for and how the model read it, its name and arrangement to change, its documents
+/// arranged by their labels, each to take out, ways to add more and to export them, and every export made of them.
+struct TaskCard: View {
+    @Environment(AppModel.self) private var model
+    let taskID: Int64
+    let onClose: () -> Void
+    @State private var detail: SearchTaskDetail?
+    @State private var name = ""
+    @State private var prompt = ""
+    @State private var confirmingRemoval = false
+    @FocusState private var editingName: Bool
+    @FocusState private var editingPrompt: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Style.taskCardSpacing) {
+            if let detail {
+                header(detail.task)
+                request(detail.task)
+                if detail.task.state == .ready && detail.tree.count == 0 {
+                    Text(Wording.nothingFound).foregroundStyle(.secondary)
+                }
+                SetLevel(group: detail.tree, taskID: taskID)
+                actions(detail.task)
+                exports(detail.task)
+            } else {
+                ProgressView().frame(maxWidth: .infinity)
+            }
+        }
+        .card()
+        .onExitCommand { withAnimation(.snappy) { onClose() } }
+        .task(id: model.activity) { await load() }
+        .onChange(of: editingName) { wasEditing, _ in
+            if wasEditing { change(SearchTaskChange(title: name)) }
+        }
+        .confirmationDialog(Wording.removeTaskQuestion(detail?.task.name ?? ""), isPresented: $confirmingRemoval) {
+            Button(Wording.removeTaskConfirm, role: .destructive) {
+                let id = taskID
+                Task { await model.perform(Wording.removeTaskAction) { try await $0.searchTasks.delete(id) } }
+            }
+        } message: {
+            Text(Wording.removeTaskNote)
+        }
+    }
+
+    private func header(_ task: SearchTask) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            Image(systemName: task.state.symbol).foregroundStyle(task.state.tint)
+            TextField(Wording.name, text: $name)
+                .textFieldStyle(.plain)
+                .font(.title3.weight(.semibold))
+                .focused($editingName)
+                .onSubmit { editingName = false }
+            Spacer(minLength: 0)
+            Button { withAnimation(.snappy) { onClose() } } label: { Image(systemName: "xmark") }
+                .buttonStyle(.borderless).foregroundStyle(.secondary).help(Wording.close)
+        }
+    }
+
+    /// What was asked, how the model read it, and what the set is arranged by.
+    private func request(_ task: SearchTask) -> some View {
+        Grid(alignment: .leading, horizontalSpacing: Style.cardGridColumnSpacing, verticalSpacing: Style.cardLabelRowSpacing) {
+            GridRow(alignment: .firstTextBaseline) {
+                label(Wording.asked)
+                HStack(alignment: .firstTextBaseline, spacing: Style.inlineControlSpacing) {
+                    TextField(Wording.askPrompt, text: $prompt, axis: .vertical)
+                        .lineLimit(1...Style.askMaxLines)
+                        .textFieldStyle(.roundedBorder)
+                        .focused($editingPrompt)
+                        .onSubmit { change(SearchTaskChange(prompt: prompt)) }
+                    Button(Wording.findAgain) {
+                        if prompt != task.prompt {
+                            change(SearchTaskChange(prompt: prompt))
+                        } else {
+                            let id = taskID
+                            Task { await model.perform(Wording.findAgainAction) { _ = try await $0.searchTasks.retry(id) } }
+                        }
+                    }
+                    .help(Wording.findAgainHelp)
+                    .disabled(task.state.isActive)
+                }
+                .controlSize(.small)
+            }
+            if let plan = task.plan {
+                GridRow(alignment: .firstTextBaseline) {
+                    label(Wording.lookedFor)
+                    Text(Wording.plan(plan)).textSelection(.enabled)
+                }
+            }
+            if let problem = task.problem {
+                GridRow(alignment: .firstTextBaseline) {
+                    label("")
+                    Text(problem).foregroundStyle(Palette.attention).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            GridRow(alignment: .firstTextBaseline) {
+                label(Wording.arrangedBy)
+                grouping(task)
+            }
+        }
+    }
+
+    /// The kinds the set is arranged by, each to take away, and a menu to add a level or go back to what was asked.
+    private func grouping(_ task: SearchTask) -> some View {
+        HStack(spacing: Style.groupingSpacing) {
+            if task.grouping.isEmpty { Text(Wording.notArranged).foregroundStyle(.secondary) }
+            ForEach(Array(task.grouping.enumerated()), id: \.element) { index, kind in
+                if index > 0 { Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary) }
+                HStack(spacing: Style.chipContentSpacing) {
+                    Text(Wording.labelKind(kind)).foregroundStyle(Palette.labelKind(kind))
+                    Button { change(SearchTaskChange(grouping: .by(task.grouping.filter { $0 != kind }))) } label: {
+                        Image(systemName: "xmark.circle.fill")
+                    }
+                    .buttonStyle(.plain).foregroundStyle(.secondary)
+                }
+                .padding(Style.labelChipInsets)
+                .background(Style.hover, in: .capsule)
+            }
+            Menu {
+                if task.grouping.count < (model.runtime?.config.tasks.maxGroupingDepth ?? 0) {
+                    ForEach(LabelKind.allCases.filter { !task.grouping.contains($0) }, id: \.self) { kind in
+                        Button(Wording.labelKind(kind)) { change(SearchTaskChange(grouping: .by(task.grouping + [kind]))) }
+                    }
+                }
+                if task.groupedByUser {
+                    Divider()
+                    Button(Wording.arrangeAsAsked) { change(SearchTaskChange(grouping: .asAsked)) }.help(Wording.arrangeAsAskedHelp)
+                }
+            } label: {
+                Image(systemName: "plus.circle")
+            }
+            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+            .help(Wording.addLevel)
+        }
+        .font(.callout)
+    }
+
+    private func actions(_ task: SearchTask) -> some View {
+        HStack(spacing: Style.actionSpacing) {
+            Button(Wording.addDocuments) { model.collect(for: task) }.help(Wording.addDocumentsHelp)
+            Menu(Wording.exportMenu) {
+                Button(Wording.exportToFolder) { export(.folder) }
+                Button(Wording.exportAsZip) { export(.zip) }
+            }
+            .fixedSize()
+            .disabled(task.documents.isEmpty)
+            Spacer()
+            Button(Wording.removeTask) { confirmingRemoval = true }
+        }
+        .buttonStyle(.borderless)
+        .font(.callout)
+    }
+
+    /// Every export of the set, the newest first, each to show in Finder while it is there.
+    @ViewBuilder private func exports(_ task: SearchTask) -> some View {
+        if !task.exports.isEmpty {
+            VStack(alignment: .leading, spacing: Style.cardReadingRowSpacing) {
+                Text(Wording.exportsHeading).foregroundStyle(.secondary)
+                ForEach(task.exports.reversed()) { export in
+                    let there = FileManager.default.fileExists(atPath: export.path)
+                    HStack(spacing: Style.inlineControlSpacing) {
+                        Image(systemName: export.format == .zip ? "doc.zipper" : "folder").foregroundStyle(.secondary)
+                        Text(Wording.export(export))
+                        Text(URL(fileURLWithPath: export.path).lastPathComponent).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                        Spacer()
+                        if there {
+                            Button(Wording.showInFinder) { model.reveal(export.path) }.buttonStyle(.borderless)
+                        } else {
+                            Text(Wording.noLongerThere).foregroundStyle(.tertiary)
+                        }
+                    }
+                    .help(export.path)
+                }
+            }
+            .font(.callout)
+        }
+    }
+
+    private func label(_ text: String) -> some View {
+        Text(text).foregroundStyle(.secondary).gridColumnAlignment(.trailing)
+    }
+
+    // MARK: Changes
+
+    private func change(_ change: SearchTaskChange) {
+        let id = taskID
+        Task { await model.perform(Wording.changeTaskAction) { _ = try await $0.searchTasks.update(id, change) } }
+    }
+
+    /// Asks where, exports there, and shows the export in Finder.
+    private func export(_ format: ExportFormat) {
+        guard let path = FolderPicker.choose(title: Wording.chooseExportFolder, startingAt: nil) else { return }
+        let id = taskID
+        Task {
+            guard let export = await model.load(Wording.exportAction, {
+                try await $0.searchTasks.export(id, to: URL(fileURLWithPath: path, isDirectory: true), format: format)
+            }) else { return }
+            model.reveal(export.path)
+        }
+    }
+
+    private func load() async {
+        let id = taskID
+        detail = await model.load(Wording.loadTaskAction) { try await $0.searchTasks.store.detail(id: id) } ?? nil
+        guard let task = detail?.task else { return }
+        // What the user is typing is not replaced by what the task says.
+        if !editingName { name = task.name }
+        if !editingPrompt { prompt = task.prompt }
+    }
+}
+
+/// One level of a task's set: a heading for each group of the level's kind, which folds away, with the level below it,
+/// and the documents at the bottom, each to take out of the set.
+private struct SetLevel: View {
+    let group: LabelGroup
+    let taskID: Int64
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(group.groups.enumerated()), id: \.offset) { item in
+                SetGroup(group: item.element, taskID: taskID)
+            }
+            ForEach(group.documents, id: \.id) { document in
+                SetDocument(document: document, taskID: taskID)
+            }
+        }
+    }
+}
+
+private struct SetGroup: View {
+    let group: LabelGroup
+    let taskID: Int64
+    @State private var collapsed = false
+
+    var body: some View {
+        DisclosureGroup(isExpanded: Binding(get: { !collapsed }, set: { collapsed = !$0 })) {
+            SetLevel(group: group, taskID: taskID).padding(.leading, Style.setLevelIndent)
+        } label: {
+            HStack {
+                Text(Wording.group(group)).fontWeight(.medium)
+                    .foregroundStyle(group.value == nil ? .secondary : .primary)
+                Spacer()
+                Text(String(group.count)).foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+/// A document of a task's set: its name, where it is and its labels; under the pointer, a × takes it out.
+private struct SetDocument: View {
+    @Environment(AppModel.self) private var model
+    let document: DocumentRecord
+    let taskID: Int64
+    @State private var hovering = false
+
+    var body: some View {
+        HStack(spacing: Style.rowAccessorySpacing) {
+            ListRow(symbol: document.status.symbol, tint: document.status.tint, title: document.filename,
+                    detail: Wording.outcome(of: document, archive: model.settings?.archiveURL, incoming: model.settings?.incomingURL),
+                    subtitle: Wording.labels(document.labels))
+                .onTapGesture(count: 2) { model.open(document.path) }
+                .help(Wording.doubleClickToOpen)
+            Button {
+                guard let id = document.id else { return }
+                let task = taskID
+                Task { await model.perform(Wording.takeOutOfTaskAction) { _ = try await $0.searchTasks.remove(task, documents: [id]) } }
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+            }
+            .buttonStyle(.plain).foregroundStyle(.secondary).help(Wording.takeOutHelp)
+            .opacity(hovering ? 1 : 0)
+        }
+        .onHover { hovering = $0 }
+    }
+}
+
+/// Heads the pages the sidebar's labels narrow documents down on while documents are added to a task: which task, a way
+/// to add every document with the labels chosen, and a way back to the task.
+struct CollectingBar: View {
+    @Environment(AppModel.self) private var model
+    let task: SearchTask
+
+    var body: some View {
+        HStack(spacing: Style.noticeSpacing) {
+            Image(systemName: Destination.tasks.symbol).foregroundStyle(Palette.tasksList)
+            Text(Wording.addingTo(task.name)).foregroundStyle(.secondary)
+            Spacer()
+            if !model.labelSelection.isEmpty {
+                Button(Wording.addAllShown) {
+                    let (id, labels) = (task.id, model.labelSelection)
+                    Task { await model.perform(Wording.addToTaskAction) { _ = try await $0.searchTasks.add(id, labelled: labels) } }
+                }
+                .buttonStyle(.link)
+            }
+            Button(Wording.doneAdding) { model.finishCollecting() }
+        }
+        .font(.callout)
+    }
+}
+
+/// The button beside a document's row while documents are added to a task: in the set, or to add to it.
+struct CollectToggle: View {
+    @Environment(AppModel.self) private var model
+    let task: SearchTask
+    let document: Int64
+
+    var body: some View {
+        let inSet = task.documents.contains(document)
+        Button {
+            let id = task.id
+            Task {
+                await model.perform(inSet ? Wording.takeOutOfTaskAction : Wording.addToTaskAction) { runtime in
+                    if inSet { _ = try await runtime.searchTasks.remove(id, documents: [document]) } else {
+                        _ = try await runtime.searchTasks.add(id, documents: [document])
+                    }
+                }
+            }
+        } label: {
+            Image(systemName: inSet ? "checkmark.circle.fill" : "plus.circle")
+                .foregroundStyle(inSet ? Palette.tasksList : .secondary)
+        }
+        .buttonStyle(.plain)
+        .help(inSet ? Wording.inTaskHelp : Wording.addToTaskHelp)
+    }
+}

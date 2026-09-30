@@ -42,6 +42,8 @@ enum Style {
     static let rowSubtitleSpacing: CGFloat = 2
     /// Between a row's status mark, its name and its detail.
     static let rowSymbolSpacing: CGFloat = 9
+    /// Between a document's row and the button that adds it to a task's set or takes it out.
+    static let rowAccessorySpacing: CGFloat = 6
     /// The column a row's status mark sits in.
     static let rowSymbolWidth: CGFloat = 18
     /// Least space between a row's name and its detail at the end.
@@ -116,6 +118,19 @@ enum Style {
     static let mergeFieldWidth: CGFloat = 240
     /// Between a decision about labels and the button that forgets it.
     static let ruleForgetSpacing: CGFloat = 8
+
+    // MARK: Search tasks
+
+    /// Between the field a request is written in and the button that asks it.
+    static let askSpacing: CGFloat = 8
+    /// Lines the field a request is written in grows to before it scrolls.
+    static let askMaxLines = 4
+    /// Between the parts of a task's card.
+    static let taskCardSpacing: CGFloat = 14
+    /// How far each level of a task's set is indented under the label that heads it.
+    static let setLevelIndent: CGFloat = 14
+    /// Between the kinds a task's set is arranged by, shown side by side.
+    static let groupingSpacing: CGFloat = 4
 
     // MARK: Labels
 
@@ -320,6 +335,7 @@ extension Destination {
         case .review: "questionmark.circle.fill"
         case .processed: "checkmark.circle.fill"
         case .labels, .labelled: "tag.fill"
+        case .tasks: "text.magnifyingglass"
         case .history: "clock.fill"
         case .statistics: "chart.bar.fill"
         }
@@ -332,6 +348,7 @@ extension Destination {
         case .review: Palette.attention
         case .processed: Palette.processedList
         case .labels, .labelled: Palette.labelsList
+        case .tasks: Palette.tasksList
         case .history, .statistics: .secondary
         }
     }
@@ -389,16 +406,41 @@ enum EventStyle {
         case .labelIgnored: Wording.ruleSymbol(.ignore)
         case .labelsKeptApart: Wording.ruleSymbol(.keepApart)
         case .labelRuleForgotten: "arrow.uturn.backward"
-        default: "circle"
+        default: taskSymbols[kind] ?? "circle"
         }
     }
 
+    /// Events about search tasks.
+    private static let taskSymbols: [EventKind: String] = [
+        .taskCreated: Destination.tasks.symbol, .taskPrepared: SearchTaskState.ready.symbol, .taskFailed: SearchTaskState.failed.symbol,
+        .taskEdited: "pencil", .taskExported: "square.and.arrow.up", .taskRemoved: "trash",
+    ]
+
     static func color(_ kind: EventKind) -> Color {
         switch kind {
-        case .filed: Palette.progress
+        case .filed, .taskPrepared: Palette.progress
         case .needsReview, .retry: Palette.attention
-        case .error, .failed: Palette.problem
+        case .error, .failed, .taskFailed: Palette.problem
         default: .secondary
+        }
+    }
+}
+
+extension SearchTaskState {
+    var symbol: String {
+        switch self {
+        case .queued: "circle.dotted"
+        case .interpreting: "ellipsis.circle"
+        case .ready: "checkmark.circle.fill"
+        case .failed: "exclamationmark.circle"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .queued, .interpreting: Palette.expected
+        case .ready: Palette.tasksList
+        case .failed: Palette.problem
         }
     }
 }

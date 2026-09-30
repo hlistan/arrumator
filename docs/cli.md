@@ -58,6 +58,26 @@ punctuated.
 | `arrumatorcli labels rules` | Your rules about labels, oldest first, with their numbers. |
 | `arrumatorcli labels forget <rule>` | Forget a rule: documents read from now on no longer follow it. Documents it changed keep their labels. |
 
+## Search tasks
+
+Ask for documents in your own words; the model reads the request and the documents it asks for are found and arranged
+by their labels ([search tasks](how-it-works.md#search-tasks)). `<task>` is a task's number, as `tasks list` shows it.
+Each change is recorded in History and kept in the archive's `System/_tasks.md`. `new`, `update` and `retry` run the
+queue until it is empty, as the app does in the background, unless `--queue-only`.
+
+| Command | What it does |
+|---|---|
+| `arrumatorcli tasks [list]` | Every search task, the most recently asked first: its state, how many documents are in its set and how many times it was exported. |
+| `arrumatorcli tasks new <prompt>… [--queue-only]` | Ask for documents in your own words, such as `tasks new electricity and water bills from 2025, by sender`, and show what the task found, arranged. `--queue-only` only puts the task in the queue, for the app, `run` or `tasks run` to read. |
+| `arrumatorcli tasks show <task> [--full]` | A task: what it asks for, the labels and words the model read it as, its documents arranged by their labels, those you took out, and every export with where it went. `--full` adds how the request was read: the prompts and the model's raw answers. |
+| `arrumatorcli tasks run` | Read every task in the queue now and find its documents, then list the tasks. |
+| `arrumatorcli tasks update <task> [--title <name>] [--prompt <prompt>] [--group-by <kinds>\|none\|asked] [--queue-only]` | Rename a task (`--title ""` gives it the model's name back), ask it for something else, which finds its documents again, or arrange its set otherwise: `--group-by sender,date` by sender and then year, `none` not at all, `asked` as the request asked. |
+| `arrumatorcli tasks retry <task> [--queue-only]` | Find a task's documents again, as after new documents were filed or when the model could not read it. What you added stays, and what you took out stays out. |
+| `arrumatorcli tasks add <task> [<document>…] [--label <kind>=<value>]…` | Add documents to a task's set, by number or path, or with `--label`, repeatable, every document in the archive that has all the labels given, as the sidebar narrows them down. |
+| `arrumatorcli tasks remove <task> <document>…` | Take documents out of a task's set. Finding its documents again leaves them out. |
+| `arrumatorcli tasks export <task> --to <folder> [--zip]` | Copy the set into a new folder named after the task inside `--to`, made if it does not exist and outside the archive and Incoming, a folder per label it is arranged by; `--zip` packs that folder into a ZIP archive instead. Nothing is written over, and the export is recorded with the task. |
+| `arrumatorcli tasks delete <task>` | Remove a task, its set and the record of its exports. What it exported stays where it was put. |
+
 ## Documents that wait for you
 
 | Command | What it does |

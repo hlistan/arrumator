@@ -5,7 +5,7 @@ documents are read and filed; [the command line](cli.md) does everything the app
 
 ## What the app shows you
 
-The window is deliberately quiet, after [Things](https://culturedcode.com/things/). It has a sidebar with four lists,
+The window is deliberately quiet, after [Things](https://culturedcode.com/things/). It has a sidebar with five lists,
 and below them the archive's labels. Each list is one page under a large title, with no dashboards. Every document row
 shows at its end what happened to it: filed in the archive, or waiting for you and why ("Waiting for you: the model gave
 no valid answer"), a copy of another document, or undone and back in Incoming. Its date, sender and type, and a few more
@@ -25,6 +25,18 @@ Again** has the model read it again, **Leave for Later** holds it, and **Undo Fi
   The sidebar counts them, as they wait for you. Below come the labels of each kind the vocabulary keeps; open one to
   merge it into another or remove it everywhere, or to show the documents that have it. **What You Decided** lists your
   rules, each with **Forget**.
+- **Tasks**: ask for documents in your own words ([search tasks](how-it-works.md#search-tasks)). Write what you need in
+  the field at the top and press **Find**; the task waits in **In Progress** while the model reads it, then joins the
+  tasks under **Earlier**, each with how many documents it found and how often it was exported. Open one as a card: its
+  name, which you can change there; what you asked, which you can rewrite, and **Find Again**, which reads it again; what
+  the model looked for; and what its documents are **Arranged by**, a kind per level, each with a × to take it away and
+  a + to add one, or to go back to what the request asked. Below come the documents, a heading per group that folds
+  away, each document with a × under the pointer to take it out of the set (a double-click opens it). **Add Documents…**
+  shows every processed document with a + at the end of its row; choose labels in the sidebar to narrow them down, as
+  anywhere else, add the documents you want one by one or **Add All With These Labels**, and press **Done** to go back
+  to the task. **Export** copies the set **To a Folder…** or **As a ZIP Archive…** in a folder you choose, and shows it
+  in Finder. Every export is listed on the card, with **Show in Finder** while it is still there. **Remove Task…**
+  removes the task, never what it exported. An event about a task in History opens the task.
 
 Below the lists, the sidebar lists the labels documents have, each with how many of the documents in view have it, the
 most used first. They come in one list under **Most Used**, `interface.sidebarLabels` of them, or, with **Group Labels
@@ -73,15 +85,17 @@ colours rather than the system accent, which macOS greys out whenever the window
 
 - **History**: every arrival, extraction, reading (with the labels it gave, and which of the model's labels were tidied
   and why), filing, correction of a name or labels, decision about labels (a merge, a label removed everywhere, two
-  kept apart, a rule forgotten), confirmation, undo, move or rename in Finder, settings change and Ollama availability
-  change (`events` table; History view; `arrumatorcli history`).
+  kept apart, a rule forgotten), confirmation, undo, move or rename in Finder, search task (asked, what it found or why
+  it could not be read, changed, its set edited, exported, removed), settings change and Ollama availability change
+  (`events` table; History view; `arrumatorcli history`).
 - **Traces**: for every document, each stage's inputs, outputs and timing, including the exact prompts (with what the
   model was shown of the archive's labels), raw model responses and the labels the `consolidate` step changed ("How
   was this read?"; `arrumatorcli trace <doc> --full`). The prompts and raw answers of a reading, and the raw answer of
   an image description, are kept for Settings › Advanced › "Keep full model prompts" days (`traceRawRetentionDays`,
   180 by default, or `arrumatorcli settings --trace-retention-days`); after that they are cleared once an hour
   (`maintenance.interval`) and what the reading concluded stays. `arrumatorcli replay` reads a document again with
-  another model without touching files.
+  another model without touching files. A search task's request is traced too: what the model was shown and answered
+  (the `interpret` step) and what it found (`match`), with the same retention (`arrumatorcli tasks show <task> --full`).
 - **Funnel**: counts, drop-off reasons and timings per step (`arrumatorcli funnel --days 30`).
 - **Processing log**: structured JSONL per day in `~/Library/Logs/Arrumator`, readable per funnel step under
   Settings › Processing log, so you can see which step is producing the errors and warnings
@@ -106,14 +120,19 @@ No tunable lives in code. Defaults are bundled in `Sources/ArrumatorCore/Resourc
 - `pipeline.json`: every pipeline tunable, in sections: `ollama` (timeouts, retries, how it is started; `ollama serve`,
   when the app starts it, listens on the address the app talks to, with `ollama.serveEnvironment` besides),
   `modelProfiles`, `watcher`, `records` (the names of the archive's record files and of its system and history folders,
-  such as `records.labelRulesFileName`),
+  such as `records.labelRulesFileName` and `records.searchTasksFileName`),
   `ingest` (attempts and retry delays), `extraction` (OCR and extraction limits), `entities` (dates and identifiers),
   `analysis` (what the model is shown and how it is asked, such as `analysis.excerptChars`, of which the end of the
   document gets `1 / analysis.excerptTailDivisor`, `analysis.repairAttempts`, and the identifiers a document's
   embedding lists, `analysis.embeddingIdentifiersLimit`), `labels` (`labels.maxPerKind`, `labels.maxValueChars`, and
   `labels.vocabulary`: for each kind kept one vocabulary, how alike labels must be written to be merged without asking
   or offered to merge and how many in use the model is shown, and how many of your merges and unwanted labels it is
-  shown), `naming`, `search`, `logging` (with `logging.followInterval`, how often `arrumatorcli logs --follow` looks),
+  shown), `naming`, `search`, `tasks` (search tasks: which labels in use the model is shown of each kind,
+  `tasks.promptLabels`, how much a request may ask for, `tasks.maxValuesPerKind` and `tasks.maxWords`, how deep a set is
+  arranged, `tasks.maxGroupingDepth`, and by what when the request does not say, `tasks.defaultGrouping`, how long a
+  task's name from the model may be, `tasks.maxTitleChars`, how many documents a task finds at most,
+  `tasks.maxDocuments`, and the folder an export puts documents without a label of a level's kind into,
+  `tasks.withoutLabelFolder`), `logging` (with `logging.followInterval`, how often `arrumatorcli logs --follow` looks),
   `power`, `stats` (the periods Statistics offers, and `stats.defaultWindowDays`, the one it and `arrumatorcli funnel`
   show first), `interface` (how many rows a page loads, `interface.pageSize`, how many labels the sidebar lists in one
   list, `interface.sidebarLabels`, and of each kind when grouped, `interface.sidebarLabelsPerKind`, how many recent
@@ -140,8 +159,8 @@ Environment variables:
 
 Everything Arrumator knows that it could not work out again is kept in Markdown files inside the archive, next to what
 it describes: a `_documents.md` in every directory holding documents, with each document's labels, and, in the
-`System` folder at the top of the archive, the history (`History`, one file per month) and your rules for labels
-(`_labels.md`).
+`System` folder at the top of the archive, the history (`History`, one file per month), your rules for labels
+(`_labels.md`) and your search tasks with their exports (`_tasks.md`).
 
 Each archive has its own SQLite index in `~/Library/Application Support/Arrumator/Indexes`, which only indexes those
 files and caches what can be recomputed, such as extracted text and embeddings. If it is lost, damaged or cannot be

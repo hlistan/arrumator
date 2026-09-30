@@ -29,6 +29,7 @@ struct MainWindow: View {
         case .review: ReviewPage()
         case .processed: ProcessedPage()
         case .labels: LabelsPage()
+        case .tasks: TasksPage()
         case .labelled: LabelledPage()
         case .history: HistoryPage()
         case .statistics: StatisticsView()

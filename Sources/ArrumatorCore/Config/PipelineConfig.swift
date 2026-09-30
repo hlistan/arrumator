@@ -14,6 +14,7 @@ public struct PipelineConfig: Sendable, Codable, Hashable, ValidatedConfiguratio
     public var labels: LabelsConfig
     public var naming: NamingConfig
     public var search: SearchConfig
+    public var tasks: TasksConfig
     public var logging: LoggingConfig
     public var power: PowerConfig
     public var stats: StatsConfig
@@ -33,6 +34,7 @@ public struct PipelineConfig: Sendable, Codable, Hashable, ValidatedConfiguratio
         if search.bm25Weights.count != SearchService.columns.count {
             problems.append("search.bm25Weights needs one weight for each of the \(SearchService.columns.count) full-text columns")
         }
+        problems += tasks.problems
         return problems
     }
 
@@ -145,6 +147,8 @@ public struct RecordsConfig: Sendable, Codable, Hashable {
     public var historyFolderName: String
     /// In the system folder, named with the watcher's managed-file prefix: the user's rules for labels.
     public var labelRulesFileName: String
+    /// In the system folder, named with the watcher's managed-file prefix: the user's search tasks and their exports.
+    public var searchTasksFileName: String
     /// Added to the name of a database that could not be opened when it is moved aside.
     public var setAsideSuffix: String
 }
@@ -340,6 +344,53 @@ public struct SearchConfig: Sendable, Codable, Hashable {
     public var snippetTokens: Int
     public var debounceMilliseconds: Int
     public var vectorSnippetChars: Int
+}
+
+/// Search tasks: how the model is asked to read what a person asks for, how much a task finds, and how what it found is
+/// exported (docs/how-it-works.md#search-tasks).
+public struct TasksConfig: Sendable, Codable, Hashable {
+    /// Stamped on every task's trace, so a change to the prompt shows in what it recorded.
+    public var promptVersion: Int
+    /// Labels of each kind in use the model is shown, the most used first, so it asks for them as the archive writes
+    /// them; a kind not listed is shown none.
+    public var promptLabels: [LabelKind: Int]
+    /// Labels of one kind a plan asks for at most.
+    public var maxValuesPerKind: Int
+    /// Words a plan asks the text for at most.
+    public var maxWords: Int
+    /// Kinds a set is arranged by at most: the depth of an export's folders.
+    public var maxGroupingDepth: Int
+    /// Longest a task's name from the model may be; a longer one is cut at a word boundary.
+    public var maxTitleChars: Int
+    /// What a set is arranged by when neither the user nor the prompt says.
+    public var defaultGrouping: [LabelKind]
+    /// Documents a task finds at most, the most recently processed first.
+    public var maxDocuments: Int
+    /// The name of an export's folder for the documents without a label of the kind its level is arranged by;
+    /// `{{kind}}` is the kind.
+    public var withoutLabelFolder: String
+
+    /// The placeholder `withoutLabelFolder` names the kind with.
+    public static let kindPlaceholder = "kind"
+
+    /// The folder of the documents without a label of `kind`.
+    public func withoutLabelFolder(_ kind: LabelKind) throws -> String {
+        try PromptTemplates.fill(withoutLabelFolder, [Self.kindPlaceholder: kind.rawValue], name: "tasks.withoutLabelFolder")
+    }
+
+    var problems: [String] {
+        var problems: [String] = []
+        if maxValuesPerKind < 1 { problems.append("tasks.maxValuesPerKind must be at least 1") }
+        if maxWords < 0 { problems.append("tasks.maxWords cannot be negative") }
+        if maxGroupingDepth < 1 { problems.append("tasks.maxGroupingDepth must be at least 1") }
+        if defaultGrouping.count > maxGroupingDepth { problems.append("tasks.defaultGrouping is deeper than tasks.maxGroupingDepth") }
+        if maxTitleChars < 1 { problems.append("tasks.maxTitleChars must be at least 1") }
+        if maxDocuments < 1 { problems.append("tasks.maxDocuments must be at least 1") }
+        do { _ = try withoutLabelFolder(.sender) } catch {
+            problems.append("tasks.withoutLabelFolder: \(error.localizedDescription)")
+        }
+        return problems
+    }
 }
 
 public struct LoggingConfig: Sendable, Codable, Hashable {

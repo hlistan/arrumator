@@ -187,6 +187,59 @@ is undone by the app.
 Reading a document again (`review retry`, **Read Again**) labels and names it again where it is. A document you undid
 is back in Incoming, held; read again, it is filed at the top of the archive.
 
+## Search tasks
+
+Rather than choosing labels one at a time, you can ask for the documents you need in your own words, in any language:
+"electricity and water bills from 2025, by sender", "everything the tax authority sent about last year's return". The
+request becomes a **task**, which joins a queue of its own; the tasks in it are read one at a time, the oldest first, by
+the same local model that reads documents, with a prompt of the app's own (`search-system.md`). The model is shown the
+labels the archive already uses of the kinds `tasks.promptLabels` names, the most used first, so it asks for them as the
+archive writes them, and today's date, so "last year" and "this month" mean something. It answers in a fixed schema:
+the labels of each kind to look for, each with the words of the request that ask for it, words the text must contain
+for what no label says, the kinds to arrange what is found by, and a name for the task. The answer is untrusted input,
+checked as a document's answer is: each label must be a label of its kind (a date, period or deadline may be a year, a
+month, a day or a span of them), at most `tasks.maxValuesPerKind` of a kind and `tasks.maxWords` words. Every kind a
+task asks for leaves documents out, so a label nobody asked for, such as the country all your documents are from,
+would silently hide what you wanted: a label is kept only when every word the model quotes for it is a word of your
+request, and a word only when it is in your request and no label already asks for it. What is dropped, and why, is in
+the task's trace. An answer that cannot be read, or is left asking for nothing at all, goes back to the model with what
+was wrong (`analysis.repairAttempts` times). A request the model never answers
+validly fails the task, with the reason. While Ollama cannot be reached a task waits in the queue, as a document does;
+one whose model is not installed fails until the model is downloaded and the task asked again.
+
+**What a task finds.** The documents in the archive (filed, waiting for you, parked after failing, or left for later;
+not copies of other documents, nor those undone or missing) that have, for every kind of label the task asks for, one
+of the labels it gives: the labels of one kind are alternatives, and the kinds narrow each other down, as the facets of
+faceted search do ([sources](organizing-principles-sources.md#sources-for-search-tasks)). A label is matched by its
+words, whatever their case, accents or punctuation, so `EDP` finds `EDP Comercial` and `tax return` the type
+`tax-return`; a date, period or deadline is matched by the time it covers, so `2025` finds the date `2025-03-05` and the
+period `2024-07/2025-06`. Every word asked for must be in the document's text, file name or labels. A task finds at most
+`tasks.maxDocuments` documents, the most recently processed first.
+
+**How they are arranged.** By the kinds the request asked for, otherwise by `tasks.defaultGrouping` (type, then sender),
+a level for each kind, at most `tasks.maxGroupingDepth` deep. At each level a document goes with its first label of the
+kind, the most significant, and by a date, period or deadline with its year. Groups follow alphabetically, years newest
+first, and the documents without a label of the kind come last; within a group, documents follow their date.
+
+**Changing a task and its set.** Take any document out of the set, or add one: by its number, or, as the sidebar
+narrows documents down, every document that has all the labels chosen. Rename the task, arrange its set otherwise, or
+list it without arranging it. Give it another request and it finds its documents again; so does **Find Again**, such as
+after new documents were filed. Finding them again keeps the documents you added and leaves out those you took out.
+
+**Exporting.** A task's set is copied into a new folder named after the task, in a folder you choose outside the
+archive and Incoming, with a folder for each group of the first kind it is arranged by, a folder inside it for each
+group of the next, and the documents at the bottom under their own names; or into a ZIP archive of that folder.
+Documents are copied, never moved, and nothing already there is written over: a name that is taken gets the collision
+suffix (`naming.collisionFormat`). A folder is named after its label as a file name is cleaned, so a label can never
+place a file anywhere else, and the documents without a label of the level's kind go into `tasks.withoutLabelFolder`
+(`No sender`). Each export is kept with its task: when, as what, where, and where each document went inside it; a
+document whose file is not where the archive has it is left out, with the reason.
+
+Every task, its set as you left it and its exports are kept in the archive (`System/_tasks.md`, [Storage](storage.md)),
+so a rebuild brings them back. Asking, what was found, each change, each export and removing a task are recorded in
+History, and each reading of a request is traced, its prompts and the model's answers included (the `interpret` and
+`match` steps; `arrumatorcli tasks show <task> --full`). Removing a task leaves what it exported where it was put.
+
 ## Archives from earlier versions
 
 Earlier versions filed documents into a tree of folders the archive's logic described, and learned senders. Those

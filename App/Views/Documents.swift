@@ -3,7 +3,8 @@ import ArrumatorRuntime
 import SwiftUI
 
 /// Documents the way Things lists to-dos: one line each, what happened to it at the end, its labels beneath, and a
-/// click opens the document in place as a card.
+/// click opens the document in place as a card. While documents are added to a search task, each row ends with a button
+/// that adds it to the task's set or takes it out.
 struct DocumentList: View {
     @Environment(AppModel.self) private var model
     let documents: [DocumentRecord]
@@ -13,8 +14,13 @@ struct DocumentList: View {
             if let id = document.id, model.openDocument == id {
                 DocumentCard(documentID: id) { if model.openDocument == id { model.openDocument = nil } }
             } else {
-                row(document)
-                    .onTapGesture { withAnimation(.snappy) { model.openDocument = document.id } }
+                HStack(spacing: Style.rowAccessorySpacing) {
+                    row(document)
+                        .onTapGesture { withAnimation(.snappy) { model.openDocument = document.id } }
+                    if let task = model.collecting, let id = document.id {
+                        CollectToggle(task: task, document: id)
+                    }
+                }
             }
         }
     }

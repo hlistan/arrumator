@@ -99,6 +99,15 @@ extension DocumentLabel {
         return "\(match.output.2) \(code)"
     }
 
+    /// At most `limit` characters, cut after the last whole word that fits when there is one.
+    public static func shortened(_ value: String, to limit: Int) -> String {
+        guard value.count > limit else { return value }
+        // One character more, so a word ending exactly at the limit is seen to be whole.
+        let cut = value.prefix(limit + 1)
+        guard let space = cut.lastIndex(of: " ") else { return String(value.prefix(limit)) }
+        return String(cut[..<space])
+    }
+
     /// Runs of white space, line breaks and control characters become one space.
     public static func oneLine(_ text: String) -> String {
         text.unicodeScalars.split { CharacterSet.whitespacesAndNewlines.union(.controlCharacters).contains($0) }

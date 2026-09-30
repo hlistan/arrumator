@@ -114,6 +114,71 @@ public struct LabelRuleEntry: Codable, Sendable, Hashable {
     }
 }
 
+/// One of the user's search tasks, as `System/_tasks.md` records it: what was asked, what the model read it as, the
+/// documents of its set by number (those the user took out among them), and its exports. The trace and queue times are
+/// the index's own and are not kept; a task whose prompt was being read is queued again.
+public struct SearchTaskEntry: Codable, Sendable, Hashable {
+    public var id: Int64
+    public var prompt: String
+    public var title: String?
+    public var grouping: [LabelKind]?
+    public var state: SearchTaskState
+    public var plan: SearchPlan?
+    public var model: String?
+    public var problem: String?
+    public var documents: [Member]
+    public var exports: [Export]
+    public var created: Date
+    public var updated: Date
+
+    public struct Member: Codable, Sendable, Hashable {
+        public var document: Int64
+        public var inclusion: SetInclusion
+    }
+
+    public struct Export: Codable, Sendable, Hashable {
+        public var id: Int64
+        public var at: Date
+        public var format: ExportFormat
+        public var path: String
+        public var files: [ExportedFile]
+        public var skipped: [SkippedFile]
+    }
+
+    /// In the order a person reads an entry, with the plan, the set and the exports last.
+    enum CodingKeys: String, CodingKey {
+        case id, prompt, title, state, grouping, model, problem, created, updated, plan, documents, exports
+    }
+
+    init?(_ record: SearchTaskRecord, members: [SetMember], exports: [SearchTaskExportRecord]) {
+        guard let id = record.id else { return nil }
+        self.id = id
+        prompt = record.prompt
+        title = record.title
+        grouping = record.userGrouping
+        state = record.state
+        plan = record.plan
+        model = record.model
+        problem = record.problem
+        documents = members.map { Member(document: $0.document, inclusion: $0.inclusion) }
+        self.exports = exports.compactMap { $0.export.map { Export(id: $0.id, at: $0.at, format: $0.format, path: $0.path, files: $0.files,
+                                                                    skipped: $0.skipped) } }
+        created = record.createdAt
+        updated = record.updatedAt
+    }
+
+    var record: SearchTaskRecord {
+        SearchTaskRecord(id: id, prompt: prompt, title: title, groupingJson: grouping.map { JSON.string($0) },
+                         state: state == .interpreting ? .queued : state, planJson: plan.map { JSON.string($0) }, model: model,
+                         problem: problem, lastTraceId: nil, nextRunAt: state.isActive ? created : nil, createdAt: created, updatedAt: updated)
+    }
+
+    var exportRecords: [SearchTaskExportRecord] {
+        exports.map { SearchTaskExportRecord(id: $0.id, taskId: id, at: $0.at, format: $0.format, path: $0.path,
+                                             manifestJson: JSON.string(ExportManifest(files: $0.files, skipped: $0.skipped))) }
+    }
+}
+
 /// The front matter of a file holding a list.
 struct RecordList<Entry: Codable & Sendable>: Codable, Sendable {
     var arrumator: Int

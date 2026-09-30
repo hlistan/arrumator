@@ -1,7 +1,8 @@
 import ArrumatorCore
 import SwiftUI
 
-/// Everything that happened, newest first and grouped by day. An event about a document opens that document.
+/// Everything that happened, newest first and grouped by day. An event about a document opens that document; one about
+/// a search task opens the task.
 struct HistoryPage: View {
     @Environment(AppModel.self) private var model
     @State private var events: [EventRecord] = []
@@ -17,6 +18,9 @@ struct HistoryPage: View {
         return out
     }
 
+    /// Events about a search task that is still there to open.
+    private static let taskEvents: Set<EventKind> = [.taskCreated, .taskPrepared, .taskFailed, .taskEdited, .taskExported]
+
     var body: some View {
         Page(.history) {
             if events.isEmpty {
@@ -29,6 +33,10 @@ struct HistoryPage: View {
                                 detail: event.at.formatted(date: .omitted, time: .shortened),
                                 tag: event.actor == .user ? Wording.byYou : nil, wraps: true)
                             .onTapGesture {
+                                if Self.taskEvents.contains(event.kind), let task = JSON.decode(TaskEventPayload.self, from: event.payloadJson)?.task {
+                                    model.open(task: task)
+                                    return
+                                }
                                 guard event.docId != nil else { return }
                                 withAnimation(.snappy) { openEvent = openEvent == event.id ? nil : event.id }
                             }

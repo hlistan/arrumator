@@ -123,7 +123,7 @@ public struct AnswerValidator: Sendable {
                 notes.append("\(key): “\(DocumentLabel.oneLine(written))” is no \(kind.rawValue), dropped")
                 continue
             }
-            label.value = shortened(label.value)
+            label.value = DocumentLabel.shortened(label.value, to: labels.maxValueChars)
             guard seen.insert(Self.folded(label.value)).inserted else { continue }
             guard seen.count <= limit else {
                 notes.append("\(key): more than \(limit), the rest dropped")
@@ -132,15 +132,6 @@ public struct AnswerValidator: Sendable {
             kept.append(label)
         }
         return kept
-    }
-
-    /// At most `maxValueChars` characters, cut after the last whole word that fits when there is one.
-    func shortened(_ value: String) -> String {
-        guard value.count > labels.maxValueChars else { return value }
-        // One character more, so a word ending exactly at the limit is seen to be whole.
-        let cut = value.prefix(labels.maxValueChars + 1)
-        guard let space = cut.lastIndex(of: " ") else { return String(value.prefix(labels.maxValueChars)) }
-        return String(cut[..<space])
     }
 
     static func folded(_ text: String) -> String {

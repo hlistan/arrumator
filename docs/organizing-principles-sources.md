@@ -71,6 +71,22 @@ How the archive's labels are kept consistent, and how the user's decisions about
 | Only labels written the same way merge without asking for names; merely alike ones wait for the user | Two people or companies can differ by one letter; record linkage sends the uncertain band between match and non-match to clerical review (Winkler 1990, above) |
 | The user's decisions teach the model through its prompt, with the archive's labels as examples, rather than by retraining it | In-context learning: a large language model does a task from instructions and demonstrations given "purely via text interaction with the model", "without any gradient updates or fine-tuning" — Brown et al., *Language Models are Few-Shot Learners*, 2020 — <https://arxiv.org/abs/2005.14165> |
 
+## Sources for search tasks
+
+How a request in the user's words becomes a search, and how what it finds is arranged and delivered
+([how it works](how-it-works.md#search-tasks), `SearchPlan`, `SearchPromptInterpreter`, `DocumentGrouping`,
+`search-system.md`).
+
+| Choice | Sources |
+|---|---|
+| The labels of one kind are alternatives and the kinds narrow each other down: values within a facet are ORed, facets are ANDed | Hearst, *Design Recommendations for Hierarchical Faceted Search Interfaces*, SIGIR 2006 Workshop on Faceted Search — <https://flamenco.berkeley.edu/papers/faceted-workshop06.pdf> ; Tunkelang, *Faceted Search*, Morgan & Claypool, 2009 — <https://doi.org/10.2200/S00190ED1V01Y200904ICR005> |
+| The model turns the request into structured criteria over the archive's own vocabulary, rather than being asked for the documents | Natural-language interfaces translate a question into a structured query against a known schema; the model is given the schema's values in its prompt: Rajkumar, Li & Bahdanau, *Evaluating the Text-to-SQL Capabilities of Large Language Models*, 2022 — <https://arxiv.org/abs/2204.00498> |
+| Each label asked for quotes the words of the request that ask for it, and a label whose quote is not in the request is dropped, so the model cannot narrow a search by what nobody asked | Checking generated statements against the sources they cite: Gao, Yen, Yu & Chen, *Enabling Large Language Models to Generate Text with Citations* (ALCE), EMNLP 2023 — <https://arxiv.org/abs/2305.14627> |
+| The answer is a fixed JSON schema, checked and repaired like a document's; the arrangement is a closed enum of the kinds | Ollama structured outputs — <https://ollama.com/blog/structured-outputs> ; Tam et al., EMNLP 2024 Industry Track (above) |
+| A date, period or deadline asked for is matched by the time it covers, as an interval | ISO 8601 time intervals (`start/end`) and reduced precision (a year, a month), as `schema.org/temporalCoverage` uses them — <https://schema.org/temporalCoverage> |
+| What is found is arranged a level per kind, the order of the levels the user's | Hierarchical faceted metadata: a facet's values become the categories a collection is browsed and grouped by, and a person chooses which facet comes first (Hearst 2006, above) |
+| A ZIP archive is made by Foundation, reading the folder for uploading, as Finder's Compress does | Apple, `NSFileCoordinator.ReadingOptions.forUploading`, which gives a directory read with it as a ZIP archive of its contents, in a temporary file removed once the reader is done — <https://developer.apple.com/documentation/foundation/nsfilecoordinator/readingoptions/foruploading> |
+
 ## Sources for search
 
 | Choice | Sources |
