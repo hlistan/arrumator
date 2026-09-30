@@ -244,9 +244,16 @@ final class AppModel {
     /// already chosen. With none left, the window shows every processed document again.
     func choose(_ label: DocumentLabel) {
         let selection = labelSelection.contains(label) ? labelSelection.filter { $0 != label } : labelSelection + [label]
-        go(selection.isEmpty ? .processed : .labelled)
-        labelSelection = selection
+        if selection.isEmpty {
+            clearLabels()
+        } else {
+            go(.labelled)
+            labelSelection = selection
+        }
     }
+
+    /// Lets go of every label chosen in the sidebar: the window shows every processed document again.
+    func clearLabels() { go(.processed) }
 
     /// Shows the documents that have a label, as choosing it alone in the sidebar does.
     func browse(_ label: DocumentLabel) {

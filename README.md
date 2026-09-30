@@ -106,8 +106,8 @@ together; [docs/cli.md](docs/cli.md) explains how to use it. To build from sourc
    if something is wrong. On **Labels**, merge labels that mean the same, or remove one you never want.
 4. Documents it could not read wait in **Needs You**. Confirm them as they are, or have them read again.
 5. Click a label in the sidebar, such as a sender, to see only its documents; the sidebar then lists only the labels
-   those documents have, so a second click, such as a type, narrows them down further. Type in the sidebar's search to
-   find a label.
+   those documents have, so a second click, such as a type, narrows them down further, and **Clear** at the top of the
+   page lets go of them all. Type in **Filter Labels**, above the labels, to find one.
 6. On **Tasks**, ask for the documents you need in your own words, look over what is found, add or take out any, and
    export them into folders by their labels (`arrumatorcli tasks new …` from a terminal).
 7. Search documents by any word, or by a kind of label, with `arrumatorcli search`: `sender:edp`,

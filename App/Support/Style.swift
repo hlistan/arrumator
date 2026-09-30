@@ -157,16 +157,14 @@ enum Style {
     static let sidebarMaxWidth: CGFloat = 300
     /// Around the text of an error shown at the foot of the main window.
     static let errorBannerInsets = EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12)
-    /// Between the sidebar search field's symbol, text and clear button.
-    static let searchFieldSpacing: CGFloat = 6
-    /// Inside the sidebar's search field.
-    static let searchFieldInsets = EdgeInsets(top: 5, leading: 8, bottom: 5, trailing: 8)
-    /// Around the sidebar's search field.
-    static let searchFieldMargins = EdgeInsets(top: 6, leading: 10, bottom: 4, trailing: 10)
-    /// Rounding of the sidebar's search field.
-    static let searchFieldCornerRadius: CGFloat = 7
-    /// How strongly the sidebar's search field is filled.
-    static let searchFieldFillOpacity = 0.6
+    /// Between the symbol, text and clear button of the sidebar's label filter.
+    static let filterFieldSpacing: CGFloat = 6
+    /// Inside the sidebar's label filter.
+    static let filterFieldInsets = EdgeInsets(top: 5, leading: 8, bottom: 5, trailing: 8)
+    /// Rounding of the sidebar's label filter.
+    static let filterFieldCornerRadius: CGFloat = 7
+    /// How strongly the sidebar's label filter is filled.
+    static let filterFieldFillOpacity = 0.6
     /// Between the parts of the sidebar's foot: why the app waits, pause, and its menu.
     static let sidebarFooterSpacing: CGFloat = 10
     /// Around the sidebar's foot.

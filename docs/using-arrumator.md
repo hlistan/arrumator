@@ -48,14 +48,16 @@ besides those of what waits for you. Click a label and the window shows the docu
 grouped by day, under the label as its title. The sidebar then lists only the labels those documents have, so each
 label clicked next narrows them down further: the documents shown have every label chosen. Chosen labels come first,
 as every document shown has them, are marked in the sidebar and head the page; click one again, or its × on the page,
-to let go of it. Letting go of the last, or choosing a list, shows the lists again. "Show Documents" on a label's menu
-or card starts from that label alone. From a terminal, `arrumatorcli labels browse` does the same.
+to let go of it, or **Clear** beside them on the page to let go of them all. Letting go of the last, or choosing a
+list, shows the lists again. "Show Documents" on a label's menu or card starts from that label alone. From a terminal,
+`arrumatorcli labels browse` does the same.
 
-The search at the top of the sidebar finds labels: as you type, the sidebar lists only the labels written with your
-text in them, every one it finds, whatever their case, accents or punctuation (`tax return` finds the type
-`tax-return`), and a language by its English name too. It searches the labels the sidebar offers, so with labels chosen,
-only those of the documents in view. `arrumatorcli labels browse --matching` does the same. **Statistics** and
-**History** are in the menu at the sidebar's foot.
+**Filter Labels**, between the lists and the labels, finds labels: as you type, the sidebar lists only the labels
+written with your text in them, every one it finds, whatever their case, accents or punctuation (`tax return` finds the
+type `tax-return`), and a language by its English name too. **Clear Filter** below them, or the × in the field, clears
+it. It filters the labels the sidebar offers, so with labels chosen, only those of the documents in view.
+`arrumatorcli labels browse --matching` does the same. **Statistics** and **History** are in the menu at the sidebar's
+foot.
 
 Documents are searched from a terminal, with `arrumatorcli search`. It lists the documents that contain your words
 first, then those alike in meaning, such as the same kind of document in another language, most similar first. Words

@@ -81,14 +81,16 @@ These are rules you can check, not aspirations. Each row says how it is checked.
    actionable error or rebuild from the archive on disk. It must never silently misread old data. Your report says what
    the installed app loses. A forward migration in `AppDatabase.migrator` is the default. You may rewrite or squash
    earlier migrations when that simplifies the schema, but the same conditions apply.
-3. **Never touch the real archive while testing.** The default settings point at `~/Documents/Incoming` and
-   `~/Documents/Archive`, so `ARRUMATOR_HOME` alone does **not** isolate you. Before you run any CLI command other than
-   `eval`, `--version` and `help`, set `ARRUMATOR_HOME` to a scratch directory **and** write a `settings.json` there
-   that points `incomingPath` and `archivePath` at scratch folders. Every other command opens the archive the settings
-   name, and opening it can create the archive and its `System` folder and write its record files: this includes `ingest
-   --dry-run` and commands that only read, such as `labels <document>`. Only `eval` isolates itself. Unit tests use
-   `TestEnvironment` and `MockOllama`, and nothing in `swift test` may need a running Ollama. How well a live model
-   reads is measured with `arrumatorcli eval`, not in `swift test`.
+3. **Never touch the real archive, or the user's running app, while testing.** The default settings point at
+   `~/Documents/Incoming` and `~/Documents/Archive`, so `ARRUMATOR_HOME` alone does **not** isolate you. Before you run
+   the app or any CLI command other than `eval`, `--version` and `help`, set `ARRUMATOR_HOME` to a scratch directory
+   **and** write a `settings.json` there that points `incomingPath` and `archivePath` at scratch folders. The app and
+   every other command open the archive the settings name, and opening it can create the archive and its `System`
+   folder and write its record files: this includes `ingest --dry-run` and commands that only read, such as `labels
+   <document>`. Only `eval` isolates itself. The user may be running Arrumator, even from the same build folder, so
+   stop, drive or capture the windows of only the process you started, found by its PID and its `ARRUMATOR_HOME`, never
+   by its name. Unit tests use `TestEnvironment` and `MockOllama`, and nothing in `swift test` may need a running
+   Ollama. How well a live model reads is measured with `arrumatorcli eval`, not in `swift test`.
 4. **Every decision can be audited.** A new pipeline stage, decision or automatic action records a trace through
    `TraceRecorder`: its inputs, outputs, raw prompts and responses, and timing. When it changes a file, a document's
    labels or a setting, it also records a History event (`EventKind`). Its counts and drop-off reasons show
