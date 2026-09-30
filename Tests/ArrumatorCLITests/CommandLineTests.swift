@@ -58,14 +58,17 @@ import Testing
         try JSON.decoder.decode(AppSettings.self, from: try run(home, ["settings", "--json"]).stdout)
     }
 
-    @Test func doctorReportsAHealthyIndexAndExitsCleanly() throws {
+    @Test func doctorReportsAHealthyIndexAndExitsAsItsReportSays() throws {
         let home = try Home.make()
         defer { home.cleanup() }
         let result = try run(home, ["doctor", "--json"])
         let report = try JSON.decoder.decode(DoctorReport.self, from: result.stdout)
         #expect(report.checks.first { $0.name == "Database" }?.status == .ok, "a current index is healthy: \(report.checks)")
-        #expect(report.checks.first { $0.name == "Ollama running" }?.status == .warning, "no Ollama is a warning, not a failure")
-        #expect(result.status == 0, "with nothing broken, the command succeeds: \(result.stderr)")
+        #expect(report.checks.first { $0.name == "Ollama running" }?.status == .warning, "Ollama not running is a warning, not a failure")
+        // Whether Ollama is installed depends on the machine (GitHub's runners have none); nothing else may fail here.
+        let failures = report.checks.filter { $0.status == .error }.map(\.name)
+        #expect(failures.allSatisfy { $0 == "Ollama installed" }, "a scratch archive and its index have nothing wrong: \(failures)")
+        #expect(result.status == (report.hasErrors ? 1 : 0), "the exit code says whether a check failed: \(result.stderr)")
     }
 
     @Test func aProfileThePipelineDoesNotDefineIsRefusedAndNothingIsSaved() throws {
