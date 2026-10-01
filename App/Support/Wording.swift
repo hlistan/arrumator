@@ -109,6 +109,7 @@ enum Wording {
     static let askAction = "Ask for documents"
     static let loadTasksAction = "Load tasks"
     static let loadTaskAction = "Load task"
+    static let loadModelsAction = "Load models"
     static let changeTaskAction = "Change task"
     static let findAgainAction = "Find again"
     static let addToTaskAction = "Add to task"

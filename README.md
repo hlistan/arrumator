@@ -42,8 +42,10 @@ say what it is in one vocabulary, so a German electricity bill and a Japanese on
   eletricidade julho.pdf`, and files it at the top of the archive. The app makes no folders.
 - **Finds documents you describe.** Ask in your own words, in any language, for the documents you need ("electricity
   and water bills from 2025, by sender"). The local model turns the request into labels to look for; the documents are
-  found and arranged by their labels, a level per kind. Take any out or add more, as the sidebar narrows them down, and
-  export them into folders by those labels, or as a ZIP archive. Every task and export is kept, to open again.
+  found and arranged by their labels, a level per kind. Choose how much effort each request is read with, Low, Medium
+  or High, and which local model reads it: a smaller one to be quicker, a larger one to be more careful. Take any out or
+  add more, as the sidebar narrows them down, and export them into folders by those labels, or as a ZIP archive. Every
+  task and export is kept, to open again.
 - **Asks when it cannot read a document.** A file the model gave no answer for, or that is encrypted, damaged or
   blank, waits in Needs You, in the archive, instead of being guessed into shape.
 - **Everything can be audited**: the prompts, the model's answers, timings and a full history, with Statistics

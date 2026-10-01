@@ -76,11 +76,14 @@ public struct ValidatedAnalysis: Sendable, Codable, Hashable {
 public enum AnswerValidationError: Error, LocalizedError, Hashable {
     case notJSON(String)
     case invalid([String])
+    /// The answer stopped at its length limit, in tokens, before it was complete.
+    case cutOff(Int)
 
     public var errorDescription: String? {
         switch self {
         case let .notJSON(why): "The answer is not valid JSON: \(why)"
         case let .invalid(problems): problems.joined(separator: "; ")
+        case let .cutOff(limit): "The answer was cut off at its length limit of \(limit) tokens before it was complete; answer more briefly"
         }
     }
 }

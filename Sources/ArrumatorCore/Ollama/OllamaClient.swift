@@ -51,10 +51,11 @@ public struct OllamaClient: OllamaAPI {
     public func chat(_ request: OllamaChatRequest) async throws -> OllamaChatResponse {
         var urlRequest = URLRequest(url: baseURL.appendingPathComponent("api/chat"))
         urlRequest.httpMethod = "POST"
-        if config.timeouts.chat > 0 { urlRequest.timeoutInterval = config.timeouts.chat }
+        let timeout = request.timeout ?? config.timeouts.chat
+        if timeout > 0 { urlRequest.timeoutInterval = timeout }
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
         urlRequest.httpBody = Data(request.body.serialized().utf8)
-        return try await send(urlRequest, model: request.model, timeout: config.timeouts.chat)
+        return try await send(urlRequest, model: request.model, timeout: timeout)
     }
 
     public func embed(_ request: OllamaEmbedRequest) async throws -> OllamaEmbedResponse {

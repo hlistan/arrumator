@@ -341,6 +341,30 @@ extension Wording {
     static let addAllShown = "Add All With These Labels"
     static let doneAdding = "Done"
     static let nothingFound = "Nothing found. Change the request, or add documents yourself."
+    static let readWith = "Read with"
+    static let effort = "Effort"
+    static let effortHelp = "How much computing the request is read with: Low is quickest, High reads it most carefully and takes longest"
+    static let readingModel = "Model"
+    static let readingModelHelp = "The model that reads the request: a smaller one is quicker, a larger one more accurate"
+    static let installedModels = "Installed"
+
+    /// An effort, as its picker names it.
+    static func effort(_ effort: TaskEffort) -> String {
+        switch effort {
+        case .low: "Low"
+        case .medium: "Medium"
+        case .high: "High"
+        }
+    }
+
+    /// The choice that leaves a task's model to its effort, with the profile's model it is, when known.
+    static func profileModel(_ name: String?) -> String { "Profile's Model" + (name.map { " (\($0))" } ?? "") }
+
+    /// A model a task was given that Ollama does not have.
+    static func notInstalled(_ name: String) -> String { "\(name) (not installed)" }
+
+    /// Which model read a task last, when it is not the one it is set to be read by.
+    static func lastReadBy(_ model: String) -> String { "last read by \(model)" }
 
     /// Asks before a task is removed.
     static func removeTaskQuestion(_ name: String) -> String { "Remove “\(name)”?" }

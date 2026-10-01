@@ -48,10 +48,10 @@ first (the sender, the type, the date) and the name last, built from them as `YY
 document's language.
 
 The answer is untrusted input. It is decoded into typed values and checked, each label as described below; an answer
-that cannot be read, or leaves a list out, goes back to the model with what was wrong (`analysis.repairAttempts`
-times). The profile's decision model is asked first and its other model after it, if the profile has two. The file
-name goes through the same cleaning every file name does: no path separators, bounded length, and, when Settings says
-so, transliterated.
+that cannot be read, or leaves a list out, goes back to the model with what was wrong (`analysis.repairAttempts` times),
+and one cut off at its length limit (`analysis.llmOptions.numPredict` tokens) goes back saying so. The profile's
+decision model is asked first and its other model after it, if the profile has two. The file name goes through the same
+cleaning every file name does: no path separators, bounded length, and, when Settings says so, transliterated.
 
 ## Labels
 
@@ -192,9 +192,10 @@ is back in Incoming, held; read again, it is filed at the top of the archive.
 Rather than choosing labels one at a time, you can ask for the documents you need in your own words, in any language:
 "electricity and water bills from 2025, by sender", "everything the tax authority sent about last year's return". The
 request becomes a **task**, which joins a queue of its own; the tasks in it are read one at a time, the oldest first, by
-the same local model that reads documents, with a prompt of the app's own (`search-system.md`). The model is shown the
-labels the archive already uses of the kinds `tasks.promptLabels` names, the most used first, so it asks for them as the
-archive writes them, and today's date, so "last year" and "this month" mean something. It answers in a fixed schema:
+a local model, with a prompt of the app's own (`search-system.md`), with the task's effort and by its model
+([below](#effort-and-model)). The model is shown the labels the archive already uses of the kinds the effort's
+`promptLabels` names, the most used first, so it asks for them as the archive writes them, and today's date, so "last
+year" and "this month" mean something. It answers in a fixed schema:
 the labels of each kind to look for, each with the words of the request that ask for it, words the text must contain
 for what no label says, the kinds to arrange what is found by, and a name for the task. The answer is untrusted input,
 checked as a document's answer is: each label must be a label of its kind (a date, period or deadline may be a year, a
@@ -203,9 +204,9 @@ task asks for leaves documents out, so a label nobody asked for, such as the cou
 would silently hide what you wanted: a label is kept only when every word the model quotes for it is a word of your
 request, and a word only when it is in your request and no label already asks for it. What is dropped, and why, is in
 the task's trace. An answer that cannot be read, or is left asking for nothing at all, goes back to the model with what
-was wrong (`analysis.repairAttempts` times). A request the model never answers
-validly fails the task, with the reason. While Ollama cannot be reached a task waits in the queue, as a document does;
-one whose model is not installed fails until the model is downloaded and the task asked again.
+was wrong, as often as the effort's `repairAttempts` says. A request the model never answers validly fails the task,
+with the reason. While Ollama cannot be reached a task waits in the queue, as a document does; one whose model is not
+installed fails until the model is downloaded and the task asked again.
 
 **What a task finds.** The documents in the archive (filed, waiting for you, parked after failing, or left for later;
 not copies of other documents, nor those undone or missing) that have, for every kind of label the task asks for, one
@@ -239,6 +240,41 @@ Every task, its set as you left it and its exports are kept in the archive (`Sys
 so a rebuild brings them back. Asking, what was found, each change, each export and removing a task are recorded in
 History, and each reading of a request is traced, its prompts and the model's answers included (the `interpret` and
 `match` steps; `arrumatorcli tasks show <task> --full`). Removing a task leaves what it exported where it was put.
+
+### Effort and model
+
+How much computing a task's request is read with is its **effort**: Low, Medium or High, each a preset in
+`tasks.efforts`. An answer improves with the computation spent on it when it is written: a larger model, thinking before
+answering, and a wrong answer sent back with what was wrong all read a request more carefully, and take longer
+([sources](organizing-principles-sources.md#sources-for-search-tasks)). A preset says
+
+- which of the profile's models reads the request, `model`: its `chat` model, which reads documents, or its `fast` one;
+- whether the profile's other model is asked when the first gives no valid answer, `fallback`;
+- whether a model that can think does so before it answers, `think` (a model that cannot is not asked to);
+- how often an invalid answer goes back to a model, `repairAttempts`;
+- how long an answer may be, in tokens and its thinking included, `numPredict`, and how many seconds it may take,
+  `timeout`, in place of `ollama.timeouts.chat`. A model that thinks until the tokens run out stops before it has
+  written its answer; that answer goes back to it saying it was cut off, so it answers more briefly;
+- how many labels in use of each kind the model is shown, `promptLabels`.
+
+| Effort | Reads with | Falls back | Thinks | Sent back | Shown of the archive's labels |
+|---|---|---|---|---|---|
+| Low | the fast model | no | no | never | the fewest |
+| Medium | the chat model | to the fast one | no | once | as many as before efforts existed |
+| High | the chat model | to the fast one | yes | twice | the most |
+
+Medium reads a request as every task was read before efforts existed. A new task gets the effort Settings gives new
+tasks (`taskEffort`), which the Tasks page's effort picker sets; any task can be given another.
+
+A task can also be given its own **model**, any installed one that answers in words (`arrumatorcli models list`), such
+as a smaller one to be quicker or a larger one to be more careful. It reads the request first, with the task's effort;
+when the effort falls back, the profile's chat and fast models are asked after it. A model given to a task that Ollama
+does not have fails the task with that reason rather than the profile's model reading it unasked. A task without a model
+of its own is read by the one its effort takes from the profile, so it follows a change of profile.
+
+Giving a task another effort or model sends it back into the queue, to be read again and find its documents again, as
+another request does. Both are kept with the task, in History and in the archive; the task's trace records the effort
+and the models it was read by, and the task which model read it last.
 
 ## Archives from earlier versions
 

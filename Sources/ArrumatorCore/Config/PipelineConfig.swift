@@ -93,6 +93,14 @@ public struct ResolvedModels: Sendable, Codable, Hashable {
     /// loaded model instead of reloading it with another context for every image (a request without one gets the
     /// server's default, which can be far larger).
     public var visionNumCtx: Int { vision != chat && vision == fast ? fastNumCtx : numCtx }
+
+    /// The model that plays `role` in reading a search task's request.
+    public func model(_ role: TaskModelRole) -> String {
+        switch role {
+        case .chat: chat
+        case .fast: fast
+        }
+    }
 }
 
 public struct OllamaConfig: Sendable, Codable, Hashable {
@@ -285,6 +293,9 @@ public struct AnalysisConfig: Sendable, Codable, Hashable {
     public var embeddingIdentifiersLimit: Int
     public var embeddingNumCtx: Int
     public var llmOptions: LLMOptions
+    /// Whether a model that can think does so before it answers. Documents are read without: the answer's schema
+    /// already orders the facts before the name, and thinking multiplies the time a document takes.
+    public var think: Bool
     public var vlmNumPredict: Int
     public var promptDatesLimit: Int
     public var promptIdentifiersLimit: Int
@@ -351,9 +362,8 @@ public struct SearchConfig: Sendable, Codable, Hashable {
 public struct TasksConfig: Sendable, Codable, Hashable {
     /// Stamped on every task's trace, so a change to the prompt shows in what it recorded.
     public var promptVersion: Int
-    /// Labels of each kind in use the model is shown, the most used first, so it asks for them as the archive writes
-    /// them; a kind not listed is shown none.
-    public var promptLabels: [LabelKind: Int]
+    /// How a request is read at each effort: every `TaskEffort` has one.
+    public var efforts: [TaskEffort: EffortPreset]
     /// Labels of one kind a plan asks for at most.
     public var maxValuesPerKind: Int
     /// Words a plan asks the text for at most.
@@ -378,8 +388,25 @@ public struct TasksConfig: Sendable, Codable, Hashable {
         try PromptTemplates.fill(withoutLabelFolder, [Self.kindPlaceholder: kind.rawValue], name: "tasks.withoutLabelFolder")
     }
 
+    /// How a request is read at `effort`.
+    public func preset(_ effort: TaskEffort) throws -> EffortPreset {
+        guard let preset = efforts[effort] else {
+            throw ConfigError.invalid(name: "pipeline", underlying: "tasks.efforts.\(effort.rawValue) is missing")
+        }
+        return preset
+    }
+
     var problems: [String] {
         var problems: [String] = []
+        for effort in TaskEffort.allCases {
+            guard let preset = efforts[effort] else {
+                problems.append("tasks.efforts.\(effort.rawValue) is missing")
+                continue
+            }
+            if preset.repairAttempts < 0 { problems.append("tasks.efforts.\(effort.rawValue).repairAttempts cannot be negative") }
+            if preset.numPredict < 1 { problems.append("tasks.efforts.\(effort.rawValue).numPredict must be at least 1") }
+            if preset.timeout <= 0 { problems.append("tasks.efforts.\(effort.rawValue).timeout must be more than 0") }
+        }
         if maxValuesPerKind < 1 { problems.append("tasks.maxValuesPerKind must be at least 1") }
         if maxWords < 0 { problems.append("tasks.maxWords cannot be negative") }
         if maxGroupingDepth < 1 { problems.append("tasks.maxGroupingDepth must be at least 1") }
@@ -391,6 +418,45 @@ public struct TasksConfig: Sendable, Codable, Hashable {
         }
         return problems
     }
+}
+
+/// How much computing a search task's request is read with (`TaskEffort`): which of the profile's models reads it and
+/// whether the other is asked after it, whether the model thinks before it answers, how often a wrong answer goes back
+/// to it, how long an answer may be, and how much of the archive's vocabulary it is shown. More of each reads a request
+/// more carefully and takes longer: answers improve with the computation spent on them at inference, by thinking and by
+/// being asked again (Snell et al., "Scaling LLM Test-Time Compute Optimally", 2024; Madaan et al., "Self-Refine", 2023;
+/// docs/organizing-principles-sources.md#sources-for-search-tasks).
+public struct EffortPreset: Sendable, Codable, Hashable {
+    /// The profile's model that reads the request, unless the task names its own.
+    public var model: TaskModelRole
+    /// Whether the profile's other model is asked when the first gives no valid answer.
+    public var fallback: Bool
+    /// Whether a model that can think does so before it answers.
+    public var think: Bool
+    /// Times an invalid answer goes back to a model, with what was wrong, before the next model or failing.
+    public var repairAttempts: Int
+    /// Tokens an answer may take, its thinking included.
+    public var numPredict: Int
+    /// Seconds one answer may take, in place of `ollama.timeouts.chat`: thinking takes longer.
+    public var timeout: Double
+    /// Labels of each kind in use the model is shown, the most used first, so it asks for them as the archive writes
+    /// them; a kind not listed is shown none.
+    public var promptLabels: [LabelKind: Int]
+
+    /// Sampling as documents are read, with this effort's length of answer.
+    public func options(over base: AnalysisConfig.LLMOptions) -> AnalysisConfig.LLMOptions {
+        var options = base
+        options.numPredict = numPredict
+        return options
+    }
+}
+
+/// Which of the profile's models an effort reads a request with.
+public enum TaskModelRole: String, Sendable, Codable, CaseIterable {
+    /// The profile's chat model, which reads documents.
+    case chat
+    /// The profile's fast model.
+    case fast
 }
 
 public struct LoggingConfig: Sendable, Codable, Hashable {

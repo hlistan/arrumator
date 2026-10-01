@@ -106,12 +106,20 @@ public struct SearchInterpretation: Sendable, Codable, Hashable {
 /// Reads what a person asks for, in their own words and language, as a `SearchPlan`. Implemented by
 /// `ArrumatorClassify.SearchPromptInterpreter`.
 public protocol SearchPromptInterpreting: Sendable {
-    /// `vocabulary` is the archive's labels in use, the most used first, which the model is shown so it asks for them as
-    /// the archive writes them; `today` is the ISO day the prompt is read on, which "last year" counts from. Without a
-    /// valid answer the interpretation says why and has no plan; a model that cannot be reached or is missing throws,
-    /// so the task waits.
-    func interpret(_ prompt: String, vocabulary: [LabelKind: [LabelUsage]], today: String, settings: AppSettings,
-                   config: PipelineConfig, trace: TraceContext) async throws -> SearchInterpretation
+    /// `effort` is how much computing the reading gets (`tasks.efforts`), and `model` the model the user gave the task,
+    /// nil for the one the effort takes from the profile. `vocabulary` is the archive's labels in use, the most used
+    /// first, which the model is shown so it asks for them as the archive writes them; `today` is the ISO day the prompt
+    /// is read on, which "last year" counts from. Without a valid answer the interpretation says why and has no plan; a
+    /// model that cannot be reached or is missing throws, so the task waits.
+    func interpret(_ prompt: String, effort: TaskEffort, model: String?, vocabulary: [LabelKind: [LabelUsage]], today: String,
+                   settings: AppSettings, config: PipelineConfig, trace: TraceContext) async throws -> SearchInterpretation
+}
+
+/// How much computing a search task's request is read with, from quick to careful: each is a preset in
+/// `tasks.efforts` of which model reads it, whether it thinks first, how often a wrong answer goes back to it, and how
+/// much of the archive's vocabulary it is shown (`EffortPreset`).
+public enum TaskEffort: String, Sendable, Codable, CaseIterable, CodingKeyRepresentable {
+    case low, medium, high
 }
 
 /// Where a search task is in the queue.
@@ -215,6 +223,11 @@ public struct SearchTask: Sendable, Codable, Hashable, Identifiable {
     public var grouping: [LabelKind]
     /// Whether the user chose `grouping`.
     public var groupedByUser: Bool
+    /// How much computing its request is read with.
+    public var effort: TaskEffort
+    /// The model the user gave it to read its request; nil for the one its effort takes from the profile.
+    public var assignedModel: String?
+    /// The model that read its request last.
     public var model: String?
     public var problem: String?
     /// The documents in the set, in the order they joined it.

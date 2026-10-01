@@ -88,7 +88,8 @@ actor VisionDescriber {
                 "num_ctx": .number(Double(options.numCtx)),
             ],
             keepAlive: options.keepAlive,
-            think: disableThinking ? false : nil)
+            think: disableThinking ? false : nil,
+            timeout: nil)
     }
 
     static let schema: JSONValue = [

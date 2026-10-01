@@ -27,7 +27,7 @@ public struct DocumentAnalyzer: DocumentAnalyzing {
         let started = Date()
         var answer: ModelAnswer<ValidatedAnalysis>?
         do {
-            answer = try await LLMClassifier(gate: gate, models: models, config: config.analysis).ask(
+            answer = try await LLMClassifier(gate: gate, models: models, effort: .documents(config.analysis)).ask(
                 system: try prompts.analysisSystem(), user: try prompts.analysisUser(content: content, guidance: guidance),
                 schema: ClassificationSchema.analysis(maxPerKind: config.labels.maxPerKind), tiers: tiers,
                 repairPrompt: { try prompts.repair(errors: $0) }, validate: { try validator.validate($0) })

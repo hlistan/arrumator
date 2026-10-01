@@ -53,6 +53,8 @@ public struct AppSettings: Sendable, Codable, Hashable {
     public var onboardingCompleted: Bool
     /// List the sidebar's labels under their kinds; otherwise in one list, the most used first.
     public var groupLabelsByKind: Bool
+    /// How much computing a new search task's request is read with, unless it is asked with another.
+    public var taskEffort: TaskEffort
 
     public var incomingURL: URL { URL(fileURLWithPath: incomingPath.expandingTilde, isDirectory: true).standardizedFileURL }
     public var archiveURL: URL { URL(fileURLWithPath: archivePath.expandingTilde, isDirectory: true).standardizedFileURL }

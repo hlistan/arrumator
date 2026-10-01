@@ -133,15 +133,25 @@ import Testing
         let interpreter: SearchPromptInterpreter
         let sink = MemoryTraceSink()
 
-        func interpret(_ prompt: String, vocabulary: [LabelKind: [LabelUsage]] = [:]) async throws -> SearchInterpretation {
-            try await interpreter.interpret(prompt, vocabulary: vocabulary, today: "2026-07-05", settings: await env.settings.current,
-                                            config: env.config, trace: TraceContext(traceID: 1, sink: sink))
+        func interpret(_ prompt: String, effort: TaskEffort = .medium, model: String? = nil,
+                       vocabulary: [LabelKind: [LabelUsage]] = [:]) async throws -> SearchInterpretation {
+            try await interpreter.interpret(prompt, effort: effort, model: model, vocabulary: vocabulary, today: "2026-07-05",
+                                            settings: await env.settings.current, config: env.config,
+                                            trace: TraceContext(traceID: 1, sink: sink))
         }
     }
 
-    private func world(_ handler: @escaping MockOllama.ChatHandler) async throws -> World {
+    /// The profile's chat model, and the other models the Ollama double has: a fast one, one of the user's that thinks,
+    /// and one that only embeds.
+    static let chat = "ministral-3:14b"
+    static let fast = "ministral-3:8b"
+    static let thinker = "qwen3.5:9b"
+
+    private func world(fast: String? = nil, _ handler: @escaping MockOllama.ChatHandler) async throws -> World {
         let env = try await TestEnvironment.make()
-        let mock = MockOllama(installed: ["ministral-3:14b", "bge-m3"], handler: handler)
+        if let fast { try await env.settings.update { $0.models.fastModel = fast } }
+        let mock = MockOllama(installed: [Self.chat, Self.fast, Self.thinker, "bge-m3"],
+                              modelCapabilities: [Self.thinker: ["completion", "thinking"], "bge-m3": ["embedding"]], handler: handler)
         let interpreter = SearchPromptInterpreter(gate: InferenceGate(api: mock, retryDelays: [], time: env.time),
                                                   models: ModelManager(api: mock, config: env.config.ollama), library: try PromptLibrary.bundled())
         return World(env: env, mock: mock, interpreter: interpreter)
@@ -157,11 +167,11 @@ import Testing
         let vocabulary: [LabelKind: [LabelUsage]] = [.sender: Self.usage(.sender, "EDP Comercial", "MEO"),
                                                      .reference: Self.usage(.reference, "invoice FT 2026/1")]
         let read = try await w.interpret(Self.request, vocabulary: vocabulary)
-        #expect(read.plan == Self.edp2025 && read.model == "ministral-3:14b" && read.problem == nil, "the answer is the plan")
+        #expect(read.plan == Self.edp2025 && read.model == Self.chat && read.problem == nil, "the answer is the plan")
         let request = try #require(await w.mock.chatRequests.first)
         let text = request.allText
         #expect(text.contains("- senders: EDP Comercial; MEO"), "the archive's senders are listed, the most used first")
-        #expect(!text.contains("invoice FT 2026/1"), "a kind tasks.promptLabels does not list is not shown: references are each document's own")
+        #expect(!text.contains("invoice FT 2026/1"), "a kind the effort's promptLabels does not list is not shown: references are each document's own")
         #expect(text.contains("## TODAY\n2026-07-05") && text.contains("## REQUEST\n" + Self.request),
                 "with today's date and the request as written")
         let schema = JSON.string(try #require(request.format))
@@ -191,6 +201,103 @@ import Testing
         let read = try await never.interpret("EDP invoices")
         #expect(read.plan == nil && read.problem?.hasPrefix("the model gave no valid answer") == true,
                 "without a valid answer there is no plan, and the task will say why rather than fail on an error")
+    }
+
+    // MARK: Effort and model
+
+    /// The chat requests `effort` makes of a model that never answers validly, and what the task was left with.
+    private func requests(_ effort: TaskEffort, model: String? = nil) async throws -> (requests: [OllamaChatRequest], read: SearchInterpretation) {
+        let w = try await world(fast: Self.fast) { _ in "not JSON" }
+        defer { w.env.cleanup() }
+        let read = try await w.interpret(Self.request, effort: effort, model: model)
+        return (await w.mock.chatRequests, read)
+    }
+
+    @Test func eachEffortReadsWithTheModelsTriesAndLengthItsPresetGives() async throws {
+        let efforts = try PipelineConfig.bundledDefaults().tasks.efforts
+        let low = try #require(efforts[.low]), medium = try #require(efforts[.medium]), high = try #require(efforts[.high])
+        #expect(low.model == .fast && !low.fallback && medium.model == .chat && medium.fallback && high.think && !medium.think,
+                "the presets these expectations follow from")
+        for (effort, preset) in [(TaskEffort.low, low), (.medium, medium), (.high, high)] {
+            let (requests, read) = try await requests(effort)
+            let first = preset.model == .fast ? Self.fast : Self.chat
+            let models = [first] + (preset.fallback ? [Self.chat, Self.fast].filter { $0 != first } : [])
+            #expect(requests.map(\.model) == models.flatMap { Array(repeating: $0, count: preset.repairAttempts + 1) },
+                    "\(effort): each model the effort reads with is asked once and again repairAttempts times, in order")
+            #expect(requests.allSatisfy { $0.options["num_predict"] == .number(Double(preset.numPredict)) && $0.timeout == preset.timeout },
+                    "\(effort): an answer may be as long, and take as long, as the effort allows")
+            #expect(requests.allSatisfy { $0.think == nil }, "\(effort): a model that cannot think is not told whether to")
+            #expect(read.plan == nil && read.problem != nil, "\(effort): without a valid answer the task says why")
+        }
+    }
+
+    @Test func aModelTheUserGaveTheTaskReadsItFirstAndThinksAsTheEffortSays() async throws {
+        let efforts = try PipelineConfig.bundledDefaults().tasks.efforts
+        let high = try #require(efforts[.high]), low = try #require(efforts[.low])
+        let careful = try await requests(.high, model: Self.thinker).requests
+        #expect(careful.first?.model == Self.thinker && careful.count == (high.repairAttempts + 1) * 3,
+                "the user's model first, then the profile's chat and fast models as the effort falls back")
+        #expect(careful.filter { $0.model == Self.thinker }.allSatisfy { $0.think == true }, "high effort lets a model that can think do so")
+        let quick = try await requests(.low, model: Self.thinker).requests
+        #expect(quick.map(\.model) == Array(repeating: Self.thinker, count: low.repairAttempts + 1) && quick.allSatisfy { $0.think == false },
+                "low effort asks only the user's model, and not to think")
+
+        let w = try await world { _ in Self.answer() }
+        defer { w.env.cleanup() }
+        let read = try await w.interpret(Self.request, model: Self.thinker)
+        #expect(read.model == Self.thinker && read.plan == Self.edp2025, "the task records the model that read it")
+        let step = try #require(await w.sink.steps.first { $0.stage == .interpret })
+        #expect(step.input?.contains("\"effort\":\"medium\"") == true && step.input?.contains(Self.thinker) == true,
+                "the trace says with what effort and by which models the request was read: \(step.input ?? "")")
+    }
+
+    @Test func anAnswerCutOffAtItsLengthLimitGoesBackSayingSo() async throws {
+        let high = try #require(try PipelineConfig.bundledDefaults().tasks.efforts[.high])
+        let w = try await world { request in request.messages.count > 2 ? Self.answer() : MockOllama.cutOff }
+        defer { w.env.cleanup() }
+        let read = try await w.interpret(Self.request, effort: .high, model: Self.thinker)
+        #expect(read.plan == Self.edp2025, "the next answer, written more briefly, is read")
+        let said = "The answer was cut off at its length limit of \(high.numPredict) tokens before it was complete; answer more briefly"
+        #expect(await w.mock.chatRequests.last?.messages.last?.content.contains(said) == true,
+                "the model is told it ran out of room, not that its empty answer is no JSON")
+        let step = try #require(await w.sink.steps.first { $0.stage == .interpret })
+        #expect(step.status == .warn && step.output?.contains("cut off at its length limit") == true, "and so does the trace")
+    }
+
+    @Test func aModelTheUserGaveThatIsNotInstalledFailsTheTaskUnread() async throws {
+        let w = try await world { _ in Self.answer() }
+        defer { w.env.cleanup() }
+        await #expect(throws: OllamaError.modelNotFound("llama-9:1t"), "the profile's model does not read it in its place unasked") {
+            try await w.interpret(Self.request, model: "llama-9:1t")
+        }
+        #expect(await w.mock.chatRequests.isEmpty, "no model was asked")
+    }
+
+    @Test func eachEffortShowsTheModelAsMuchOfTheArchivesVocabularyAsItsPresetSays() async throws {
+        let efforts = try PipelineConfig.bundledDefaults().tasks.efforts
+        let most = try efforts.values.map { try #require($0.promptLabels[.sender]) }.max() ?? 0
+        let senders = (1...most + 1).map { "Sender \($0)" }
+        let vocabulary: [LabelKind: [LabelUsage]] = [.sender: senders.enumerated().map {
+            LabelUsage(label: DocumentLabel(kind: .sender, value: $1), documents: senders.count - $0)
+        }]
+        for effort in TaskEffort.allCases {
+            let w = try await world { _ in Self.answer() }
+            defer { w.env.cleanup() }
+            _ = try await w.interpret(Self.request, effort: effort, vocabulary: vocabulary)
+            let limit = try #require(efforts[effort]?.promptLabels[.sender])
+            let shown = try #require(await w.mock.chatRequests.first?.messages.last?.content
+                .split(separator: "\n").first { $0.hasPrefix("- senders: ") }, "the request tells the model the archive's senders")
+            #expect(shown == "- senders: " + senders.prefix(limit).joined(separator: "; "),
+                    "\(effort): the \(limit) most used senders, no more")
+        }
+    }
+
+    @Test func documentsAreStillReadWithoutThinking() async throws {
+        let config = try PipelineConfig.bundledDefaults()
+        let effort = LLMClassifier.Effort.documents(config.analysis)
+        #expect(effort.think == config.analysis.think && !effort.think && effort.timeout == nil
+                    && effort.repairAttempts == config.analysis.repairAttempts && effort.options == config.analysis.llmOptions,
+                "documents are read as before: analysis.think off, the chat timeout of ollama.timeouts, analysis's tries and options")
     }
 
     @Test func aServerThatCannotBeReachedIsAnErrorSoTheTaskWaits() async throws {

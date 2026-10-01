@@ -131,6 +131,10 @@ enum Style {
     static let setLevelIndent: CGFloat = 14
     /// Between the kinds a task's set is arranged by, shown side by side.
     static let groupingSpacing: CGFloat = 4
+    /// Between the effort a request is read with and the model that reads it.
+    static let readingSpacing: CGFloat = 12
+    /// Widest the menu of models may be, so a long model name does not push the row apart.
+    static let readingModelMaxWidth: CGFloat = 260
 
     // MARK: Labels
 

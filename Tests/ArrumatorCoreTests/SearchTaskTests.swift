@@ -226,6 +226,82 @@ import Testing
         #expect(ready.plan == phonePlan && ready.documents == [meo], "the task has what the new prompt asks for")
     }
 
+    // MARK: Effort and model
+
+    @Test func eachTaskIsReadWithItsEffortAndModelNewOnesWithTheEffortSettingsGives() async throws {
+        let w = try await world()
+        defer { w.h.env.cleanup() }
+        let interpreter = StubInterpreter(plans: [Self.prompt: Self.invoices2025])
+        let (queue, tasks) = w.h.searchTasks(interpreter)
+        let defaults = try AppSettings.bundledDefaults().taskEffort
+        let plain = try await tasks.create(prompt: Self.prompt)
+        #expect(plain.effort == defaults && plain.assignedModel == nil, "a new task is read with the effort Settings gives new tasks")
+        try await w.h.env.settings.update { $0.taskEffort = .high }
+        let careful = try await tasks.create(prompt: Self.prompt)
+        #expect(careful.effort == .high, "whichever effort that is")
+        let chosen = try await tasks.create(prompt: Self.prompt, effort: .low, model: " qwen3.5:9b\n")
+        #expect(chosen.effort == .low && chosen.assignedModel == "qwen3.5:9b", "or with the effort and model it is asked with, on one line")
+        await queue.drain()
+        let readings = await interpreter.calls.readings
+        #expect(readings.map(\.effort) == [defaults, .high, .low], "each prompt is read with its task's effort")
+        #expect(readings.map(\.model) == [nil, nil, "qwen3.5:9b"], "and by its model when it has one")
+        #expect(try await task(tasks, chosen.id).model == "qwen3.5:9b", "and the task records the model that read it")
+        let asked = try await events(w.h, [.taskCreated]).map(\.summary)
+        #expect(asked.last == "Asked for “\(Self.prompt)”, read with low effort by qwen3.5:9b"
+                    && asked.first?.hasSuffix("read with \(defaults.rawValue) effort by the profile's model") == true,
+                "History says how each task is to be read: \(asked)")
+    }
+
+    @Test func anotherEffortOrModelReadsTheTaskAgainAndTheSameChangesNothing() async throws {
+        let w = try await world()
+        defer { w.h.env.cleanup() }
+        let interpreter = StubInterpreter(plans: [Self.prompt: Self.invoices2025])
+        let (queue, tasks) = w.h.searchTasks(interpreter)
+        let id = try await tasks.create(prompt: Self.prompt, effort: .medium).id
+        await queue.drain()
+        let found = try await task(tasks, id).documents
+
+        var changed = try await tasks.update(id, SearchTaskChange(effort: .medium, model: ""))
+        let edited = try await events(w.h, [.taskEdited])
+        #expect(changed.state == .ready && edited.isEmpty, "the effort and model it has already change nothing")
+        changed = try await tasks.update(id, SearchTaskChange(effort: .high))
+        #expect(changed.state == .queued && changed.effort == .high, "another effort sends the task back into the queue")
+        await queue.drain()
+        changed = try await tasks.update(id, SearchTaskChange(model: "gemma4:12b"))
+        #expect(changed.state == .queued && changed.assignedModel == "gemma4:12b", "and so does another model")
+        await queue.drain()
+        changed = try await tasks.update(id, SearchTaskChange(model: ""))
+        #expect(changed.assignedModel == nil && changed.state == .queued, "an empty model gives the task back to its effort's model")
+        await queue.drain()
+        #expect(await interpreter.calls.readings.dropFirst() == [StubInterpreter.Reading(effort: .high, model: nil),
+                                                                  StubInterpreter.Reading(effort: .high, model: "gemma4:12b"),
+                                                                  StubInterpreter.Reading(effort: .high, model: nil)],
+                "each is read again as it was changed")
+        #expect(try await task(tasks, id).documents == found, "and finds its documents again")
+        let edits = try await events(w.h, [.taskEdited]).map(\.summary)
+        #expect(edits == ["Changed the effort of “Utility invoices 2025”, read with high effort by the profile's model",
+                          "Changed the model of “Utility invoices 2025”, read with high effort by gemma4:12b",
+                          "Changed the model of “Utility invoices 2025”, read with high effort by the profile's model"],
+                "each change is in History with how the task is read now: \(edits)")
+    }
+
+    @Test func anEffortChangedWhileThePromptWasBeingReadReadsItAgainWithTheNewOne() async throws {
+        let w = try await world()
+        defer { w.h.env.cleanup() }
+        let holder = TaskHolder()
+        let interpreter = StubInterpreter(plans: [Self.prompt: Self.invoices2025]) { _ in
+            if let tasks = await holder.tasks, let id = await holder.id, try await tasks.store.task(id: id)?.effort == .low {
+                try await tasks.update(id, SearchTaskChange(effort: .high))
+            }
+        }
+        let (queue, tasks) = w.h.searchTasks(interpreter)
+        let asked = try await tasks.create(prompt: Self.prompt, effort: .low)
+        await holder.set(tasks, asked.id)
+        await queue.drain()
+        #expect(await interpreter.calls.readings.map(\.effort) == [.low, .high], "the reading at the old effort is dropped")
+        #expect(try await task(tasks, asked.id).state == .ready, "and the task is ready from the new one")
+    }
+
     // MARK: Editing the set
 
     @Test func theUserEditsTheSetAndFindingTheDocumentsAgainRespectsIt() async throws {
@@ -366,7 +442,7 @@ import Testing
         _ = try await tasks.add(id, documents: [try w.id("meo_2025_01.txt")])
         _ = try await tasks.update(id, SearchTaskChange(title: "For the accountant", grouping: .by([.date])))
         _ = try await tasks.export(id, to: w.h.env.root.appendingPathComponent("Out", isDirectory: true), format: .folder)
-        let waiting = try await tasks.create(prompt: "phone bills").id
+        let waiting = try await tasks.create(prompt: "phone bills", effort: .high, model: "qwen3.5:9b").id
 
         let records = ArchiveRecords(database: w.h.env.database, settings: w.h.env.settings, config: w.h.env.config, registry: nil,
                                      time: w.h.env.time)
@@ -375,6 +451,8 @@ import Testing
         #expect(file.contains("prompt: \(Self.prompt)") && file.contains("inclusion: removed") && file.contains("format: folder"),
                 "the prompt, the set as the user edited it and the exports are in System/_tasks.md")
         #expect(file.contains("| \(id) | For the accountant |"), "with a table of the tasks for people")
+        #expect(file.contains("effort: high") && file.contains("assignedModel: qwen3.5:9b") && file.contains("effort: medium"),
+                "each task's effort, and the model the user gave it")
 
         let database = try AppDatabase.inMemory()
         let summary = try await ArchiveRecords(database: database, settings: w.h.env.settings, config: w.h.env.config, registry: nil,
@@ -389,7 +467,10 @@ import Testing
                 "with its set as the user left it")
         #expect(after.exports == before.exports && after.grouping == [.date], "its exports and its arrangement")
         #expect(after.lastTrace == nil, "traces are the index's own and are not kept")
-        #expect(try await rebuilt.task(id: waiting)?.state == .queued, "a task that was waiting is waiting again")
+        let again = try #require(try await rebuilt.task(id: waiting))
+        #expect(again.state == .queued && again.effort == .high && again.assignedModel == "qwen3.5:9b",
+                "a task that was waiting is waiting again, to be read as it was asked")
+        #expect(after.effort == before.effort && after.assignedModel == nil, "and one read by its effort's model still is")
     }
 }
 

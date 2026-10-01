@@ -10,7 +10,7 @@ import Testing
     static let shipped = ["v1_initial", "v2_datesAsUnixSeconds", "v3_brainsAndRethink", "v4_renameBrainsToLogic",
                           "v5_logicEvents", "v6_archiveRecords", "v7_oneLogicPerArchive",
                           "v8_undoForgets", "v9_foldersOfAnyDepth", "v10_folderKinds", "v11_labelsNotFolders",
-                          "v12_labelRules", "v13_traceExchanges", "v14_searchTasks"]
+                          "v12_labelRules", "v13_traceExchanges", "v14_searchTasks", "v15_taskEffort"]
 
     @Test func shippedIdentifiersNeverChange() {
         let registered = AppDatabase.migrator.migrations
@@ -39,6 +39,35 @@ import Testing
             #expect(outputs[1] == #"{"visual":{"imageKind":"receipt"},"exchange":"a receipt"}"#, "and so is an image description's")
             #expect(outputs[2] == #"{"calls":"not a model exchange"}"#, "a step that talked to no model is left as it was")
         }
+    }
+
+    @Test func searchTasksAskedBeforeEffortsAreReadAsMediumReadsThemWithTheProfilesModel() throws {
+        let queue = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(queue, upTo: "v14_searchTasks")
+        try queue.write { db in
+            try db.execute(sql: """
+                INSERT INTO search_tasks (id, prompt, state, created_at, updated_at) VALUES (1, 'water bills', 'ready', 0, 0);
+                DELETE FROM record_dirty;
+                """)
+        }
+        try AppDatabase.migrator.migrate(queue)
+        try queue.write { db in
+            let task = try #require(try SearchTaskRecord.fetchOne(db, key: 1))
+            #expect(task.effort == .medium && task.assignedModel == nil, "what reproduces how the task was read before")
+            #expect(try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM record_dirty WHERE key = 'tasks'") == 1,
+                    "System/_tasks.md is written again, with the effort, at the next flush")
+            try db.execute(sql: "DELETE FROM record_dirty")
+            try db.execute(sql: "UPDATE search_tasks SET effort = 'high' WHERE id = 1")
+            #expect(try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM record_dirty WHERE key = 'tasks'") == 1,
+                    "and a change of effort reaches it as any other change does")
+            try db.execute(sql: "DELETE FROM record_dirty")
+            try db.execute(sql: "UPDATE search_tasks SET assigned_model = 'qwen3.5:9b' WHERE id = 1")
+            #expect(try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM record_dirty WHERE key = 'tasks'") == 1, "so does a change of model")
+        }
+        let empty = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(empty)
+        #expect(try empty.read { db in try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM record_dirty") } == 0,
+                "an index without tasks has no record of them to write")
     }
 
     @Test func theFullTextIndexHasTheColumnsSearchNames() throws {

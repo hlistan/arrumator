@@ -46,6 +46,19 @@ public actor ModelManager {
         }
     }
 
+    /// Every installed model that answers in words, by name in Ollama's order: those a search task can be given to read
+    /// its request. Embedding models, which only turn text into vectors, are not among them.
+    public func chatModels() async throws -> [String] {
+        var names: [String] = []
+        for model in try await api.tags() where try await capabilities(of: model.name).capabilities?.contains(Self.completion) ?? false {
+            names.append(model.name)
+        }
+        return names
+    }
+
+    /// The capability Ollama lists for a model that generates text.
+    static let completion = "completion"
+
     public func capabilities(of model: String) async throws -> OllamaShowResponse {
         if let cached = capabilities[model] { return cached }
         let info = try await api.show(model: model)

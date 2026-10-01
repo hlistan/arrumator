@@ -39,11 +39,15 @@ struct Tasks: AsyncParsableCommand {
             abstract: "Ask for documents in your own words: the model reads the request, and the documents it asks for are found and arranged.")
         @OptionGroup var options: GlobalOptions
         @Flag(help: "Only put the task in the queue; the app, `run` or `tasks run` finds its documents.") var queueOnly = false
+        @Option(help: "How much computing the request is read with: low, medium or high; Settings' effort for new tasks if not given.")
+        var effort: TaskEffort?
+        @Option(help: "The model that reads the request, one `models list` shows; the effort's model of the profile if not given.")
+        var model: String?
         @Argument(parsing: .remaining, help: "What you need, such as: electricity invoices from 2025, by sender.") var prompt: [String]
 
         func run() async throws {
             let runtime = try await options.runtime()
-            let task = try await runtime.searchTasks.create(prompt: prompt.joined(separator: " "))
+            let task = try await runtime.searchTasks.create(prompt: prompt.joined(separator: " "), effort: effort, model: model)
             if !queueOnly { await Tasks.runQueue(runtime) }
             let detail = try await Tasks.detail(task.id, runtime: runtime)
             options.emit(detail) { Terminal.detail(detail) }
@@ -91,10 +95,12 @@ struct Tasks: AsyncParsableCommand {
 
     struct Update: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
-            abstract: "Rename a task, ask it for something else, which finds its documents again, or arrange its set otherwise.")
+            abstract: "Rename a task, arrange its set otherwise, or ask it for something else, with another effort or model, which finds its documents again.")
         @OptionGroup var options: GlobalOptions
         @Option(help: "The task's name; \"\" gives it the model's name back.") var title: String?
         @Option(help: "What the task asks for, in your own words.") var prompt: String?
+        @Option(help: "How much computing the request is read with: low, medium or high.") var effort: TaskEffort?
+        @Option(help: "The model that reads the request; \"\" gives it back to the effort's model of the profile.") var model: String?
         @Option(help: "What the set is arranged by, outermost first, such as sender,date; `none` for no arrangement; `asked` for what the request asked.")
         var groupBy: String?
         @Flag(help: "Only put a changed task in the queue; the app, `run` or `tasks run` finds its documents.") var queueOnly = false
@@ -102,13 +108,16 @@ struct Tasks: AsyncParsableCommand {
 
         func validate() throws {
             _ = try groupBy.map(Tasks.grouping)
-            if title == nil && prompt == nil && groupBy == nil { throw ValidationError("Give --title, --prompt or --group-by") }
+            if title == nil && prompt == nil && groupBy == nil && effort == nil && model == nil {
+                throw ValidationError("Give --title, --prompt, --group-by, --effort or --model")
+            }
         }
 
         func run() async throws {
             let runtime = try await options.runtime()
             let updated = try await runtime.searchTasks.update(task, SearchTaskChange(title: title, prompt: prompt,
-                                                                                    grouping: try groupBy.map(Tasks.grouping)))
+                                                                                    grouping: try groupBy.map(Tasks.grouping),
+                                                                                    effort: effort, model: model))
             if updated.state.isActive && !queueOnly { await Tasks.runQueue(runtime) }
             let detail = try await Tasks.detail(task, runtime: runtime)
             options.emit(detail) { Terminal.detail(detail) }
@@ -220,10 +229,13 @@ struct Tasks: AsyncParsableCommand {
     }
 }
 
+extension TaskEffort: ExpressibleByArgument {}
+
 extension Terminal {
-    /// A task on one line of a table: number, state, how many documents and exports, name.
+    /// A task on one line of a table: number, state, effort, how many documents and exports, name.
     static func taskRow(_ task: SearchTask) -> [String] {
-        ["#\(task.id)", task.state.rawValue, Format.count(task.documents.count, "document"), Format.count(task.exports.count, "export"), task.name]
+        ["#\(task.id)", task.state.rawValue, task.effort.rawValue, Format.count(task.documents.count, "document"),
+         Format.count(task.exports.count, "export"), task.name]
     }
 
     /// A task, what it asks for, its set arranged as it says, and its exports.
@@ -231,6 +243,8 @@ extension Terminal {
         let task = detail.task
         var lines = ["#\(task.id) \(task.name) · \(task.state.rawValue) · \(Format.count(task.documents.count, "document"))",
                      "  asked:       \(task.prompt)"]
+        lines.append("  read with:   \(task.effort.rawValue) effort, " + (task.assignedModel.map { "by \($0) (yours)" } ?? "by the profile's model")
+            + (task.model.map { $0 == task.assignedModel ? "" : "; last read by \($0)" } ?? ""))
         if let plan = task.plan { lines.append("  looked for:  \(Terminal.plan(plan))") }
         if let problem = task.problem { lines.append("  problem:     \(problem)") }
         lines.append("  arranged by: " + (task.grouping.isEmpty ? "nothing" : task.grouping.map(\.rawValue).joined(separator: " › "))
