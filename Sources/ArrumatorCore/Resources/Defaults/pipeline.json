@@ -259,6 +259,7 @@
       "numPredict": 600,
       "seed": 42
     },
+    "think": false,
     "vlmNumPredict": 300,
     "promptDatesLimit": 5,
     "promptIdentifiersLimit": 8,
@@ -344,12 +345,52 @@
   },
   "tasks": {
     "promptVersion": 2,
-    "promptLabels": {
-      "sender": 60,
-      "party": 30,
-      "topic": 60,
-      "jurisdiction": 20,
-      "language": 10
+    "efforts": {
+      "low": {
+        "model": "fast",
+        "fallback": false,
+        "think": false,
+        "repairAttempts": 0,
+        "numPredict": 600,
+        "timeout": 90,
+        "promptLabels": {
+          "sender": 20,
+          "party": 10,
+          "topic": 20,
+          "jurisdiction": 10,
+          "language": 10
+        }
+      },
+      "medium": {
+        "model": "chat",
+        "fallback": true,
+        "think": false,
+        "repairAttempts": 1,
+        "numPredict": 600,
+        "timeout": 180,
+        "promptLabels": {
+          "sender": 60,
+          "party": 30,
+          "topic": 60,
+          "jurisdiction": 20,
+          "language": 10
+        }
+      },
+      "high": {
+        "model": "chat",
+        "fallback": true,
+        "think": true,
+        "repairAttempts": 2,
+        "numPredict": 8192,
+        "timeout": 900,
+        "promptLabels": {
+          "sender": 150,
+          "party": 80,
+          "topic": 150,
+          "jurisdiction": 40,
+          "language": 20
+        }
+      }
     },
     "maxValuesPerKind": 5,
     "maxWords": 4,

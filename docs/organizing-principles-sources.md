@@ -74,8 +74,8 @@ How the archive's labels are kept consistent, and how the user's decisions about
 ## Sources for search tasks
 
 How a request in the user's words becomes a search, and how what it finds is arranged and delivered
-([how it works](how-it-works.md#search-tasks), `SearchPlan`, `SearchPromptInterpreter`, `DocumentGrouping`,
-`search-system.md`).
+([how it works](how-it-works.md#search-tasks), `SearchPlan`, `SearchPromptInterpreter`, `EffortPreset`,
+`DocumentGrouping`, `search-system.md`).
 
 | Choice | Sources |
 |---|---|
@@ -85,6 +85,8 @@ How a request in the user's words becomes a search, and how what it finds is arr
 | The answer is a fixed JSON schema, checked and repaired like a document's; the arrangement is a closed enum of the kinds | Ollama structured outputs — <https://ollama.com/blog/structured-outputs> ; Tam et al., EMNLP 2024 Industry Track (above) |
 | A date, period or deadline asked for is matched by the time it covers, as an interval | ISO 8601 time intervals (`start/end`) and reduced precision (a year, a month), as `schema.org/temporalCoverage` uses them — <https://schema.org/temporalCoverage> |
 | What is found is arranged a level per kind, the order of the levels the user's | Hierarchical faceted metadata: a facet's values become the categories a collection is browsed and grouped by, and a person chooses which facet comes first (Hearst 2006, above) |
+| A request is read with an effort, Low, Medium or High, that spends more or less computation on it: a larger model, thinking before answering, more chances to repair a wrong answer, more of the archive's vocabulary | Answers improve with the computation spent on them at inference, and how much is worth spending depends on the request: Snell, Lee, Xu & Kumar, *Scaling LLM Test-Time Compute Optimally can be More Effective than Scaling Model Parameters*, 2024 — <https://arxiv.org/abs/2408.03314> ; a model improves its answer when given feedback on it and asked again: Madaan et al., *Self-Refine: Iterative Refinement with Self-Feedback*, NeurIPS 2023 — <https://arxiv.org/abs/2303.17651> ; thinking before answering, separately from the structured answer: Ollama, *Thinking* — <https://docs.ollama.com/capabilities/thinking> |
+| The effort is one of three presets rather than a number of tokens or tries | A few named levels of reasoning effort, as model APIs offer them (low, medium, high), which a person can choose between without knowing what each costs: OpenAI, *Reasoning models*, `reasoning.effort` — <https://platform.openai.com/docs/guides/reasoning> |
 | A ZIP archive is made by Foundation, reading the folder for uploading, as Finder's Compress does | Apple, `NSFileCoordinator.ReadingOptions.forUploading`, which gives a directory read with it as a ZIP archive of its contents, in a temporary file removed once the reader is done — <https://developer.apple.com/documentation/foundation/nsfilecoordinator/readingoptions/foruploading> |
 
 ## Sources for search

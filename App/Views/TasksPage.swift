@@ -2,13 +2,17 @@ import ArrumatorCore
 import ArrumatorRuntime
 import SwiftUI
 
-/// Search tasks: a field to ask for documents in one's own words, then the tasks, those still in the queue first and the
-/// rest newest first. A task opens in place as a card with its documents arranged by their labels, to look over, add to,
-/// take from and export (`SearchTaskActions`).
+/// Search tasks: a field to ask for documents in one's own words, with the effort and model to read the request with,
+/// then the tasks, those still in the queue first and the rest newest first. A task opens in place as a card with its
+/// documents arranged by their labels, to look over, add to, take from and export (`SearchTaskActions`).
 struct TasksPage: View {
     @Environment(AppModel.self) private var model
     @State private var tasks: [SearchTask] = []
     @State private var prompt = ""
+    /// The model the next task is read by; nil for its effort's model of the profile.
+    @State private var askModel: String?
+    /// The installed models that answer in words; nil until Ollama has said.
+    @State private var installed: [String]?
 
     private var active: [SearchTask] { tasks.filter(\.state.isActive) }
     private var earlier: [SearchTask] { tasks.filter { !$0.state.isActive } }
@@ -22,6 +26,14 @@ struct TasksPage: View {
                     .onSubmit(ask)
                 Button(Wording.find, action: ask).disabled(prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
+            if let settings = model.settings {
+                HStack(spacing: Style.askSpacing) {
+                    Text(Wording.readWith).foregroundStyle(.secondary)
+                    // The effort chosen here is Settings' effort for new tasks, so the next one is asked with it too.
+                    ReadingControls(effort: setting(model, settings, \.taskEffort), assigned: $askModel, installed: installed)
+                }
+                .font(.callout)
+            }
             if tasks.isEmpty {
                 EmptyState(symbol: Destination.tasks.symbol, text: Wording.noTasksYet)
             }
@@ -33,11 +45,12 @@ struct TasksPage: View {
             }
         }
         .task(id: model.activity) { await load() }
+        .task(id: model.ollama.isReady) { await loadModels() }
     }
 
     @ViewBuilder private func row(_ task: SearchTask) -> some View {
         if model.openTask == task.id {
-            TaskCard(taskID: task.id) { if model.openTask == task.id { model.openTask = nil } }
+            TaskCard(taskID: task.id, installed: installed) { if model.openTask == task.id { model.openTask = nil } }
         } else {
             ListRow(symbol: task.state.symbol, tint: task.state.tint, title: task.name, detail: Wording.taskOutcome(task),
                     subtitle: task.name == task.prompt ? nil : task.prompt, busy: task.state == .interpreting)
@@ -49,8 +62,11 @@ struct TasksPage: View {
         let asked = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !asked.isEmpty else { return }
         prompt = ""
+        let (effort, assigned) = (model.settings?.taskEffort, askModel)
         Task {
-            guard let task = await model.load(Wording.askAction, { try await $0.searchTasks.create(prompt: asked) }) else { return }
+            guard let task = await model.load(Wording.askAction, {
+                try await $0.searchTasks.create(prompt: asked, effort: effort, model: assigned)
+            }) else { return }
             await load()
             model.openTask = task.id
         }
@@ -59,13 +75,64 @@ struct TasksPage: View {
     private func load() async {
         tasks = await model.load(Wording.loadTasksAction) { try await $0.searchTasks.store.tasks() } ?? tasks
     }
+
+    private func loadModels() async {
+        guard model.ollama.isReady else { return }
+        installed = await model.load(Wording.loadModelsAction) { try await $0.models.chatModels() } ?? installed
+    }
 }
 
-/// A task opened in place: what it asks for and how the model read it, its name and arrangement to change, its documents
-/// arranged by their labels, each to take out, ways to add more and to export them, and every export made of them.
+/// The effort a request is read with and the model that reads it: the presets side by side, and a menu of the
+/// profile's model for that effort and every installed model that answers in words.
+struct ReadingControls: View {
+    @Environment(AppModel.self) private var model
+    @Binding var effort: TaskEffort
+    /// nil for the effort's model of the profile.
+    @Binding var assigned: String?
+    /// nil while Ollama has not said which models it has.
+    let installed: [String]?
+
+    var body: some View {
+        HStack(spacing: Style.readingSpacing) {
+            Picker(Wording.effort, selection: $effort) {
+                ForEach(TaskEffort.allCases, id: \.self) { Text(Wording.effort($0)).tag($0) }
+            }
+            .pickerStyle(.segmented).labelsHidden().fixedSize()
+            .help(Wording.effortHelp)
+            Picker(Wording.readingModel, selection: $assigned) {
+                Text(Wording.profileModel(profileModel)).tag(String?.none)
+                if let installed, !installed.isEmpty {
+                    Section(Wording.installedModels) {
+                        ForEach(installed, id: \.self) { Text($0).tag(String?.some($0)) }
+                    }
+                }
+                if let assigned, !(installed ?? []).contains(assigned) {
+                    Text(installed == nil ? assigned : Wording.notInstalled(assigned)).tag(String?.some(assigned))
+                }
+            }
+            .pickerStyle(.menu).labelsHidden().frame(maxWidth: Style.readingModelMaxWidth)
+            .help(Wording.readingModelHelp)
+        }
+        .controlSize(.small)
+    }
+
+    /// The profile's model the effort reads with, when the settings are known.
+    private var profileModel: String? {
+        guard let runtime = model.runtime, let settings = model.settings, let preset = try? runtime.config.tasks.preset(effort) else {
+            return nil
+        }
+        return (try? runtime.config.models(for: settings.models))?.model(preset.model)
+    }
+}
+
+/// A task opened in place: what it asks for, with what effort and by which model, and how the model read it; its name,
+/// effort, model and arrangement to change; its documents arranged by their labels, each to take out; ways to add more
+/// and to export them; and every export made of them.
 struct TaskCard: View {
     @Environment(AppModel.self) private var model
     let taskID: Int64
+    /// The installed models that answer in words; nil until Ollama has said.
+    let installed: [String]?
     let onClose: () -> Void
     @State private var detail: SearchTaskDetail?
     @State private var name = ""
@@ -142,6 +209,16 @@ struct TaskCard: View {
                     .disabled(task.state.isActive)
                 }
                 .controlSize(.small)
+            }
+            GridRow(alignment: .firstTextBaseline) {
+                label(Wording.readWith)
+                HStack(spacing: Style.readingSpacing) {
+                    // Another effort or model reads the request again.
+                    ReadingControls(effort: Binding(get: { task.effort }, set: { change(SearchTaskChange(effort: $0)) }),
+                                    assigned: Binding(get: { task.assignedModel }, set: { change(SearchTaskChange(model: $0 ?? "")) }),
+                                    installed: installed)
+                    if let last = task.model { Text(Wording.lastReadBy(last)).font(.callout).foregroundStyle(.secondary) }
+                }
             }
             if let plan = task.plan {
                 GridRow(alignment: .firstTextBaseline) {

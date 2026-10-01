@@ -5,19 +5,26 @@ import Foundation
 public actor MockOllama: OllamaAPI {
     public typealias ChatHandler = @Sendable (OllamaChatRequest) throws -> String
 
+    /// What a handler answers to stop at the request's length limit (`num_predict`), as a model that thought until it
+    /// ran out does: an empty answer, done for that reason.
+    public static let cutOff = "\u{0}cut off"
+
     public private(set) var chatRequests: [OllamaChatRequest] = []
     public private(set) var embedRequests: [OllamaEmbedRequest] = []
     private let handler: ChatHandler
     private let installed: [String]
     private let dimension: Int
-    private let capabilities: [String]
+    private let defaultCapabilities: [String]
+    private let capabilities: [String: [String]]
 
-    /// `capabilities` are what `show` reports for every model, as Ollama lists them ("completion", "vision", …).
+    /// `capabilities` are what `show` reports for every model, as Ollama lists them ("completion", "vision", …), and
+    /// `modelCapabilities` what it reports for particular models instead.
     public init(installed: [String] = [], dimension: Int = 256, capabilities: [String] = ["completion"],
-                handler: @escaping ChatHandler) {
+                modelCapabilities: [String: [String]] = [:], handler: @escaping ChatHandler) {
         self.installed = installed
         self.dimension = dimension
-        self.capabilities = capabilities
+        defaultCapabilities = capabilities
+        self.capabilities = modelCapabilities
         self.handler = handler
     }
 
@@ -29,15 +36,20 @@ public actor MockOllama: OllamaAPI {
         installed.map { OllamaModelInfo(name: $0, model: $0, size: 1, digest: nil, modifiedAt: nil, details: nil) }
     }
 
+    /// A model not among `installed`, when there are any, is not found, as Ollama answers for it.
     public func show(model: String) async throws -> OllamaShowResponse {
-        OllamaShowResponse(capabilities: capabilities, modelInfo: nil, details: nil)
+        guard installed.isEmpty || installed.map(ModelManager.normalized).contains(ModelManager.normalized(model)) else {
+            throw OllamaError.modelNotFound(model)
+        }
+        return OllamaShowResponse(capabilities: capabilities[model] ?? defaultCapabilities, modelInfo: nil, details: nil)
     }
 
     public func chat(_ request: OllamaChatRequest) async throws -> OllamaChatResponse {
         chatRequests.append(request)
         let content = try handler(request)
-        return OllamaChatResponse(model: request.model, message: .assistant(content), done: true,
-                                  doneReason: "stop", totalDuration: 1_000_000, loadDuration: 0, promptEvalCount: 10,
+        let cut = content == Self.cutOff
+        return OllamaChatResponse(model: request.model, message: .assistant(cut ? "" : content), done: true,
+                                  doneReason: cut ? OllamaChatResponse.lengthReason : "stop", totalDuration: 1_000_000, loadDuration: 0, promptEvalCount: 10,
                                   promptEvalDuration: 500_000, evalCount: 5, evalDuration: 500_000)
     }
 

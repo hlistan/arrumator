@@ -123,6 +123,9 @@ public struct SearchTaskEntry: Codable, Sendable, Hashable {
     public var title: String?
     public var grouping: [LabelKind]?
     public var state: SearchTaskState
+    public var effort: TaskEffort
+    /// The model the user gave the task; absent for the one its effort takes from the profile.
+    public var assignedModel: String?
     public var plan: SearchPlan?
     public var model: String?
     public var problem: String?
@@ -147,7 +150,7 @@ public struct SearchTaskEntry: Codable, Sendable, Hashable {
 
     /// In the order a person reads an entry, with the plan, the set and the exports last.
     enum CodingKeys: String, CodingKey {
-        case id, prompt, title, state, grouping, model, problem, created, updated, plan, documents, exports
+        case id, prompt, title, state, effort, assignedModel, grouping, model, problem, created, updated, plan, documents, exports
     }
 
     init?(_ record: SearchTaskRecord, members: [SetMember], exports: [SearchTaskExportRecord]) {
@@ -157,6 +160,8 @@ public struct SearchTaskEntry: Codable, Sendable, Hashable {
         title = record.title
         grouping = record.userGrouping
         state = record.state
+        effort = record.effort
+        assignedModel = record.assignedModel
         plan = record.plan
         model = record.model
         problem = record.problem
@@ -168,8 +173,8 @@ public struct SearchTaskEntry: Codable, Sendable, Hashable {
     }
 
     var record: SearchTaskRecord {
-        SearchTaskRecord(id: id, prompt: prompt, title: title, groupingJson: grouping.map { JSON.string($0) },
-                         state: state == .interpreting ? .queued : state, planJson: plan.map { JSON.string($0) }, model: model,
+        SearchTaskRecord(id: id, prompt: prompt, title: title, groupingJson: grouping.map { JSON.string($0) }, effort: effort,
+                         assignedModel: assignedModel, state: state == .interpreting ? .queued : state, planJson: plan.map { JSON.string($0) }, model: model,
                          problem: problem, lastTraceId: nil, nextRunAt: state.isActive ? created : nil, createdAt: created, updatedAt: updated)
     }
 

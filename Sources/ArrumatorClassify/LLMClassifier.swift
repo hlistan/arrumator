@@ -38,17 +38,45 @@ public enum ModelAnswerError: Error, LocalizedError {
     }
 }
 
-/// Asks the local model for a schema-constrained answer, repairs invalid answers, then falls back to the fast
-/// model. Every call (prompt, raw response, counters) is returned for the trace.
+/// Asks the local model for a schema-constrained answer, repairs invalid answers, then falls back to the next model.
+/// Every call (prompt, raw response, counters) is returned for the trace.
 public struct LLMClassifier: Sendable {
     public let gate: InferenceGate
     public let models: ModelManager
-    public let config: AnalysisConfig
+    public let effort: Effort
 
-    public init(gate: InferenceGate, models: ModelManager, config: AnalysisConfig) {
+    public init(gate: InferenceGate, models: ModelManager, effort: Effort) {
         self.gate = gate
         self.models = models
-        self.config = config
+        self.effort = effort
+    }
+
+    /// How much the model is given to answer with: its sampling and length of answer, whether a model that can think
+    /// does, how often an invalid answer goes back to it, and how long one answer may take.
+    public struct Effort: Sendable, Hashable {
+        public var options: AnalysisConfig.LLMOptions
+        public var think: Bool
+        public var repairAttempts: Int
+        /// Seconds; nil for `ollama.timeouts.chat`.
+        public var timeout: Double?
+
+        public init(options: AnalysisConfig.LLMOptions, think: Bool, repairAttempts: Int, timeout: Double?) {
+            self.options = options
+            self.think = think
+            self.repairAttempts = repairAttempts
+            self.timeout = timeout
+        }
+
+        /// As documents are read (`analysis`).
+        public static func documents(_ analysis: AnalysisConfig) -> Effort {
+            Effort(options: analysis.llmOptions, think: analysis.think, repairAttempts: analysis.repairAttempts, timeout: nil)
+        }
+
+        /// As a search task's request is read at `preset`, sampled as documents are.
+        public static func task(_ preset: EffortPreset, analysis: AnalysisConfig) -> Effort {
+            Effort(options: preset.options(over: analysis.llmOptions), think: preset.think, repairAttempts: preset.repairAttempts,
+                   timeout: preset.timeout)
+        }
     }
 
     public struct Tier: Sendable, Hashable {
@@ -72,19 +100,21 @@ public struct LLMClassifier: Sendable {
                                                  validate: @Sendable (String) throws -> Answer) async throws -> ModelAnswer<Answer> {
         var calls: [ModelCall] = []
         for (tierIndex, tier) in tiers.enumerated() {
+            let llm = effort.options
             let options: [String: JSONValue] = [
-                "temperature": .number(config.llmOptions.temperature), "top_k": .number(Double(config.llmOptions.topK)),
-                "top_p": .number(config.llmOptions.topP), "num_predict": .number(Double(config.llmOptions.numPredict)),
-                "seed": .number(Double(config.llmOptions.seed)), "num_ctx": .number(Double(tier.numCtx)),
+                "temperature": .number(llm.temperature), "top_k": .number(Double(llm.topK)),
+                "top_p": .number(llm.topP), "num_predict": .number(Double(llm.numPredict)),
+                "seed": .number(Double(llm.seed)), "num_ctx": .number(Double(tier.numCtx)),
             ]
+            // A model that cannot think is not told whether to.
             let thinking = (try? await models.capabilities(of: tier.model).supportsThinking) ?? false
             var messages: [OllamaMessage] = [.system(system), .user(user)]
-            for attempt in 0...config.repairAttempts {
+            for attempt in 0...effort.repairAttempts {
                 var call = ModelCall(model: tier.model, attempt: attempt,
                                      reason: tierIndex == 0 ? (attempt == 0 ? "primary" : "repair") : "fallback",
                                      system: system, user: messages.last?.content ?? user, schema: schema, options: options)
                 let request = OllamaChatRequest(model: tier.model, messages: messages, format: schema, options: options,
-                                                keepAlive: tier.keepAlive, think: thinking ? false : nil)
+                                                keepAlive: tier.keepAlive, think: thinking ? effort.think : nil, timeout: effort.timeout)
                 let response: OllamaChatResponse
                 do {
                     response = try await gate.chat(request)
@@ -103,6 +133,8 @@ public struct LLMClassifier: Sendable {
                     calls.append(call)
                     return ModelAnswer(answer: answer, model: tier.model, calls: calls)
                 } catch {
+                    // An answer cut off at its length limit is invalid for that reason, whatever is wrong with what came.
+                    let error = response.reachedLengthLimit ? AnswerValidationError.cutOff(effort.options.numPredict) : error
                     call.error = error.localizedDescription
                     calls.append(call)
                     Log.warning(.classify, "Invalid model answer", ["model": tier.model, "attempt": String(attempt),

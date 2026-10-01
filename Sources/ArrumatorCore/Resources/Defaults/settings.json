@@ -18,5 +18,6 @@
   "logLevel": "info",
   "traceRawRetentionDays": 180,
   "onboardingCompleted": false,
-  "groupLabelsByKind": false
+  "groupLabelsByKind": false,
+  "taskEffort": "medium"
 }

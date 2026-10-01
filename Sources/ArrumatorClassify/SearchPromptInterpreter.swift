@@ -177,7 +177,10 @@ public struct SearchPlanValidator: Sendable {
 /// The production `SearchPromptInterpreting`. The local model reads the request with the app's own prompt
 /// (`search-system.md`), told the archive's labels in use (`search-archive.md`) and today's date, and answers in a fixed
 /// schema (`SearchSchema`), which `SearchPlanValidator` checks; an invalid answer goes back to the model with what was
-/// wrong, as a document's does. Every call is recorded in the trace.
+/// wrong, as a document's does. The task's effort (`tasks.efforts`) decides which of the profile's models reads it and
+/// whether the other is asked after, whether it thinks, how often an answer goes back, how long it may be and how much
+/// vocabulary it is shown; a model the user gave the task reads it first, and must be installed. Every call is recorded
+/// in the trace.
 public struct SearchPromptInterpreter: SearchPromptInterpreting {
     public let gate: InferenceGate
     public let models: ModelManager
@@ -189,23 +192,24 @@ public struct SearchPromptInterpreter: SearchPromptInterpreting {
         self.library = library
     }
 
-    public func interpret(_ prompt: String, vocabulary: [LabelKind: [LabelUsage]], today: String, settings: AppSettings,
-                          config: PipelineConfig, trace: TraceContext) async throws -> SearchInterpretation {
-        let resolved = try config.models(for: settings.models)
-        let tiers = LLMClassifier.Tier.distinct([
-            LLMClassifier.Tier(model: resolved.chat, numCtx: resolved.numCtx, keepAlive: resolved.keepAliveChat),
-            LLMClassifier.Tier(model: resolved.fast, numCtx: resolved.fastNumCtx, keepAlive: resolved.keepAliveChat)])
+    public func interpret(_ prompt: String, effort: TaskEffort, model: String?, vocabulary: [LabelKind: [LabelUsage]], today: String,
+                          settings: AppSettings, config: PipelineConfig, trace: TraceContext) async throws -> SearchInterpretation {
+        let preset = try config.tasks.preset(effort)
+        let tiers = Self.tiers(preset, assigned: model, profile: try config.models(for: settings.models))
+        // A model the user chose that Ollama does not have fails the task with that reason, rather than the profile's
+        // model reading it in its place unasked.
+        if let model { _ = try await models.capabilities(of: model) }
         let validator = SearchPlanValidator(tasks: config.tasks, labels: config.labels)
         let system = try library.render("search-system", [
             "max_per_kind": String(config.tasks.maxValuesPerKind), "max_words": String(config.tasks.maxWords),
             "max_depth": String(config.tasks.maxGroupingDepth), "max_title_chars": String(config.tasks.maxTitleChars)])
-        let user = try library.render("search-user", ["archive": try archiveBlock(vocabulary, limits: config.tasks.promptLabels),
+        let user = try library.render("search-user", ["archive": try archiveBlock(vocabulary, limits: preset.promptLabels),
                                                       "today": today, "request": prompt])
         let library = library
-        let input = ["tiers": tiers.map(\.model).joined(separator: ","), "today": today]
+        let input = ["effort": effort.rawValue, "tiers": tiers.map(\.model).joined(separator: ","), "today": today]
         let started = Date()
         do {
-            let answer = try await LLMClassifier(gate: gate, models: models, config: config.analysis).ask(
+            let answer = try await LLMClassifier(gate: gate, models: models, effort: .task(preset, analysis: config.analysis)).ask(
                 system: system, user: user, schema: SearchSchema.plan(config.tasks), tiers: tiers,
                 repairPrompt: { try library.render("repair-user", ["errors": $0]) }, validate: { try validator.validate($0, request: prompt) })
             await trace.record(.interpret, status: answer.calls.count > 1 ? .warn : .ok, startedAt: started, input: input,
@@ -217,6 +221,18 @@ public struct SearchPromptInterpreter: SearchPromptInterpreting {
             Log.warning(.classify, "The model gave no valid answer to a search request", ["error": error.localizedDescription])
             return SearchInterpretation(plan: nil, model: nil, problem: "the model gave no valid answer (\(error.localizedDescription))")
         }
+    }
+
+    /// The models that read a request, in order, each once: the one the user gave the task, else the profile's model the
+    /// effort names; then, when the effort falls back, the profile's chat and fast models. A model reads with the context
+    /// of the profile's role it plays, the chat model's when it plays none.
+    static func tiers(_ preset: EffortPreset, assigned: String?, profile: ResolvedModels) -> [LLMClassifier.Tier] {
+        func tier(_ model: String) -> LLMClassifier.Tier {
+            LLMClassifier.Tier(model: model, numCtx: model != profile.chat && model == profile.fast ? profile.fastNumCtx : profile.numCtx,
+                               keepAlive: profile.keepAliveChat)
+        }
+        let first = assigned ?? profile.model(preset.model)
+        return LLMClassifier.Tier.distinct([tier(first)] + (preset.fallback ? [tier(profile.chat), tier(profile.fast)] : []))
     }
 
     /// The labels the archive uses of each kind `limits` names, the most used first, by the answer's name for their

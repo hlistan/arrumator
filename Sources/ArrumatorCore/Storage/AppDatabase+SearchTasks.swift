@@ -47,5 +47,19 @@ extension AppDatabase {
         CREATE TRIGGER search_task_exports_record_delete AFTER DELETE ON search_task_exports BEGIN INSERT INTO record_dirty(key, version) VALUES ('tasks', 1) ON CONFLICT(key) DO UPDATE SET version = version + 1; END;
         """)
     }
+
+    /// `v15_taskEffort`. Each task is read with an effort (`TaskEffort`) and, if the user gave it one, its own model
+    /// (docs/how-it-works.md#search-tasks). Tasks asked before were read as `medium` reads them, with the profile's
+    /// model, so that is what they keep. The archive's `System/_tasks.md` is marked to be written again with both, and
+    /// the trigger that marks it follows them.
+    static func taskEffortMigration(_ db: Database) throws {
+        try db.execute(sql: """
+        ALTER TABLE search_tasks ADD COLUMN effort TEXT NOT NULL DEFAULT 'medium';
+        ALTER TABLE search_tasks ADD COLUMN assigned_model TEXT;
+        DROP TRIGGER search_tasks_record_update;
+        CREATE TRIGGER search_tasks_record_update AFTER UPDATE OF prompt, title, grouping_json, effort, assigned_model, state, plan_json, model, problem, created_at, updated_at ON search_tasks BEGIN INSERT INTO record_dirty(key, version) VALUES ('tasks', 1) ON CONFLICT(key) DO UPDATE SET version = version + 1; END;
+        INSERT INTO record_dirty(key, version) SELECT 'tasks', 1 WHERE EXISTS (SELECT 1 FROM search_tasks) ON CONFLICT(key) DO UPDATE SET version = version + 1;
+        """)
+    }
 }
 // swiftlint:enable line_length

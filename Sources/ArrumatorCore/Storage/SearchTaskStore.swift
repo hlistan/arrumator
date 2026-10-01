@@ -11,6 +11,10 @@ public struct SearchTaskRecord: ArrumatorRecord, Identifiable, Hashable {
     public var title: String?
     /// The kinds the user chose to arrange the set by, as JSON; nil for the plan's.
     public var groupingJson: String?
+    /// How much computing its prompt is read with.
+    public var effort: TaskEffort
+    /// The model the user gave it; nil for the one its effort takes from the profile.
+    public var assignedModel: String?
     public var state: SearchTaskState
     public var planJson: String?
     public var model: String?
@@ -127,7 +131,8 @@ public struct SearchTaskStore: Sendable {
         let plan = record.plan
         let grouping = record.userGrouping ?? plan.flatMap { $0.grouping.isEmpty ? nil : $0.grouping } ?? config.defaultGrouping
         return SearchTask(id: id, name: name(record, config: config), prompt: record.prompt, title: record.title, state: record.state,
-                          plan: plan, grouping: grouping, groupedByUser: record.userGrouping != nil, model: record.model,
+                          plan: plan, grouping: grouping, groupedByUser: record.userGrouping != nil, effort: record.effort,
+                          assignedModel: record.assignedModel, model: record.model,
                           problem: record.problem, documents: members.filter { $0.inclusion != .removed }.map(\.document),
                           added: members.filter { $0.inclusion == .added }.map(\.document),
                           removed: members.filter { $0.inclusion == .removed }.map(\.document),

@@ -109,8 +109,21 @@ extension LogCategory: ExpressibleByArgument {}
 extension LogLevel: ExpressibleByArgument {}
 
 struct Models: AsyncParsableCommand {
-    static let configuration = CommandConfiguration(abstract: "Local models: status of the configured ones, and explicit downloads.",
-                                                    subcommands: [Status.self, Pull.self], defaultSubcommand: Status.self)
+    static let configuration = CommandConfiguration(
+        abstract: "Local models: status of the configured ones, every one installed that can read a request, and explicit downloads.",
+        subcommands: [Status.self, List.self, Pull.self], defaultSubcommand: Status.self)
+
+    struct List: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            abstract: "Every installed model that answers in words: those a search task can be given (`tasks new --model`).")
+        @OptionGroup var options: GlobalOptions
+        func run() async throws {
+            let runtime = try await options.runtime()
+            _ = await runtime.lifecycle.ensureRunning()
+            let models = try await runtime.models.chatModels()
+            options.emit(models) { models.isEmpty ? "No model that answers in words is installed." : models.joined(separator: "\n") }
+        }
+    }
 
     struct Status: AsyncParsableCommand {
         @OptionGroup var options: GlobalOptions

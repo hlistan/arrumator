@@ -1,7 +1,7 @@
 import Foundation
 
 /// Runs search tasks one at a time, the oldest first: the model reads each task's prompt into a plan
-/// (`SearchPromptInterpreting`), the documents the plan asks for are found (`SearchPlanMatcher`), and the task keeps both,
+/// (`SearchPromptInterpreting`), with the task's effort and by its model, the documents the plan asks for are found (`SearchPlanMatcher`), and the task keeps both,
 /// ready to be looked over and exported. Each run is traced, and what it concluded is recorded in History.
 ///
 /// A task survives a stop: one whose prompt was being read goes back into the queue at the next start. While Ollama
@@ -154,7 +154,8 @@ public actor SearchTaskQueue {
     private func interpret(_ record: SearchTaskRecord, id: Int64, settings: AppSettings, trace: TraceContext) async throws -> String {
         let vocabulary = try await services.labels.usage()
         let today = services.time.now().formatted(Date.ISO8601FormatStyle(timeZone: .current).year().month().day())
-        let interpretation = try await interpreter.interpret(record.prompt, vocabulary: vocabulary, today: today, settings: settings,
+        let interpretation = try await interpreter.interpret(record.prompt, effort: record.effort, model: record.assignedModel,
+                                                             vocabulary: vocabulary, today: today, settings: settings,
                                                              config: services.config, trace: trace)
         guard let plan = interpretation.plan else {
             try await store.fail(id, prompt: record.prompt, interpretation: interpretation, trace: trace.traceID)

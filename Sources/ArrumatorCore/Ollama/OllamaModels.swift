@@ -108,15 +108,18 @@ public struct OllamaChatRequest: Sendable, Codable, Hashable {
     public var keepAlive: String?
     public var think: Bool?
     public var stream: Bool
+    /// Seconds the answer may take, in place of `ollama.timeouts.chat`; nil for that. Not sent: the client waits.
+    public var timeout: Double?
 
     public init(model: String, messages: [OllamaMessage], format: JSONValue?, options: [String: JSONValue],
-                keepAlive: String?, think: Bool?) {
+                keepAlive: String?, think: Bool?, timeout: Double?) {
         self.model = model
         self.messages = messages
         self.format = format
         self.options = options
         self.keepAlive = keepAlive
         self.think = think
+        self.timeout = timeout
         stream = false
     }
 }
@@ -166,6 +169,13 @@ public struct OllamaChatResponse: Sendable, Codable, Hashable {
         self.evalCount = evalCount
         self.evalDuration = evalDuration
     }
+
+    /// Whether the answer stopped at its length limit (`num_predict`) rather than because it was complete: thinking
+    /// counts toward the limit, so a model that thinks long can stop before it has written any of the answer.
+    public var reachedLengthLimit: Bool { doneReason == Self.lengthReason }
+
+    /// The `done_reason` Ollama gives an answer cut off at `num_predict`.
+    public static let lengthReason = "length"
 
     /// Performance counters in milliseconds, recorded in traces.
     public var metrics: OllamaMetrics {

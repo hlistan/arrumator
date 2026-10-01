@@ -8,6 +8,11 @@ public struct SearchTaskChange: Sendable, Hashable {
     /// What the task asks for, in the user's words; a new one sends the task back into the queue.
     public var prompt: String?
     public var grouping: Grouping?
+    /// How much computing its prompt is read with; another sends the task back into the queue.
+    public var effort: TaskEffort?
+    /// The model that reads its prompt; empty gives it back to its effort's model of the profile. Another sends the task
+    /// back into the queue.
+    public var model: String?
 
     /// What the task's set is arranged by.
     public enum Grouping: Sendable, Hashable {
@@ -17,10 +22,12 @@ public struct SearchTaskChange: Sendable, Hashable {
         case by([LabelKind])
     }
 
-    public init(title: String? = nil, prompt: String? = nil, grouping: Grouping? = nil) {
+    public init(title: String? = nil, prompt: String? = nil, grouping: Grouping? = nil, effort: TaskEffort? = nil, model: String? = nil) {
         self.title = title
         self.prompt = prompt
         self.grouping = grouping
+        self.effort = effort
+        self.model = model
     }
 }
 
@@ -39,19 +46,24 @@ public struct SearchTaskActions: Sendable {
     public var store: SearchTaskStore { SearchTaskStore(database: services.database, config: services.config.tasks, time: services.time) }
     private var config: TasksConfig { services.config.tasks }
 
-    /// Puts a prompt in the queue as a new task.
+    /// Puts a prompt in the queue as a new task, read with `effort`, else the one Settings gives new tasks
+    /// (`taskEffort`), and by `model`, else the one the effort takes from the profile.
     @discardableResult
-    public func create(prompt: String) async throws -> SearchTask {
+    public func create(prompt: String, effort: TaskEffort? = nil, model: String? = nil) async throws -> SearchTask {
         let asked = try Self.prompt(prompt)
+        let effort = if let effort { effort } else { await services.settings.current.taskEffort }
+        let assigned = model.flatMap(Self.model)
         let now = services.time.now()
         let config = config
         let id = try await services.database.writer.write { db in
-            var record = SearchTaskRecord(id: nil, prompt: asked, title: nil, groupingJson: nil, state: .queued, planJson: nil, model: nil,
-                                          problem: nil, lastTraceId: nil, nextRunAt: now, createdAt: now, updatedAt: now)
+            var record = SearchTaskRecord(id: nil, prompt: asked, title: nil, groupingJson: nil, effort: effort, assignedModel: assigned,
+                                          state: .queued, planJson: nil, model: nil, problem: nil, lastTraceId: nil, nextRunAt: now,
+                                          createdAt: now, updatedAt: now)
             try record.insert(db)
             let id = record.id ?? 0
             try HistoryStore.insert(db, .taskCreated, at: now, actor: .user,
-                                    summary: "Asked for “\(SearchTaskStore.name(record, config: config))”",
+                                    summary: "Asked for “\(SearchTaskStore.name(record, config: config))”, "
+                                        + Self.reading(effort: effort, model: assigned),
                                     payload: TaskEventPayload(task: id, documents: nil, plan: nil))
             return id
         }
@@ -59,7 +71,8 @@ public struct SearchTaskActions: Sendable {
         return try await task(id)
     }
 
-    /// Renames the task, gives it another prompt, which sends it back into the queue, or arranges its set otherwise.
+    /// Renames the task, arranges its set otherwise, or gives it another prompt, effort or model, each of which sends it
+    /// back into the queue to be read again.
     @discardableResult
     public func update(_ id: Int64, _ change: SearchTaskChange) async throws -> SearchTask {
         let prompt = try change.prompt.map(Self.prompt)
@@ -73,14 +86,25 @@ public struct SearchTaskActions: Sendable {
                 let kept = title.isEmpty ? nil : DocumentLabel.shortened(title, to: config.maxTitleChars)
                 if kept != record.title { record.title = kept; changed.append("name") }
             }
-            var requeued = false
+            var reread: [String] = []
             if let prompt, prompt != record.prompt {
                 record.prompt = prompt
+                reread.append("prompt")
+            }
+            if let effort = change.effort, effort != record.effort {
+                record.effort = effort
+                reread.append("effort")
+            }
+            if let model = change.model.map(Self.model), model != record.assignedModel {
+                record.assignedModel = model
+                reread.append("model")
+            }
+            let requeued = !reread.isEmpty
+            if requeued {
                 record.state = .queued
                 record.problem = nil
                 record.nextRunAt = now
-                requeued = true
-                changed.append("prompt")
+                changed += reread
             }
             if let grouping = change.grouping {
                 let json: String? = switch grouping {
@@ -93,7 +117,8 @@ public struct SearchTaskActions: Sendable {
             record.updatedAt = now
             try record.update(db)
             try HistoryStore.insert(db, .taskEdited, at: now, actor: .user,
-                                    summary: "Changed the \(changed.joined(separator: ", ")) of “\(SearchTaskStore.name(record, config: config))”",
+                                    summary: "Changed the \(changed.joined(separator: ", ")) of “\(SearchTaskStore.name(record, config: config))”"
+                                        + (requeued ? ", " + Self.reading(effort: record.effort, model: record.assignedModel) : ""),
                                     payload: TaskEventPayload(task: id, documents: nil, plan: nil))
             return requeued
         }
@@ -227,6 +252,17 @@ public struct SearchTaskActions: Sendable {
         let prompt = DocumentLabel.oneLine(text)
         guard !prompt.isEmpty else { throw SearchTaskError.emptyPrompt }
         return prompt
+    }
+
+    /// A model's name on one line; nil for none, which leaves the model to the task's effort.
+    static func model(_ text: String) -> String? {
+        let name = DocumentLabel.oneLine(text)
+        return name.isEmpty ? nil : name
+    }
+
+    /// How a task is read, for History: “read with high effort by qwen3.5:9b”.
+    static func reading(effort: TaskEffort, model: String?) -> String {
+        "read with \(effort.rawValue) effort" + (model.map { " by \($0)" } ?? " by the profile's model")
     }
 
     private func validate(_ kinds: [LabelKind]) throws {

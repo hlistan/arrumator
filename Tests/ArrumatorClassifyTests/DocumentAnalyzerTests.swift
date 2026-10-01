@@ -84,7 +84,7 @@ import Testing
     @Test func theSchemaAsksForEveryKindTheFactsFirstAndTheNameLast() throws {
         let config = try PipelineConfig.bundledDefaults()
         let schema = ClassificationSchema.analysis(maxPerKind: config.labels.maxPerKind)
-        let body = OllamaChatRequest(model: "m", messages: [.user("hi")], format: schema, options: [:], keepAlive: "1m", think: false)
+        let body = OllamaChatRequest(model: "m", messages: [.user("hi")], format: schema, options: [:], keepAlive: "1m", think: false, timeout: nil)
             .body.serialized()
         let keys = ClassificationSchema.answerOrder.map(ClassificationSchema.labelsKey) + [ClassificationSchema.fileNameKey]
         let positions = try keys.map { key in try #require(body.range(of: "\"\(key)\"")?.lowerBound, "\(key) is asked for") }

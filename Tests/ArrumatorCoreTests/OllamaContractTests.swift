@@ -24,6 +24,13 @@ import Testing
         #expect(answer.message == .assistant(#"{"types":[]}"#), "the answer's text is what the validator reads")
         #expect(answer.metrics.promptTokens == 26 && answer.metrics.outputTokens == 298, "token counts reach the trace")
         #expect(answer.metrics.totalMs == 5191.566416, "durations come in nanoseconds and are recorded in milliseconds")
+        #expect(!answer.reachedLengthLimit, "an answer that stopped by itself is complete")
+        let cut = try decode(OllamaChatResponse.self, """
+            {"model":"qwen3.5:9b","message":{"role":"assistant","content":"","thinking":"First, the request asks for"},
+             "done":true,"done_reason":"length","eval_count":8192}
+            """)
+        #expect(cut.reachedLengthLimit && cut.message.content.isEmpty,
+                "a model that thought until num_predict ran out stops at its length limit, before writing the answer")
     }
 
     @Test func embeddingsCapabilitiesAndInstalledModelsDecode() throws {

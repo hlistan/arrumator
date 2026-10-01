@@ -88,13 +88,14 @@ import Testing
         let result = try run(home, ["settings", "--json", "--show-in-dock", "false", "--rename-files", "false", "--transliterate", "true",
                                     "--duplicate-action", "leaveInIncoming", "--notify-on-filed", "true", "--notify-on-review", "false",
                                     "--pause-on-battery", "false", "--log-level", "debug", "--trace-retention-days", "30",
-                                    "--group-labels-by-kind", "true"])
+                                    "--group-labels-by-kind", "true", "--task-effort", "high"])
         #expect(result.status == 0, "the command accepts every setting: \(result.stderr)")
         let changed = try JSON.decoder.decode(AppSettings.self, from: result.stdout)
         #expect(!changed.showInDock && !changed.renameFiles && changed.transliterate && changed.duplicateAction == .leaveInIncoming,
                 "the filing settings are the ones given")
         #expect(changed.notifyOnFiled && !changed.notifyOnReview && !changed.pauseOnBattery && changed.logLevel == .debug
-                    && changed.traceRawRetentionDays == 30 && changed.groupLabelsByKind, "and so are the rest")
+                    && changed.traceRawRetentionDays == 30 && changed.groupLabelsByKind && changed.taskEffort == .high,
+                "and so are the rest")
         #expect(try settings(home) == changed, "and they are saved")
     }
 
@@ -139,7 +140,19 @@ import Testing
         let detail = try JSON.decoder.decode(SearchTaskDetail.self, from: asked.stdout)
         #expect(detail.task.state == .queued && detail.task.prompt == "electricity invoices from 2025" && detail.tree.count == 0,
                 "it waits in the queue, having found nothing yet")
+        #expect(detail.task.effort == (try AppSettings.bundledDefaults().taskEffort) && detail.task.assignedModel == nil,
+                "to be read with the effort Settings gives new tasks, by the profile's model")
         let id = String(detail.task.id)
+        let careful = try run(home, ["tasks", "new", "--queue-only", "--json", "--effort", "high", "--model", "qwen3.5:9b", "water", "bills"])
+        let carefulTask = try JSON.decoder.decode(SearchTaskDetail.self, from: careful.stdout).task
+        #expect(carefulTask.effort == .high && carefulTask.assignedModel == "qwen3.5:9b", "or with the effort and model asked: \(careful.stderr)")
+        let shown = try run(home, ["tasks", "show", String(carefulTask.id)])
+        #expect(shown.text.contains("read with:   high effort, by qwen3.5:9b (yours)"), "the task says how it is read: \(shown.text)")
+        let lowered = try run(home, ["tasks", "update", String(carefulTask.id), "--json", "--queue-only", "--effort", "low", "--model", ""])
+        let loweredTask = try JSON.decoder.decode(SearchTaskDetail.self, from: lowered.stdout).task
+        #expect(loweredTask.effort == .low && loweredTask.assignedModel == nil, "another effort, and the profile's model back: \(lowered.stderr)")
+        #expect(try run(home, ["tasks", "new", "--effort", "extreme", "bills"]).status != 0, "an effort that is no preset is refused")
+        #expect(try run(home, ["tasks", "delete", String(carefulTask.id)]).status == 0, "and the task can go")
         let changed = try run(home, ["tasks", "update", id, "--json", "--title", "Bills", "--group-by", "sender,date", "--queue-only"])
         let task = try JSON.decoder.decode(SearchTaskDetail.self, from: changed.stdout).task
         #expect(task.name == "Bills" && task.grouping == [.sender, .date] && task.groupedByUser, "renamed and arranged as asked: \(changed.stderr)")

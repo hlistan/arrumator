@@ -71,12 +71,33 @@ import Testing
         defer { env.cleanup() }
         for override in [#"{"ingest": {"retryDelays": []}}"#, #"{"analysis": {"repairAttempts": -1}}"#,
                          #"{"ingest": {"maxAttempts": 0}}"#, #"{"tasks": {"withoutLabelFolder": "No {{label}}"}}"#,
-                         #"{"tasks": {"defaultGrouping": ["type", "sender", "date", "party"]}}"#, #"{"tasks": {"maxDocuments": 0}}"#] {
+                         #"{"tasks": {"defaultGrouping": ["type", "sender", "date", "party"]}}"#, #"{"tasks": {"maxDocuments": 0}}"#,
+                         #"{"tasks": {"efforts": {"low": {"repairAttempts": -1}}}}"#, #"{"tasks": {"efforts": {"high": {"numPredict": 0}}}}"#,
+                         #"{"tasks": {"efforts": {"medium": {"timeout": 0}}}}"#, #"{"tasks": {"efforts": {"low": {"model": "vision"}}}}"#,
+                         #"{"tasks": {"efforts": {"extreme": {"model": "chat"}}}}"#] {
             try Data(override.utf8).write(to: env.paths.pipelineOverrideURL)
             #expect(throws: ConfigError.self, "\(override) would crash or stall the pipeline, so it stops the app with the reason") {
                 try PipelineConfig.load(paths: env.paths, environment: TestEnvironment.isolated)
             }
         }
+    }
+
+    @Test func everyEffortHasItsPresetAndMediumReadsAsTasksWereReadBefore() throws {
+        var config = try PipelineConfig.bundledDefaults()
+        let medium = try config.tasks.preset(.medium)
+        #expect(medium.model == .chat && medium.fallback && medium.think == config.analysis.think
+                    && medium.repairAttempts == config.analysis.repairAttempts && medium.numPredict == config.analysis.llmOptions.numPredict
+                    && medium.timeout == config.ollama.timeouts.chat,
+                "medium reads a request as every task was read before efforts: as documents are, by the chat model, then the fast one")
+        let low = try config.tasks.preset(.low), high = try config.tasks.preset(.high)
+        #expect(low.repairAttempts <= medium.repairAttempts && medium.repairAttempts <= high.repairAttempts
+                    && low.numPredict <= medium.numPredict && medium.numPredict <= high.numPredict
+                    && LabelKind.allCases.allSatisfy { (low.promptLabels[$0] ?? 0) <= (medium.promptLabels[$0] ?? 0)
+                        && (medium.promptLabels[$0] ?? 0) <= (high.promptLabels[$0] ?? 0) },
+                "each effort gives at least as much as the one below it")
+        config.tasks.efforts[.high] = nil
+        #expect(config.problems.contains("tasks.efforts.high is missing"), "an effort without its preset stops the app with the reason")
+        #expect(throws: ConfigError.self, "and is never read with a guess") { try config.tasks.preset(.high) }
     }
 
     @Test func aListThatMayNotBeEmptyPicksItsValuesAndRefusesToBeEmpty() throws {
@@ -152,7 +173,7 @@ import Testing
     @Test func chatBodyPutsSchemaPropertiesInOrder() throws {
         let schema: JSONValue = .orderedObject([JSONEntry("type", "object"), JSONEntry("properties",
             .orderedObject([JSONEntry("correspondent", ["type": "string"]), JSONEntry("file_name", ["type": "string"])]))])
-        let body = OllamaChatRequest(model: "m", messages: [.user("hi")], format: schema, options: [:], keepAlive: "1m", think: false)
+        let body = OllamaChatRequest(model: "m", messages: [.user("hi")], format: schema, options: [:], keepAlive: "1m", think: false, timeout: nil)
             .body.serialized()
         let r = try #require(body.range(of: "correspondent"))
         let f = try #require(body.range(of: "file_name"))
