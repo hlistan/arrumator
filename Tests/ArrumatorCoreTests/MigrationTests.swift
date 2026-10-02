@@ -10,7 +10,8 @@ import Testing
     static let shipped = ["v1_initial", "v2_datesAsUnixSeconds", "v3_brainsAndRethink", "v4_renameBrainsToLogic",
                           "v5_logicEvents", "v6_archiveRecords", "v7_oneLogicPerArchive",
                           "v8_undoForgets", "v9_foldersOfAnyDepth", "v10_folderKinds", "v11_labelsNotFolders",
-                          "v12_labelRules", "v13_traceExchanges", "v14_searchTasks", "v15_taskEffort"]
+                          "v12_labelRules", "v13_traceExchanges", "v14_searchTasks", "v15_taskEffort",
+                          "v16_taskProfile", "v17_tags"]
 
     @Test func shippedIdentifiersNeverChange() {
         let registered = AppDatabase.migrator.migrations
@@ -50,10 +51,11 @@ import Testing
                 DELETE FROM record_dirty;
                 """)
         }
-        try AppDatabase.migrator.migrate(queue)
+        try AppDatabase.migrator.migrate(queue, upTo: "v15_taskEffort")
         try queue.write { db in
-            let task = try #require(try SearchTaskRecord.fetchOne(db, key: 1))
-            #expect(task.effort == .medium && task.assignedModel == nil, "what reproduces how the task was read before")
+            let task = try #require(try Row.fetchOne(db, sql: "SELECT effort, assigned_model FROM search_tasks WHERE id = 1"))
+            #expect(task["effort"] as String? == "medium" && task["assigned_model"] as String? == nil,
+                    "what reproduced how the task was read before, when efforts came")
             #expect(try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM record_dirty WHERE key = 'tasks'") == 1,
                     "System/_tasks.md is written again, with the effort, at the next flush")
             try db.execute(sql: "DELETE FROM record_dirty")
@@ -65,9 +67,82 @@ import Testing
             #expect(try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM record_dirty WHERE key = 'tasks'") == 1, "so does a change of model")
         }
         let empty = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(empty, upTo: "v15_taskEffort")
+        #expect(try empty.read { db in try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM record_dirty") } == 0,
+                "an index without tasks has no record of them to write")
+    }
+
+    @Test func tasksGivenAModelFollowSettingsProfileOnceTheColumnIsGone() throws {
+        let queue = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(queue, upTo: "v15_taskEffort")
+        try queue.write { db in
+            try db.execute(sql: """
+                INSERT INTO search_tasks (id, prompt, state, effort, assigned_model, created_at, updated_at)
+                  VALUES (1, 'water bills', 'ready', 'high', 'qwen3.5:9b', 0, 0);
+                INSERT INTO search_tasks (id, prompt, state, effort, created_at, updated_at) VALUES (2, 'phone bills', 'queued', 'low', 0, 0);
+                DELETE FROM record_dirty;
+                """)
+        }
+        try AppDatabase.migrator.migrate(queue)
+        let marks = "SELECT version FROM record_dirty WHERE key = 'tasks'"
+        try queue.write { db in
+            #expect(try !db.columns(in: "search_tasks").contains { $0.name == "assigned_model" },
+                    "a model given to a task is no column any more, so nothing can read it as something else")
+            let tasks = try Row.fetchAll(db, sql: "SELECT effort, profile FROM search_tasks ORDER BY id")
+            #expect(tasks.map { $0["profile"] as String? } == [nil, nil],
+                    "a task given a model, and one without, both follow the profile Settings uses: a model is not a profile")
+            #expect(tasks.map { $0["effort"] as String? } == ["high", "low"], "and each keeps the effort it was asked with")
+            #expect(try Int.fetchOne(db, sql: marks) == 1, "System/_tasks.md is marked once, to be written again without the model")
+            try db.execute(sql: "DELETE FROM record_dirty")
+            try db.execute(sql: "UPDATE search_tasks SET profile = 'smart' WHERE id = 1")
+            #expect(try Int.fetchOne(db, sql: marks) == 1, "a change of profile reaches it, as the trigger now follows the profile")
+            try db.execute(sql: "DELETE FROM record_dirty")
+            try db.execute(sql: "UPDATE search_tasks SET effort = 'medium' WHERE id = 2")
+            #expect(try Int.fetchOne(db, sql: marks) == 1, "and a change of effort still does")
+        }
+        let empty = try DatabaseQueue()
         try AppDatabase.migrator.migrate(empty)
         #expect(try empty.read { db in try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM record_dirty") } == 0,
                 "an index without tasks has no record of them to write")
+    }
+
+    @Test func tagsComeAsAFieldOfTheFullTextIndexAndEveryDocumentKeepsWhatItHad() throws {
+        let queue = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(queue, upTo: "v16_taskProfile")
+        try queue.write { db in
+            try db.execute(sql: """
+                INSERT INTO documents (id, uid, path, original_filename, sha256, size, uttype, status, labels_json, content_json,
+                                       added_at, created_at, updated_at)
+                VALUES (1, 'u1', '/archive/bill.pdf', 'bill.pdf', 'h1', 1, 'com.adobe.pdf', 'filed', '[{"kind":"sender","value":"EDP"}]', '{}', 0, 0, 0),
+                       (2, 'u2', '/archive/scan.pdf', 'scan.pdf', 'h2', 1, 'com.adobe.pdf', 'needsReview', NULL, '{}', 0, 0, 0),
+                       (3, 'u3', '/archive/note.pdf', 'note.pdf', 'h3', 1, 'com.adobe.pdf', 'filed', '[]', '{}', 0, 0, 0);
+                INSERT INTO document_text (doc_id, filename, body, sender) VALUES (1, 'bill.pdf', 'eletricidade julho', 'EDP'),
+                    (2, 'scan.pdf', 'recibo', ''), (3, 'note.pdf', 'lembrete', '');
+                DELETE FROM record_dirty;
+                """)
+        }
+
+        try AppDatabase.migrator.migrate(queue)
+
+        try queue.write { db in
+            #expect(try db.columns(in: "document_fts").map(\.name) == SearchService.columns && SearchService.columns.last == "tag",
+                    "a tag is a field of the search, the full-text index's last column, where search.bm25Weights gives it its weight")
+            let match = "SELECT rowid FROM document_fts WHERE document_fts MATCH ? ORDER BY rowid"
+            #expect(try Int64.fetchAll(db, sql: match, arguments: ["eletricidade OR recibo OR lembrete"]) == [1, 2, 3],
+                    "every document indexed before is still found by its words")
+            #expect(try Int64.fetchAll(db, sql: match, arguments: ["sender : edp"]) == [1], "and by its labels, kind by kind")
+            let documents = try DocumentRecord.order(Column("id")).fetchAll(db)
+            #expect(documents.map(\.tagsOnly) == [false, false, false] && documents.map(\.isLabelled) == [true, false, true],
+                    "each keeps what it was: labelled, or not yet, or labelled with nothing")
+            #expect(try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM record_dirty") == 0, "and no record file needs writing again")
+            try db.execute(sql: "UPDATE document_text SET tag = 'Taxes 2024' WHERE doc_id = 2")
+            #expect(try Int64.fetchAll(db, sql: match, arguments: ["tag : taxes"]) == [2], "a tag is found under its kind")
+            try db.execute(sql: #"UPDATE documents SET labels_json = '[{"kind":"tag","value":"Taxes 2024"}]' WHERE id = 2"#)
+            try db.execute(sql: "DELETE FROM record_dirty")
+            try db.execute(sql: "UPDATE documents SET tags_only = 1 WHERE id = 2")
+            #expect(try String.fetchAll(db, sql: "SELECT key FROM record_dirty") == ["documents:/archive/"],
+                    "whether a document's labels are only its tags reaches its record file, as its labels do")
+        }
     }
 
     @Test func theFullTextIndexHasTheColumnsSearchNames() throws {

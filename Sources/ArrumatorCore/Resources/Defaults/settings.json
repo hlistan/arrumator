@@ -5,9 +5,29 @@
   "showInDock": true,
   "renameFiles": true,
   "transliterate": false,
-  "duplicateAction": "fileInArchive",
-  "models": {
-    "profile": "standard"
+  "profile": "standard",
+  "modelProfiles": {
+    "fast": {
+      "name": "Fast",
+      "position": 1,
+      "chatModel": "gemma4:e2b-it-qat",
+      "visionModel": "gemma4:e2b-it-qat",
+      "embedModel": "bge-m3"
+    },
+    "standard": {
+      "name": "Standard",
+      "position": 2,
+      "chatModel": "ministral-3:14b",
+      "visionModel": "ministral-3:14b",
+      "embedModel": "bge-m3"
+    },
+    "smart": {
+      "name": "Smart",
+      "position": 3,
+      "chatModel": "qwen3.5:9b",
+      "visionModel": "qwen3.5:9b",
+      "embedModel": "bge-m3"
+    }
   },
   "ollamaURL": "http://127.0.0.1:11434",
   "ollamaManagement": "launchApp",

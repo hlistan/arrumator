@@ -31,22 +31,14 @@ public struct ReviewActions: Sendable {
         try await services.history.record(.markedCorrect, actor: .user, doc: docID, summary: "Confirmed \(doc.filename)")
     }
 
-    /// Reads the document again with the model, as after changing models, and files it under the name it gives: where
-    /// it is in the archive, or, for one back in Incoming, at the top of the archive.
+    /// Reads the document again with the model, as after changing models, from the text read of it before, and files it
+    /// under the name it gives: where it is in the archive, or, for one back in Incoming, at the top of the archive. It
+    /// keeps its tags, which its row in the queue shows, and one in a folder in Incoming is given that folder's too
+    /// (`PipelineServices.queueReadingAgain`).
     public func retry(_ docID: Int64) async throws {
-        var doc = try await document(docID)
-        let settings = await services.settings.current
-        let inArchive = doc.path.hasPrefix(services.layout(settings).root.path + "/")
-        if [.undone, .held].contains(doc.status) {
-            doc.status = .processing
-            doc = try await services.documents.save(doc)
-        }
-        var payload = JobPayload()
-        payload.sha256 = doc.sha256
-        payload.content = try await services.documents.content(docID: docID)
-        let state: JobState = payload.content == nil ? .extracting : .analysing
-        try await services.jobs.enqueue(path: doc.path, kind: inArchive ? .reanalyse : .ingest, docID: docID, payload: payload,
-                                        state: state)
+        let doc = try await document(docID)
+        try await services.queueReadingAgain(doc, content: try await services.documents.content(docID: docID),
+                                             settings: await services.settings.current)
         try await services.history.record(.retry, actor: .user, doc: docID, summary: "Read again: \(doc.filename)")
         await coordinator.wake()
     }
@@ -81,7 +73,9 @@ public struct ReviewActions: Sendable {
     }
 
     /// Applies the user's corrections: a new file name renames the file where it is, and `labels`, when given, become
-    /// the document's labels, each kept as `DocumentLabel.normalized` keeps it, once, and one of a single-valued kind.
+    /// the document's labels, each kept as `DocumentLabel.normalized` keeps it, once, and one of a single-valued kind. A
+    /// label of another kind than a tag labels a document not labelled yet; a tag, the user's own, does not
+    /// (`DocumentLabel.stored`).
     public func edit(_ docID: Int64, fileName: String?, labels: [DocumentLabel]?) async throws {
         var doc = try await document(docID)
         var edited: [String: String] = [:]
@@ -103,8 +97,8 @@ public struct ReviewActions: Sendable {
         }
         if let labels {
             let kept = labels.compactMap { DocumentLabel.normalized($0.value, kind: $0.kind) }.distinct()
-            if kept != doc.labels {
-                try await services.index.saveLabels(kept, docID: docID)
+            if DocumentLabel.stored(kept, labelled: doc.isLabelled).labels != doc.labels {
+                try await services.index.saveLabels(kept, docID: docID, labelled: doc.isLabelled)
                 edited["labels"] = kept.map { "\($0.kind.rawValue): \($0.value)" }.joined(separator: "; ")
             }
         }

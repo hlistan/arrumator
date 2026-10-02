@@ -75,10 +75,25 @@ gate crash "no fatalError or try! in shipped code" \
   'fatalError\(|try!' \
   Sources App
 
+gate quit "work at quit runs before AppKit lets the app end (applicationShouldTerminate answering .terminateLater), never in applicationWillTerminate, after which the process ends before work started there has run" \
+  '^App/[^:]+:[0-9]+: *//' \
+  'applicationWillTerminate|willTerminateNotification' \
+  App
+
+gate trash "a file the app has no more use for goes to the Trash through Trashing, which the tests and eval replace with a folder of their own: only SystemTrash and a move across volumes call trashItem, and only the app and arrumatorcli use SystemTrash" \
+  '^Sources/ArrumatorCore/FileOps/(Trash|FileOperations)\.swift:|^App/AppModel\.swift:[0-9]+: +trash: SystemTrash\(\)\)$|^Sources/ArrumatorCLI/Arrumator\.swift:[0-9]+: .*trash: SystemTrash\(\)\)$' \
+  'trashItem\(|SystemTrash\(\)' \
+  Sources App Tests
+
 gate debt "no TODO, FIXME, HACK or XXX markers" \
   '^scripts/lint\.sh:' \
   '\b(TODO|FIXME|HACK|XXX)\b' \
   Sources App Tests scripts Tools/FixtureGen/Sources
+
+gate icon "the app icon is the project's own drawing, made of paths: no SF Symbol, image, font or text, as the SF Symbols licence does not allow symbols, or glyphs like them, in an app icon" \
+  '^scripts/app-icon\.swift:[0-9]+: *//|^scripts/app-icon\.sh:[0-9]+: *#' \
+  'systemSymbolName|systemName:|SymbolConfiguration|NSImage|\bImage\(|CGImageSource|Font|\bText\(|AttributedString|withAttributes|CTLine' \
+  scripts/app-icon.sh scripts/app-icon.swift
 
 check secrets gitleaks scripts/check-secrets.sh
 check swiftlint swiftlint swift_lint

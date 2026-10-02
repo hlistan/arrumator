@@ -35,6 +35,7 @@ struct OnboardingView: View {
         }
         .padding(Style.onboardingPadding)
         .frame(width: Style.onboardingWindow.width, height: Style.onboardingWindow.height)
+        .showsLastError()
     }
 
     private var welcome: some View {

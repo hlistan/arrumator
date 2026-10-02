@@ -34,11 +34,21 @@ public struct TestEnvironment: Sendable {
         try? FileManager.default.removeItem(at: root)
     }
 
-    /// Writes a text file into Incoming and returns its URL.
+    /// What stands in for the Trash in everything built on this environment, so nothing a test does reaches the user's.
+    public var trash: FolderTrash { FolderTrash(folder: root.appendingPathComponent("Trash", isDirectory: true)) }
+
+    /// Every file put in the Trash, at any depth.
+    public func trashed() -> [URL] {
+        let found = FileManager.default.enumerator(at: trash.folder, includingPropertiesForKeys: [.isRegularFileKey])?.allObjects ?? []
+        return found.compactMap { $0 as? URL }.filter { (try? $0.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true }
+    }
+
+    /// Writes a text file into Incoming and returns its URL. `name` may be a path below Incoming, such as
+    /// `Taxes 2024/sub/scan.txt`, as when the user puts a folder there: the folders are made as needed.
     @discardableResult
     public func drop(_ name: String, text: String) throws -> URL {
-        try FileManager.default.createDirectory(at: incoming, withIntermediateDirectories: true)
         let url = incoming.appendingPathComponent(name)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data(text.utf8).write(to: url)
         return url
     }

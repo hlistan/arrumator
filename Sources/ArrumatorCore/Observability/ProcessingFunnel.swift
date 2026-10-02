@@ -1,7 +1,7 @@
 import Foundation
 import GRDB
 
-/// How much a stop matters: a duplicate leaving early is the pipeline working, a failure is not.
+/// How much a stop matters: a copy an earlier version filed, leaving early, is the pipeline working; a failure is not.
 public enum FunnelSeverity: String, Sendable, Codable, Hashable {
     /// The pipeline did its job by stopping here.
     case expected

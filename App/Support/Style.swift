@@ -131,10 +131,14 @@ enum Style {
     static let setLevelIndent: CGFloat = 14
     /// Between the kinds a task's set is arranged by, shown side by side.
     static let groupingSpacing: CGFloat = 4
-    /// Between the effort a request is read with and the model that reads it.
+    /// Between the effort a request is read with and the profile that reads it.
     static let readingSpacing: CGFloat = 12
-    /// Widest the menu of models may be, so a long model name does not push the row apart.
-    static let readingModelMaxWidth: CGFloat = 260
+    /// Widest the menu of profiles may be, so a long name or model does not push the row apart.
+    static let profileMenuMaxWidth: CGFloat = 260
+    /// Seconds a request has been read before its card says for how long: until then it is a moment, not worth a number.
+    static let readingTimeShownAfter: TimeInterval = 10
+    /// Seconds between updates of how long a request has been read, on its card.
+    static let readingTimeTick: TimeInterval = 1
 
     // MARK: Labels
 
@@ -159,7 +163,7 @@ enum Style {
     static let sidebarIdealWidth: CGFloat = 230
     /// Widest the sidebar can be made.
     static let sidebarMaxWidth: CGFloat = 300
-    /// Around the text of an error shown at the foot of the main window.
+    /// Around the text of an error shown at the foot of a window.
     static let errorBannerInsets = EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12)
     /// Between the symbol, text and clear button of the sidebar's label filter.
     static let filterFieldSpacing: CGFloat = 6
@@ -169,10 +173,19 @@ enum Style {
     static let filterFieldCornerRadius: CGFloat = 7
     /// How strongly the sidebar's label filter is filled.
     static let filterFieldFillOpacity = 0.6
-    /// Between the parts of the sidebar's foot: why the app waits, pause, and its menu.
-    static let sidebarFooterSpacing: CGFloat = 10
-    /// Around the sidebar's foot.
-    static let sidebarFooterInsets = EdgeInsets(top: 9, leading: 12, bottom: 9, trailing: 12)
+    /// Least space between a list's name in the sidebar and the spinner after it while it is at work, as Tasks while a
+    /// search request is read.
+    static let sidebarSpinnerSpacing: CGFloat = 6
+    /// How tall the sidebar's lists and label filter are taken to be until their rows are measured: what they measure
+    /// with medium sidebar icons, the default. Rows a larger size makes taller are laid out as tall as the list
+    /// estimates them, and the lists then end where their rows do (`SidebarLists`).
+    static let sidebarListsEstimatedHeight: CGFloat = 220
+    /// Between the parts of the bar at the sidebar's foot: the profile in use, pause, and its menu.
+    static let sidebarBarSpacing: CGFloat = 10
+    /// Between why the app waits and the controls under it, in the bar at the sidebar's foot.
+    static let sidebarBarLineSpacing: CGFloat = 4
+    /// Around what the bar at the sidebar's foot holds.
+    static let sidebarBarInsets = EdgeInsets(top: 9, leading: 12, bottom: 9, trailing: 12)
     /// The sheet that shows how a document was read.
     static let traceSheetMinimum = CGSize(width: 760, height: 560)
 
@@ -210,6 +223,12 @@ enum Style {
     static let retentionDays = 1...3_650
     /// The step of the stepper for how long model prompts are kept.
     static let retentionDaysStep = 30
+    /// Between a model profile's name and the words after it, in its row and opened.
+    static let profileNameSpacing: CGFloat = 8
+    /// Between the parts of a model profile opened in place: its name, its models, its actions.
+    static let profileCardSpacing: CGFloat = 12
+    /// Above and below a model profile opened in place, apart from the rows around it.
+    static let profileCardPadding: CGFloat = 6
 
     // MARK: Processing log
 
@@ -424,6 +443,24 @@ enum EventStyle {
         case .needsReview, .retry: Palette.attention
         case .error, .failed, .taskFailed: Palette.problem
         default: .secondary
+        }
+    }
+}
+
+extension JobProgress {
+    /// Beside a file in Incoming's queue; the file in hand has a spinner in its place.
+    var symbol: String {
+        switch self {
+        case .working, .waiting: "circle"
+        case .resuming: "circle.lefthalf.filled"
+        case .retrying: "exclamationmark.circle"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .retrying: Palette.attention
+        case .working, .resuming, .waiting: .secondary
         }
     }
 }

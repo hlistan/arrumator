@@ -29,18 +29,20 @@ public struct IndexStore: Sendable {
     }
 
     /// Makes a document's labels its own: on its row, which writes them into its record file, and in the full-text
-    /// index, in one transaction.
-    public func saveLabels(_ labels: [DocumentLabel], docID: Int64) async throws {
+    /// index, in one transaction. `labelled` says whether they label it, as when the model read it; a document's tags
+    /// alone do not (`DocumentLabel.stored`).
+    public func saveLabels(_ labels: [DocumentLabel], docID: Int64, labelled: Bool) async throws {
         let now = time.now()
-        try await database.writer.write { db in try Self.saveLabels(db, labels, docID: docID, at: now) }
+        try await database.writer.write { db in try Self.saveLabels(db, labels, docID: docID, labelled: labelled, at: now) }
     }
 
     /// Saves a document's labels inside an existing transaction, so a change to many documents commits as one.
-    static func saveLabels(_ db: Database, _ labels: [DocumentLabel], docID: Int64, at now: Date) throws {
+    static func saveLabels(_ db: Database, _ labels: [DocumentLabel], docID: Int64, labelled: Bool, at now: Date) throws {
+        let stored = DocumentLabel.stored(labels, labelled: labelled)
         let assignments = LabelKind.allCases.map { "\($0.rawValue) = ?" }.joined(separator: ", ")
         let values: [(any DatabaseValueConvertible)?] = LabelKind.allCases.map { DocumentLabel.searchText(labels, kind: $0) } + [docID]
-        try db.execute(sql: "UPDATE documents SET labels_json = ?, updated_at = ? WHERE id = ?",
-                       arguments: [JSON.string(labels), now.unixSeconds, docID])
+        try db.execute(sql: "UPDATE documents SET labels_json = ?, tags_only = ?, updated_at = ? WHERE id = ?",
+                       arguments: [stored.labels.map { JSON.string($0) }, stored.tagsOnly, now.unixSeconds, docID])
         try db.execute(sql: "UPDATE document_text SET \(assignments) WHERE doc_id = ?", arguments: StatementArguments(values))
     }
 

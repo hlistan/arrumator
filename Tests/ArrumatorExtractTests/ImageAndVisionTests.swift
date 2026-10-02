@@ -65,7 +65,7 @@ struct ImageAndVisionTests {
         #expect(request.keepAlive == vision.keepAlive, "the model stays loaded for as long as configured")
         #expect(request.options["num_predict"] == .number(Double(vision.numPredict)), "the answer length is capped as configured")
         #expect(request.options["num_ctx"] == .number(Double(vision.numCtx)),
-                "asked with the context its model is loaded with for decisions, the model is not loaded again for each image")
+                "asked with the context documents are read with, the model is not loaded again for each image")
         #expect(request.options["temperature"] == .number(vision.options.temperature), "the model is sampled with the pipeline's temperature")
         let kinds = request.format?["properties"]?["image_kind"]?["enum"]?.arrayValue?.compactMap(\.stringValue) ?? []
         #expect(kinds == ["photo", "screenshot", "scanned_document", "receipt", "id_card", "whiteboard", "diagram", "other"], "the schema limits the image kind to the kinds Arrumator knows")
@@ -84,21 +84,52 @@ struct ImageAndVisionTests {
         let vlmInput = try #require(vlmStep.input)
         #expect(vlmOutput.contains("Acme Corp"), "the trace shows what the model answered, unverified names included")
         #expect(vlmInput.contains("image_kind"), "the trace shows the schema the model was asked with")
+        #expect(vlmInput.contains(#""think":false"#), "and that the model was told not to think")
     }
 
-    @Test("An image without text becomes vlmOnly; thinking stays unset for models without it")
+    @Test("An image without text becomes vlmOnly; thinking stays unset for models that cannot be told not to think")
     func vlmOnly() async throws {
         let scratch = try Scratch()
         let url = try scratch.writeImage("blank.png", try Scratch.textImage([], width: 800, height: 600))
         let reply = #"{"image_kind":"photo","description":"An empty white surface","visible_text_summary":"","organisations":["Ghost Inc"],"dates":[]}"#
-        let ollama = MockOllama(capabilities: ["completion", "vision"]) { _ in reply }
-        let content = try await TestConfig.registry(ollama: ollama).extract(
-            url, sha256: "x", context: try TestConfig.context(vision: TestConfig.visionOptions()), trace: .disabled)
-        #expect(content.textOrigin == .vlmOnly, "an image without text is described by the vision model alone")
-        #expect(content.visual?.organisations == [], "with no text to verify against, no organisation is verified")
-        #expect(content.visual?.unverifiedOrganisations == ["Ghost Inc"], "the model's organisation is kept as unverified")
-        #expect(await ollama.chatRequests.first?.think == nil, "a model without thinking is not sent the think flag")
-        #expect(!content.hasWarning(.emptyText), "an image the vision model described is not reported as empty")
+        let vision = try TestConfig.visionOptions()
+        let cannotThink = MockOllama(capabilities: ["completion", "vision"]) { _ in reply }
+        let thinksAtLevels = MockOllama(capabilities: MockOllama.visionCapabilities, modelThinking: [vision.model: .levels]) { _ in reply }
+        for (ollama, model) in [(cannotThink, "a model without thinking"), (thinksAtLevels, "a model that names levels but not off")] {
+            let sink = MemoryTraceSink()
+            let content = try await TestConfig.registry(ollama: ollama).extract(
+                url, sha256: "x", context: try TestConfig.context(vision: vision), trace: TraceContext(traceID: 4, sink: sink))
+            #expect(content.textOrigin == .vlmOnly, "an image without text is described by the vision model alone")
+            #expect(content.visual?.organisations == [], "with no text to verify against, no organisation is verified")
+            #expect(content.visual?.unverifiedOrganisations == ["Ghost Inc"], "the model's organisation is kept as unverified")
+            #expect(await ollama.chatRequests.first?.think == nil, "\(model) is not sent the think flag, so it thinks as it does by default")
+            let input = try #require(await sink.steps.first { $0.stage == .vlm }?.input)
+            #expect(!input.contains(#""think""#), "\(model): the trace says it was told nothing about thinking")
+            #expect(!content.hasWarning(.emptyText), "an image the vision model described is not reported as empty")
+        }
+    }
+
+    @Test("The vision model is told about thinking what the options say, analysis.think, as the model allows")
+    func vlmThinking() async throws {
+        let scratch = try Scratch()
+        let url = try scratch.writeImage("blank.png", try Scratch.textImage([], width: 800, height: 600))
+        let reply = #"{"image_kind":"photo","description":"An empty white surface","visible_text_summary":"","organisations":[],"dates":[]}"#
+        var vision = try TestConfig.visionOptions()
+        #expect(vision.think == (try TestConfig.pipeline()).analysis.think, "the pipeline's options carry analysis.think")
+        let told: [(wanted: OllamaThink, sent: OllamaThink, why: String)] = [
+            (false, false, "off, as documents are read"), (true, true, "on, when analysis.think says so"),
+            ("high", true, "and a level as on, to a model that is only switched on and off"),
+        ]
+        for (wanted, sent, why) in told {
+            vision.think = wanted
+            let ollama = MockOllama(capabilities: MockOllama.visionCapabilities, modelThinking: [vision.model: .switches]) { _ in reply }
+            let sink = MemoryTraceSink()
+            _ = try await TestConfig.registry(ollama: ollama).extract(url, sha256: "x", context: try TestConfig.context(vision: vision),
+                                                                      trace: TraceContext(traceID: 5, sink: sink))
+            #expect(await ollama.chatRequests.map(\.think) == [sent], "the model is told \(why)")
+            let input = try #require(await sink.steps.first { $0.stage == .vlm }?.input)
+            #expect(input.contains(#""think":\#(JSON.string(sent))"#), "and the trace says what it was told: \(input)")
+        }
     }
 
     @Test("Vision failures become warnings, never errors")

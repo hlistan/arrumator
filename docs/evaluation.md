@@ -6,12 +6,15 @@ How the pipeline and the model profiles are measured, and what was measured. Eve
 ## The evaluation
 
 `arrumatorcli eval Tests/Fixtures --passes 2` files every document of the synthetic corpus in `Tests/Fixtures` through
-the real pipeline and the configured models, in a throw-away home and archive, and scores each against
-`expected.json` ([the corpus](../Tests/Fixtures/README.md)):
+the real pipeline, in a throw-away home and archive with the settings the app comes with, and scores each against
+`expected.json` ([the corpus](../Tests/Fixtures/README.md)). It reads with Standard, the profile the app comes set to,
+and `--profile` reads with another profile the app comes with instead, by its id (`fast`, `smart`): profiles of your
+own and your changes to the predefined ones are not used, as the throw-away home has none. `--model` reads with another
+model in place of the profile's reading model:
 
 | Score | What counts as right |
 |---|---|
-| status | Filed, waiting for you or taken for a copy, as the corpus expects: ordinary documents are filed; the encrypted, damaged and blank files wait for you; the byte-identical copy is a duplicate. |
+| status | Filed, waiting for you or taken for a copy, as the corpus expects: ordinary documents are filed; the encrypted, damaged and blank files wait for you; the byte-identical copy makes no document of its own: it is right when History says it had the document of the file it copies read again. |
 | type | The `type` label is the expected type, or one the corpus also accepts. |
 | sender | A `sender` label contains the expected sender, or one the corpus also accepts, ignoring case and accents. |
 | date | The `date` label is the expected issue date, exactly. |
@@ -123,9 +126,9 @@ What the runs showed about telling the model of the archive:
 An image is described by the model only when OCR finds too little text in it. Image descriptions used to be requested
 without a context size, so Ollama applied its own default. Measured on the server with `gemma4:e2b`, a description
 request without `num_ctx` reloaded the model at 131,072 tokens (1.9 s). The next request to read a document, asked with
-the profile's 12,288, reloaded it again (1.4 s). That is about 3 s spent on reloading per described image, and more for
-larger models. Every vision request now sends the context its model is loaded with (`ResolvedModels.visionNumCtx`), and
-a model that reads documents and describes images stays loaded once.
+12,288, reloaded it again (1.4 s). That is about 3 s spent on reloading per described image, and more for larger
+models. Every vision request now sends the context documents are read with, `analysis.numCtx` (12,288), so a model
+that reads documents and describes images stays loaded once.
 
 The corpora don't show this: OCR found enough text in each of their images, so no run described one.
 
@@ -138,7 +141,7 @@ documents filed into a scratch archive, with 51 queries in English, Portuguese a
 ("electricity bill", "extrato bancário", "налоговая декларация"), senders, and six with no relevant document ("banana",
 "wedding"). A document was relevant when the corpus then gave it the queried category (the corpus labelled which
 documents belong together) or sender. Only documents without the query's words count, because the floor decides only
-about those. Query vectors are from `bge-m3`, the embedding model of every profile.
+about those. Query vectors are from `bge-m3`, the embedding model of every profile the app comes with.
 
 | floor | found by meaning | relevant | precision | recall | F0.5 | queries with an irrelevant hit |
 |---|---|---|---|---|---|---|
@@ -158,18 +161,20 @@ about those. Query vectors are from `bge-m3`, the embedding model of every profi
 
 ## Earlier measurements: filing into folders
 
-The model profiles were chosen when Arrumator filed documents into folders the archive's logic described. Those runs
+Fast and Standard were chosen when Arrumator filed documents into folders the archive's logic described. Those runs
 scored how consistently documents of one kind were grouped into one folder (F1), on a Mac mini (M5, 16 GB) through
 Ollama 0.34.4, over three-instance corpora rendered with several seeds. They no longer measure what the app does, and
-are kept only because the profiles still follow them.
-
-The profiles in `pipeline.json` follow this table:
+are kept only because those two profiles still follow them. `ministral-3:8b` was a profile of its own then
+(`balanced`); the app no longer comes with it, and its row is kept only as a measurement, for a profile of your own.
+Smart came after these runs and has not been measured on the evaluation corpus: not how well it labels documents, nor
+its time per document, nor its memory.
 
 | profile | model | F1 three-instance / standard pass 1 | P three-instance / standard | s/doc three-instance / standard pass 1 | memory |
 |---|---|---|---|---|---|
-| `standard` | ministral-3:14b | **0.71 / 0.55** | 0.90 / **0.89** | 25 / 39 | ~10 GB |
-| `balanced` | ministral-3:8b | 0.65 / 0.46 | **0.92** / 0.86 | 16 / 29 | ~7 GB |
-| `lowMemory` | gemma4:e2b-it-qat | 0.66 / 0.53 | 0.76 / 0.82 | **6 / 8.5** | ~5.5 GB |
+| Standard | ministral-3:14b | **0.71 / 0.55** | 0.90 / **0.89** | 25 / 39 | ~10 GB |
+| none (`balanced` before) | ministral-3:8b | 0.65 / 0.46 | **0.92** / 0.86 | 16 / 29 | ~7 GB |
+| Fast | gemma4:e2b-it-qat | 0.66 / 0.53 | 0.76 / 0.82 | **6 / 8.5** | ~5.5 GB |
+| Smart | qwen3.5:9b | not measured | not measured | not measured | not measured |
 
 `ministral-3:14b` grouped best at about 25 s per document, `ministral-3:8b` as precisely at 16 s, and
 `gemma4:e2b-it-qat` fastest at 6 s with more mixing. Larger models do not fit such a Mac's memory. Reading a document
@@ -179,6 +184,8 @@ now takes one model call instead of up to several, so these times are upper boun
 
 - **Synthetic documents.** The corpus is synthetic: 57 documents of 21 kinds in 18 languages and 8 scripts, and five
   edge cases. Real archives have more kinds and longer histories.
+- **One profile.** Labels are measured with Standard alone. Fast has been measured only in the folder-era runs above,
+  and Smart not at all.
 - **Expected labels on a third of the corpus.** Parties, objects, references, periods, deadlines, amounts and
   jurisdictions are checked on the 21 international documents only; on the rest they are measured by coverage.
 - **No image descriptions.** Every image in the corpus has enough text for OCR, so the corpus never tests how well a

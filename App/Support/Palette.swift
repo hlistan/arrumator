@@ -19,7 +19,8 @@ enum Palette {
 
     // MARK: Lists, as Things' sidebar colours them
 
-    /// The Incoming list.
+    /// The Incoming list. The app icon is drawn in it too: `scripts/app-icon.sh` reads this line, so run it again after
+    /// changing the colour, to regenerate App/Assets.xcassets/AppIcon.appiconset.
     static let incomingList = Color.blue
     /// The Processed list.
     static let processedList = Color.green
@@ -31,9 +32,10 @@ enum Palette {
     // MARK: Kinds of label
 
     /// Each kind of label its own colour, on its name heading the sidebar's group and on its labels' tags, so a label
-    /// shows its kind in the one list the sidebar makes of them too. The twelve system colours are twelve hues that
-    /// adapt to dark mode and Increase Contrast; the colour is never the only sign of a kind, whose name heads its group
-    /// and is in each label's help (Apple Human Interface Guidelines › Color:
+    /// shows its kind in the one list the sidebar makes of them too. The kinds the model gives take the twelve system hues,
+    /// and the user's own tags the system's grey, apart from all of them; each adapts to dark mode and Increase Contrast.
+    /// The colour is never the only sign of a kind, whose name heads its group and is in each label's help (Apple Human
+    /// Interface Guidelines › Color:
     /// https://developer.apple.com/design/human-interface-guidelines/color).
     static func labelKind(_ kind: LabelKind) -> Color {
         switch kind {
@@ -49,6 +51,7 @@ enum Palette {
         case .amount: .mint
         case .jurisdiction: .teal
         case .language: .pink
+        case .tag: .gray
         }
     }
 }

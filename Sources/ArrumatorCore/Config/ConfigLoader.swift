@@ -15,7 +15,9 @@ public enum ConfigError: Error, LocalizedError {
 }
 
 /// Loads strongly typed configuration from bundled JSON defaults, deep-merged with an optional user override file.
-/// The bundled file is the single source of every default; Swift types declare no default values.
+/// The bundled file is the single source of every default; Swift types declare no default values. A key the app does
+/// not read stops the load, naming it, rather than being ignored: a key an earlier version wrote, such as a choice it
+/// kept elsewhere, is never read as something else or silently dropped (AGENTS.md §4.2).
 public enum ConfigLoader {
     public static func bundledValue(_ name: String) throws -> JSONValue {
         guard let url = Bundle.module.url(forResource: name, withExtension: "json", subdirectory: "Defaults") else {
@@ -24,20 +26,43 @@ public enum ConfigLoader {
         return try JSON.decoder.decode(JSONValue.self, from: Data(contentsOf: url))
     }
 
-    public static func load<T: Decodable>(_ type: T.Type, defaults name: String, overrides: [JSONValue] = []) throws -> T {
-        var merged = try bundledValue(name)
+    public static func load<T: Codable>(_ type: T.Type, defaults name: String, overrides: [JSONValue] = []) throws -> T {
+        let bundled = try bundledValue(name)
+        var merged = bundled
         for o in overrides { merged = deepMerge(merged, o) }
         let value: T
+        let read: JSONValue
         do {
-            let data = try JSON.encoder.encode(merged)
-            value = try JSON.decoder.decode(T.self, from: data)
+            value = try JSON.decoder.decode(T.self, from: JSON.encoder.encode(merged))
+            // What the app reads of the configuration: the value it decoded, written out again.
+            read = try JSON.decoder.decode(JSONValue.self, from: JSON.encoder.encode(value))
         } catch {
             throw ConfigError.invalid(name: name, underlying: String(describing: error))
         }
-        if let validated = value as? any ValidatedConfiguration, !validated.problems.isEmpty {
-            throw ConfigError.invalid(name: name, underlying: validated.problems.joined(separator: "; "))
-        }
+        let unknown = Set(([bundled] + overrides).flatMap { unknownKeys(in: $0, read: read) }).sorted()
+        try refuse(unknown.map(unknownKey) + ((value as? any ValidatedConfiguration)?.problems ?? []), name: name)
         return value
+    }
+
+    /// Stops with `problems`, the reasons the configuration `name` cannot be used, when there are any.
+    static func refuse(_ problems: [String], name: String) throws {
+        guard problems.isEmpty else { throw ConfigError.invalid(name: name, underlying: problems.joined(separator: "; ")) }
+    }
+
+    /// Why a configuration with the key at `path` is refused.
+    public static func unknownKey(_ path: String) -> String { "\(path) is not a key the app knows; remove it" }
+
+    /// The dotted paths of the keys `value` sets, at any depth, that `read` does not have. Objects are walked key by key,
+    /// so a key the user gave a dictionary of free keys (Ollama's variables, a profile of the user's) is known once it is
+    /// read; an array or any other value is taken whole, and a null sets nothing (`deepMerge`).
+    static func unknownKeys(in value: JSONValue, read: JSONValue, at path: String = "") -> [String] {
+        guard case let .object(set) = value, case let .object(known) = read else { return [] }
+        return set.flatMap { key, sub -> [String] in
+            if case .null = sub { return [] }
+            let keyPath = path.isEmpty ? key : "\(path).\(key)"
+            guard let readSub = known[key] else { return [keyPath] }
+            return unknownKeys(in: sub, read: readSub, at: keyPath)
+        }
     }
 
     public static func overrideValue(at url: URL) throws -> JSONValue? {

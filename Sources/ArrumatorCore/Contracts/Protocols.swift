@@ -38,3 +38,11 @@ public struct SystemTime: TimeSource {
     public func now() -> Date { Date() }
     public func sleep(seconds: Double) async throws { try await Task.sleep(for: .seconds(seconds)) }
 }
+
+/// Where a file the app has no more use for goes, so the user can still take it back: never deleted (AGENTS.md §4.2).
+/// `SystemTrash` is the one the app runs on; `FolderTrash` keeps what it is given in a folder of its own, for a run that
+/// must leave nothing outside its own folders, as `eval` and the tests.
+public protocol Trashing: Sendable {
+    /// Moves the file at `url` to the Trash; where it went, when that can be told.
+    func trash(_ url: URL) throws -> URL?
+}

@@ -1,8 +1,9 @@
 import ArrumatorCore
 import SwiftUI
 
-/// The documents that have every label chosen in the sidebar, newest first and grouped by day, as on Processed. The
-/// chosen labels head the page, each can be let go of there as in the sidebar, and Clear beside them lets go of all.
+/// The documents that have every label chosen in the sidebar, by their own date, the newest first and the undated last
+/// (`DocumentOrder.documentDate`), under a heading for each month of it and one for those without a date. The chosen
+/// labels head the page, each can be let go of there as in the sidebar, and Clear beside them lets go of all.
 struct LabelledPage: View {
     @Environment(AppModel.self) private var model
     @State private var documents: [DocumentRecord] = []
@@ -21,7 +22,7 @@ struct LabelledPage: View {
             if documents.isEmpty {
                 EmptyState(symbol: "tag", text: Wording.noDocumentHasAll)
             }
-            ProcessedDays(documents: documents)
+            DocumentSections(documents: documents, heading: Wording.documentMonth)
             if let pageSize = model.runtime?.config.interface.pageSize, documents.count == pages * pageSize {
                 Button(Wording.showMore) { pages += 1 }.buttonStyle(.link)
             }
@@ -30,7 +31,7 @@ struct LabelledPage: View {
         .task(id: "\(pages)|\(selection)|\(model.activity)") {
             let pages = pages
             guard let loaded = await model.load(Wording.loadLabelledAction, { runtime in
-                try await runtime.services.documents.list(DocumentFilter(labels: selection), order: .recentlyProcessed,
+                try await runtime.services.documents.list(DocumentFilter(labels: selection), order: .documentDate,
                                                           limit: pages * runtime.config.interface.pageSize)
             }) else { return }
             documents = loaded

@@ -8,11 +8,22 @@ struct Ingest: AsyncParsableCommand {
         abstract: "File documents now (reads, labels and moves them into the archive), or show what would happen with --dry-run.")
     @OptionGroup var options: GlobalOptions
     @Flag(help: "Read and label without moving files or recording anything.") var dryRun = false
+    @Option(help: "Give the documents this tag, your own label, besides the one the folder in Incoming they are in gives (repeatable).")
+    var tag: [String] = []
     @Argument(help: "Files to ingest.") var files: [String]
+
+    func validate() throws {
+        for value in tag where DocumentLabel.normalized(value, kind: .tag) == nil {
+            throw ValidationError("--tag “\(value)” is no tag: give it a name")
+        }
+    }
 
     func run() async throws {
         let runtime = try await options.runtime()
         let settings = await runtime.settings.current
+        guard tag.count <= runtime.config.labels.maxPerKind else {
+            throw ValidationError("--tag is given at most \(runtime.config.labels.maxPerKind) times (labels.maxPerKind)")
+        }
         _ = await runtime.lifecycle.ensureRunning()
         var jobs: [Int64] = []
         for path in files {
@@ -20,30 +31,36 @@ struct Ingest: AsyncParsableCommand {
             if dryRun {
                 let sink = MemoryTraceSink()
                 let trace = TraceContext(traceID: 0, sink: sink)
+                let tags = runtime.services.tags(for: url, given: tag, settings: settings)
                 let content = try await runtime.services.extractor.extract(
                     url, sha256: try HashService.sha256(of: url), context: try runtime.config.extractionContext(settings: settings),
                     trace: trace)
-                let reading = try await runtime.services.read(content, settings: settings, trace: trace)
+                let reading = try await runtime.services.read(content, tags: tags.map(\.label), settings: settings, trace: trace)
                 let steps = await sink.steps
-                options.emit(DryRun(content: content, analysis: reading.outcome.analysis, labels: reading.outcome.labels,
+                options.emit(DryRun(content: content, analysis: reading.outcome.analysis, labels: reading.outcome.labels, tags: tags,
                                     changes: reading.changes, steps: steps)) {
-                    describe(reading, content: content, steps: steps)
+                    describe(reading, tags: tags, content: content, steps: steps)
                 }
-            } else if let job = await runtime.coordinator.enqueue(url) {
+            } else if let job = await runtime.coordinator.enqueue(url, tags: tag) {
                 jobs.append(job)
             }
         }
         if !dryRun {
             await runtime.coordinator.drain()
-            // The documents these files became, whatever else the archive holds.
+            // The documents these files became, whatever else the archive holds; for an exact copy of a document in the
+            // archive, that document, read again in its place.
             var docs: [DocumentRecord] = []
             for id in jobs {
-                if let doc = try await runtime.services.jobs.job(id: id)?.docId, let document = try await runtime.services.documents.document(id: doc) {
+                let job = try await runtime.services.jobs.job(id: id)
+                if let doc = job?.docId ?? job?.payload.copyOf, let document = try await runtime.services.documents.document(id: doc) {
                     docs.append(document)
                 }
             }
             options.emit(docs) {
-                docs.map { "\($0.status.rawValue.padding(toLength: 11, withPad: " ", startingAt: 0)) \($0.path)" }.joined(separator: "\n")
+                docs.map { document in
+                    "\(document.status.rawValue.padding(toLength: 11, withPad: " ", startingAt: 0)) \(document.path)"
+                        + (document.labels(.tag).isEmpty ? "" : "\n            tags: " + document.labels(.tag).joined(separator: " · "))
+                }.joined(separator: "\n")
             }
         }
     }
@@ -51,19 +68,22 @@ struct Ingest: AsyncParsableCommand {
     struct DryRun: Encodable {
         var content: ExtractedContent
         var analysis: DocumentAnalysis
-        /// Nil when the model gave no valid answer.
+        /// The model's labels, tidied, and the tags after them; nil when the model gave no valid answer.
         var labels: [DocumentLabel]?
+        /// The tags the document would be given, and what gives each: the folder in Incoming it is in, or `--tag`.
+        var tags: [GivenTag]
         /// Labels the model gave that the archive's vocabulary and the user's rules changed.
         var changes: [LabelChange]
         var steps: [TraceStep]
     }
 
-    func describe(_ reading: Reading, content: ExtractedContent, steps: [TraceStep]) -> String {
+    func describe(_ reading: Reading, tags: [GivenTag], content: ExtractedContent, steps: [TraceStep]) -> String {
         let a = reading.outcome.analysis
+        let tagged = GivenTag.note(tags).map { "\n  tags:      " + $0 } ?? ""
         return """
         \(content.source.originalFilename)
           content:   \(content.kind.rawValue), \(content.textOrigin.rawValue), \(content.text.count) chars, language \(content.language.primary)
-        \(Terminal.labelTable(reading.outcome.labels, indent: 2))\(reading.changes.isEmpty ? "" : "\n  tidied:    " + Terminal.changes(reading.changes))
+        \(Terminal.labelTable(reading.outcome.labels, indent: 2))\(reading.changes.isEmpty ? "" : "\n  tidied:    " + Terminal.changes(reading.changes))\(tagged)
           file name: \(a.fileName ?? "(keeps its name)")
           read by:   \(a.model ?? "—")\(a.problems.isEmpty ? "" : "; waits for you: " + a.problems.joined(separator: "; "))
           stages:    \(steps.map { "\($0.stage.rawValue) \(Int($0.durationMs))ms" }.joined(separator: ", "))
@@ -110,10 +130,11 @@ struct Search: AsyncParsableCommand {
         try await runtime.prepareSearch(await runtime.settings.current)
         let results = try await runtime.search.search(SearchQuery(text: query.joined(separator: " "), semantic: !noSemantic))
         options.emit(results.hits.map { SearchRow(id: $0.id, path: $0.document.path, score: $0.score, snippet: SearchHighlight.plain($0.snippet),
-                                                   sources: $0.sources.map(\.rawValue).sorted(), labels: $0.document.labels) }) {
+                                                   sources: $0.sources.map(\.rawValue).sorted(), labels: $0.document.labels,
+                                                   labelled: $0.document.isLabelled) }) {
             var lines = results.hits.map { hit in
                 "\(hit.document.path)\n    \(Terminal.highlight(hit.snippet).replacingOccurrences(of: "\n", with: " "))"
-                    + (hit.document.labels?.isEmpty == false ? "\n    \(Terminal.labels(hit.document.labels))" : "")
+                    + (hit.document.labels?.isEmpty == false ? "\n    \(Terminal.labels(hit.document.labels, labelled: hit.document.isLabelled))" : "")
             }
             lines.append(String(format: "%d results in %.0f ms%@", results.hits.count, results.elapsedMs,
                                 results.semanticUsed ? " (hybrid)" : " (full text: \(results.semanticUnavailableReason ?? ""))"))
@@ -128,6 +149,8 @@ struct Search: AsyncParsableCommand {
         var snippet: String
         var sources: [String]
         var labels: [DocumentLabel]?
+        /// Whether the document has been labelled; one that has not may have its tags.
+        var labelled: Bool
     }
 }
 
@@ -171,7 +194,7 @@ struct Replay: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         abstract: "Read a stored document again with the model, optionally another one, and compare, without touching files.")
     @OptionGroup var options: GlobalOptions
-    @Option(help: "Chat model to use instead of the configured one.") var model: String?
+    @Option(help: "Chat model to read with instead of the profile's.") var model: String?
     @Argument(help: "Document id or file path.") var document: String
 
     func run() async throws {
@@ -182,16 +205,18 @@ struct Replay: AsyncParsableCommand {
             throw ValidationError("Document \(docID) has no stored content")
         }
         var settings = await runtime.settings.current
-        if let model { settings.models.chatModel = model }
+        if let model { settings = try settings.reading(withChatModel: model) }
         _ = await runtime.lifecycle.ensureRunning()
         let trace = try await runtime.services.startTrace(docID: docID, jobID: nil, attempt: 0, source: .replay, settings: settings)
-        let outcome = try await runtime.services.read(content, settings: settings, trace: trace).outcome
+        // Read with the tags the document has, which a reading keeps, so what differs is what the model gives.
+        let outcome = try await runtime.services.read(content, tags: stored.labels?.filter(\.kind.isUsersOwn) ?? [], settings: settings,
+                                                      trace: trace).outcome
         await runtime.traces.finish(trace, outcome: "replay", docID: docID)
         let original = Reading(analysis: stored.analysis, labels: stored.labels)
         let replay = Reading(analysis: outcome.analysis, labels: outcome.labels)
         options.emit(["original": original, "replay": replay]) {
             """
-            original: \(original.analysis?.fileName ?? "—") · \(Terminal.labels(original.labels))
+            original: \(original.analysis?.fileName ?? "—") · \(Terminal.labels(original.labels, labelled: stored.isLabelled))
             replay:   \(replay.analysis?.fileName ?? "—") · \(Terminal.labels(replay.labels)) (\(replay.analysis?.model ?? "no answer"))
             trace #\(trace.traceID ?? 0)
             """

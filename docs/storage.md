@@ -14,10 +14,10 @@ no other folders in the archive.
 
 | What | File | Contents |
 |---|---|---|
-| The documents in a directory | `<directory>/_documents.md` | One entry per file in that directory: identity, original name, checksum, size, content type, pages, status, the labels that describe it (each a kind and a value; absent until the model has labelled it), and how it was read: the file name the model gave it, the model, and why it waits for you, if it does. The table below the data shows each file's date, sender, type and other labels. |
+| The documents in a directory | `<directory>/_documents.md` | One entry per file in that directory: identity, original name, checksum, size, content type, pages, status, the labels that describe it (each a kind and a value, your tags among them; absent while it has none and the model has not labelled it), `tags_only: true` while those labels are only its tags because the model has not labelled it yet, and how it was read: the file name the model gave it, the model, and why it waits for you, if it does. The table below the data shows each file's date, sender, type and other labels. |
 | History | `System/History/_<year>-<month>.md` | One line per event, newest last. |
 | Rules for labels | `System/_labels.md` | Your decisions about labels ([how](how-it-works.md#keeping-labels-one-vocabulary)): each rule's number, kind, label, what it decides (`merge`, `ignore` or `keepApart`), the other label of a merge or of a pair kept apart, and when it was made. There is no file while there are no rules. |
-| Search tasks | `System/_tasks.md` | Your search tasks ([how](how-it-works.md#search-tasks)): each task's number, what you asked, the name and arrangement you gave it, its state, the effort it is read with and the model you gave it (none when the effort's model of the profile reads it), what the model read the request as and which model, why it failed if it did, the documents of its set by number, each `matched`, `added` or `removed` (taken out by you), and every export: its number, when, as a `folder` or a `zip`, where it was put, where each document went inside it and which could not be copied and why. There is no file while there are no tasks. |
+| Search tasks | `System/_tasks.md` | Your search tasks ([how](how-it-works.md#search-tasks)): each task's number, what you asked, the name and arrangement you gave it, its state, the effort it is read with and the model profile you gave it, by its id (none when it follows the one Settings uses), what the model read the request as and which model, why it failed if it did, the documents of its set by number, each `matched`, `added` or `removed` (taken out by you), and every export: its number, when, as a `folder` or a `zip`, where it was put, where each document went inside it and which could not be copied and why. There is no file while there are no tasks. |
 
 Every file starts with YAML front matter holding the exact data, followed by a Markdown rendering for people. The front
 matter is what the app reads; the rendering is regenerated on every write.
@@ -46,9 +46,11 @@ version moves it into place as that archive's index, so nothing it held is lost.
 ## What the database only indexes or caches
 
 - **Text and search**: extracted text and the full-text index are extracted again from the documents; the labels'
-  columns of the full-text index are filled from the entries, without asking the model again.
+  columns of the full-text index, one per kind and the last for tags, are filled from the entries, without asking the
+  model again.
 - **Embeddings** of documents are computed again with the embedding model.
-- **The job queue** is rebuilt by looking at the Incoming folder.
+- **The job queue** is rebuilt by looking at the Incoming folder, so each file waiting there is given the tag of the
+  folder it is in again. A tag a document already has is in its entry.
 - **Positions in the file-system event stream** and similar bookkeeping.
 
 Some working state is deliberately not kept in files and does not survive a rebuild:
@@ -110,3 +112,14 @@ shape. Those older files, `_senders.md` among them, are left alone in the archiv
 entry written by an earlier version that a rebuild reads without that migration (on another Mac, say) comes back
 without labels; its document is labelled when it is read again (`arrumatorcli labels unlabelled`, once its text has
 been read again). Read any document again (`arrumatorcli review retry`) to give it the full set of labels.
+
+Search tasks of earlier versions could be given a model of their own, which `_tasks.md` kept as `assignedModel`. A
+model is not a profile, so it is not read as one: such a task follows the profile Settings uses, the index forgets the
+model when it is migrated, `_tasks.md` is written again without it, and a rebuild that reads an older `_tasks.md`
+leaves it out too. Give the task a profile to read it with another model.
+
+Tags came after labels. The first start of the version that brought them makes the full-text index again with a column
+for tags, from the text the index already holds, so nothing is read again or lost, and adds to each document whether
+its labels are only its tags, which no document's are yet. No record file is written again for it: an entry without
+`tags_only` is read as it always was, labelled when it has labels. The `tags` that entries of the versions that filed
+into folders hold were topics; a rebuild leaves them unread, as before, and never reads them as tags.

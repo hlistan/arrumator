@@ -4,8 +4,9 @@ import GRDB
 /// Finds the documents a search task's plan asks for among those in the archive (`DocumentStatus.inArchive`): those
 /// whose labels match every kind the plan gives (`SearchPlan.matches`) and that contain every one of its words, each as
 /// a phrase, in the full-text index. Labels are matched on the documents' own labels, so a document is found by them
-/// even before its text has been read again after a rebuild. The most recently processed come first, at most `limit`.
-/// A plan that asks for nothing finds nothing.
+/// even before its text has been read again after a rebuild. They come by their own date, the newest first and the
+/// undated last (`DocumentOrder.documentDate`), and when more match than `limit`, the newest are kept. A plan that asks
+/// for nothing finds nothing.
 public struct SearchPlanMatcher: Sendable {
     public let database: AppDatabase
     public let limit: Int
@@ -23,7 +24,7 @@ public struct SearchPlanMatcher: Sendable {
         return try await database.reader.read { db in
             let rows = try Row.fetchAll(db, sql: """
                 SELECT d.id, d.labels_json FROM documents d WHERE d.status IN (\(databaseQuestionMarks(count: statuses.count)))
-                ORDER BY \(DocumentOrder.recentlyProcessed.sql), d.id DESC
+                ORDER BY \(DocumentOrder.documentDate.sql)
                 """, arguments: StatementArguments(statuses))
             var found = rows.compactMap { row -> Int64? in
                 plan.matches(JSON.decode([DocumentLabel].self, from: row["labels_json"]) ?? []) ? row["id"] : nil

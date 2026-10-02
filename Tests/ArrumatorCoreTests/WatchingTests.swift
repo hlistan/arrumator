@@ -1,5 +1,6 @@
 @testable import ArrumatorCore
 import ArrumatorTesting
+import CoreServices
 import Foundation
 import Testing
 
@@ -44,6 +45,30 @@ import Testing
                 "it was taken only after unchanged for watcher.stabilityRequiredPolls polls, so a copy in progress is never read half")
     }
 
+    @Test func aFolderMovedIntoIncomingIsTakenInWithEverythingInIt() async throws {
+        let env = try TestEnvironmentSync.make()
+        defer { env.cleanup() }
+        let incoming = env.root.appendingPathComponent("Incoming", isDirectory: true)
+        try FileManager.default.createDirectory(at: incoming, withIntermediateDirectories: true)
+        let watcher = IncomingWatcher(config: env.config.watcher, skip: SkipRules(watcher: env.config.watcher), time: TestTime(.advances))
+        try await watcher.start(root: incoming)
+        defer { Task { await watcher.stop() } }
+        let taken = Taken()
+        let collecting = Task { for await url in watcher.stableFiles { await taken.add(url.lastPathComponent) } }
+        defer { collecting.cancel() }
+        // Made elsewhere and moved in whole, as Finder moves a folder on one volume: macOS reports the folder that came,
+        // not what is in it.
+        let elsewhere = env.root.appendingPathComponent("Taxes 2024", isDirectory: true)
+        try FileManager.default.createDirectory(at: elsewhere.appendingPathComponent("sub", isDirectory: true), withIntermediateDirectories: true)
+        try Data("a scan".utf8).write(to: elsewhere.appendingPathComponent("scan.pdf"))
+        try Data("a receipt".utf8).write(to: elsewhere.appendingPathComponent("sub/receipt.pdf"))
+        let moved = incoming.appendingPathComponent("Taxes 2024", isDirectory: true)
+        try FileManager.default.moveItem(at: elsewhere, to: moved)
+        await watcher.handle([FSEvent(path: moved.path, flags: UInt32(kFSEventStreamEventFlagItemIsDir | kFSEventStreamEventFlagItemRenamed), id: 1)])
+        #expect(await Patience.until { await taken.names == ["scan.pdf", "receipt.pdf"] },
+                "every file in a folder that comes into Incoming is taken in, at any depth, once it has stopped changing")
+    }
+
     @Test func workPausesWhenTheMacIsHotOrItsBatteryLow() throws {
         let config = try PipelineConfig.bundledDefaults().power
         var settings = try AppSettings.bundledDefaults()
@@ -61,6 +86,12 @@ import Testing
         settings.pauseOnBattery = true
         #expect(charged.pauseReason(settings: settings, config: config) == nil, "at the limit itself, work goes on")
     }
+}
+
+/// The names of the files the Incoming watcher took in.
+actor Taken {
+    private(set) var names: Set<String> = []
+    func add(_ name: String) { names.insert(name) }
 }
 
 /// A scratch folder and the bundled configuration, for tests that need no database.

@@ -10,6 +10,11 @@ struct RuntimeHome {
     var paths: AppPaths { AppPaths.resolve(environment) }
     func folder(_ name: String) -> URL { root.appendingPathComponent(name, isDirectory: true).standardizedFileURL }
     func cleanup() { try? FileManager.default.removeItem(at: root) }
+    /// What stands in for the Trash, so nothing a test does reaches the user's.
+    var trash: FolderTrash { FolderTrash(folder: folder("Trash")) }
+
+    /// An address on this Mac where no Ollama answers: port 9 is the discard service, which nothing serves here.
+    static let nowhere = "http://127.0.0.1:9"
 
     static func make() async throws -> RuntimeHome {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("arrumator-runtime-\(UUID().uuidString)",
@@ -26,9 +31,18 @@ struct RuntimeHome {
         return home
     }
 
+    /// Settings under which a started runtime finds no Ollama and starts none: what a test that runs the app's
+    /// background machinery (`ArrumatorRuntime.start()`) needs, as no model may be reached from `swift test`.
+    func withoutOllama() async throws {
+        try await SettingsStore(paths: paths).update {
+            $0.ollamaURL = Self.nowhere
+            $0.ollamaManagement = .external
+        }
+    }
+
     /// What the app and every command do first.
     func open() async throws -> ArrumatorRuntime {
-        let runtime = try await ArrumatorRuntime.bootstrap(appVersion: "test", environment: environment, echoLogsToStderr: false)
+        let runtime = try await ArrumatorRuntime.bootstrap(appVersion: "test", environment: environment, echoLogsToStderr: false, trash: trash)
         try await runtime.openArchive()
         return runtime
     }

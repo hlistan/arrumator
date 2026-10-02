@@ -8,11 +8,11 @@ public struct SearchTaskChange: Sendable, Hashable {
     /// What the task asks for, in the user's words; a new one sends the task back into the queue.
     public var prompt: String?
     public var grouping: Grouping?
-    /// How much computing its prompt is read with; another sends the task back into the queue.
+    /// How much the model thinks before it answers its prompt; another sends the task back into the queue.
     public var effort: TaskEffort?
-    /// The model that reads its prompt; empty gives it back to its effort's model of the profile. Another sends the task
-    /// back into the queue.
-    public var model: String?
+    /// The id of the model profile that reads its prompt, one the settings list; empty gives the task back to the one
+    /// Settings uses. Another sends the task back into the queue.
+    public var profile: String?
 
     /// What the task's set is arranged by.
     public enum Grouping: Sendable, Hashable {
@@ -22,12 +22,12 @@ public struct SearchTaskChange: Sendable, Hashable {
         case by([LabelKind])
     }
 
-    public init(title: String? = nil, prompt: String? = nil, grouping: Grouping? = nil, effort: TaskEffort? = nil, model: String? = nil) {
+    public init(title: String? = nil, prompt: String? = nil, grouping: Grouping? = nil, effort: TaskEffort? = nil, profile: String? = nil) {
         self.title = title
         self.prompt = prompt
         self.grouping = grouping
         self.effort = effort
-        self.model = model
+        self.profile = profile
     }
 }
 
@@ -47,23 +47,25 @@ public struct SearchTaskActions: Sendable {
     private var config: TasksConfig { services.config.tasks }
 
     /// Puts a prompt in the queue as a new task, read with `effort`, else the one Settings gives new tasks
-    /// (`taskEffort`), and by `model`, else the one the effort takes from the profile.
+    /// (`taskEffort`), and by the model profile `profile` names, else by the one Settings uses whenever it is read. A
+    /// profile the settings do not list is refused, and nothing is written.
     @discardableResult
-    public func create(prompt: String, effort: TaskEffort? = nil, model: String? = nil) async throws -> SearchTask {
+    public func create(prompt: String, effort: TaskEffort? = nil, profile: String? = nil) async throws -> SearchTask {
         let asked = try Self.prompt(prompt)
-        let effort = if let effort { effort } else { await services.settings.current.taskEffort }
-        let assigned = model.flatMap(Self.model)
+        let settings = await services.settings.current
+        let effort = effort ?? settings.taskEffort
+        let profile = try profile.flatMap { try Self.profile($0, settings: settings) }
         let now = services.time.now()
         let config = config
         let id = try await services.database.writer.write { db in
-            var record = SearchTaskRecord(id: nil, prompt: asked, title: nil, groupingJson: nil, effort: effort, assignedModel: assigned,
+            var record = SearchTaskRecord(id: nil, prompt: asked, title: nil, groupingJson: nil, effort: effort, profile: profile,
                                           state: .queued, planJson: nil, model: nil, problem: nil, lastTraceId: nil, nextRunAt: now,
                                           createdAt: now, updatedAt: now)
             try record.insert(db)
             let id = record.id ?? 0
             try HistoryStore.insert(db, .taskCreated, at: now, actor: .user,
                                     summary: "Asked for “\(SearchTaskStore.name(record, config: config))”, "
-                                        + Self.reading(effort: effort, model: assigned),
+                                        + Self.reading(effort: effort, profile: profile, settings: settings),
                                     payload: TaskEventPayload(task: id, documents: nil, plan: nil))
             return id
         }
@@ -71,12 +73,14 @@ public struct SearchTaskActions: Sendable {
         return try await task(id)
     }
 
-    /// Renames the task, arranges its set otherwise, or gives it another prompt, effort or model, each of which sends it
-    /// back into the queue to be read again.
+    /// Renames the task, arranges its set otherwise, or gives it another prompt, effort or profile, each of which sends it
+    /// back into the queue to be read again. A profile the settings do not list is refused, and nothing is changed.
     @discardableResult
     public func update(_ id: Int64, _ change: SearchTaskChange) async throws -> SearchTask {
         let prompt = try change.prompt.map(Self.prompt)
         if case let .by(kinds) = change.grouping { try validate(kinds) }
+        let settings = await services.settings.current
+        let profile = try change.profile.map { try Self.profile($0, settings: settings) }
         let now = services.time.now()
         let config = config
         let requeued = try await services.database.writer.write { db -> Bool in
@@ -95,9 +99,9 @@ public struct SearchTaskActions: Sendable {
                 record.effort = effort
                 reread.append("effort")
             }
-            if let model = change.model.map(Self.model), model != record.assignedModel {
-                record.assignedModel = model
-                reread.append("model")
+            if let profile, profile != record.profile {
+                record.profile = profile
+                reread.append("profile")
             }
             let requeued = !reread.isEmpty
             if requeued {
@@ -118,7 +122,7 @@ public struct SearchTaskActions: Sendable {
             try record.update(db)
             try HistoryStore.insert(db, .taskEdited, at: now, actor: .user,
                                     summary: "Changed the \(changed.joined(separator: ", ")) of “\(SearchTaskStore.name(record, config: config))”"
-                                        + (requeued ? ", " + Self.reading(effort: record.effort, model: record.assignedModel) : ""),
+                                        + (requeued ? ", " + Self.reading(effort: record.effort, profile: record.profile, settings: settings) : ""),
                                     payload: TaskEventPayload(task: id, documents: nil, plan: nil))
             return requeued
         }
@@ -173,11 +177,12 @@ public struct SearchTaskActions: Sendable {
     }
 
     /// Adds every document in the archive that has all these labels, as the sidebar narrows them down
-    /// (`DocumentFilter.labels`). Returns the documents that were not in the set before.
+    /// (`DocumentFilter.labels`): at most `tasks.maxDocuments`, the newest by their own date, as a task finds them
+    /// (`SearchPlanMatcher`). Returns the documents that were not in the set before.
     @discardableResult
     public func add(_ id: Int64, labelled labels: [DocumentLabel]) async throws -> [Int64] {
         let documents = try await services.documents.list(DocumentFilter(statuses: DocumentStatus.inArchive, labels: labels),
-                                                          order: .recentlyProcessed, limit: config.maxDocuments)
+                                                          order: .documentDate, limit: config.maxDocuments)
         return try await add(id, documents: documents.compactMap(\.id))
     }
 
@@ -205,7 +210,7 @@ public struct SearchTaskActions: Sendable {
     }
 
     /// Removes the task with its set and the record of its exports. What it exported stays where it was put: the copies
-    /// are the user's.
+    /// are the user's. The queue no longer counts it among the tasks waiting.
     public func delete(_ id: Int64) async throws {
         let now = services.time.now()
         let config = config
@@ -215,6 +220,7 @@ public struct SearchTaskActions: Sendable {
             try HistoryStore.insert(db, .taskRemoved, at: now, actor: .user, summary: "Removed “\(SearchTaskStore.name(record, config: config))”",
                                     payload: TaskEventPayload(task: id, documents: nil, plan: record.plan))
         }
+        await queue.wake()
     }
 
     /// Copies the task's set into a new folder in `folder`, named after the task, in folders of folders as its set is
@@ -254,15 +260,19 @@ public struct SearchTaskActions: Sendable {
         return prompt
     }
 
-    /// A model's name on one line; nil for none, which leaves the model to the task's effort.
-    static func model(_ text: String) -> String? {
-        let name = DocumentLabel.oneLine(text)
-        return name.isEmpty ? nil : name
+    /// A profile's id on one line, one `settings` list (`ModelProfileError.unknown` otherwise); nil for none, which leaves
+    /// the task to the profile Settings uses.
+    static func profile(_ text: String, settings: AppSettings) throws -> String? {
+        let id = DocumentLabel.oneLine(text)
+        guard !id.isEmpty else { return nil }
+        _ = try settings.modelProfile(id)
+        return id
     }
 
-    /// How a task is read, for History: “read with high effort by qwen3.5:9b”.
-    static func reading(effort: TaskEffort, model: String?) -> String {
-        "read with \(effort.rawValue) effort" + (model.map { " by \($0)" } ?? " by the profile's model")
+    /// How a task is read, for History: “read with high effort by Smart”, its profile by name, or “… by Settings'
+    /// profile” for one that follows the profile Settings uses.
+    static func reading(effort: TaskEffort, profile: String?, settings: AppSettings) -> String {
+        "read with \(effort.rawValue) effort by " + (profile.map { settings.modelProfiles[$0]?.name ?? "“\($0)”" } ?? "Settings' profile")
     }
 
     private func validate(_ kinds: [LabelKind]) throws {

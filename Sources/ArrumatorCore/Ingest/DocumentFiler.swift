@@ -24,10 +24,29 @@ public struct DocumentFiler: Sendable {
     ///   - event: the history kind to record; nil follows `status` (filed, or waiting for the user).
     ///   - recording: runs in the transaction that records the filing, with the document as filed, so what the caller
     ///     keeps of it (a job's destination) commits with it or not at all.
+    ///
+    /// Filing, once begun, is finished, whatever the caller is asked meanwhile. A stop of the caller's task (the worker's,
+    /// when the app quits) cancels the database accesses it makes after it ("`CancellationError` if the task is
+    /// cancelled", GRDB's `DatabaseWriter.write`), so one that came between the move and its record would leave the file
+    /// in the archive with its record still saying where it was, where the job that moved it could no longer find it.
+    /// The move and its record therefore run as a task of their own: "an unstructured task doesn't have a parent task"
+    /// (The Swift Programming Language › Concurrency › Unstructured Concurrency), and cancelling a task reaches only its
+    /// children. A stop asked for before filing begins leaves the file where it is.
     public func file(_ document: DocumentRecord, source: SourceFile, analysis: DocumentAnalysis, status: DocumentStatus,
                      directory: URL, inPlace: Bool, actor: EventActor, settings: AppSettings, trace: TraceContext,
                      event: EventKind?, recording: (@Sendable (Database, DocumentRecord) throws -> Void)?) async throws -> DocumentRecord {
         guard let docID = document.id else { throw IngestError.documentNotPersisted }
+        try Task.checkCancellation()
+        return try await Task {
+            try await place(document, docID: docID, source: source, analysis: analysis, status: status, directory: directory,
+                            inPlace: inPlace, actor: actor, settings: settings, trace: trace, event: event, recording: recording)
+        }.value
+    }
+
+    /// Moves the document and records where it went, as `file` describes.
+    private func place(_ document: DocumentRecord, docID: Int64, source: SourceFile, analysis: DocumentAnalysis, status: DocumentStatus,
+                       directory: URL, inPlace: Bool, actor: EventActor, settings: AppSettings, trace: TraceContext,
+                       event: EventKind?, recording: (@Sendable (Database, DocumentRecord) throws -> Void)?) async throws -> DocumentRecord {
         var newPath = document.path
         if inPlace {
             do { try Xattr.set(Xattr.documentID, document.uid, on: document.url) } catch {
@@ -78,4 +97,13 @@ public struct FiledPayload: Sendable, Codable, Hashable {
     public var to: String
     /// Why the document waits for the user, when it does.
     public var problems: [String]
+}
+
+extension DocumentRecord {
+    /// The file as it is known before it is read: what filing a document the pipeline could not process, parked after
+    /// failing, names it from.
+    var unreadSource: SourceFile {
+        SourceFile(path: path, originalFilename: originalFilename, fileExtension: (originalFilename as NSString).pathExtension,
+                   utType: uttype, byteSize: size, createdAt: nil, modifiedAt: fileMtime, sha256: sha256)
+    }
 }

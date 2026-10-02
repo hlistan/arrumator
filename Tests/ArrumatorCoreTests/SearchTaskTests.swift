@@ -43,21 +43,28 @@ import Testing
         func ids(_ names: String...) throws -> Set<Int64> { Set(try names.map(id)) }
     }
 
-    func world() async throws -> World {
+    /// The corpus filed one document after another in the order `names` gives, the clock moving on by `apart` seconds
+    /// before each, so the last of them is the most recently processed.
+    func world(filing names: [String] = SearchTaskTests.corpus.keys.sorted(), apart: Double = 0) async throws -> World {
         let h = try await Harness.make(analyzer: PerFileAnalyzer(labels: Self.corpus.mapValues(\.labels)))
         var ids: [String: Int64] = [:]
-        for name in Self.corpus.keys.sorted() {
+        for name in names {
+            h.env.time.advance(by: apart)
             ids[name] = try await h.ingest(name, text: Self.corpus[name]?.text ?? "").id
         }
         return World(h: h, ids: ids)
     }
 
-    private func task(_ tasks: SearchTaskActions, _ id: Int64) async throws -> SearchTask {
+    /// The corpus's invoices, the newest by their own date first.
+    static let invoicesNewestFirst = ["aguas_2025_05.txt", "edp_2025_03.txt", "meo_2025_01.txt", "edp_2024_11.txt"]
+    static let invoices = SearchPlan(title: "Invoices", labels: [label(.type, "invoice")], words: [], grouping: [])
+
+    func task(_ tasks: SearchTaskActions, _ id: Int64) async throws -> SearchTask {
         try #require(try await tasks.store.task(id: id))
     }
 
     /// Events of these kinds in the order they were recorded: the test clock stands still, so by number.
-    private func events(_ h: Harness, _ kinds: Set<EventKind>) async throws -> [EventRecord] {
+    func events(_ h: Harness, _ kinds: Set<EventKind>) async throws -> [EventRecord] {
         try await h.services.history.events(limit: 100, kinds: kinds).sorted { ($0.id ?? 0) < ($1.id ?? 0) }
     }
 
@@ -116,8 +123,30 @@ import Testing
         #expect(try await matcher.documents(Self.invoices2025) == [try w.id("edp_2025_03.txt")],
                 "a document undone back to Incoming is no longer in the archive")
         let one = SearchPlanMatcher(database: w.h.env.database, limit: 1)
-        let invoices = SearchPlan(title: "", labels: [Self.label(.type, "invoice")], words: [], grouping: [])
-        #expect(try await one.documents(invoices) == [try w.id("meo_2025_01.txt")], "at most the limit, the most recently processed first")
+        #expect(try await one.documents(Self.invoices) == [try w.id("edp_2025_03.txt")],
+                "at most the limit, the newest by their own date first: the March invoice, not the January one processed after it")
+    }
+
+    @Test func aTaskThatFindsMoreThanItsLimitKeepsTheNewestByTheirOwnDateNotTheLastProcessed() async throws {
+        // Filed a minute apart, the newest-dated first: the order they were processed in is the reverse of their dates.
+        let w = try await world(filing: Self.invoicesNewestFirst, apart: 60)
+        defer { w.h.env.cleanup() }
+        let newestFirst = try Self.invoicesNewestFirst.map(w.id)
+        let matcher = SearchPlanMatcher(database: w.h.env.database, limit: newestFirst.count)
+        #expect(try await matcher.documents(Self.invoices) == newestFirst,
+                "a task's documents are found newest by their own date first, not the most recently processed first")
+
+        let limit = 2
+        let limited = w.h.with { $0.tasks.maxDocuments = limit }
+        let nothing = SearchPlan(title: "Nothing yet", labels: [Self.label(.sender, "Nobody")], words: [], grouping: [])
+        let (queue, tasks) = limited.searchTasks(StubInterpreter(plans: ["invoices": Self.invoices, "nothing": nothing]))
+        let found = try await tasks.create(prompt: "invoices").id
+        let empty = try await tasks.create(prompt: "nothing").id
+        await queue.drain()
+        #expect(try await task(tasks, found).documents == Array(newestFirst.prefix(limit)),
+                "finding more than tasks.maxDocuments, a task keeps the newest by their own date, not the last processed")
+        #expect(try await tasks.add(empty, labelled: [Self.label(.type, "invoice")]) == Array(newestFirst.prefix(limit)),
+                "and adding every document with the chosen labels adds the same ones, so “found” means the same everywhere in a task")
     }
 
     // MARK: The queue
@@ -134,8 +163,9 @@ import Testing
 
         await queue.drain()
         let ready = try await task(tasks, asked.id)
-        #expect(ready.state == .ready && ready.plan == Self.invoices2025 && ready.model == StubInterpreter.model,
-                "the task keeps what the model read its prompt as")
+        let reader = try await w.h.env.settings.current.modelProfile().chatModel
+        #expect(ready.state == .ready && ready.plan == Self.invoices2025 && ready.model == reader,
+                "the task keeps what the model read its prompt as, and which model that was")
         #expect(Set(ready.documents) == (try w.ids("edp_2025_03.txt", "aguas_2025_05.txt")), "and the documents that plan finds")
         #expect(ready.name == "Utility invoices 2025" && ready.grouping == [.sender], "it goes by the model's name and arrangement")
         #expect(await interpreter.calls.days == [TestTime.start.formatted(Date.ISO8601FormatStyle(timeZone: .current).year().month().day())],
@@ -189,19 +219,27 @@ import Testing
                 "a model that is not installed will not appear by waiting, so the task says which one it needs")
     }
 
-    @Test func aTaskInterruptedWhileItsPromptWasReadIsReadAgainAtTheNextStart() async throws {
+    @Test func aTaskInterruptedWhileItsPromptWasReadIsReadAgainFirstAtTheNextStart() async throws {
         let w = try await world()
         defer { w.h.env.cleanup() }
-        let (queue, tasks) = w.h.searchTasks(StubInterpreter(plans: [Self.prompt: Self.invoices2025]))
+        let phones = SearchTaskQueueStatusTests.phones
+        let interpreter = StubInterpreter(plans: SearchTaskQueueStatusTests.plans)
+        let (queue, tasks) = w.h.searchTasks(interpreter)
         let asked = try await tasks.create(prompt: Self.prompt)
         try await w.h.env.database.writer.write { db in
             try db.execute(sql: "UPDATE search_tasks SET state = ? WHERE id = ?", arguments: [SearchTaskState.interpreting.rawValue, asked.id])
         }
         await queue.drain()
         #expect(try await task(tasks, asked.id).state == .interpreting, "a task being read is not taken up twice")
+        // Another task is asked while the first is read, and the app quits; it starts again a minute later.
+        w.h.env.time.advance(by: 60)
+        _ = try await tasks.create(prompt: phones)
+        w.h.env.time.advance(by: 60)
         #expect(try await tasks.store.recoverInterrupted() == 1, "at the next start it goes back into the queue")
         await queue.drain()
-        #expect(try await task(tasks, asked.id).state == .ready, "and is read then")
+        let read = await interpreter.calls.prompts
+        #expect(read == [Self.prompt, phones], "and is read first, keeping its place before the task asked after it")
+        #expect(try await task(tasks, asked.id).state == .ready, "and is ready then")
     }
 
     @Test func aPromptChangedWhileItWasBeingReadIsReadAgainWithTheNewOne() async throws {
@@ -224,82 +262,6 @@ import Testing
         #expect(await interpreter.calls.prompts == [Self.prompt, phones], "the old prompt's reading is dropped and the new one read")
         let meo = try w.id("meo_2025_01.txt")
         #expect(ready.plan == phonePlan && ready.documents == [meo], "the task has what the new prompt asks for")
-    }
-
-    // MARK: Effort and model
-
-    @Test func eachTaskIsReadWithItsEffortAndModelNewOnesWithTheEffortSettingsGives() async throws {
-        let w = try await world()
-        defer { w.h.env.cleanup() }
-        let interpreter = StubInterpreter(plans: [Self.prompt: Self.invoices2025])
-        let (queue, tasks) = w.h.searchTasks(interpreter)
-        let defaults = try AppSettings.bundledDefaults().taskEffort
-        let plain = try await tasks.create(prompt: Self.prompt)
-        #expect(plain.effort == defaults && plain.assignedModel == nil, "a new task is read with the effort Settings gives new tasks")
-        try await w.h.env.settings.update { $0.taskEffort = .high }
-        let careful = try await tasks.create(prompt: Self.prompt)
-        #expect(careful.effort == .high, "whichever effort that is")
-        let chosen = try await tasks.create(prompt: Self.prompt, effort: .low, model: " qwen3.5:9b\n")
-        #expect(chosen.effort == .low && chosen.assignedModel == "qwen3.5:9b", "or with the effort and model it is asked with, on one line")
-        await queue.drain()
-        let readings = await interpreter.calls.readings
-        #expect(readings.map(\.effort) == [defaults, .high, .low], "each prompt is read with its task's effort")
-        #expect(readings.map(\.model) == [nil, nil, "qwen3.5:9b"], "and by its model when it has one")
-        #expect(try await task(tasks, chosen.id).model == "qwen3.5:9b", "and the task records the model that read it")
-        let asked = try await events(w.h, [.taskCreated]).map(\.summary)
-        #expect(asked.last == "Asked for “\(Self.prompt)”, read with low effort by qwen3.5:9b"
-                    && asked.first?.hasSuffix("read with \(defaults.rawValue) effort by the profile's model") == true,
-                "History says how each task is to be read: \(asked)")
-    }
-
-    @Test func anotherEffortOrModelReadsTheTaskAgainAndTheSameChangesNothing() async throws {
-        let w = try await world()
-        defer { w.h.env.cleanup() }
-        let interpreter = StubInterpreter(plans: [Self.prompt: Self.invoices2025])
-        let (queue, tasks) = w.h.searchTasks(interpreter)
-        let id = try await tasks.create(prompt: Self.prompt, effort: .medium).id
-        await queue.drain()
-        let found = try await task(tasks, id).documents
-
-        var changed = try await tasks.update(id, SearchTaskChange(effort: .medium, model: ""))
-        let edited = try await events(w.h, [.taskEdited])
-        #expect(changed.state == .ready && edited.isEmpty, "the effort and model it has already change nothing")
-        changed = try await tasks.update(id, SearchTaskChange(effort: .high))
-        #expect(changed.state == .queued && changed.effort == .high, "another effort sends the task back into the queue")
-        await queue.drain()
-        changed = try await tasks.update(id, SearchTaskChange(model: "gemma4:12b"))
-        #expect(changed.state == .queued && changed.assignedModel == "gemma4:12b", "and so does another model")
-        await queue.drain()
-        changed = try await tasks.update(id, SearchTaskChange(model: ""))
-        #expect(changed.assignedModel == nil && changed.state == .queued, "an empty model gives the task back to its effort's model")
-        await queue.drain()
-        #expect(await interpreter.calls.readings.dropFirst() == [StubInterpreter.Reading(effort: .high, model: nil),
-                                                                  StubInterpreter.Reading(effort: .high, model: "gemma4:12b"),
-                                                                  StubInterpreter.Reading(effort: .high, model: nil)],
-                "each is read again as it was changed")
-        #expect(try await task(tasks, id).documents == found, "and finds its documents again")
-        let edits = try await events(w.h, [.taskEdited]).map(\.summary)
-        #expect(edits == ["Changed the effort of “Utility invoices 2025”, read with high effort by the profile's model",
-                          "Changed the model of “Utility invoices 2025”, read with high effort by gemma4:12b",
-                          "Changed the model of “Utility invoices 2025”, read with high effort by the profile's model"],
-                "each change is in History with how the task is read now: \(edits)")
-    }
-
-    @Test func anEffortChangedWhileThePromptWasBeingReadReadsItAgainWithTheNewOne() async throws {
-        let w = try await world()
-        defer { w.h.env.cleanup() }
-        let holder = TaskHolder()
-        let interpreter = StubInterpreter(plans: [Self.prompt: Self.invoices2025]) { _ in
-            if let tasks = await holder.tasks, let id = await holder.id, try await tasks.store.task(id: id)?.effort == .low {
-                try await tasks.update(id, SearchTaskChange(effort: .high))
-            }
-        }
-        let (queue, tasks) = w.h.searchTasks(interpreter)
-        let asked = try await tasks.create(prompt: Self.prompt, effort: .low)
-        await holder.set(tasks, asked.id)
-        await queue.drain()
-        #expect(await interpreter.calls.readings.map(\.effort) == [.low, .high], "the reading at the old effort is dropped")
-        #expect(try await task(tasks, asked.id).state == .ready, "and the task is ready from the new one")
     }
 
     // MARK: Editing the set
@@ -422,12 +384,20 @@ import Testing
                 "senders alphabetically, accents aside, one group however a sender is cased, and those without one last")
         let edp = tree.groups[1]
         #expect(edp.groups.map(\.value) == ["2025", "2024"] && edp.count == 3, "by year, the newest first")
-        #expect(edp.groups[0].documents.compactMap(\.id) == [2, 1], "and within a year by date")
+        #expect(edp.groups[0].documents.compactMap(\.id) == [1, 2], "and within a year by their own date, the newest first")
         #expect(tree.groups[0].groups.map(\.value) == [nil], "a document without a date goes with those that have none")
         #expect(tree.count == docs.count && tree.documents.isEmpty, "every document is somewhere in the tree, once")
         let flat = DocumentGrouping.tree(docs, by: [])
-        #expect(flat.groups.isEmpty && flat.documents.compactMap(\.id) == [4, 5, 2, 1, 3], "unarranged, by date, the undated last")
+        #expect(flat.groups.isEmpty && flat.documents.compactMap(\.id) == [1, 2, 5, 4, 3], "unarranged, the newest date first, the undated last")
         #expect(DocumentGrouping.value(of: docs[2], kind: .period) == "2024", "a span is arranged by the year it starts in")
+    }
+
+    @Test func documentsOfOneDateFollowTheirNameThenTheirNumber() {
+        let day = Self.label(.date, "2025-03-05")
+        let docs = [Self.document(13, "b/same.pdf", [day]), Self.document(12, "a/same.pdf", [day]), Self.document(11, "bill 10.pdf", [day]),
+                    Self.document(10, "bill 9.pdf", [day]), Self.document(9, "undated.pdf", [])]
+        #expect(DocumentGrouping.tree(docs, by: [.type]).groups.first?.documents.compactMap(\.id) == [10, 11, 12, 13, 9],
+                "one date by name as Finder sorts it, numbers by their value; one name by number, so the order is the same however they came")
     }
 
     // MARK: The archive's record
@@ -442,7 +412,7 @@ import Testing
         _ = try await tasks.add(id, documents: [try w.id("meo_2025_01.txt")])
         _ = try await tasks.update(id, SearchTaskChange(title: "For the accountant", grouping: .by([.date])))
         _ = try await tasks.export(id, to: w.h.env.root.appendingPathComponent("Out", isDirectory: true), format: .folder)
-        let waiting = try await tasks.create(prompt: "phone bills", effort: .high, model: "qwen3.5:9b").id
+        let waiting = try await tasks.create(prompt: "phone bills", effort: .high, profile: "smart").id
 
         let records = ArchiveRecords(database: w.h.env.database, settings: w.h.env.settings, config: w.h.env.config, registry: nil,
                                      time: w.h.env.time)
@@ -451,8 +421,9 @@ import Testing
         #expect(file.contains("prompt: \(Self.prompt)") && file.contains("inclusion: removed") && file.contains("format: folder"),
                 "the prompt, the set as the user edited it and the exports are in System/_tasks.md")
         #expect(file.contains("| \(id) | For the accountant |"), "with a table of the tasks for people")
-        #expect(file.contains("effort: high") && file.contains("assignedModel: qwen3.5:9b") && file.contains("effort: medium"),
-                "each task's effort, and the model the user gave it")
+        #expect(file.contains("effort: high") && file.contains("profile: smart") && file.contains("effort: medium"),
+                "each task's effort, and the profile the user gave it")
+        #expect(file.components(separatedBy: "profile:").count == 2, "a task that follows Settings' profile names none")
 
         let database = try AppDatabase.inMemory()
         let summary = try await ArchiveRecords(database: database, settings: w.h.env.settings, config: w.h.env.config, registry: nil,
@@ -468,9 +439,44 @@ import Testing
         #expect(after.exports == before.exports && after.grouping == [.date], "its exports and its arrangement")
         #expect(after.lastTrace == nil, "traces are the index's own and are not kept")
         let again = try #require(try await rebuilt.task(id: waiting))
-        #expect(again.state == .queued && again.effort == .high && again.assignedModel == "qwen3.5:9b",
+        #expect(again.state == .queued && again.effort == .high && again.profile == "smart",
                 "a task that was waiting is waiting again, to be read as it was asked")
-        #expect(after.effort == before.effort && after.assignedModel == nil, "and one read by its effort's model still is")
+        #expect(after.effort == before.effort && after.profile == nil, "and one that follows Settings' profile still does")
+    }
+
+    @Test func aRecordOfTasksWrittenBeforeProfilesComesBackFollowingSettingsProfile() async throws {
+        let h = try await Harness.make()
+        defer { h.env.cleanup() }
+        try FileManager.default.createDirectory(at: h.env.layout.searchTasks.deletingLastPathComponent(), withIntermediateDirectories: true)
+        // As the version that gave tasks a model of their own wrote it: the model, and no profile.
+        try """
+        ---
+        arrumator: 1
+        entries:
+        - id: 3
+          prompt: water bills
+          state: ready
+          effort: high
+          assignedModel: qwen3.5:9b
+          created: 2026-07-05T10:00:00Z
+          updated: 2026-07-05T10:00:00Z
+          documents: []
+          exports: []
+        ---
+        """.write(to: h.env.layout.searchTasks, atomically: true, encoding: .utf8)
+        let summary = try await ArchiveRecords(database: h.env.database, settings: h.env.settings, config: h.env.config, registry: nil,
+                                               time: h.env.time).rebuild()
+        #expect(summary.searchTasks == 1, "the earlier version's task is read")
+        let interpreter = StubInterpreter(plans: ["water bills": Self.invoices2025])
+        let (queue, tasks) = h.searchTasks(interpreter)
+        let back = try await task(tasks, 3)
+        #expect(back.prompt == "water bills" && back.effort == .high && back.state == .ready, "as it was asked")
+        #expect(back.profile == nil, "the model it was given is no profile, so it follows the one Settings uses, as the migration has it")
+        _ = try await tasks.retry(3)
+        await queue.drain()
+        let inUse = try await h.env.settings.current.modelProfile()
+        #expect(await interpreter.calls.readings == [StubInterpreter.Reading(effort: .high, profile: inUse)],
+                "and is read by Settings' profile, never by the model the dropped key named")
     }
 }
 

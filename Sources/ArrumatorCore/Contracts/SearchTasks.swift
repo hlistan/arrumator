@@ -106,18 +106,20 @@ public struct SearchInterpretation: Sendable, Codable, Hashable {
 /// Reads what a person asks for, in their own words and language, as a `SearchPlan`. Implemented by
 /// `ArrumatorClassify.SearchPromptInterpreter`.
 public protocol SearchPromptInterpreting: Sendable {
-    /// `effort` is how much computing the reading gets (`tasks.efforts`), and `model` the model the user gave the task,
-    /// nil for the one the effort takes from the profile. `vocabulary` is the archive's labels in use, the most used
+    /// `effort` is how much that model thinks before it answers (`tasks.efforts`), and `profile` the model profile whose
+    /// chat model reads it: the task's own, else the one Settings uses. `vocabulary` is the archive's labels in use, the most used
     /// first, which the model is shown so it asks for them as the archive writes them; `today` is the ISO day the prompt
     /// is read on, which "last year" counts from. Without a valid answer the interpretation says why and has no plan; a
-    /// model that cannot be reached or is missing throws, so the task waits.
-    func interpret(_ prompt: String, effort: TaskEffort, model: String?, vocabulary: [LabelKind: [LabelUsage]], today: String,
-                   settings: AppSettings, config: PipelineConfig, trace: TraceContext) async throws -> SearchInterpretation
+    /// model that cannot be reached throws, so the task waits, and one that is missing throws, so the task fails saying
+    /// which it needs.
+    func interpret(_ prompt: String, effort: TaskEffort, profile: ModelProfile, vocabulary: [LabelKind: [LabelUsage]], today: String,
+                   config: PipelineConfig, trace: TraceContext) async throws -> SearchInterpretation
 }
 
-/// How much computing a search task's request is read with, from quick to careful: each is a preset in
-/// `tasks.efforts` of which model reads it, whether it thinks first, how often a wrong answer goes back to it, and how
-/// much of the archive's vocabulary it is shown (`EffortPreset`).
+/// How much the model thinks before it answers a search task's request: low not at all, medium, high the most. Which
+/// model reads is the profile's. Each is a preset in `tasks.efforts` of what the model is told about thinking, with the
+/// answer length and time thinking needs, how often a wrong answer goes back to it and how much of the archive's
+/// vocabulary it is shown (`EffortPreset`).
 public enum TaskEffort: String, Sendable, Codable, CaseIterable, CodingKeyRepresentable {
     case low, medium, high
 }
@@ -223,10 +225,11 @@ public struct SearchTask: Sendable, Codable, Hashable, Identifiable {
     public var grouping: [LabelKind]
     /// Whether the user chose `grouping`.
     public var groupedByUser: Bool
-    /// How much computing its request is read with.
+    /// How much the model thinks before it answers its request.
     public var effort: TaskEffort
-    /// The model the user gave it to read its request; nil for the one its effort takes from the profile.
-    public var assignedModel: String?
+    /// The id of the model profile the user gave it to read its request; nil to follow the one Settings uses, whichever
+    /// that is when it is read.
+    public var profile: String?
     /// The model that read its request last.
     public var model: String?
     public var problem: String?

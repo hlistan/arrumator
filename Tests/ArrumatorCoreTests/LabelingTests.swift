@@ -57,7 +57,9 @@ import Testing
         services.analyzer = StubAnalyzer()
         let coordinator = IngestCoordinator(services: services)
         try await ReviewActions(services: services, coordinator: coordinator).retry(id)
-        #expect(try await services.jobs.active().map(\.state) == [.analysing], "read again from the text it arrived with")
+        let queued = try await services.jobs.active()
+        #expect(queued.map(\.state) == [.pending] && queued.first?.payload.content != nil,
+                "it waits its turn with the text it arrived with, to be read again from it")
         await coordinator.drain()
         let read = try #require(try await services.documents.document(id: id))
         #expect(read.labels == StubAnalyzer.edpBill && read.status == .filed && read.analysis?.problems == [],

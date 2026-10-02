@@ -64,7 +64,7 @@ import Testing
     }
 
     @Test func aDocumentShowingNothingSignificantHasNoLabels() throws {
-        let empty = Dictionary(uniqueKeysWithValues: LabelKind.allCases.map { ($0, [String]()) })
+        let empty = Dictionary(uniqueKeysWithValues: ClassificationSchema.answerOrder.map { ($0, [String]()) })
         let validated = try Self.validator().validate(Fixtures.answer(empty))
         #expect(validated.labels.isEmpty && validated.notes.isEmpty, "empty lists are a valid answer, with nothing to note")
     }
@@ -84,18 +84,51 @@ import Testing
     @Test func theSchemaAsksForEveryKindTheFactsFirstAndTheNameLast() throws {
         let config = try PipelineConfig.bundledDefaults()
         let schema = ClassificationSchema.analysis(maxPerKind: config.labels.maxPerKind)
-        let body = OllamaChatRequest(model: "m", messages: [.user("hi")], format: schema, options: [:], keepAlive: "1m", think: false, timeout: nil)
-            .body.serialized()
+        let body = OllamaChatRequest.sample(format: schema, think: nil).body.serialized()
         let keys = ClassificationSchema.answerOrder.map(ClassificationSchema.labelsKey) + [ClassificationSchema.fileNameKey]
         let positions = try keys.map { key in try #require(body.range(of: "\"\(key)\"")?.lowerBound, "\(key) is asked for") }
         #expect(positions == positions.sorted(), "the model writes the sender, type and date before the rest, and the name last")
-        #expect(Set(ClassificationSchema.answerOrder) == Set(LabelKind.allCases) && ClassificationSchema.answerOrder.count == LabelKind.allCases.count,
-                "the schema asks for every kind, once")
+        #expect(Set(ClassificationSchema.answerOrder) == Set(LabelKind.modelKinds)
+                    && ClassificationSchema.answerOrder.count == LabelKind.modelKinds.count,
+                "the schema asks for every kind the model gives, once")
         #expect(schema["properties"]?["types"]?["maxItems"] == .number(1) && schema["properties"]?["dates"]?["maxItems"] == .number(1),
                 "one type and one date")
         #expect(schema["properties"]?["topics"]?["maxItems"] == .number(Double(config.labels.maxPerKind)), "other kinds up to labels.maxPerKind")
         #expect(schema["properties"]?["types"]?["items"]?["enum"]?.arrayValue?.contains(.string("other")) == false,
                 "a document no type fits has none, rather than \"other\"")
+    }
+
+    @Test func theModelIsNeverAskedForATagNorReadAsGivingOne() async throws {
+        let config = try PipelineConfig.bundledDefaults()
+        #expect(!ClassificationSchema.answerOrder.contains(.tag), "a tag is the user's own: the model is asked for every kind but it")
+        let schema = ClassificationSchema.analysis(maxPerKind: config.labels.maxPerKind).serialized()
+        #expect(!schema.contains("\"tags\"") && !schema.contains("\"tag\""), "the answer's schema has no list of tags: \(schema)")
+        let answer = try Self.defaultValidator().validate(#"{"tags": ["Taxes 2024", "Mine"], "# + Fixtures.answer().dropFirst())
+        #expect(answer.labels == Fixtures.edpLabels && answer.notes.isEmpty,
+                "a list of tags in an answer is no list the app reads, and none is asked for when it is left out")
+
+        // The archive has tags, and rules about them: what the model is told of the archive stays as it was without them.
+        let h = try await ClassifyHarness.make { _ in Fixtures.answer() }
+        defer { h.env.cleanup() }
+        let store = DocumentStore(database: h.env.database, time: h.env.time)
+        for (offset, labels) in [StubAnalyzer.edpBill, StubAnalyzer.edpBill + [DocumentLabel(kind: .tag, value: "Taxes 2024")],
+                                 [DocumentLabel(kind: .tag, value: "Taxes 2024"), DocumentLabel(kind: .tag, value: "Receipts")]].enumerated() {
+            var record = DocumentRecord.arrived(path: "/archive/\(offset).pdf", sha256: "\(offset)", size: 1, uttype: "com.adobe.pdf", inode: nil,
+                                                modified: nil, now: h.env.time.now())
+            record.status = .filed
+            record.labelsJson = JSON.string(labels)
+            try await store.save(record)
+        }
+        let actions = LabelActions(database: h.env.database, time: h.env.time)
+        try await actions.merge(DocumentLabel(kind: .tag, value: "Taxes 2024"), into: "Taxes")
+        try await actions.ignore(DocumentLabel(kind: .tag, value: "Receipts"))
+        let guidance = try await LabelStore(database: h.env.database, config: h.env.config.labels).guidance()
+        _ = try await h.analyse(Fixtures.content("fatura.pdf", text: Fixtures.edpText), guidance: guidance)
+        let request = try #require(await h.mock.chatRequests.first)
+        let prompt = request.messages.map(\.content).joined(separator: "\n")
+        #expect(prompt.contains("- senders: EDP Comercial") && !prompt.contains("tags:") && !prompt.contains("Taxes") && !prompt.contains("Receipts"),
+                "the model is shown the archive's other labels, and nothing of its tags nor of the decisions about them: \(prompt)")
+        #expect(request.format?.serialized().contains("\"tags\"") == false, "and is asked for none")
     }
 
     // MARK: Asking the model
@@ -105,7 +138,7 @@ import Testing
         defer { h.env.cleanup() }
         let outcome = try await h.analyse(Fixtures.content("fatura.pdf", text: Fixtures.edpText))
         #expect(outcome.labels == Fixtures.edpLabels, "the document is described by the labels the model gave")
-        #expect(outcome.analysis == DocumentAnalysis(fileName: "2026-07-05 EDP Comercial - Fatura eletricidade julho", model: "ministral-3:14b"),
+        #expect(outcome.analysis == DocumentAnalysis(fileName: "2026-07-05 EDP Comercial - Fatura eletricidade julho", model: ClassifyHarness.chatModel),
                 "and named as the model named it, by the model that read it")
         let embedded = try #require(await h.mock.embedRequests.first?.input.first)
         #expect(outcome.embedding == VectorCodec.normalized(MockOllama.hashEmbedding(embedded, dimension: 256)),
@@ -120,6 +153,7 @@ import Testing
         #expect(system.contains("no folders") && !system.contains("{{"), "written for labelling, every placeholder filled")
         #expect(request.messages[1].content.contains("NIF 503504564   Cliente: Maria Exemplo"), "the model reads the document's text")
         #expect(!request.messages[1].content.contains("## THIS ARCHIVE"), "an archive without labels has nothing to tell it")
+        #expect(request.think == nil, "a model that cannot think is not told whether to")
 
         let steps = await h.steps(.analyse)
         #expect(steps.map(\.status) == [.ok], "the exchange is recorded in the trace")
@@ -128,6 +162,17 @@ import Testing
         let output = try JSON.decoder.decode(JSONValue.self, from: Data(try #require(steps.first?.output).utf8))
         #expect(output[TraceStep.exchangeKey]?.arrayValue?.count == 1 && output["answer"] != nil,
                 "the prompt and raw answer sit under the key retention clears, apart from the answer it keeps")
+        #expect(try steps.first?.exchange().map(\.think) == [nil], "and the trace says nothing was sent about thinking")
+    }
+
+    @Test func aModelThatCanThinkReadsADocumentWithoutAndTheTraceSaysSo() async throws {
+        let h = try await ClassifyHarness.make(thinking: .switches) { _ in Fixtures.answer() }
+        defer { h.env.cleanup() }
+        _ = try await h.analyse(Fixtures.content("fatura.pdf", text: Fixtures.edpText))
+        #expect(await h.mock.chatRequests.map(\.think) == [false],
+                "analysis.think is off, and a model that can be switched off is told so: thinking multiplies a document's time")
+        let step = try #require(await h.steps(.analyse).first)
+        #expect(try step.exchange().map(\.think) == [false], "the trace records what the model was told about thinking")
     }
 
     @Test func aDocumentQuotingATemplatePlaceholderIsReadAsWritten() async throws {
@@ -174,6 +219,39 @@ import Testing
         let repair = try #require(await h.mock.chatRequests.last?.messages.last?.content)
         #expect(repair.contains("languages is missing"), "the model is told what was wrong")
         #expect(await h.steps(.analyse).map(\.status) == [.warn], "a repaired answer is flagged in the trace")
+    }
+
+    @Test func aDocumentIsReadByTheProfilesChatModelAloneAndAnInvalidAnswerGoesBackAsOftenAsAnalysisSays() async throws {
+        let h = try await ClassifyHarness.make { _ in "I cannot tell." }
+        defer { h.env.cleanup() }
+        _ = try await h.analyse(Fixtures.content("fatura.pdf", text: Fixtures.edpText))
+        let config = h.env.config, profile = try h.settings.modelProfile()
+        let requests = await h.mock.chatRequests
+        #expect(profile.chatModel == ClassifyHarness.chatModel
+                    && requests.map(\.model) == Array(repeating: profile.chatModel, count: config.analysis.repairAttempts + 1),
+                "the profile's chat model is asked, then again analysis.repairAttempts times with what was wrong, and no model after it")
+        #expect(requests.allSatisfy { $0.options["num_ctx"] == .number(Double(config.analysis.numCtx)) && $0.keepAlive == config.ollama.keepAlive.chat },
+                "with analysis.numCtx, the context images are described with too, and the chat keep-alive")
+        let step = try #require(await h.steps(.analyse).first)
+        #expect(try step.exchange().map(\.reason) == [.primary] + Array(repeating: .repair, count: config.analysis.repairAttempts),
+                "the trace says which call read the document and which were sent back to repair it")
+        #expect(step.output?.contains(#""reason":"primary""#) == true && step.output?.contains(#""reason":"repair""#) == true,
+                "each reason written as the word it is, as traces have always written it")
+        let input = try JSON.decoder.decode(JSONValue.self, from: Data(try #require(step.input, "the step records its input").utf8))
+        #expect(input["model"] == .string(profile.chatModel), "and which model read it: \(input)")
+        let embedded = try #require(await h.mock.embedRequests.first, "a document without labels is still found by meaning")
+        #expect(embedded.model == profile.embedModel && embedded.keepAlive == config.ollama.keepAlive.embed,
+                "by the profile's embedding model, kept loaded as long as ollama.keepAlive.embed says")
+    }
+
+    @Test func aChatModelThatIsNotInstalledHoldsTheDocumentUnread() async throws {
+        let h = try await ClassifyHarness.make { _ in Fixtures.answer() }
+        defer { h.env.cleanup() }
+        let settings = try h.settings.reading(withChatModel: "llama-9:1t")
+        await #expect(throws: OllamaError.modelNotFound("llama-9:1t"), "the document waits for its model rather than another reading it unasked") {
+            try await h.analyse(Fixtures.content("fatura.pdf", text: Fixtures.edpText), settings: settings)
+        }
+        #expect(await h.mock.chatRequests.isEmpty, "no model was asked: Ollama said, when asked what the model can do, that it does not have it")
     }
 
     @Test func withoutAValidAnswerTheDocumentWaitsForTheUserUnlabelled() async throws {

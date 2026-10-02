@@ -17,8 +17,11 @@ public struct DocumentEntry: Codable, Sendable, Hashable {
     public var contentType: String
     public var status: DocumentStatus
     public var pages: Int?
-    /// What the document is described by; absent until the model has labelled it.
+    /// What the document is described by; absent while it has no labels and has not been labelled.
     public var labels: [DocumentLabel]?
+    /// True while its labels are only its tags because the model has not labelled it yet; absent otherwise. Never `tags`,
+    /// which entries of versions that filed into folders hold topics under.
+    public var tagsOnly: Bool?
     public var duplicateOf: Int64?
     /// How the model read the document: its name, the model, why it waits for the user.
     public var analysis: DocumentAnalysis?
@@ -30,6 +33,7 @@ public struct DocumentEntry: Codable, Sendable, Hashable {
         case id, uid, file
         case originalName = "original_name"
         case added, filed, status, pages, labels
+        case tagsOnly = "tags_only"
         case duplicateOf = "duplicate_of"
         case contentType = "content_type"
         case size, sha256, analysis
@@ -47,6 +51,7 @@ public struct DocumentEntry: Codable, Sendable, Hashable {
         status = record.status
         pages = record.pageCount
         labels = record.labels
+        tagsOnly = record.tagsOnly ? true : nil
         duplicateOf = record.duplicateOf
         analysis = record.analysis
         added = record.addedAt
@@ -54,12 +59,16 @@ public struct DocumentEntry: Codable, Sendable, Hashable {
     }
 
     /// The index row for this entry in `directory`. What the index caches about the file (its text, inode, times of
-    /// extraction) starts empty and is filled in again when the document is read.
+    /// extraction) starts empty and is filled in again when the document is read. Labels are kept as the index keeps
+    /// them (`DocumentLabel.stored`), so an entry edited by hand to give a document a label of another kind than a tag
+    /// labels it, as a correction in the app does.
     public func record(directory: URL, now: Date) -> DocumentRecord {
-        DocumentRecord(id: id, uid: uid, path: directory.appendingPathComponent(file).path, originalFilename: originalName,
-                       sha256: sha256, size: size, uttype: contentType, inode: nil, pageCount: pages, status: status, analysisJson: analysis.map { JSON.string($0) },
-                       contentJson: nil, labelsJson: labels.map { JSON.string($0) }, duplicateOf: duplicateOf, lastTraceId: nil,
-                       addedAt: added, filedAt: filed, extractedAt: nil, embeddedAt: nil, fileMtime: nil, createdAt: added, updatedAt: now)
+        let stored = labels.map { DocumentLabel.stored($0, labelled: tagsOnly != true) } ?? (labels: nil, tagsOnly: false)
+        return DocumentRecord(id: id, uid: uid, path: directory.appendingPathComponent(file).path, originalFilename: originalName,
+                              sha256: sha256, size: size, uttype: contentType, inode: nil, pageCount: pages, status: status,
+                              analysisJson: analysis.map { JSON.string($0) }, contentJson: nil, labelsJson: stored.labels.map { JSON.string($0) },
+                              tagsOnly: stored.tagsOnly, duplicateOf: duplicateOf, lastTraceId: nil, addedAt: added, filedAt: filed,
+                              extractedAt: nil, embeddedAt: nil, fileMtime: nil, createdAt: added, updatedAt: now)
     }
 }
 
@@ -116,7 +125,9 @@ public struct LabelRuleEntry: Codable, Sendable, Hashable {
 
 /// One of the user's search tasks, as `System/_tasks.md` records it: what was asked, what the model read it as, the
 /// documents of its set by number (those the user took out among them), and its exports. The trace and queue times are
-/// the index's own and are not kept; a task whose prompt was being read is queued again.
+/// the index's own and are not kept; a task whose prompt was being read is queued again. The model an earlier version
+/// gave a task (`assignedModel`) is not read: a model is not a profile, so that task follows Settings' profile, as
+/// `v16_taskProfile` has it.
 public struct SearchTaskEntry: Codable, Sendable, Hashable {
     public var id: Int64
     public var prompt: String
@@ -124,8 +135,8 @@ public struct SearchTaskEntry: Codable, Sendable, Hashable {
     public var grouping: [LabelKind]?
     public var state: SearchTaskState
     public var effort: TaskEffort
-    /// The model the user gave the task; absent for the one its effort takes from the profile.
-    public var assignedModel: String?
+    /// The id of the model profile the user gave the task; absent for one that follows the profile Settings uses.
+    public var profile: String?
     public var plan: SearchPlan?
     public var model: String?
     public var problem: String?
@@ -150,7 +161,7 @@ public struct SearchTaskEntry: Codable, Sendable, Hashable {
 
     /// In the order a person reads an entry, with the plan, the set and the exports last.
     enum CodingKeys: String, CodingKey {
-        case id, prompt, title, state, effort, assignedModel, grouping, model, problem, created, updated, plan, documents, exports
+        case id, prompt, title, state, effort, profile, grouping, model, problem, created, updated, plan, documents, exports
     }
 
     init?(_ record: SearchTaskRecord, members: [SetMember], exports: [SearchTaskExportRecord]) {
@@ -161,7 +172,7 @@ public struct SearchTaskEntry: Codable, Sendable, Hashable {
         grouping = record.userGrouping
         state = record.state
         effort = record.effort
-        assignedModel = record.assignedModel
+        profile = record.profile
         plan = record.plan
         model = record.model
         problem = record.problem
@@ -174,7 +185,7 @@ public struct SearchTaskEntry: Codable, Sendable, Hashable {
 
     var record: SearchTaskRecord {
         SearchTaskRecord(id: id, prompt: prompt, title: title, groupingJson: grouping.map { JSON.string($0) }, effort: effort,
-                         assignedModel: assignedModel, state: state == .interpreting ? .queued : state, planJson: plan.map { JSON.string($0) }, model: model,
+                         profile: profile, state: state == .interpreting ? .queued : state, planJson: plan.map { JSON.string($0) }, model: model,
                          problem: problem, lastTraceId: nil, nextRunAt: state.isActive ? created : nil, createdAt: created, updatedAt: updated)
     }
 

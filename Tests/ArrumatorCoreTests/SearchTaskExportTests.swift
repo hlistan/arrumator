@@ -53,6 +53,15 @@ import Testing
                 "and in History, with where it went")
     }
 
+    @Test func aSetListedWithoutArrangingIsExportedNewestFirst() async throws {
+        let (w, tasks, id) = try await prepared()
+        defer { w.h.env.cleanup() }
+        _ = try await tasks.update(id, SearchTaskChange(grouping: .by([])))
+        let export = try await tasks.export(id, to: out(w), format: .folder)
+        #expect(export.files.map(\.document) == [try w.id("aguas_2025_05.txt"), try w.id("edp_2025_03.txt")],
+                "the export records the documents as the set lists them: the May bill before the March one, the newest by their own date first")
+    }
+
     @Test func exportingAgainNeverWritesOverWhatIsThere() async throws {
         let (w, tasks, id) = try await prepared()
         defer { w.h.env.cleanup() }

@@ -1,10 +1,11 @@
 import ArrumatorCore
 import Foundation
 
-/// The production `DocumentAnalyzing`. The local model reads the document once, with the app's own prompt
-/// (`labels-system.md`) and what the archive's labels and the user's decisions about them say (`archive-labels.md`),
-/// picks out its signals, which become its labels and all it is described by, and names its file. Every model call is
-/// recorded in the trace.
+/// The production `DocumentAnalyzing`. The chat model of the profile in use reads the document once, with the app's own
+/// prompt (`labels-system.md`) and what the archive's labels and the user's decisions about them say
+/// (`archive-labels.md`), picks out its signals, which become its labels and all it is described by, and names its file;
+/// an invalid answer goes back to it `analysis.repairAttempts` times. Its embedding model makes the vector the document
+/// is found by meaning with. Every model call is recorded in the trace.
 public struct DocumentAnalyzer: DocumentAnalyzing {
     public let gate: InferenceGate
     public let models: ModelManager
@@ -18,18 +19,15 @@ public struct DocumentAnalyzer: DocumentAnalyzing {
 
     public func analyse(_ content: ExtractedContent, guidance: LabelGuidance, settings: AppSettings, config: PipelineConfig,
                         trace: TraceContext) async throws -> AnalysisOutcome {
-        let resolved = try config.models(for: settings.models)
-        let tiers = LLMClassifier.Tier.distinct([
-            LLMClassifier.Tier(model: resolved.chat, numCtx: resolved.numCtx, keepAlive: resolved.keepAliveChat),
-            LLMClassifier.Tier(model: resolved.fast, numCtx: resolved.fastNumCtx, keepAlive: resolved.keepAliveChat)])
+        let model = try settings.modelProfile().chatModel
         let validator = AnswerValidator(labels: config.labels)
-        let input = ["tiers": tiers.map(\.model).joined(separator: ",")]
+        let input = ["model": model]
         let started = Date()
         var answer: ModelAnswer<ValidatedAnalysis>?
         do {
-            answer = try await LLMClassifier(gate: gate, models: models, effort: .documents(config.analysis)).ask(
+            answer = try await LLMClassifier(gate: gate, models: models, effort: .documents(config)).ask(
                 system: try prompts.analysisSystem(), user: try prompts.analysisUser(content: content, guidance: guidance),
-                schema: ClassificationSchema.analysis(maxPerKind: config.labels.maxPerKind), tiers: tiers,
+                schema: ClassificationSchema.analysis(maxPerKind: config.labels.maxPerKind), model: model,
                 repairPrompt: { try prompts.repair(errors: $0) }, validate: { try validator.validate($0) })
             await trace.record(.analyse, status: (answer?.calls.count ?? 0) > 1 ? .warn : .ok, startedAt: started, input: input,
                                output: AnalysisTrace(answer: answer?.answer, exchange: answer?.calls ?? []))
@@ -56,8 +54,7 @@ public struct DocumentAnalyzer: DocumentAnalyzing {
 
     public func embedding(for content: ExtractedContent, senders: [String], settings: AppSettings, config: PipelineConfig,
                           trace: TraceContext) async throws -> (vector: [Float], model: String)? {
-        let resolved = try config.models(for: settings.models)
-        let embedder = OllamaEmbedder(gate: gate, model: resolved.embed, keepAlive: resolved.keepAliveEmbed,
+        let embedder = OllamaEmbedder(gate: gate, model: try settings.modelProfile().embedModel, keepAlive: config.ollama.keepAlive.embed,
                                       numCtx: config.analysis.embeddingNumCtx)
         let summary = content.embeddingSummary(senders: senders, maxChars: config.analysis.embeddingSummaryChars,
                                                identifiersLimit: config.analysis.embeddingIdentifiersLimit)

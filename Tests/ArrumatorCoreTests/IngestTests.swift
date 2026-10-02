@@ -9,11 +9,34 @@ extension Harness {
     func jobs() async throws -> [JobRecord] {
         try await env.database.reader.read { db in try JobRecord.order(Column("id")).fetchAll(db) }
     }
+
+    /// The name the model reads documents as in `readingOtherwise()`.
+    static let otherFileName = "2026-07-05 MEO - Contrato"
+
+    /// This pipeline as after the user chose another profile: its model reads every document as a contract from MEO
+    /// (`LabelingTests.meoContract`), named `otherFileName`.
+    func readingOtherwise() -> (services: PipelineServices, coordinator: IngestCoordinator, analyzer: StubAnalyzer) {
+        let analyzer = StubAnalyzer(labels: LabelingTests.meoContract, fileName: Self.otherFileName)
+        var services = services
+        services.analyzer = analyzer
+        return (services, IngestCoordinator(services: services), analyzer)
+    }
+}
+
+/// A Trash that takes nothing, as that of a volume without one.
+struct RefusingTrash: Trashing {
+    static let reason = "the volume has no Trash"
+
+    func trash(_ url: URL) throws -> URL? {
+        throw CocoaError(.featureUnsupported, userInfo: [NSLocalizedDescriptionKey: Self.reason])
+    }
 }
 
 /// Every document is read by the model, labelled and filed at the top of the archive under the name it gave; the
 /// archive has no folders of the app's making.
 @Suite struct IngestTests {
+    static let bill = "EDP electricity July"
+
     @Test func aNewDocumentIsFiledAtTheTopOfTheArchiveUnderTheNameTheModelGave() async throws {
         let h = try await Harness.make()
         defer { h.env.cleanup() }
@@ -49,21 +72,125 @@ extension Harness {
         #expect(try await h.services.documents.reviewQueue().map(\.id) == [doc.id], "it is in the review queue")
     }
 
-    @Test func aCopyIsFiledBesideItsOriginalUnreadOrLeftInIncoming() async throws {
+    @Test func aCopyOfADocumentInTheArchiveHasItReadAgainFromTheStartAndGoesToTheTrash() async throws {
+        let h = try await Harness.make()
+        defer { h.env.cleanup() }
+        let original = try await h.ingest("bill.txt", text: Self.bill)
+        let id = try #require(original.id)
+        h.env.time.advance(by: 60)
+        let (services, coordinator, analyzer) = h.readingOtherwise()
+        let copy = try h.env.drop("bill copy.txt", text: Self.bill)
+        await coordinator.enqueue(copy)
+        await coordinator.drain()
+
+        let documents = try await services.documents.list(DocumentFilter(), limit: 10)
+        #expect(documents.map(\.id) == [id], "the copy becomes no document of its own")
+        let read = try #require(documents.first)
+        #expect(read.labels == LabelingTests.meoContract && read.status == .filed, "its original is labelled with what the model reads now")
+        #expect(read.path == h.env.archive.appendingPathComponent(Harness.otherFileName + ".txt").standardizedFileURL.path,
+                "and renamed where it is, under the name the model gives now")
+        #expect(await analyzer.calls.files == [original.filename], "the original is what is read, once")
+        #expect((read.extractedAt ?? .distantPast) > (original.extractedAt ?? .distantFuture),
+                "its text is read from its file again, as a file that arrives is, not taken from before")
+        #expect(try await h.search.fullText(SearchQuery(text: "sender:meo")).hits.map(\.id) == [id], "the index has what it reads now")
+        #expect(!FileManager.default.fileExists(atPath: copy.path), "the copy leaves Incoming")
+        let trashed = h.env.trashed()
+        #expect(trashed.map(\.lastPathComponent) == ["bill copy.txt"], "into the Trash, under its own name, never deleted")
+        #expect(try trashed.first.map { try String(contentsOf: $0, encoding: .utf8) } == Self.bill, "as it came")
+
+        let event = try #require(try await services.history.events(limit: 5, kinds: [.duplicate], docID: id).first)
+        #expect(event.summary == "bill copy.txt is a copy of \(original.filename), which is read again; the copy is in the Trash",
+                "History says, under the original, what became of the copy")
+        let payload = try #require(JSON.decode(CopyPayload.self, from: event.payloadJson))
+        #expect(payload.copy == copy.standardizedFileURL.path && payload.trashed.map { URL(fileURLWithPath: $0).lastPathComponent } == "bill copy.txt"
+                    && payload.tags == nil, "and where the copy was and went: \(event.payloadJson)")
+        #expect(try await h.jobs().map(\.state) == [.done, .duplicate, .done],
+                "the copy's job ends as a copy's, and reading its original is a job of its own")
+    }
+
+    @Test func aCopyNoLongerTheSameAsItsOriginalOnDiskIsADocumentOfItsOwn() async throws {
         let analyzer = StubAnalyzer()
         let h = try await Harness.make(analyzer: analyzer)
         defer { h.env.cleanup() }
-        let original = try await h.ingest("bill.txt", text: "EDP electricity July")
-        let copy = try await h.ingest("bill copy.txt", text: "EDP electricity July")
-        #expect(copy.status == .duplicate && copy.duplicateOf == original.id, "the copy points at the document it repeats")
-        #expect(copy.url.deletingLastPathComponent().standardizedFileURL == h.env.archive.standardizedFileURL && copy.filename == "bill copy.txt",
-                "a copy goes into the archive under its own name")
-        #expect(await analyzer.calls.files == ["bill.txt"], "the copy is not read again")
+        let changed = try await h.ingest("bill.txt", text: Self.bill)
+        try Data("EDP electricity July, annotated".utf8).write(to: changed.url)
+        let gone = try await h.ingest("receipt.txt", text: "A receipt")
+        try FileManager.default.removeItem(at: gone.url)
 
-        try await h.env.settings.update { $0.duplicateAction = .leaveInIncoming }
-        let another = try await h.ingest("bill again.txt", text: "EDP electricity July")
-        #expect(another.status == .duplicate && another.path == h.env.incoming.appendingPathComponent("bill again.txt").path,
-                "when the user asks, a copy is left in Incoming untouched")
+        let first = try await h.ingest("bill copy.txt", text: Self.bill)
+        let second = try await h.ingest("receipt copy.txt", text: "A receipt")
+        #expect(first.id != changed.id && second.id != gone.id && [first.status, second.status] == [.filed, .filed],
+                "a file the archive no longer holds the same bytes of, changed or gone, is filed as a new document")
+        #expect(await analyzer.calls.files == ["bill.txt", "receipt.txt", "bill copy.txt", "receipt copy.txt"], "each read as itself")
+        #expect(h.env.trashed().isEmpty, "and nothing goes to the Trash")
+    }
+
+    @Test func aCopyPutIntoTheArchiveIsADocumentOfItsOwnAndNothingGoesToTheTrash() async throws {
+        let analyzer = StubAnalyzer()
+        let h = try await Harness.make(analyzer: analyzer)
+        defer { h.env.cleanup() }
+        let original = try await h.ingest("bill.txt", text: Self.bill)
+        let put = try h.env.put("Old/bill copy.txt", text: Self.bill)
+        await ArchiveReconciler(services: h.services, coordinator: h.coordinator).apply([.untrackedFile(path: put.path)])
+        await h.coordinator.drain()
+        let adopted = try #require(try await h.services.documents.document(path: put.path))
+        #expect(adopted.id != original.id && adopted.status == .filed && FileManager.default.fileExists(atPath: put.path),
+                "a file the user put into the archive is theirs: read where it is, never taken for a copy")
+        #expect(await analyzer.calls.files == ["bill.txt", "bill copy.txt"] && h.env.trashed().isEmpty,
+                "its original is not read again, and nothing of the archive goes to the Trash")
+    }
+
+    @Test func aCopyTheTrashRefusesStaysInIncomingAndItsOriginalIsNotReadAgain() async throws {
+        let base = try await Harness.make()
+        defer { base.env.cleanup() }
+        let original = try await base.ingest("bill.txt", text: Self.bill)
+        var services = base.with { $0.ingest.retryDelays = NonEmpty(0, []) }.services
+        let analyzer = StubAnalyzer()
+        services.analyzer = analyzer
+        services.trash = RefusingTrash()
+        let coordinator = IngestCoordinator(services: services)
+        let copy = try base.env.drop("bill copy.txt", text: Self.bill)
+        await coordinator.enqueue(copy)
+        await coordinator.drain()
+
+        #expect(FileManager.default.fileExists(atPath: copy.path), "the copy stays where it was: nothing is lost")
+        #expect(await analyzer.calls.files.isEmpty, "its original is not read again while the copy cannot go")
+        let job = try #require(try await base.jobs().last)
+        #expect(job.state == .failed && job.attempt == services.config.ingest.maxAttempts, "the copy's job is tried again, then fails")
+        let failed = try #require(try await services.history.events(limit: 5, kinds: [.failed]).first)
+        #expect(failed.summary == IngestError.notTrashed(copy.standardizedFileURL.path, reason: RefusingTrash.reason).localizedDescription,
+                "History says why: \(failed.summary)")
+        #expect(try await services.documents.list(DocumentFilter(), limit: 5).map(\.id) == [original.id], "and no document is made of it")
+    }
+
+    @Test func aStopAfterTheCopyWentToTheTrashStillHasItsOriginalReadAgain() async throws {
+        let base = try await Harness.make()
+        defer { base.env.cleanup() }
+        let original = try await base.ingest("bill.txt", text: Self.bill)
+        let id = try #require(original.id)
+        var services = base.with { $0.ingest.retryDelays = NonEmpty(0, []) }.services
+        let analyzer = StubAnalyzer()
+        services.analyzer = analyzer
+        let coordinator = IngestCoordinator(services: services)
+        // Queueing the original to be read again fails once, after the copy went to the Trash.
+        try await base.env.database.writer.write { db in
+            try db.execute(sql: """
+                CREATE TEMP TRIGGER queueing_fails_once BEFORE INSERT ON jobs
+                WHEN NEW.kind = '\(JobKind.reanalyse.rawValue)' AND (SELECT COUNT(*) FROM events WHERE kind = '\(EventKind.retry.rawValue)') = 0
+                BEGIN SELECT RAISE(ABORT, 'the queue is briefly unavailable'); END
+                """)
+        }
+        await coordinator.enqueue(try base.env.drop("bill copy.txt", text: Self.bill))
+        await coordinator.drain()
+
+        #expect(base.env.trashed().map(\.lastPathComponent) == ["bill copy.txt"], "the copy went to the Trash before the stop")
+        #expect(await analyzer.calls.files == [original.filename], "its original is still read again, once")
+        let events = try await services.history.events(limit: 20, kinds: [.duplicate, .missing])
+        #expect(events.map(\.kind) == [.duplicate] && events.first?.docId == id,
+                "the copy is recorded once, under its original, and never as a file that disappeared: \(events.map(\.summary))")
+        #expect(events.first?.summary == "bill copy.txt is a copy of \(original.filename), which is read again",
+                "where the Trash put it is not known after the stop, so History does not say")
+        #expect(try await base.jobs().map(\.state) == [.done, .duplicate, .done], "the copy's job finishes what the stop left")
     }
 
     @Test func aModelThatCannotBeReachedKeepsTheDocumentWaitingToBeRead() async throws {

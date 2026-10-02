@@ -630,8 +630,8 @@ extension AppDatabase {
             """)
         }
 
-        m.registerMigration("v14_searchTasks", migrate: searchTasksMigration)
-        m.registerMigration("v15_taskEffort", migrate: taskEffortMigration)
+        registerSearchTaskMigrations(&m)
+        registerTagMigrations(&m)
 
         return m
     }

@@ -11,10 +11,10 @@ public struct SearchTaskRecord: ArrumatorRecord, Identifiable, Hashable {
     public var title: String?
     /// The kinds the user chose to arrange the set by, as JSON; nil for the plan's.
     public var groupingJson: String?
-    /// How much computing its prompt is read with.
+    /// How much the model thinks before it answers its prompt.
     public var effort: TaskEffort
-    /// The model the user gave it; nil for the one its effort takes from the profile.
-    public var assignedModel: String?
+    /// The id of the model profile the user gave it; nil to follow the one Settings uses.
+    public var profile: String?
     public var state: SearchTaskState
     public var planJson: String?
     public var model: String?
@@ -132,7 +132,7 @@ public struct SearchTaskStore: Sendable {
         let grouping = record.userGrouping ?? plan.flatMap { $0.grouping.isEmpty ? nil : $0.grouping } ?? config.defaultGrouping
         return SearchTask(id: id, name: name(record, config: config), prompt: record.prompt, title: record.title, state: record.state,
                           plan: plan, grouping: grouping, groupedByUser: record.userGrouping != nil, effort: record.effort,
-                          assignedModel: record.assignedModel, model: record.model,
+                          profile: record.profile, model: record.model,
                           problem: record.problem, documents: members.filter { $0.inclusion != .removed }.map(\.document),
                           added: members.filter { $0.inclusion == .added }.map(\.document),
                           removed: members.filter { $0.inclusion == .removed }.map(\.document),
@@ -154,6 +154,11 @@ public struct SearchTaskStore: Sendable {
         }
     }
 
+    /// How many tasks read with the model profile `profile` names, rather than with the one Settings uses.
+    static func count(_ db: Database, profile: String) throws -> Int {
+        try SearchTaskRecord.filter(Column("profile") == profile).fetchCount(db)
+    }
+
     /// The documents with these numbers, in this order.
     static func documents(_ db: Database, ids: [Int64]) throws -> [DocumentRecord] {
         let byID = Dictionary(uniqueKeysWithValues: try DocumentRecord.fetchAll(db, keys: ids).compactMap { d in d.id.map { ($0, d) } })
@@ -162,14 +167,21 @@ public struct SearchTaskStore: Sendable {
 
     // MARK: The queue
 
-    /// The next queued task that is due, the oldest first.
+    /// The task to read next: of the queued tasks that are due, the one asked first (by `id`). `next_run_at` only says
+    /// when a task is due: one waiting for Ollama is not read before its time, and holds up none behind it. A task
+    /// whose prompt was being read when the app stopped keeps its place, so it is read first at the next start.
     func nextDue() async throws -> SearchTaskRecord? {
         let now = time.now()
         return try await database.reader.read { db in
             try SearchTaskRecord.filter(Column("state") == SearchTaskState.queued.rawValue)
                 .filter(Column("next_run_at") == nil || Column("next_run_at") <= now.unixSeconds)
-                .order(Column("next_run_at"), Column("id")).fetchOne(db)
+                .order(Column("id")).fetchOne(db)
         }
+    }
+
+    /// How many tasks wait in the queue, due or not: those being read are not among them.
+    func queuedCount() async throws -> Int {
+        try await database.reader.read { db in try SearchTaskRecord.filter(Column("state") == SearchTaskState.queued.rawValue).fetchCount(db) }
     }
 
     /// When the next queued task is due.
@@ -180,7 +192,8 @@ public struct SearchTaskStore: Sendable {
         }
     }
 
-    /// Takes a queued task to have its prompt read; nil when it is no longer queued.
+    /// Takes a queued task to have its prompt read; nil when it is no longer queued. No History event says so, as History
+    /// keeps what a reading concluded: the queue's status says which task it reads (`SearchTaskQueue.statusUpdates()`).
     func begin(_ id: Int64) async throws -> SearchTaskRecord? {
         let now = time.now()
         return try await database.writer.write { db in
@@ -192,12 +205,12 @@ public struct SearchTaskStore: Sendable {
         }
     }
 
-    /// Tasks whose prompt was being read when the app stopped go back into the queue.
+    /// Tasks whose prompt was being read when the app stopped go back into the queue, in their place: they were due when
+    /// they were taken, so they are due still.
     func recoverInterrupted() async throws -> Int {
-        let now = time.now()
-        return try await database.writer.write { db in
+        try await database.writer.write { db in
             try SearchTaskRecord.filter(Column("state") == SearchTaskState.interpreting.rawValue)
-                .updateAll(db, Column("state").set(to: SearchTaskState.queued.rawValue), Column("next_run_at").set(to: now.unixSeconds))
+                .updateAll(db, Column("state").set(to: SearchTaskState.queued.rawValue))
         }
     }
 

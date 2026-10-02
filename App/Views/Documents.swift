@@ -32,6 +32,30 @@ struct DocumentList: View {
     }
 }
 
+/// Documents under headings, in the order they come, a heading wherever `heading` names another than the one before:
+/// what was processed under the day it was processed, the latest first (Processed, and what was just processed on
+/// Incoming, read the same way), and the documents the sidebar's labels choose under the month of their own date, the
+/// newest first and those without a date last.
+struct DocumentSections: View {
+    let documents: [DocumentRecord]
+    let heading: (DocumentRecord) -> String
+
+    private var sections: [(title: String, documents: [DocumentRecord])] {
+        var out: [(title: String, documents: [DocumentRecord])] = []
+        for document in documents {
+            let title = heading(document)
+            if out.last?.title == title { out[out.count - 1].documents.append(document) } else { out.append((title, [document])) }
+        }
+        return out
+    }
+
+    var body: some View {
+        ForEach(sections, id: \.title) { section in
+            PageSection(section.title) { DocumentList(documents: section.documents) }
+        }
+    }
+}
+
 /// A document opened in place: its labels, all it is described by, who read it, and every way to correct it. Each
 /// change goes through `ReviewActions`, which records it.
 struct DocumentCard: View {
@@ -240,7 +264,7 @@ struct LabelChip: View {
         .background(Style.hover, in: .capsule)
         .onHover { hovering = $0 }
         .contextMenu {
-            if model.runtime?.config.labels.vocabulary.kinds[label.kind] != nil {
+            if model.runtime?.config.labels.isWrittenFreely(label.kind) == true {
                 Button(Wording.showInLabels) { model.open(label: label) }
             }
             Button(Wording.showDocuments) { model.browse(label) }

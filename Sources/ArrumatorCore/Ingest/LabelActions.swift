@@ -133,11 +133,11 @@ public struct LabelActions: Sendable {
     }
 
     /// Writes `label`, written however, as `value` on every document that has it, or takes it off when `value` is nil.
-    /// Returns the documents changed, in order.
+    /// A document not labelled yet stays so. Returns the documents changed, in order.
     private static func relabel(_ db: Database, _ label: DocumentLabel, to value: String?, at now: Date) throws -> [Int64] {
         var changed: [Int64] = []
         let rows = try Row.fetchAll(db, sql: """
-            SELECT DISTINCT d.id AS id, d.labels_json AS labels FROM documents d, json_each(d.labels_json) l
+            SELECT DISTINCT d.id AS id, d.labels_json AS labels, d.tags_only AS tags_only FROM documents d, json_each(d.labels_json) l
             WHERE d.labels_json IS NOT NULL AND json_extract(l.value, '$.kind') = ? ORDER BY d.id
             """, arguments: [label.kind.rawValue])
         for row in rows {
@@ -147,7 +147,7 @@ public struct LabelActions: Sendable {
                 return value.map { DocumentLabel(kind: existing.kind, value: $0) }
             }.distinct()
             guard updated != labels else { continue }
-            try IndexStore.saveLabels(db, updated, docID: id, at: now)
+            try IndexStore.saveLabels(db, updated, docID: id, labelled: !(row["tags_only"] as Bool? ?? false), at: now)
             changed.append(id)
         }
         return changed

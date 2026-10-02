@@ -5,7 +5,7 @@ import Foundation
 /// of a kind the configuration keeps consistent becomes the label the archive already uses when the two are written
 /// alike enough (`KindVocabularyConfig.mergeSimilarity`, 1 for written the same way), unless the user kept them apart.
 /// Labels that are alike, but not enough to be merged without asking, are offered to the user instead
-/// (`suggestions()`).
+/// (`suggestions()`). The user's own labels, tags, follow the user's rules alone (`ruled`): nothing merges them unasked.
 public struct LabelConsolidator: Sendable {
     public let config: LabelVocabularyConfig
     public let rules: [LabelRule]
@@ -33,6 +33,18 @@ public struct LabelConsolidator: Sendable {
                 changes.append(LabelChange(from: label, to: current, reason: .alike(similarity: similarity)))
             }
             kept.append(current)
+        }
+        return LabelConsolidation(labels: kept.distinct(), changes: changes)
+    }
+
+    /// The user's own labels, tags, as the user's rules write them, each once: merged or dropped as a rule says, and
+    /// never made another label because one in use is written alike, as the model's are. They are the user's words.
+    public func ruled(_ tags: [DocumentLabel]) -> LabelConsolidation {
+        var changes: [LabelChange] = []
+        let kept = tags.compactMap { tag -> DocumentLabel? in
+            let (ruled, applied) = resolve(tag)
+            if ruled != tag, let rule = applied.last { changes.append(LabelChange(from: tag, to: ruled, reason: .rule(id: rule))) }
+            return ruled
         }
         return LabelConsolidation(labels: kept.distinct(), changes: changes)
     }

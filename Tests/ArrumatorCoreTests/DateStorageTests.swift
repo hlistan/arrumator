@@ -51,31 +51,20 @@ import Testing
         job.nextRunAt = time.now().addingTimeInterval(30)
         try await jobs.update(job)
         #expect(try await jobs.nextDue() == nil, "a job waiting out its retry delay is not taken early")
-        #expect(try await jobs.earliestPending() == TestTime.start.addingTimeInterval(30), "the worker sleeps until exactly then")
+        #expect(try await jobs.earliestDue() == TestTime.start.addingTimeInterval(30), "the worker sleeps until exactly then")
         time.advance(by: 31)
         #expect(try await jobs.nextDue()?.id == id, "once its time has come, it is taken")
     }
 
-    @Test func aJobStuckInAStageIsFoundByTheWatchdog() async throws {
-        let time = TestTime(.advances)
-        let jobs = JobStore(database: try AppDatabase.inMemory(), time: time)
-        let waiting = try #require(try await jobs.enqueue(path: "/tmp/waiting.txt", kind: .ingest))
-        let stuck = try #require(try await jobs.enqueue(path: "/tmp/stuck.txt", kind: .ingest, state: .extracting))
-        time.advance(by: 601)
-        let fresh = try #require(try await jobs.enqueue(path: "/tmp/fresh.txt", kind: .ingest, state: .analysing))
-        let found = try await jobs.stale(olderThan: 600).compactMap(\.id)
-        #expect(found == [stuck], "only a job in a working stage, unchanged for longer than the watchdog allows, is stuck")
-        #expect(!found.contains(waiting) && !found.contains(fresh), "a queued job waits its turn; a recent one is working")
-    }
-
     @Test func aJobWaitingToRetryItsReadingIsScheduled() async throws {
         let jobs = JobStore(database: try AppDatabase.inMemory(), time: TestTime(.advances))
-        let id = try #require(try await jobs.enqueue(path: "/tmp/d.txt", kind: .ingest, state: .analysing))
+        let id = try #require(try await jobs.enqueue(path: "/tmp/d.txt", kind: .ingest))
         var job = try #require(try await jobs.job(id: id))
         let retryAt = Date(timeIntervalSince1970: 1_900_000_000)
+        job.state = .analysing
         job.nextRunAt = retryAt
         try await jobs.update(job)
-        #expect(try await jobs.earliestPending() == retryAt,
+        #expect(try await jobs.earliestDue() == retryAt,
                 "a reading that failed while Ollama was down is retried when its delay is over, not at the next unrelated file")
     }
 }

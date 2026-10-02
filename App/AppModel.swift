@@ -18,7 +18,14 @@ final class AppModel {
     var phase: Phase = .starting
     private(set) var runtime: ArrumatorRuntime?
     var settings: AppSettings?
+    /// What the ingest worker is doing: the file it has in hand and its stage, how many wait, and what holds it up.
+    /// Taking a file and moving it from stage to stage records nothing in History, so the Incoming page reloads on this
+    /// too (`ingestActivity`).
     var ingest = IngestStatus.idle
+    /// What the search task queue is doing: the request it reads and by which model, what waits, and whether it waits for
+    /// Ollama. Taking a task to read records nothing in History, so pages that show tasks reload on this too
+    /// (`taskActivity`).
+    var taskQueue = SearchTaskQueueStatus.idle
     var ollama = OllamaState.unknown
     var recent: [EventRecord] = []
     var reviewCount = 0
@@ -26,6 +33,12 @@ final class AppModel {
     var labelSuggestionCount = 0
     /// Bumped on every database change, and when another archive is opened; views reload with `.task(id:)`.
     var activity: Int64 = 0
+    /// What the Tasks page and a task's card reload on with `.task(id:)`: History growing, and the search task queue's
+    /// status changing, as it does when a task's request starts being read.
+    var taskActivity: String { "\(activity)|\(taskQueue)" }
+    /// What the Incoming page reloads on with `.task(id:)`: History growing, and the ingest worker's status changing, as it
+    /// does when the worker takes a file, moves it to its next stage or finishes it.
+    var ingestActivity: String { "\(activity)|\(ingest)" }
     var destination: Destination = .incoming
     /// The document opened in place as a card. One at a time, as in Things.
     var openDocument: Int64?
@@ -54,7 +67,8 @@ final class AppModel {
     func start() async {
         guard runtime == nil else { return }
         do {
-            let runtime = try await ArrumatorRuntime.bootstrap(appVersion: Self.version, environment: .current, echoLogsToStderr: false)
+            let runtime = try await ArrumatorRuntime.bootstrap(appVersion: Self.version, environment: .current, echoLogsToStderr: false,
+                                                               trash: SystemTrash())
             self.runtime = runtime
             settings = await runtime.settings.current
             observe(runtime)
@@ -106,6 +120,7 @@ final class AppModel {
             self.runtime = next
             settings = await next.settings.current
             ingest = .idle
+            taskQueue = .idle
             openDocument = nil
             observe(next)
             activity &+= 1
@@ -123,6 +138,9 @@ final class AppModel {
         streams = [
             Task { [weak self] in
                 for await status in await runtime.coordinator.statusUpdates() { self?.ingest = status }
+            },
+            Task { [weak self] in
+                for await status in await runtime.taskQueue.statusUpdates() { self?.taskQueue = status }
             },
             Task { [weak self] in
                 for await state in await runtime.lifecycle.states() { self?.ollama = state }
@@ -157,33 +175,47 @@ final class AppModel {
         }
     }
 
+    /// Changes settings that have no action of their own, as `arrumatorcli settings` does: saved and recorded once in
+    /// History, in words made of what changed (`SettingsActions.change(_:)`). Settings the store refuses are shown, and
+    /// the settings in force stay as they were.
     func update(_ mutate: @escaping @Sendable (inout AppSettings) -> Void) async {
-        guard let runtime else { return }
-        do { settings = try await runtime.settings.update(mutate) } catch {
-            Log.error(.ui, "Could not save settings", ["error": error.localizedDescription])
-        }
+        await changeSettings(Wording.saveSettingsAction) { _ = try await $0.settingsActions.change(mutate) }
     }
 
     /// Pauses or resumes filing, as `arrumatorcli settings --paused` does (`ArrumatorRuntime.setPaused`).
     func setPaused(_ paused: Bool) async {
-        await perform(paused ? Wording.pause : Wording.resume) { try await $0.setPaused(paused) }
-        settings = await runtime?.settings.current
+        await changeSettings(paused ? Wording.pause : Wording.resume) { try await $0.setPaused(paused) }
     }
 
     // MARK: Actions with user-visible errors
 
     var lastError: String?
 
-    func perform(_ what: String, _ action: @escaping @Sendable (ArrumatorRuntime) async throws -> Void) async {
-        guard let runtime else { return }
+    /// Does what the user asked, through Runtime and Core: what it gave, or nil when it failed, and then why it failed is
+    /// shown (`lastError`).
+    @discardableResult
+    func perform<T: Sendable>(_ what: String, _ action: @escaping @Sendable (ArrumatorRuntime) async throws -> T) async -> T? {
+        guard let runtime else { return nil }
+        var result: T?
         do {
-            try await action(runtime)
+            result = try await action(runtime)
             lastError = nil
         } catch {
             lastError = Wording.failure(what, error.localizedDescription)
             Log.error(.ui, what, ["error": error.localizedDescription])
         }
         await refresh()
+        return result
+    }
+
+    /// Changes the settings through one of their actions (`SettingsActions`, `ModelProfileActions`, pausing), as
+    /// `perform` does, and shows the settings in force at once, rather than once their stream says they changed, so a
+    /// control the store refused goes back to what is saved.
+    @discardableResult
+    func changeSettings<T: Sendable>(_ what: String, _ action: @escaping @Sendable (ArrumatorRuntime) async throws -> T) async -> T? {
+        let result = await perform(what, action)
+        if let runtime { settings = await runtime.settings.current }
+        return result
     }
 
     /// Reads for display. A failure is reported instead of leaving a view empty or spinning forever.
@@ -282,7 +314,7 @@ final class AppModel {
         case .unhealthy, .notInstalled: return "exclamationmark.triangle"
         default: break
         }
-        if ingest.currentPath != nil { return "tray.and.arrow.down.fill" }
+        if ingest.current != nil { return "tray.and.arrow.down.fill" }
         return reviewCount > 0 ? "tray.full" : "tray"
     }
 
@@ -296,15 +328,17 @@ final class AppModel {
         return nil
     }
 
+    /// What the app is doing, in the menu bar popover: a document being filed first, then a search request being read.
     var statusLine: String {
         if case let .failed(why) = phase { return why }
         if settings?.onboardingCompleted == true, !watching { return Wording.startingForFolders }
         if settings?.paused == true { return Wording.paused }
         if let reason = ingest.powerPauseReason { return Wording.waiting(reason) }
-        if ingest.waitingForOllama { return Wording.waitingForOllama }
-        if let path = ingest.currentPath {
-            return Wording.working(on: (path as NSString).lastPathComponent, stage: ingest.currentStage?.rawValue.capitalized)
+        if ingest.waitingForOllama || taskQueue.waitingForOllama { return Wording.waitingForOllama }
+        if let current = ingest.current {
+            return Wording.working(on: (current.path as NSString).lastPathComponent, stage: current.stage.rawValue.capitalized)
         }
+        if let reading = taskQueue.reading { return Wording.readingRequest(with: reading.model) }
         return ingest.queued > 0 ? Wording.queued(ingest.queued) : Wording.idle
     }
 }

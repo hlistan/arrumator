@@ -25,6 +25,10 @@ public final class ArrumatorRuntime: Sendable {
     /// The archive's record files, which the database indexes (docs/storage.md).
     public let records: ArchiveRecords
     public let settings: SettingsStore
+    /// The user's changes to the settings, each saved and recorded once in History.
+    public let settingsActions: SettingsActions
+    /// What the user does with model profiles: lists, adds, changes, resets and removes them, and chooses the one in use.
+    public let profiles: ModelProfileActions
     public let registry: SelfChangeRegistry
     /// The Ollama server in use; `useOllama(at:)` points it elsewhere.
     public let ollama: OllamaConnection
@@ -54,8 +58,11 @@ public final class ArrumatorRuntime: Sendable {
     public let doctor: Doctor
     private let tasks = BackgroundTasks()
 
-    public static func bootstrap(appVersion: String, environment: RuntimeEnvironment,
-                                 echoLogsToStderr: Bool) async throws -> ArrumatorRuntime {
+    /// - Parameter trash: where an exact copy of a document in the archive goes once its original is read again in its
+    ///   place: the Mac's Trash for the app and the command line, a folder of its own for a run that must leave nothing
+    ///   behind, as `eval`.
+    public static func bootstrap(appVersion: String, environment: RuntimeEnvironment, echoLogsToStderr: Bool,
+                                 trash: any Trashing) async throws -> ArrumatorRuntime {
         let time = SystemTime()
         let paths = AppPaths.resolve(environment)
         try paths.ensureDirectories()
@@ -71,20 +78,18 @@ public final class ArrumatorRuntime: Sendable {
         try paths.moveSingleIndex(to: try paths.indexURL(for: current.archiveURL))
         return try ArrumatorRuntime(appVersion: appVersion, environment: environment, logLevelOverride: logLevelOverride,
                                     time: time, paths: paths, config: config, settings: settings, archive: current.archiveURL,
-                                    ollamaURL: try OllamaEndpoint.validated(environment.ollamaURL ?? current.ollamaURL))
+                                    ollamaURL: try OllamaEndpoint.validated(environment.ollamaURL ?? current.ollamaURL), trash: trash)
     }
 
     /// Points the app at the Ollama server at `address` — this Mac or a machine on the local network — from now on,
-    /// and remembers it. An address elsewhere is refused and nothing changes. Whether the server answers is the
-    /// caller's to check (`lifecycle.ensureRunning()`).
+    /// and remembers it, recorded in History once. An address elsewhere is refused and nothing changes. Whether the
+    /// server answers is the caller's to check (`lifecycle.ensureRunning()`).
     public func useOllama(at address: String) async throws {
         let url = try OllamaEndpoint.validated(address)
         try ollama.connect(to: url)
-        let updated = try await settings.update { $0.ollamaURL = url.absoluteString }
+        let updated = try await settingsActions.change(summary: "Ollama at \(url.absoluteString)") { $0.ollamaURL = url.absoluteString }
         await lifecycle.configure(management: Self.management(for: updated, at: url), binaryOverride: updated.ollamaBinaryPath,
                                   address: url)
-        try await services.history.record(.settingsChanged, actor: .user, summary: "Ollama at \(url.absoluteString)",
-                                          payload: ["ollamaURL": url.absoluteString])
         Log.info(.ollama, "Using Ollama", ["url": url.absoluteString])
     }
 
@@ -119,7 +124,7 @@ public final class ArrumatorRuntime: Sendable {
         let nextSettings = try SettingsStore(paths: paths)
         let next = try ArrumatorRuntime(appVersion: appVersion, environment: environment, logLevelOverride: logLevelOverride,
                                         time: time, paths: paths, config: config, settings: nextSettings, archive: target,
-                                        ollamaURL: ollama.baseURL)
+                                        ollamaURL: ollama.baseURL, trash: services.trash)
         await stop()
         do {
             let waiting = try await services.jobs.cancelActive(kinds: [.ingest])
@@ -168,7 +173,8 @@ public final class ArrumatorRuntime: Sendable {
     }
 
     private init(appVersion: String, environment: RuntimeEnvironment, logLevelOverride: LogLevel?, time: any TimeSource,
-                 paths: AppPaths, config: PipelineConfig, settings: SettingsStore, archive: URL, ollamaURL: URL) throws {
+                 paths: AppPaths, config: PipelineConfig, settings: SettingsStore, archive: URL, ollamaURL: URL,
+                 trash: any Trashing) throws {
         self.appVersion = appVersion
         self.environment = environment
         self.logLevelOverride = logLevelOverride
@@ -203,8 +209,10 @@ public final class ArrumatorRuntime: Sendable {
             database: database, config: config, settings: settings, extractor: extractor, analyzer: analyzer,
             filer: DocumentFiler(database: database, placer: placer, index: IndexStore(database: database, time: time),
                                  registry: registry, time: time),
-            traces: traces, vectors: vectors, time: time)
+            traces: traces, vectors: vectors, trash: trash, time: time)
         coordinator = IngestCoordinator(services: services)
+        settingsActions = SettingsActions(store: settings, history: services.history)
+        profiles = ModelProfileActions(settings: settingsActions, bundled: try AppSettings.bundledDefaults().modelProfiles, database: database)
         review = ReviewActions(services: services, coordinator: coordinator)
         labels = LabelActions(database: database, time: time)
         interpreter = SearchPromptInterpreter(gate: gate, models: models, library: prompts.library)
@@ -231,6 +239,10 @@ public final class ArrumatorRuntime: Sendable {
     /// Starts Ollama supervision, the ingest worker, the search task queue, both watchers and maintenance. Returns
     /// immediately.
     public func start() async {
+        // Subscribed before the settings in force are read, so a change made while the runtime starts, or as soon as
+        // `start()` returns, is applied too, at worst twice. Whoever changes a setting records it (`SettingsActions`,
+        // `setPaused`), so applying records nothing.
+        let changes = await settings.changes()
         let current = await settings.current
         Log.info(.app, "Arrumator starting", ["version": appVersion, "archive": current.archivePath, "incoming": current.incomingPath])
         await audit(.appStarted, actor: .system, summary: "Arrumator \(appVersion) started", payload: nil)
@@ -262,19 +274,8 @@ public final class ArrumatorRuntime: Sendable {
                 }
             }
         }
-        await tasks.run("settings") { [settings, weak self] in
-            var previous = current
-            for await changed in await settings.changes() {
-                // Pausing has its own event (`setPaused`); every other change is recorded as a settings change.
-                var pauseAlone = previous
-                pauseAlone.paused = changed.paused
-                let onlyPaused = pauseAlone == changed
-                previous = changed
-                if !onlyPaused {
-                    await self?.audit(.settingsChanged, actor: .user, summary: "Settings changed", payload: changed)
-                }
-                await self?.apply(changed)
-            }
+        await tasks.run("settings") { [weak self] in
+            for await changed in changes { await self?.apply(changed) }
         }
         await tasks.run("ollama-audit") { [lifecycle, weak self] in
             var previous: OllamaState?
@@ -292,17 +293,31 @@ public final class ArrumatorRuntime: Sendable {
         }
     }
 
+    /// Stops everything `start()` started and waits until it has: the queues first, so the document in hand and the
+    /// request being read stop where they carry on at the next start, then the watchers; the record files are written
+    /// after, so what the queues kept while stopping is in them too, and Ollama, when the app started it, is stopped last.
     public func stop() async {
         await tasks.cancelAll()
-        do { try await records.flush() } catch {
-            Log.error(.db, "Could not write record files before stopping", ["error": error.localizedDescription])
-        }
         await coordinator.stop()
         await taskQueue.stop()
         await incomingWatcher.stop()
         await archiveWatcher.stop()
+        do { try await records.flush() } catch {
+            Log.error(.db, "Could not write record files before stopping", ["error": error.localizedDescription])
+        }
         await lifecycle.shutdown()
         Log.info(.app, "Arrumator stopped")
+    }
+
+    /// Stops as `stop()` does, before the app quits, waiting for it at most `ingest.quitTimeout` seconds: a stop that
+    /// takes longer, such as a page being read that cannot be interrupted, goes on while the app quits, and the job it
+    /// was on carries on where it stopped at the next start. Whether everything stopped in time.
+    @discardableResult
+    public func stopBeforeQuitting() async -> Bool {
+        let timeout = config.ingest.quitTimeout
+        let stopped = await time.wait(atMost: timeout) { [self] in await stop() }
+        if !stopped { Log.warning(.app, "Quitting before everything stopped", ["waited": String(timeout)]) }
+        return stopped
     }
 
     /// Applies (changed) settings: Ollama management, watched folders, embedding model for search.
@@ -321,13 +336,13 @@ public final class ArrumatorRuntime: Sendable {
         await coordinator.wake()
     }
 
-    /// Loads the vector index and the query embedder for the configured embedding model (no watchers started).
+    /// Loads the vector index and the query embedder for the embedding model of the profile in use (no watchers started).
     public func prepareSearch(_ current: AppSettings) async throws {
-        let resolved = try config.models(for: current.models)
-        await search.setEmbedder(OllamaEmbedder(gate: gate, model: resolved.embed, keepAlive: resolved.keepAliveEmbed,
+        let model = try current.modelProfile().embedModel
+        await search.setEmbedder(OllamaEmbedder(gate: gate, model: model, keepAlive: config.ollama.keepAlive.embed,
                                                 numCtx: config.analysis.embeddingNumCtx))
-        if await vectors.model != resolved.embed {
-            await vectors.load(model: resolved.embed, rows: try await services.index.embeddings(model: resolved.embed))
+        if await vectors.model != model {
+            await vectors.load(model: model, rows: try await services.index.embeddings(model: model))
         }
     }
 
@@ -337,18 +352,13 @@ public final class ArrumatorRuntime: Sendable {
         do {
             let trimmed = try await traces.trimRawPayloads(olderThanDays: current.traceRawRetentionDays)
             if trimmed > 0 { Log.info(.app, "Trimmed raw model payloads", ["steps": String(trimmed)]) }
-            let jobs = services.jobs
-            for var job in try await jobs.stale(olderThan: config.ingest.watchdogMinutes * Units.secondsPerMinute) {
-                Log.warning(.ingest, "Watchdog: job stuck, rescheduling", ["job": String(job.id ?? 0), "state": job.state.rawValue])
-                job.nextRunAt = time.now()
-                try await jobs.update(job)
-            }
         } catch {
             Log.error(.app, "Maintenance failed", ["error": error.localizedDescription])
         }
         do { try await records.flush() } catch {
             Log.error(.db, "Could not write record files", ["error": error.localizedDescription])
         }
+        // Jobs another process queued, such as `arrumatorcli review retry`, wake no worker here; this does.
         await coordinator.wake()
     }
 
