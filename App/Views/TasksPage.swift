@@ -2,17 +2,19 @@ import ArrumatorCore
 import ArrumatorRuntime
 import SwiftUI
 
-/// Search tasks: a field to ask for documents in one's own words, with the effort and model to read the request with,
-/// then the tasks, those still in the queue first and the rest newest first. A task opens in place as a card with its
-/// documents arranged by their labels, to look over, add to, take from and export (`SearchTaskActions`).
+/// Search tasks: a field to ask for documents in one's own words, with the effort and profile to read the request with,
+/// then the tasks, those still in the queue first and the rest newest first. A task in the queue says what the queue
+/// does with it, as its status says (`AppModel.taskQueue`): being read, with a spinner, and by which model, or what it
+/// waits for. A task opens in place as a card with its documents arranged by their labels, to look over, add to, take
+/// from and export (`SearchTaskActions`).
 struct TasksPage: View {
     @Environment(AppModel.self) private var model
     @State private var tasks: [SearchTask] = []
     @State private var prompt = ""
-    /// The model the next task is read by; nil for its effort's model of the profile.
-    @State private var askModel: String?
-    /// The installed models that answer in words; nil until Ollama has said.
-    @State private var installed: [String]?
+    /// The id of the profile the next task is read by; nil to follow the one Settings uses.
+    @State private var askProfile: String?
+    /// Every profile, as Settings lists them; nil until they are read.
+    @State private var profiles: [ModelProfileListing]?
 
     private var active: [SearchTask] { tasks.filter(\.state.isActive) }
     private var earlier: [SearchTask] { tasks.filter { !$0.state.isActive } }
@@ -30,7 +32,7 @@ struct TasksPage: View {
                 HStack(spacing: Style.askSpacing) {
                     Text(Wording.readWith).foregroundStyle(.secondary)
                     // The effort chosen here is Settings' effort for new tasks, so the next one is asked with it too.
-                    ReadingControls(effort: setting(model, settings, \.taskEffort), assigned: $askModel, installed: installed)
+                    ReadingControls(effort: setting(model, settings, \.taskEffort), profile: $askProfile, profiles: profiles)
                 }
                 .font(.callout)
             }
@@ -44,29 +46,37 @@ struct TasksPage: View {
                 PageSection(Wording.earlierTasks) { ForEach(earlier) { row($0) } }
             }
         }
-        .task(id: model.activity) { await load() }
-        .task(id: model.ollama.isReady) { await loadModels() }
+        // Reloaded when the queue takes a task to read, too, which History does not record.
+        .task(id: model.taskActivity) { await load() }
+        .task(id: model.settings) { await loadProfiles() }
     }
 
     @ViewBuilder private func row(_ task: SearchTask) -> some View {
         if model.openTask == task.id {
-            TaskCard(taskID: task.id, installed: installed) { if model.openTask == task.id { model.openTask = nil } }
+            TaskCard(taskID: task.id, profiles: profiles) { if model.openTask == task.id { model.openTask = nil } }
         } else {
-            ListRow(symbol: task.state.symbol, tint: task.state.tint, title: task.name, detail: Wording.taskOutcome(task),
-                    subtitle: task.name == task.prompt ? nil : task.prompt, busy: task.state == .interpreting)
+            let progress = model.taskQueue.progress(of: task)
+            ListRow(symbol: task.state.symbol, tint: task.state.tint, title: task.name, detail: Wording.taskOutcome(task, progress: progress),
+                    subtitle: task.name == task.prompt ? nil : task.prompt, busy: progress?.isReading == true)
                 .onTapGesture { withAnimation(.snappy) { model.openTask = task.id } }
         }
     }
 
+    /// Asks for a task with what was typed. A request that is refused, such as one given a profile removed meanwhile,
+    /// says why and is given back to be asked again, unless something else has been typed since.
     private func ask() {
-        let asked = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        let typed = prompt
+        let asked = typed.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !asked.isEmpty else { return }
         prompt = ""
-        let (effort, assigned) = (model.settings?.taskEffort, askModel)
+        let (effort, profile) = (model.settings?.taskEffort, askProfile)
         Task {
             guard let task = await model.load(Wording.askAction, {
-                try await $0.searchTasks.create(prompt: asked, effort: effort, model: assigned)
-            }) else { return }
+                try await $0.searchTasks.create(prompt: asked, effort: effort, profile: profile)
+            }) else {
+                if prompt.isEmpty { prompt = typed }
+                return
+            }
             await load()
             model.openTask = task.id
         }
@@ -76,21 +86,24 @@ struct TasksPage: View {
         tasks = await model.load(Wording.loadTasksAction) { try await $0.searchTasks.store.tasks() } ?? tasks
     }
 
-    private func loadModels() async {
-        guard model.ollama.isReady else { return }
-        installed = await model.load(Wording.loadModelsAction) { try await $0.models.chatModels() } ?? installed
+    /// Reads the profiles again; one chosen for the next task that the settings no longer list gives way to the one
+    /// Settings uses, rather than staying chosen for a request it would refuse.
+    private func loadProfiles() async {
+        guard let runtime = model.runtime else { return }
+        let listed = await runtime.profiles.list()
+        profiles = listed
+        if let chosen = askProfile, !listed.contains(where: { $0.id == chosen }) { askProfile = nil }
     }
 }
 
-/// The effort a request is read with and the model that reads it: the presets side by side, and a menu of the
-/// profile's model for that effort and every installed model that answers in words.
+/// How a request is read: the effort, how much the model thinks before it answers, as presets side by side; and a menu
+/// of the profile whose model reads it, Settings' profile, whichever that is when the request is read, or one of its own.
 struct ReadingControls: View {
-    @Environment(AppModel.self) private var model
     @Binding var effort: TaskEffort
-    /// nil for the effort's model of the profile.
-    @Binding var assigned: String?
-    /// nil while Ollama has not said which models it has.
-    let installed: [String]?
+    /// The id of the profile that reads the request; nil to follow the one Settings uses.
+    @Binding var profile: String?
+    /// Every profile, as Settings lists them; nil until they are read.
+    let profiles: [ModelProfileListing]?
 
     var body: some View {
         HStack(spacing: Style.readingSpacing) {
@@ -99,40 +112,31 @@ struct ReadingControls: View {
             }
             .pickerStyle(.segmented).labelsHidden().fixedSize()
             .help(Wording.effortHelp)
-            Picker(Wording.readingModel, selection: $assigned) {
-                Text(Wording.profileModel(profileModel)).tag(String?.none)
-                if let installed, !installed.isEmpty {
-                    Section(Wording.installedModels) {
-                        ForEach(installed, id: \.self) { Text($0).tag(String?.some($0)) }
-                    }
-                }
-                if let assigned, !(installed ?? []).contains(assigned) {
-                    Text(installed == nil ? assigned : Wording.notInstalled(assigned)).tag(String?.some(assigned))
+            Picker(Wording.profile, selection: $profile) {
+                Text(Wording.settingsProfile(profiles?.first(where: \.inUse)?.profile.name)).tag(String?.none)
+                Divider()
+                ForEach(profiles ?? []) { Text(Wording.profileChoice($0.profile)).tag(String?.some($0.id)) }
+                // A profile the settings no longer list stays chosen, saying so, until the task is given another.
+                if let profile, !(profiles ?? []).contains(where: { $0.id == profile }) {
+                    Text(profiles == nil ? profile : Wording.profileGone(profile)).tag(String?.some(profile))
                 }
             }
-            .pickerStyle(.menu).labelsHidden().frame(maxWidth: Style.readingModelMaxWidth)
-            .help(Wording.readingModelHelp)
+            .pickerStyle(.menu).labelsHidden().frame(maxWidth: Style.profileMenuMaxWidth)
+            .help(Wording.readingProfileHelp)
         }
         .controlSize(.small)
     }
-
-    /// The profile's model the effort reads with, when the settings are known.
-    private var profileModel: String? {
-        guard let runtime = model.runtime, let settings = model.settings, let preset = try? runtime.config.tasks.preset(effort) else {
-            return nil
-        }
-        return (try? runtime.config.models(for: settings.models))?.model(preset.model)
-    }
 }
 
-/// A task opened in place: what it asks for, with what effort and by which model, and how the model read it; its name,
-/// effort, model and arrangement to change; its documents arranged by their labels, each to take out; ways to add more
-/// and to export them; and every export made of them.
+/// A task opened in place: while it is in the queue, what the queue does with it (`TaskProgressLine`); what it asks for,
+/// with what effort and by which profile, and how the model read it; its name, effort, profile and arrangement to change;
+/// its documents arranged by their labels, each to take out; ways to add more and to export them; and every export made
+/// of them.
 struct TaskCard: View {
     @Environment(AppModel.self) private var model
     let taskID: Int64
-    /// The installed models that answer in words; nil until Ollama has said.
-    let installed: [String]?
+    /// Every profile, as Settings lists them; nil until they are read.
+    let profiles: [ModelProfileListing]?
     let onClose: () -> Void
     @State private var detail: SearchTaskDetail?
     @State private var name = ""
@@ -145,6 +149,7 @@ struct TaskCard: View {
         VStack(alignment: .leading, spacing: Style.taskCardSpacing) {
             if let detail {
                 header(detail.task)
+                if let progress = model.taskQueue.progress(of: detail.task) { TaskProgressLine(progress: progress) }
                 request(detail.task)
                 if detail.task.state == .ready && detail.tree.count == 0 {
                     Text(Wording.nothingFound).foregroundStyle(.secondary)
@@ -158,7 +163,7 @@ struct TaskCard: View {
         }
         .card()
         .onExitCommand { withAnimation(.snappy) { onClose() } }
-        .task(id: model.activity) { await load() }
+        .task(id: model.taskActivity) { await load() }
         .onChange(of: editingName) { wasEditing, _ in
             if wasEditing { change(SearchTaskChange(title: name)) }
         }
@@ -213,10 +218,10 @@ struct TaskCard: View {
             GridRow(alignment: .firstTextBaseline) {
                 label(Wording.readWith)
                 HStack(spacing: Style.readingSpacing) {
-                    // Another effort or model reads the request again.
+                    // Another effort or profile reads the request again; none gives the task back to Settings' profile.
                     ReadingControls(effort: Binding(get: { task.effort }, set: { change(SearchTaskChange(effort: $0)) }),
-                                    assigned: Binding(get: { task.assignedModel }, set: { change(SearchTaskChange(model: $0 ?? "")) }),
-                                    installed: installed)
+                                    profile: Binding(get: { task.profile }, set: { change(SearchTaskChange(profile: $0 ?? "")) }),
+                                    profiles: profiles)
                     if let last = task.model { Text(Wording.lastReadBy(last)).font(.callout).foregroundStyle(.secondary) }
                 }
             }
@@ -345,6 +350,35 @@ struct TaskCard: View {
         // What the user is typing is not replaced by what the task says.
         if !editingName { name = task.name }
         if !editingPrompt { prompt = task.prompt }
+    }
+}
+
+/// What the queue does with a task, at the top of its card in place of the documents not found yet: a spinner and by
+/// which model its request is being read, with how long once that is more than a moment, or what it waits for, Ollama
+/// marked as a notice. How long counts on by itself from when the queue began the reading, without reading the index
+/// again; the line gives way to what the reading found, or why it failed, once it ends.
+private struct TaskProgressLine: View {
+    let progress: SearchTaskProgress
+
+    var body: some View {
+        if progress == .waitingForOllama {
+            Notice(text: Wording.taskProgressLine(progress))
+        } else {
+            HStack(spacing: Style.noticeSpacing) {
+                ProgressView().controlSize(.small)
+                if case let .reading(reading?) = progress {
+                    TimelineView(.periodic(from: reading.since, by: Style.readingTimeTick)) { context in
+                        let elapsed = context.date.timeIntervalSince(reading.since)
+                        Text(Wording.taskProgressLine(progress, elapsed: elapsed >= Style.readingTimeShownAfter ? elapsed : nil))
+                    }
+                } else {
+                    Text(Wording.taskProgressLine(progress))
+                }
+                Spacer()
+            }
+            .font(.callout)
+            .foregroundStyle(.secondary)
+        }
     }
 }
 

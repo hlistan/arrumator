@@ -4,7 +4,6 @@ import Foundation
 /// `pipeline.json` and `ARRUMATOR_PIPELINE_CONFIG`; `ARRUMATOR_OLLAMA_URL` overrides the endpoint.
 public struct PipelineConfig: Sendable, Codable, Hashable, ValidatedConfiguration {
     public var ollama: OllamaConfig
-    public var modelProfiles: [String: ModelProfile]
     public var watcher: WatcherConfig
     public var records: RecordsConfig
     public var ingest: IngestConfig
@@ -34,6 +33,10 @@ public struct PipelineConfig: Sendable, Codable, Hashable, ValidatedConfiguratio
         if search.bm25Weights.count != SearchService.columns.count {
             problems.append("search.bm25Weights needs one weight for each of the \(SearchService.columns.count) full-text columns")
         }
+        // The user's own labels are never merged unasked nor shown to the model, however the configuration is written.
+        for kind in labels.vocabulary.kinds.keys where kind.isUsersOwn {
+            problems.append("labels.vocabulary.kinds.\(kind.rawValue): the user's own labels are never kept one vocabulary; remove it")
+        }
         problems += tasks.problems
         return problems
     }
@@ -48,58 +51,6 @@ public struct PipelineConfig: Sendable, Codable, Hashable, ValidatedConfiguratio
 
     public static func bundledDefaults() throws -> PipelineConfig {
         try ConfigLoader.load(PipelineConfig.self, defaults: "pipeline")
-    }
-
-    /// Resolves the effective model set for the user's selection.
-    public func models(for selection: ModelSelection) throws -> ResolvedModels {
-        guard let profile = modelProfiles[selection.profile] else {
-            throw ConfigError.invalid(name: "pipeline", underlying: "unknown model profile '\(selection.profile)'")
-        }
-        return ResolvedModels(
-            profileName: selection.profile,
-            chat: selection.chatModel ?? profile.chatModel,
-            vision: selection.visionModel ?? profile.visionModel,
-            embed: selection.embedModel ?? profile.embedModel,
-            fast: selection.fastModel ?? profile.fastModel,
-            numCtx: profile.numCtx, fastNumCtx: profile.fastNumCtx,
-            keepAliveChat: profile.keepAliveChat, keepAliveEmbed: profile.keepAliveEmbed)
-    }
-}
-
-public struct ModelProfile: Sendable, Codable, Hashable {
-    public var label: String
-    public var chatModel: String
-    public var visionModel: String
-    public var embedModel: String
-    public var fastModel: String
-    public var numCtx: Int
-    public var fastNumCtx: Int
-    public var keepAliveChat: String
-    public var keepAliveEmbed: String
-}
-
-public struct ResolvedModels: Sendable, Codable, Hashable {
-    public var profileName: String
-    public var chat: String
-    public var vision: String
-    public var embed: String
-    public var fast: String
-    public var numCtx: Int
-    public var fastNumCtx: Int
-    public var keepAliveChat: String
-    public var keepAliveEmbed: String
-
-    /// The context images are described with: that of the role the vision model also plays, so Ollama keeps one
-    /// loaded model instead of reloading it with another context for every image (a request without one gets the
-    /// server's default, which can be far larger).
-    public var visionNumCtx: Int { vision != chat && vision == fast ? fastNumCtx : numCtx }
-
-    /// The model that plays `role` in reading a search task's request.
-    public func model(_ role: TaskModelRole) -> String {
-        switch role {
-        case .chat: chat
-        case .fast: fast
-        }
     }
 }
 
@@ -125,6 +76,16 @@ public struct OllamaConfig: Sendable, Codable, Hashable {
     public var restartBackoff: NonEmpty<Double>
     public var maxRestartsPerHour: Int
     public var requiredFreeDiskGBAfterPull: Double
+    public var keepAlive: KeepAlive
+
+    /// How long Ollama keeps a model loaded after its last request (`keep_alive`), so the next document does not wait
+    /// for it to load again.
+    public struct KeepAlive: Sendable, Codable, Hashable {
+        /// The model that reads documents and requests and describes images.
+        public var chat: String
+        /// The model that makes the vectors search by meaning uses; search asks it at any time.
+        public var embed: String
+    }
 }
 
 public struct WatcherConfig: Sendable, Codable, Hashable {
@@ -166,7 +127,9 @@ public struct IngestConfig: Sendable, Codable, Hashable {
     /// Seconds before each retry of a failed job, the last one for every retry after; also how long a job waits for
     /// Ollama to come back.
     public var retryDelays: NonEmpty<Double>
-    public var watchdogMinutes: Double
+    /// Seconds the app, when it quits, waits for its work to stop, so the document in hand and the request being read
+    /// stop where they carry on at the next start. A stop that takes longer goes on while the app quits.
+    public var quitTimeout: Double
 }
 
 public struct ExtractionConfig: Sendable, Codable, Hashable {
@@ -292,14 +255,19 @@ public struct AnalysisConfig: Sendable, Codable, Hashable {
     /// Identifiers the text a document's embedding is made from lists, the first found first.
     public var embeddingIdentifiersLimit: Int
     public var embeddingNumCtx: Int
+    /// The context a document, a search task's request and an image are read with: one context, so a model that reads
+    /// and describes images stays loaded once. Ollama loads a model again for a request with another context, and gives
+    /// one without the server's default, which can be far larger (docs/evaluation.md).
+    public var numCtx: Int
     public var llmOptions: LLMOptions
-    /// Whether a model that can think does so before it answers. Documents are read without: the answer's schema
-    /// already orders the facts before the name, and thinking multiplies the time a document takes.
-    public var think: Bool
+    /// What a model that can think is told about thinking before it reads a document or describes an image: off, on or a
+    /// level it names, sent as the model allows (`OllamaShowResponse.think(sending:)`). Both are done without: the
+    /// answer's schema already orders the facts before the name, and thinking multiplies the time a document takes.
+    public var think: OllamaThink
     public var vlmNumPredict: Int
     public var promptDatesLimit: Int
     public var promptIdentifiersLimit: Int
-    /// Re-asks after an invalid answer before falling back to the other model.
+    /// Times an invalid answer goes back to the model, with what was wrong, before the document waits for the user.
     public var repairAttempts: Int
 }
 
@@ -350,7 +318,7 @@ public struct SearchConfig: Sendable, Codable, Hashable {
     public var semanticMinSimilarity: Double
     public var queryCacheSize: Int
     /// BM25 weight of each full-text column, in `SearchService.columns` order: file name, text, then one column per
-    /// `LabelKind`.
+    /// `LabelKind`, the user's tags last.
     public var bm25Weights: [Double]
     public var snippetTokens: Int
     public var debounceMilliseconds: Int
@@ -362,7 +330,8 @@ public struct SearchConfig: Sendable, Codable, Hashable {
 public struct TasksConfig: Sendable, Codable, Hashable {
     /// Stamped on every task's trace, so a change to the prompt shows in what it recorded.
     public var promptVersion: Int
-    /// How a request is read at each effort: every `TaskEffort` has one.
+    /// How much the model thinks before it answers a request at each effort, with the budget thinking needs
+    /// (`EffortPreset`): every `TaskEffort` has one.
     public var efforts: [TaskEffort: EffortPreset]
     /// Labels of one kind a plan asks for at most.
     public var maxValuesPerKind: Int
@@ -374,7 +343,7 @@ public struct TasksConfig: Sendable, Codable, Hashable {
     public var maxTitleChars: Int
     /// What a set is arranged by when neither the user nor the prompt says.
     public var defaultGrouping: [LabelKind]
-    /// Documents a task finds at most, the most recently processed first.
+    /// Documents a task finds at most: the newest by their own date (`DocumentOrder.documentDate`).
     public var maxDocuments: Int
     /// The name of an export's folder for the documents without a label of the kind its level is arranged by;
     /// `{{kind}}` is the kind.
@@ -388,7 +357,7 @@ public struct TasksConfig: Sendable, Codable, Hashable {
         try PromptTemplates.fill(withoutLabelFolder, [Self.kindPlaceholder: kind.rawValue], name: "tasks.withoutLabelFolder")
     }
 
-    /// How a request is read at `effort`.
+    /// How much the model thinks before it answers a request at `effort`, with the budget thinking needs.
     public func preset(_ effort: TaskEffort) throws -> EffortPreset {
         guard let preset = efforts[effort] else {
             throw ConfigError.invalid(name: "pipeline", underlying: "tasks.efforts.\(effort.rawValue) is missing")
@@ -406,6 +375,9 @@ public struct TasksConfig: Sendable, Codable, Hashable {
             if preset.repairAttempts < 0 { problems.append("tasks.efforts.\(effort.rawValue).repairAttempts cannot be negative") }
             if preset.numPredict < 1 { problems.append("tasks.efforts.\(effort.rawValue).numPredict must be at least 1") }
             if preset.timeout <= 0 { problems.append("tasks.efforts.\(effort.rawValue).timeout must be more than 0") }
+            for kind in preset.promptLabels.keys where kind.isUsersOwn {
+                problems.append("tasks.efforts.\(effort.rawValue).promptLabels.\(kind.rawValue): the model is never shown the user's own labels; remove it")
+            }
         }
         if maxValuesPerKind < 1 { problems.append("tasks.maxValuesPerKind must be at least 1") }
         if maxWords < 0 { problems.append("tasks.maxWords cannot be negative") }
@@ -420,20 +392,26 @@ public struct TasksConfig: Sendable, Codable, Hashable {
     }
 }
 
-/// How much computing a search task's request is read with (`TaskEffort`): which of the profile's models reads it and
-/// whether the other is asked after it, whether the model thinks before it answers, how often a wrong answer goes back
-/// to it, how long an answer may be, and how much of the archive's vocabulary it is shown. More of each reads a request
-/// more carefully and takes longer: answers improve with the computation spent on them at inference, by thinking and by
+/// How much the model thinks before it answers a search task's request (`TaskEffort`), with the budget thinking needs:
+/// what it is told about thinking, how long an answer may be and take, how often a wrong answer goes back to it, and how
+/// much of the archive's vocabulary it is shown. Which model reads is the profile's. More of each reads a request more
+/// carefully and takes longer: answers improve with the computation spent on them at inference, by thinking first and by
 /// being asked again (Snell et al., "Scaling LLM Test-Time Compute Optimally", 2024; Madaan et al., "Self-Refine", 2023;
 /// docs/organizing-principles-sources.md#sources-for-search-tasks).
+///
+/// The bundled presets: Low does not think and reads at once, as every request was read before efforts thought, with one
+/// repair and the answer length and time documents get. Medium and High think, and a model that thinks spends thousands
+/// of tokens on it before it writes its answer: measured live with #11, `qwen3.5:9b` spent all of 4,096 thinking and
+/// answered nothing, and answered with 8,192 in about 300 s against 61 s without thinking, so both get that budget; High
+/// sends a wrong answer back once more. A model with thinking levels (gpt-oss: low, medium, high) is told the effort's,
+/// one that only switches thinking on and off thinks the same at Medium and High, and one that cannot think is told
+/// nothing, so for it the efforts differ by repairs and by how much of the vocabulary it is shown
+/// (`OllamaShowResponse.think(sending:)`; Ollama, "Thinking", https://docs.ollama.com/capabilities/thinking).
 public struct EffortPreset: Sendable, Codable, Hashable {
-    /// The profile's model that reads the request, unless the task names its own.
-    public var model: TaskModelRole
-    /// Whether the profile's other model is asked when the first gives no valid answer.
-    public var fallback: Bool
-    /// Whether a model that can think does so before it answers.
-    public var think: Bool
-    /// Times an invalid answer goes back to a model, with what was wrong, before the next model or failing.
+    /// What a model that can think is told about thinking before it answers: off, on or a level it names, sent as the
+    /// model allows (`OllamaShowResponse.think(sending:)`).
+    public var think: OllamaThink
+    /// Times an invalid answer goes back to the model, with what was wrong, before the task says it could not be read.
     public var repairAttempts: Int
     /// Tokens an answer may take, its thinking included.
     public var numPredict: Int
@@ -449,14 +427,6 @@ public struct EffortPreset: Sendable, Codable, Hashable {
         options.numPredict = numPredict
         return options
     }
-}
-
-/// Which of the profile's models an effort reads a request with.
-public enum TaskModelRole: String, Sendable, Codable, CaseIterable {
-    /// The profile's chat model, which reads documents.
-    case chat
-    /// The profile's fast model.
-    case fast
 }
 
 public struct LoggingConfig: Sendable, Codable, Hashable {
@@ -517,8 +487,8 @@ public struct InterfaceConfig: Sendable, Codable, Hashable {
     public var extractPreviewChars: Int
 }
 
-/// The app's housekeeping: pruning logs, trimming model exchanges from old traces, rescheduling stuck jobs, writing
-/// record files a change marked.
+/// The app's housekeeping: pruning logs, trimming model exchanges from old traces, writing record files a change marked,
+/// and looking for jobs another process queued.
 public struct MaintenanceConfig: Sendable, Codable, Hashable {
     /// Seconds between rounds.
     public var interval: Double
@@ -549,15 +519,19 @@ public struct FunnelConfig: Sendable, Codable, Hashable {
 }
 
 extension PipelineConfig {
-    /// What extraction is given for a file under `settings`: its tunables, and the vision model when images may be
-    /// described. The ingest pipeline and `arrumatorcli ingest --dry-run` extract alike with it.
+    /// What extraction is given for a file under `settings`: its tunables, and the vision model of the profile in use when
+    /// images may be described. The ingest pipeline and `arrumatorcli ingest --dry-run` extract alike with it.
     public func extractionContext(settings: AppSettings) throws -> ExtractionContext {
         ExtractionContext(config: extraction, entities: entities, vision: settings.enableVLM ? try visionOptions(settings: settings) : nil)
     }
 
+    /// Images are described with the context and keep-alive documents are read with (`analysis.numCtx`,
+    /// `ollama.keepAlive.chat`): a profile that reads and describes images with one model keeps it loaded once, rather
+    /// than Ollama loading it again with another context for every image. The model thinks as it does reading a
+    /// document (`analysis.think`).
     private func visionOptions(settings: AppSettings) throws -> VisionModelOptions {
-        let resolved = try models(for: settings.models)
-        return VisionModelOptions(model: resolved.vision, keepAlive: resolved.keepAliveChat, numPredict: analysis.vlmNumPredict,
-                                  numCtx: resolved.visionNumCtx, options: analysis.llmOptions)
+        VisionModelOptions(model: try settings.modelProfile().visionModel, keepAlive: ollama.keepAlive.chat,
+                           numPredict: analysis.vlmNumPredict, numCtx: analysis.numCtx, options: analysis.llmOptions,
+                           think: analysis.think)
     }
 }

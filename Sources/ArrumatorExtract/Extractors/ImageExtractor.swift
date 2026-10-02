@@ -88,7 +88,8 @@ struct ImageExtractor: FileExtractor {
                                   on trace: TraceContext) async {
         struct Input: Encodable {
             var model: String
-            var thinkDisabled: Bool
+            // What the model was told about thinking; absent when nothing was sent.
+            var think: OllamaThink?
             var imageBytes: Int
             var width: Int
             var height: Int
@@ -101,7 +102,7 @@ struct ImageExtractor: FileExtractor {
             var metrics: OllamaMetrics?
         }
         await trace.record(.vlm, status: outcome.summary == nil ? .error : .ok, startedAt: startedAt,
-                           input: Input(model: outcome.model, thinkDisabled: outcome.thinkDisabled,
+                           input: Input(model: outcome.model, think: outcome.think,
                                         imageBytes: outcome.imageBytes, width: pixels.0, height: pixels.1,
                                         schema: VisionDescriber.schema),
                            output: Output(exchange: outcome.rawResponse, visual: outcome.summary, metrics: outcome.metrics),

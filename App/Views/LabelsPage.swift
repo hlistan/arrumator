@@ -3,8 +3,8 @@ import ArrumatorRuntime
 import SwiftUI
 
 /// The archive's labels as one vocabulary: those that look alike and wait for the user first, then the labels of each
-/// kind kept consistent, then what the user decided. Opening a label lets the user merge it into another or remove it
-/// everywhere; every decision is a rule each reading follows from then on (`LabelActions`).
+/// kind kept consistent and the user's own tags, then what the user decided. Opening a label lets the user merge it into
+/// another or remove it everywhere; every decision is a rule each reading follows from then on (`LabelActions`).
 struct LabelsPage: View {
     @Environment(AppModel.self) private var model
     @State private var usage: [LabelKind: [LabelUsage]] = [:]
@@ -13,10 +13,11 @@ struct LabelsPage: View {
     @State private var openSuggestion: String?
     @State private var expanded: Set<LabelKind> = []
 
-    /// The kinds kept one vocabulary; the others have one form each and nothing to merge.
+    /// The kinds written freely (`LabelsConfig.isWrittenFreely`): those kept one vocabulary, and tags; the others have
+    /// one form each and nothing to merge.
     private var kinds: [LabelKind] {
-        let configured = model.runtime?.config.labels.vocabulary.kinds ?? [:]
-        return LabelKind.allCases.filter { configured[$0] != nil && usage[$0]?.isEmpty == false }
+        guard let labels = model.runtime?.config.labels else { return [] }
+        return LabelKind.allCases.filter { labels.isWrittenFreely($0) && usage[$0]?.isEmpty == false }
     }
 
     var body: some View {

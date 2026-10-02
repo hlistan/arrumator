@@ -39,11 +39,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Wind
     private var statusItem: NSStatusItem?
     private let popover = NSPopover()
     private var windows: [WindowID: NSWindow] = [:]
-    /// False when macOS started the app by itself, such as a login item; then no window is opened unasked.
-    private var openedByUser = true
+    /// True when macOS started the app by itself, as a login item; then no window is opened unasked.
+    private var launchedAsLoginItem = false
+    /// True once quitting has begun stopping the app's work.
+    private var quitting = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        openedByUser = notification.userInfo?[NSApplication.launchIsDefaultUserInfoKey] as? Bool ?? true
+        launchedAsLoginItem = LoginItem.launchedTheApp
         model.presenter = self
         NSApp.mainMenu = MainMenu.build()
         installStatusItem()
@@ -53,7 +55,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Wind
             reportStatusItem()
             if model.settings?.onboardingCompleted != true {
                 show(.onboarding)
-            } else if openedByUser {
+            } else if !launchedAsLoginItem {
                 show(.main)
             }
             trackModel()
@@ -70,9 +72,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Wind
         return true
     }
 
-    func applicationWillTerminate(_ notification: Notification) {
-        let runtime = model.runtime
-        Task { await runtime?.stop() }
+    /// Quitting stops the app's work first, so the document in hand stops where it carries on at the next start instead
+    /// of being cut off wherever the process ends. `applicationWillTerminate(_:)` is too late for that: the process ends
+    /// as soon as it returns, before any work it starts has run. AppKit lets the delegate finish work first: "If the
+    /// method returns NSApplication.TerminateReply.terminateLater, the app runs its run loop in the modalPanel mode until
+    /// the reply(toApplicationShouldTerminate:) method is called with the value true or false" (`NSApplication.terminate(_:)`).
+    /// The main actor's work goes on meanwhile: the run loop serves the main queue in its common modes (CFRunLoop.c), and
+    /// "in Cocoa applications, this set includes the default, modal, and event tracking modes" (Threading Programming
+    /// Guide › Run Loops › Run Loop Modes). The wait is bounded (`ArrumatorRuntime.stopBeforeQuitting()`,
+    /// `ingest.quitTimeout`), so a stop that hangs keeps neither the app from quitting nor the Mac from logging out.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let runtime = model.runtime else { return .terminateNow }
+        guard !quitting else { return .terminateLater }
+        quitting = true
+        Task {
+            await runtime.stopBeforeQuitting()
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
     }
 
     // MARK: Status item
@@ -142,12 +159,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Wind
 
     // MARK: Windows
 
+    /// Opens a window, or brings back the one already open, in front of every app's windows: every window the app shows
+    /// comes through here. While the app is not active, `makeKeyAndOrderFront` puts a window in front of this app's
+    /// windows only ("normally an NSWindow object can't be moved in front of the key window unless it and the key
+    /// window are in the same application", `NSWindow.orderFrontRegardless()`), and since macOS 14 activation is a
+    /// request the system may decline ("calling this method doesn't guarantee app activation", `NSApplication.activate()`;
+    /// AppKit Release Notes for macOS 14 › App activation). Launched as an accessory (`LSUIElement`) from a terminal, the
+    /// app was not made active, and its main window opened behind the terminal's. `orderFrontRegardless()` "moves the
+    /// window to the front of its level, even if its application isn't active"; the window is already key, so it takes
+    /// the keyboard as soon as macOS lets the app become active, at once or at the user's first click in it.
     func show(_ id: WindowID) {
-        if let existing = windows[id] {
-            existing.makeKeyAndOrderFront(nil)
-            NSApp.activate()
-            return
-        }
+        let window = windows[id] ?? makeWindow(id)
+        window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
+        NSApp.activate()
+    }
+
+    private func makeWindow(_ id: WindowID) -> NSWindow {
         let content: AnyView = switch id {
         case .main: AnyView(MainWindow())
         case .onboarding: AnyView(OnboardingView())
@@ -167,9 +195,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Wind
         window.isReleasedWhenClosed = false
         window.delegate = self
         windows[id] = window
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate()
         Log.info(.ui, "Opened window", ["window": id.rawValue])
+        return window
     }
 
     func close(_ id: WindowID) {

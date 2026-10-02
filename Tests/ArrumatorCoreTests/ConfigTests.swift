@@ -7,11 +7,32 @@ import Testing
     @Test func bundledDefaultsDecode() throws {
         let config = try PipelineConfig.bundledDefaults()
         let settings = try AppSettings.bundledDefaults()
-        let models = try config.models(for: settings.models)
-        #expect(!models.chat.isEmpty && !models.embed.isEmpty, "the default settings name a profile the pipeline defines")
         #expect(config.extraction.ocrLanguages.allSatisfy { Locale.LanguageCode($0).isISOLanguage },
                 "OCR hints are language codes Vision can be given")
         #expect(config.problems.isEmpty, "the bundled defaults pass their own validation: \(config.problems)")
+        #expect(settings.problems.isEmpty, "and so do the bundled settings: \(settings.problems)")
+    }
+
+    @Test func theBundledSettingsUseAProfileTheyListAndListFastStandardAndSmartInThatOrder() throws {
+        let settings = try AppSettings.bundledDefaults()
+        let inUse = try settings.modelProfile()
+        #expect(inUse == settings.modelProfiles[settings.profile] && inUse.name == "Standard",
+                "the profile in use is one the settings list, Standard, so documents are read as before profiles were settings")
+        #expect(settings.modelProfiles.values.sorted { $0.position < $1.position }.map(\.name) == ["Fast", "Standard", "Smart"],
+                "the profiles are listed by position, as JSON objects keep no order")
+        #expect(settings.modelProfiles.values.allSatisfy { $0.visionModel == $0.chatModel },
+                "each bundled profile reads documents and describes images with one model, which stays loaded once for both")
+        #expect(throws: ModelProfileError.unknown("lowMemory"), "a profile the settings do not list is refused, naming it") {
+            try settings.modelProfile("lowMemory")
+        }
+        let replay = try settings.reading(withChatModel: "gpt-oss:20b")
+        #expect(try replay.modelProfile() == ModelProfile(name: inUse.name, position: inUse.position, chatModel: "gpt-oss:20b",
+                                                          visionModel: inUse.visionModel, embedModel: inUse.embedModel)
+                    && replay.profile == settings.profile,
+                "replay and eval read with another chat model in the profile in use, and change nothing else of it")
+        #expect(throws: ConfigError.self, "and never with a blank one, which no model answers to") {
+            try settings.reading(withChatModel: " ")
+        }
     }
 
     @Test func everyKeyOfTheDefaultsIsNeededSoNoneIsMissing() throws {
@@ -26,31 +47,46 @@ import Testing
             String(describing: error).contains("excerptChars")
         }
         guard case var .object(settings) = try ConfigLoader.bundledValue("settings") else { throw ConfigError.missingResource("settings.json") }
-        settings["duplicateAction"] = nil
+        settings["renameFiles"] = nil
         #expect(throws: DecodingError.self, "and so does a setting left out of settings.json") {
             try JSON.decoder.decode(AppSettings.self, from: JSON.encoder.encode(JSONValue.object(settings)))
         }
     }
 
-    @Test func imagesAreDescribedWithTheContextTheirModelIsLoadedWithElsewhere() throws {
-        var models = try PipelineConfig.bundledDefaults().models(for: AppSettings.bundledDefaults().models)
-        models.numCtx = 12288
-        models.fastNumCtx = 8192
-        models.chat = "one-model"
-        models.vision = "one-model"
-        models.fast = "one-model"
-        #expect(models.visionNumCtx == 12288,
-                "one model for decisions and images keeps one context, so describing an image does not reload it")
-        models.chat = "a-decision-model"
-        #expect(models.visionNumCtx == 8192, "an image model that also names files keeps the naming context")
-        models.fast = "another-naming-model"
-        #expect(models.visionNumCtx == 12288, "an image model of its own is asked with the decision context")
+    @Test func imagesAreDescribedByTheProfilesVisionModelWithTheContextDocumentsAreReadWith() throws {
+        let config = try PipelineConfig.bundledDefaults()
+        var settings = try AppSettings.bundledDefaults()
+        settings.modelProfiles[settings.profile]?.visionModel = "an-image-model"
+        let vision = try #require(try config.extractionContext(settings: settings).vision, "images are described while enableVLM is on")
+        #expect(vision.model == "an-image-model", "by the vision model of the profile in use")
+        #expect(vision.numCtx == config.analysis.numCtx && vision.keepAlive == config.ollama.keepAlive.chat,
+                "with the context and keep-alive documents are read with, so a model that does both is loaded once, not again for each image")
+        settings.enableVLM = false
+        #expect(try config.extractionContext(settings: settings).vision == nil, "and none is described when the user turned it off")
     }
 
     @Test func everyFullTextColumnHasItsWeight() throws {
         let weights = try PipelineConfig.bundledDefaults().search.bm25Weights
         #expect(weights.count == SearchService.columns.count,
                 "bm25() weighs columns by position; a column without a weight counts as 1 and a label would outrank the title")
+    }
+
+    @Test func tagsAreNeitherKeptOneVocabularyNorShownToTheModelHoweverTheConfigurationIsWritten() async throws {
+        let env = try await TestEnvironment.make()
+        defer { env.cleanup() }
+        let bundled = try PipelineConfig.bundledDefaults()
+        #expect(bundled.labels.vocabulary.kinds[.tag] == nil && bundled.tasks.efforts.values.allSatisfy { $0.promptLabels[.tag] == nil },
+                "the bundled configuration keeps no tag one vocabulary and shows none to the model")
+        for (override, why) in [(#"{"labels": {"vocabulary": {"kinds": {"tag": {"mergeSimilarity": 1, "suggestSimilarity": 1, "promptLimit": 0}}}}}"#,
+                                 "labels.vocabulary.kinds.tag"),
+                                (#"{"tasks": {"efforts": {"low": {"promptLabels": {"tag": 5}}}}}"#, "tasks.efforts.low.promptLabels.tag")] {
+            try Data(override.utf8).write(to: env.paths.pipelineOverrideURL)
+            #expect("\(why) would merge the user's own words or show them to the model, so it stops the app naming the key") {
+                try PipelineConfig.load(paths: env.paths, environment: TestEnvironment.isolated)
+            } throws: { error in
+                (error as? ConfigError)?.localizedDescription.contains(why) == true
+            }
+        }
     }
 
     @Test func theVocabularyMergesOnlyWhatItWouldAlsoOffer() throws {
@@ -73,28 +109,39 @@ import Testing
                          #"{"ingest": {"maxAttempts": 0}}"#, #"{"tasks": {"withoutLabelFolder": "No {{label}}"}}"#,
                          #"{"tasks": {"defaultGrouping": ["type", "sender", "date", "party"]}}"#, #"{"tasks": {"maxDocuments": 0}}"#,
                          #"{"tasks": {"efforts": {"low": {"repairAttempts": -1}}}}"#, #"{"tasks": {"efforts": {"high": {"numPredict": 0}}}}"#,
-                         #"{"tasks": {"efforts": {"medium": {"timeout": 0}}}}"#, #"{"tasks": {"efforts": {"low": {"model": "vision"}}}}"#,
-                         #"{"tasks": {"efforts": {"extreme": {"model": "chat"}}}}"#] {
+                         #"{"tasks": {"efforts": {"medium": {"timeout": 0}}}}"#, #"{"tasks": {"efforts": {"extreme": {"think": false}}}}"#] {
             try Data(override.utf8).write(to: env.paths.pipelineOverrideURL)
             #expect(throws: ConfigError.self, "\(override) would crash or stall the pipeline, so it stops the app with the reason") {
                 try PipelineConfig.load(paths: env.paths, environment: TestEnvironment.isolated)
             }
         }
+        try Data(#"{"tasks": {"efforts": {"high": {"think": ""}}}}"#.utf8).write(to: env.paths.pipelineOverrideURL)
+        #expect("a level without a name would tell a model nothing, so it stops the app saying so") {
+            try PipelineConfig.load(paths: env.paths, environment: TestEnvironment.isolated)
+        } throws: { error in
+            (error as? ConfigError)?.localizedDescription.contains("think names no level") == true
+        }
     }
 
-    @Test func everyEffortHasItsPresetAndMediumReadsAsTasksWereReadBefore() throws {
+    @Test func everyEffortHasItsPresetLowDoesNotThinkAndEachThinksAtLeastAsMuchAsTheOneBelowIt() throws {
         var config = try PipelineConfig.bundledDefaults()
-        let medium = try config.tasks.preset(.medium)
-        #expect(medium.model == .chat && medium.fallback && medium.think == config.analysis.think
-                    && medium.repairAttempts == config.analysis.repairAttempts && medium.numPredict == config.analysis.llmOptions.numPredict
-                    && medium.timeout == config.ollama.timeouts.chat,
-                "medium reads a request as every task was read before efforts: as documents are, by the chat model, then the fast one")
-        let low = try config.tasks.preset(.low), high = try config.tasks.preset(.high)
+        let low = try config.tasks.preset(.low), medium = try config.tasks.preset(.medium), high = try config.tasks.preset(.high)
+        #expect(low.think == .off && low.repairAttempts == config.analysis.repairAttempts
+                    && low.numPredict == config.analysis.llmOptions.numPredict && low.timeout == config.ollama.timeouts.chat,
+                "low reads at once, as every request was read before efforts thought: with the repairs, answer length and time documents get")
+        #expect(medium.think != .off && high.think != .off, "medium and high let a model that can think do so before it answers")
+        let levels = try #require(OllamaShowResponse.Thinking.levels.values, "the levels a model like gpt-oss thinks at, least first")
+        let mediumLevel = try #require(levels.firstIndex(of: medium.think), "medium names a level, so a model with levels is told it")
+        let highLevel = try #require(levels.firstIndex(of: high.think), "and so does high")
+        #expect(mediumLevel <= highLevel, "a model with levels thinks at least as much at high as at medium")
         #expect(low.repairAttempts <= medium.repairAttempts && medium.repairAttempts <= high.repairAttempts
                     && low.numPredict <= medium.numPredict && medium.numPredict <= high.numPredict
+                    && low.timeout <= medium.timeout && medium.timeout <= high.timeout
                     && LabelKind.allCases.allSatisfy { (low.promptLabels[$0] ?? 0) <= (medium.promptLabels[$0] ?? 0)
                         && (medium.promptLabels[$0] ?? 0) <= (high.promptLabels[$0] ?? 0) },
-                "each effort gives at least as much as the one below it")
+                "each effort gives at least as much as the one below it: repairs, answer length, time and the archive's vocabulary")
+        #expect([medium, high].allSatisfy { $0.numPredict > low.numPredict && $0.timeout > low.timeout },
+                "an effort that thinks gives the answer more room and time than one that does not: thinking counts toward both")
         config.tasks.efforts[.high] = nil
         #expect(config.problems.contains("tasks.efforts.high is missing"), "an effort without its preset stops the app with the reason")
         #expect(throws: ConfigError.self, "and is never read with a guess") { try config.tasks.preset(.high) }
@@ -130,6 +177,169 @@ import Testing
         #expect(saved["transliterate"] == nil, "an unchanged setting is not, so a new default still reaches the user")
         let reloaded = try SettingsStore(paths: env.paths)
         #expect(await reloaded.current.renameFiles == false, "the change survives a restart")
+    }
+
+    @Test func aSettingChangedThroughTheActionsIsRecordedOnceWithWhatChangedAndNothingWhenNothingChanged() async throws {
+        let env = try await TestEnvironment.make()
+        defer { env.cleanup() }
+        let history = HistoryStore(database: env.database, time: env.time)
+        let actions = SettingsActions(store: env.settings, history: history)
+        func events() async throws -> [EventRecord] {
+            try await history.events(limit: 50, kinds: [.settingsChanged]).sorted { ($0.id ?? 0) < ($1.id ?? 0) }
+        }
+        let changed = try await actions.change(summary: "Files keep their names, and more is logged") {
+            $0.renameFiles = false
+            $0.logLevel = .debug
+        }
+        #expect(!changed.renameFiles && changed.logLevel == .debug, "the settings in force are returned")
+        #expect(try JSON.decoder.decode(JSONValue.self, from: Data(contentsOf: env.paths.settingsURL))["renameFiles"] == .bool(false),
+                "and saved")
+        let recorded = try await events()
+        #expect(recorded.map(\.summary) == ["Files keep their names, and more is logged"] && recorded.first?.actor == .user,
+                "the change is one event in History, the user's, in the words given")
+        #expect(JSON.decode([String: JSONValue].self, from: recorded.first?.payloadJson) == ["logLevel": "debug", "renameFiles": false],
+                "its payload is the settings that changed, with their new values, and nothing else")
+
+        let file = try Data(contentsOf: env.paths.settingsURL)
+        let same = try await actions.change(summary: "Nothing new") { $0.renameFiles = false }
+        #expect(same == changed, "a change that changes nothing leaves the settings as they are")
+        #expect(try await events().count == 1, "and records nothing")
+        #expect(try Data(contentsOf: env.paths.settingsURL) == file, "and settings.json is as it was")
+
+        try await actions.change(summary: "Ollama from Homebrew") { $0.ollamaBinaryPath = "/opt/homebrew/bin/ollama" }
+        try await actions.change(summary: "Ollama found again") { $0.ollamaBinaryPath = nil }
+        #expect(JSON.decode([String: JSONValue].self, from: try await events().last?.payloadJson) == ["ollamaBinaryPath": .null],
+                "a setting taken away is recorded as null, so the payload says it changed")
+        await #expect(throws: ConfigError.self, "settings the next launch would refuse are refused") {
+            try await actions.change(summary: "A profile there is none of") { $0.profile = "lowMemory" }
+        }
+        #expect(try await events().count == 3, "and recorded nowhere")
+    }
+
+    @Test func aChangeGivenWithoutWordsIsRecordedInWordsMadeOfWhatChanged() async throws {
+        let env = try await TestEnvironment.make()
+        defer { env.cleanup() }
+        let history = HistoryStore(database: env.database, time: env.time)
+        let actions = SettingsActions(store: env.settings, history: history)
+        func summaries() async throws -> [String] {
+            try await history.events(limit: 50, kinds: [.settingsChanged]).sorted { ($0.id ?? 0) < ($1.id ?? 0) }.map(\.summary)
+        }
+        let changed = try await actions.change {
+            $0.renameFiles = false
+            $0.logLevel = .debug
+            $0.ollamaBinaryPath = "/opt/homebrew/bin/ollama"
+        }
+        #expect(!changed.renameFiles && changed.logLevel == .debug, "the settings in force are returned")
+        #expect(try await summaries() == ["Changed logLevel to debug, ollamaBinaryPath to /opt/homebrew/bin/ollama, renameFiles to false"],
+                "History names each setting that changed and what it became, in the order of their names, the app's changes as the command's")
+        try await actions.change { $0.ollamaBinaryPath = nil }
+        try await actions.change { $0.traceRawRetentionDays = 30 }
+        #expect(try await summaries().dropFirst() == ["Changed ollamaBinaryPath to null", "Changed traceRawRetentionDays to 30"],
+                "a setting taken away is said to be null, and a value that is not text is written as settings.json writes it")
+        try await actions.change { $0.renameFiles = false }
+        #expect(try await summaries().count == 3, "a change that changes nothing records nothing")
+        await #expect(throws: ConfigError.self, "settings the next launch would refuse are refused, so the app shows why") {
+            try await actions.change { $0.profile = "lowMemory" }
+        }
+        #expect(try await summaries().count == 3, "and recorded nowhere")
+    }
+
+    @Test func aChangedPredefinedProfileIsSavedAsItsChangeAloneAndNothingOnceSetBack() async throws {
+        let env = try await TestEnvironment.make()
+        defer { env.cleanup() }
+        let bundled = try AppSettings.bundledDefaults().modelProfile("smart")
+        try await env.settings.update { $0.modelProfiles["smart"]?.chatModel = "gpt-oss:20b" }
+        let changed = try JSON.decoder.decode(JSONValue.self, from: Data(contentsOf: env.paths.settingsURL))
+        #expect(changed["modelProfiles"] == ["smart": ["chatModel": "gpt-oss:20b"]] && changed["profile"] == nil,
+                "the user's file holds the one field changed, so the profile's other models still follow the bundled ones")
+        #expect(try await SettingsStore(paths: env.paths).current.modelProfile("smart").chatModel == "gpt-oss:20b",
+                "and the change survives a restart")
+        try await env.settings.update { $0.modelProfiles["smart"] = bundled }
+        let reset = try JSON.decoder.decode(JSONValue.self, from: Data(contentsOf: env.paths.settingsURL))
+        #expect(reset["modelProfiles"] == nil, "a profile set back to the bundled one is saved as nothing, so a new default reaches it")
+    }
+
+    @Test func settingsTheNextLaunchWouldRefuseAreRefusedBeforeTheyAreSaved() async throws {
+        let env = try await TestEnvironment.make()
+        defer { env.cleanup() }
+        let file = try Data(contentsOf: env.paths.settingsURL)
+        let current = await env.settings.current
+        let mine = ModelProfile(name: "Mine", position: 4, chatModel: "qwen3.5:9b", visionModel: " ", embedModel: "bge-m3")
+        let refused: [(String, @Sendable (inout AppSettings) -> Void)] = [
+            ("profile", { $0.profile = "lowMemory" }),
+            ("modelProfiles.fast.name", { $0.modelProfiles["fast"]?.name = "  " }),
+            ("modelProfiles.smart.chatModel", { $0.modelProfiles["smart"]?.chatModel = "" }),
+            ("modelProfiles.standard.embedModel", { $0.modelProfiles["standard"]?.embedModel = "\n" }),
+            ("modelProfiles.mine.visionModel", { $0.modelProfiles["mine"] = mine }),
+            ("modelProfiles.smart.name", { $0.modelProfiles["smart"]?.name = "fast" }),
+        ]
+        for (key, change) in refused {
+            await #expect("settings with \(key) the app cannot use are refused, with the reason that names the key") {
+                try await env.settings.update(change)
+            } throws: { error in
+                guard case let ConfigError.invalid(name, underlying) = error else { return false }
+                return name == "settings" && underlying.hasPrefix(key + " ")
+            }
+            #expect(try Data(contentsOf: env.paths.settingsURL) == file, "\(key): nothing is written, so the next launch still starts")
+            #expect(await env.settings.current == current, "\(key): and the app goes on with the settings it had")
+        }
+        try Data(#"{"profile": "lowMemory"}"#.utf8).write(to: env.paths.settingsURL)
+        #expect("a file naming a profile it does not list stops the load, naming the profile") {
+            try SettingsStore(paths: env.paths)
+        } throws: { error in
+            (error as? ConfigError)?.localizedDescription.contains("lowMemory") == true
+        }
+    }
+
+    /// Whether `error` refuses the configuration `name` for each key of `paths`, which the app does not know.
+    private func refuses(_ error: any Error, _ name: String, unknown paths: [String]) -> Bool {
+        guard case let ConfigError.invalid(refused, underlying) = error else { return false }
+        return refused == name && underlying == paths.map(ConfigLoader.unknownKey).joined(separator: "; ")
+    }
+
+    @Test func aKeyTheAppDoesNotKnowStopsTheLoadNamingItAndKeysItKnowsLoad() async throws {
+        let env = try await TestEnvironment.make()
+        defer { env.cleanup() }
+        try Data(#"{"models": {"profile": "lowMemory"}, "renameFiles": false}"#.utf8).write(to: env.paths.settingsURL)
+        #expect("a choice of profile an earlier version saved stops the app naming the key, rather than being read as another") {
+            try SettingsStore(paths: env.paths)
+        } throws: { refuses($0, "settings", unknown: ["models"]) }
+        let extra = env.root.appendingPathComponent("extra.json")
+        let environment = RuntimeEnvironment(home: nil, ollamaURL: nil, logLevelName: nil, pipelineOverridePath: extra.path)
+        for (override, unknown) in [(#"{"modelProfiles": {"standard": {"numCtx": 8192}}}"#, ["modelProfiles"]),
+                                    (#"{"tasks": {"efforts": {"low": {"model": "fast", "fallback": false, "repairAttempts": 1}}}}"#,
+                                     ["tasks.efforts.low.fallback", "tasks.efforts.low.model"])] {
+            try Data(override.utf8).write(to: env.paths.pipelineOverrideURL)
+            #expect("\(override) sets what the pipeline no longer reads, so it stops the app naming each key") {
+                try PipelineConfig.load(paths: env.paths, environment: TestEnvironment.isolated)
+            } throws: { refuses($0, "pipeline", unknown: unknown) }
+        }
+        try Data(#"{"search": {"rrfK": 30}}"#.utf8).write(to: env.paths.pipelineOverrideURL)
+        try Data(#"{"analysis": {"fastNumCtx": 8192}}"#.utf8).write(to: extra)
+        #expect("ARRUMATOR_PIPELINE_CONFIG is held to the same rule") {
+            try PipelineConfig.load(paths: env.paths, environment: environment)
+        } throws: { refuses($0, "pipeline", unknown: ["analysis.fastNumCtx"]) }
+
+        try Data(#"""
+            {"ollamaBinaryPath": "/opt/homebrew/bin/ollama", "profile": "mine", "renameFiles": null,
+             "modelProfiles": {"mine": {"name": "Mine", "position": 4, "chatModel": "qwen3.5:9b", "visionModel": "qwen3.5:9b",
+                                        "embedModel": "bge-m3"},
+                               "smart": {"chatModel": "gpt-oss:20b"}}}
+            """#.utf8).write(to: env.paths.settingsURL)
+        let settings = try await SettingsStore(paths: env.paths).current
+        #expect(settings.ollamaBinaryPath == "/opt/homebrew/bin/ollama" && settings.renameFiles,
+                "an optional setting loads, and a null one sets nothing")
+        #expect(try settings.modelProfile().name == "Mine" && settings.modelProfiles["smart"]?.chatModel == "gpt-oss:20b",
+                "a profile of the user's own, under an id of its own, and a change to a bundled one load")
+        try Data(#"""
+            {"ollama": {"serveEnvironment": {"OLLAMA_FLASH_ATTENTION": "1"}},
+             "labels": {"vocabulary": {"kinds": {"language": {"mergeSimilarity": 1, "suggestSimilarity": 1, "promptLimit": 5}}}}}
+            """#.utf8).write(to: env.paths.pipelineOverrideURL)
+        try Data(#"{"tasks": {"efforts": {"high": {"promptLabels": {"object": 5}}}}}"#.utf8).write(to: extra)
+        let config = try PipelineConfig.load(paths: env.paths, environment: environment)
+        #expect(config.ollama.serveEnvironment["OLLAMA_FLASH_ATTENTION"] == "1" && config.labels.vocabulary.kinds[.language]?.promptLimit == 5
+                    && config.tasks.efforts[.high]?.promptLabels[.object] == 5,
+                "keys of a dictionary the user fills, from either override, load: a variable for Ollama, a kind, an effort's labels")
     }
 
     @Test func ollamaAnswersOnThisMacOrTheLocalNetworkOnly() throws {
@@ -173,11 +383,9 @@ import Testing
     @Test func chatBodyPutsSchemaPropertiesInOrder() throws {
         let schema: JSONValue = .orderedObject([JSONEntry("type", "object"), JSONEntry("properties",
             .orderedObject([JSONEntry("correspondent", ["type": "string"]), JSONEntry("file_name", ["type": "string"])]))])
-        let body = OllamaChatRequest(model: "m", messages: [.user("hi")], format: schema, options: [:], keepAlive: "1m", think: false, timeout: nil)
-            .body.serialized()
+        let body = OllamaChatRequest.sample(format: schema, think: nil).body.serialized()
         let r = try #require(body.range(of: "correspondent"))
         let f = try #require(body.range(of: "file_name"))
         #expect(r.lowerBound < f.lowerBound, "the model is asked for the properties in the order the schema gives them")
-        #expect(body.contains(#""think":false"#), "thinking is turned off as asked")
     }
 }

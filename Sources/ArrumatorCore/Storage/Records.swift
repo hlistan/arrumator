@@ -21,15 +21,19 @@ extension Date {
 }
 
 public enum DocumentStatus: String, Sendable, Codable, CaseIterable {
-    case arrived, processing, filed, needsReview, failed, duplicate, undone, held, missing
+    case arrived, processing, filed, needsReview, failed
+    /// A copy an earlier version filed beside the document it repeats (`duplicateOf`), as the archive's record files
+    /// still hold it. None is made now: an exact copy has its original read again in its place (`IngestCoordinator`).
+    case duplicate
+    case undone, held, missing
 
     public var isReviewable: Bool { [.needsReview, .failed, .held, .undone].contains(self) }
 
     /// Statuses of documents the pipeline has finished with, whatever the outcome.
     public static let processed: Set<DocumentStatus> = [.filed, .needsReview, .failed, .duplicate, .undone, .held]
 
-    /// Statuses of documents kept in the archive as themselves: what a search task finds. A duplicate is a copy of one
-    /// of them, and a document undone or missing is not in the archive.
+    /// Statuses of documents kept in the archive as themselves: what a search task finds, and what an exact copy is a
+    /// copy of. A duplicate is a copy of one of them, and a document undone or missing is not in the archive.
     public static let inArchive: Set<DocumentStatus> = [.filed, .needsReview, .failed, .held]
 }
 
@@ -48,8 +52,12 @@ public struct DocumentRecord: ArrumatorRecord, Identifiable, Hashable {
     /// What the model read the document as (`DocumentAnalysis`) as JSON, with the user's corrections; NULL before.
     public var analysisJson: String?
     public var contentJson: String?
-    /// The document's labels as JSON; NULL until the model has labelled it.
+    /// The document's labels as JSON; NULL while it has none and has not been labelled.
     public var labelsJson: String?
+    /// Whether its labels are only its tags, the user's own (`LabelKind.tag`), because the model has not labelled it
+    /// yet, as when it gave no valid answer for it: it counts as not labelled (`isLabelled`, `DocumentLabel.stored`).
+    public var tagsOnly: Bool
+    /// The document a `duplicate` repeats.
     public var duplicateOf: Int64?
     public var lastTraceId: Int64?
     public var addedAt: Date
@@ -67,17 +75,24 @@ public struct DocumentRecord: ArrumatorRecord, Identifiable, Hashable {
                                now: Date) -> DocumentRecord {
         DocumentRecord(id: nil, uid: UUID().uuidString, path: path, originalFilename: (path as NSString).lastPathComponent,
                        sha256: sha256, size: size, uttype: uttype, inode: inode, pageCount: nil, status: .processing, analysisJson: nil,
-                       contentJson: nil, labelsJson: nil, duplicateOf: nil, lastTraceId: nil, addedAt: now, filedAt: nil,
+                       contentJson: nil, labelsJson: nil, tagsOnly: false, duplicateOf: nil, lastTraceId: nil, addedAt: now, filedAt: nil,
                        extractedAt: nil, embeddedAt: nil, fileMtime: modified, createdAt: now, updatedAt: now)
     }
 
     public var url: URL { URL(fileURLWithPath: path) }
     public var filename: String { (path as NSString).lastPathComponent }
     public var analysis: DocumentAnalysis? { JSON.decode(DocumentAnalysis.self, from: analysisJson) }
-    /// Nil until the model has labelled the document; empty when it found nothing worth a label.
+    /// Nil while the document has no labels and has not been labelled; empty when the model found nothing worth a label.
+    /// Before the model has labelled it, it may have its tags (`tagsOnly`).
     public var labels: [DocumentLabel]? { JSON.decode([DocumentLabel].self, from: labelsJson) }
+    /// Whether the document has been labelled: read by the model, or given a label of another kind than a tag by hand.
+    /// One that is not is read by what reads documents without labels (`DocumentStore.unlabelled`).
+    public var isLabelled: Bool { labelsJson != nil && !tagsOnly }
     /// The values of the document's labels of `kind`.
     public func labels(_ kind: LabelKind) -> [String] { labels?.values(kind) ?? [] }
+    /// The document's own date, the day it was issued: its `date` label, `YYYY-MM-DD`, of which it has one at most; nil
+    /// when it has none. Not when it was added, filed or processed.
+    public var documentDate: String? { labels(.date).first }
 }
 
 public struct EmbeddingRecord: ArrumatorRecord {
@@ -94,7 +109,11 @@ public struct EmbeddingRecord: ArrumatorRecord {
 }
 
 public enum EventKind: String, Sendable, Codable, CaseIterable {
-    case arrived, extracted, analysed, filed, needsReview, duplicate, error, retry, failed
+    case arrived, extracted, analysed, filed, needsReview
+    /// An exact copy of a document in the archive arrived, under that document: it is read again, and the copy went to
+    /// the Trash (`CopyPayload`); in versions that filed copies, the copy was filed or left in Incoming.
+    case duplicate
+    case error, retry, failed
     /// The user changed a document's name or labels.
     case corrected
     case undone, markedCorrect, userMoved, userRenamed, missing, adopted
@@ -141,6 +160,10 @@ public struct EventRecord: ArrumatorRecord, Identifiable, Hashable {
     public mutating func didInsert(_ inserted: InsertionSuccess) { id = inserted.rowID }
 }
 
+/// Where a job is. `pending` has not begun. `hashing`, `extracting`, `analysing` and `filing` are the stage it is at,
+/// the one it runs next, whether the worker has it in hand now or it was stopped part way and carries on there: only
+/// the worker's live status (`IngestStatus.current`) says which. The rest are how it ended: `duplicate` for a file that
+/// was an exact copy of a document in the archive, which is read again in its place.
 public enum JobState: String, Sendable, Codable, CaseIterable {
     case pending, hashing, extracting, analysing, filing, done, duplicate, needsReview, failed, held, cancelled
 

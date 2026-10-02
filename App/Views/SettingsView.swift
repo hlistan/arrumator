@@ -12,7 +12,7 @@ struct SettingsView: View {
                 TabView {
                     GeneralSettings(loaded: settings).tabItem { Label(Wording.generalTab, systemImage: "gearshape") }
                     FilingSettings(loaded: settings).tabItem { Label(Wording.filingTab, systemImage: "folder") }
-                    ModelSettingsView(loaded: settings).tabItem { Label(Wording.modelsTab, systemImage: "cpu") }
+                    ModelSettingsView(loaded: settings, editsProfiles: true).tabItem { Label(Wording.modelsTab, systemImage: "cpu") }
                     AdvancedSettings(loaded: settings).tabItem { Label(Wording.advancedTab, systemImage: "wrench.and.screwdriver") }
                     ProcessingLogView().tabItem { Label(Wording.processingLogTab, systemImage: "text.alignleft") }
                 }
@@ -21,6 +21,7 @@ struct SettingsView: View {
             }
         }
         .frame(width: Style.settingsWindow.width, height: Style.settingsWindow.height)
+        .showsLastError()
     }
 }
 
@@ -96,30 +97,42 @@ struct FilingSettings: View {
 
     var body: some View {
         Form {
-            Section(Wording.files) {
+            Section {
                 Toggle(Wording.renameFiles, isOn: setting(model, loaded, \.renameFiles))
                 Toggle(Wording.transliterate, isOn: setting(model, loaded, \.transliterate))
-                Picker(Wording.exactDuplicates, selection: setting(model, loaded, \.duplicateAction)) {
-                    Text(Wording.fileCopies).tag(DuplicateAction.fileInArchive)
-                    Text(Wording.leaveCopies).tag(DuplicateAction.leaveInIncoming)
-                }
+            } header: {
+                Text(Wording.files)
+            } footer: {
+                Text(Wording.copiesFooter)
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
         }
         .formStyle(.grouped)
     }
 }
 
+/// Settings › Models: the Ollama server, then the profile documents and requests are read with and its three models, each
+/// installed or to download. Onboarding shows this much; Settings also lists every profile to edit under it
+/// (`ModelProfilesView`).
 struct ModelSettingsView: View {
     @Environment(AppModel.self) private var model
     let loaded: AppSettings
+    /// Whether every profile is listed to edit under the one in use, as Settings does and onboarding does not.
+    var editsProfiles = false
+    /// Every profile, as `ModelProfileActions.list()` orders them.
+    @State private var profiles: [ModelProfileListing] = []
+    /// Whether the models of the profile in use are installed; empty until Ollama has said.
     @State private var status: [ModelStatus] = []
-    @State private var downloading: String?
-    @State private var progress: Double?
-    @State private var message: String?
+    /// The installed models, to choose from for each role of a profile edited; nil until Ollama has said.
+    @State private var installed: [InstalledModel]?
+    @State private var downloads = ModelDownloads()
     @State private var server = ""
     @State private var serverError: String?
 
     private var onThisMac: Bool { model.runtime.map { OllamaEndpoint.isThisMac($0.ollama.baseURL) } ?? true }
+    private var current: AppSettings { model.settings ?? loaded }
+    /// The profile Settings reads with: always one the settings list, as the store refuses any other.
+    private var inUse: ModelProfile? { current.modelProfiles[current.profile] }
 
     var body: some View {
         Form {
@@ -138,31 +151,34 @@ struct ModelSettingsView: View {
                 }
                 .disabled(!onThisMac)
                 .help(Wording.managementOnThisMacOnly)
-                Button(Wording.startOllama) { Task { _ = await model.runtime?.lifecycle.ensureRunning(); await load() } }
+                Button(Wording.startOllama) { Task { _ = await model.runtime?.lifecycle.ensureRunning(); await loadStatus() } }
             }
             Section(Wording.modelsRun(at: model.runtime?.ollama.baseURL)) {
-                Picker(Wording.profile, selection: setting(model, loaded, \.models.profile)) {
-                    ForEach(model.runtime?.config.modelProfiles.sorted { $0.key < $1.key } ?? [], id: \.key) { Text($0.value.label).tag($0.key) }
+                if !profiles.isEmpty {
+                    ProfileInUsePicker(inUse: current.profile, profiles: profiles)
                 }
-                ForEach(status, id: \.self) { m in
-                    HStack {
-                        Image(systemName: m.installed ? "checkmark.circle.fill" : "arrow.down.circle").foregroundStyle(m.installed ? Palette.fine : Palette.attention)
-                        Text(Wording.model(role: m.role.rawValue, name: m.name))
-                        Spacer()
-                        if !m.installed {
-                            Button(downloading == m.name ? Wording.downloading : Wording.download) { Task { await pull(m.name) } }
-                                .disabled(downloading != nil)
+                if let inUse {
+                    ForEach(ModelProfile.roles, id: \.self) { role in
+                        let name = inUse.model(for: role)
+                        LabeledContent(Wording.role(role)) {
+                            HStack(spacing: Style.inlineControlSpacing) {
+                                Text(name).textSelection(.enabled)
+                                ModelAvailability(name: name, installed: status.first { $0.name == name }?.installed, downloads: downloads)
+                            }
                         }
                     }
+                    DownloadProgress(downloads: downloads, of: ModelProfile.roles.map(inUse.model(for:)))
                 }
-                if let progress { ProgressView(value: progress) }
-                if let message { Text(message).font(.caption).foregroundStyle(.secondary) }
                 Text(Wording.downloadNote)
                     .font(.caption).foregroundStyle(.secondary)
             }
+            if editsProfiles { ModelProfilesView(profiles: profiles, installed: installed, downloads: downloads) }
         }
         .formStyle(.grouped)
-        .task(id: "\(model.settings?.models.profile ?? "")|\(model.ollama.isReady)") { await load() }
+        .task(id: model.settings) { await loadProfiles() }
+        // Asked again when the models change, once Ollama answers, and when a download ends.
+        .task(id: [inUse, model.ollama.isReady, downloads.finished] as [AnyHashable]) { await loadStatus() }
+        .task(id: [model.ollama.isReady, downloads.finished] as [AnyHashable]) { await loadInstalled() }
         .onAppear { server = model.runtime?.ollama.baseURL.absoluteString ?? "" }
     }
 
@@ -177,33 +193,26 @@ struct ModelSettingsView: View {
                 serverError = nil
                 server = runtime.ollama.baseURL.absoluteString
                 model.settings = await runtime.settings.current
-                await load()
+                await loadStatus()
             } catch {
                 serverError = error.localizedDescription
             }
         }
     }
 
-    private func load() async {
-        guard model.ollama.isReady else { return }
-        let selection = (model.settings ?? loaded).models
-        status = await model.load(Wording.checkModelsAction) { try await $0.models.status(for: try $0.config.models(for: selection)) } ?? []
+    private func loadProfiles() async {
+        guard let runtime = model.runtime else { return }
+        profiles = await runtime.profiles.list()
     }
 
-    private func pull(_ name: String) async {
-        guard let runtime = model.runtime else { return }
-        downloading = name
-        defer { downloading = nil; progress = nil }
-        do {
-            for try await p in try await runtime.models.pull(name) {
-                progress = p.fraction
-                message = p.status
-            }
-            message = Wording.installed(name)
-        } catch {
-            message = error.localizedDescription
-        }
-        await load()
+    private func loadStatus() async {
+        guard model.ollama.isReady, let profile = inUse else { return }
+        status = await model.load(Wording.checkModelsAction) { try await $0.models.status(for: profile) } ?? status
+    }
+
+    private func loadInstalled() async {
+        guard editsProfiles, model.ollama.isReady else { return }
+        installed = await model.load(Wording.checkModelsAction) { try await $0.models.installed() } ?? installed
     }
 }
 

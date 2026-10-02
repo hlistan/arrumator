@@ -26,10 +26,12 @@ struct Tasks: AsyncParsableCommand {
         @OptionGroup var options: GlobalOptions
 
         func run() async throws {
-            let tasks = try await options.runtime().searchTasks.store.tasks()
+            let runtime = try await options.runtime()
+            let tasks = try await runtime.searchTasks.store.tasks()
+            let settings = await runtime.settings.current
             options.emit(tasks) {
                 tasks.isEmpty ? "No search tasks yet; `arrumatorcli tasks new <what you need>` asks for documents."
-                    : Terminal.table(tasks.map { Terminal.taskRow($0) })
+                    : Terminal.table(tasks.map { Terminal.taskRow($0, settings: settings) })
             }
         }
     }
@@ -39,24 +41,25 @@ struct Tasks: AsyncParsableCommand {
             abstract: "Ask for documents in your own words: the model reads the request, and the documents it asks for are found and arranged.")
         @OptionGroup var options: GlobalOptions
         @Flag(help: "Only put the task in the queue; the app, `run` or `tasks run` finds its documents.") var queueOnly = false
-        @Option(help: "How much computing the request is read with: low, medium or high; Settings' effort for new tasks if not given.")
+        @Option(help: "How much the model thinks before it answers the request: low (not at all), medium or high (the most); Settings' effort for new tasks if not given.")
         var effort: TaskEffort?
-        @Option(help: "The model that reads the request, one `models list` shows; the effort's model of the profile if not given.")
-        var model: String?
+        @Option(help: "The model profile that reads the request, by its id as `arrumatorcli profiles` lists it; if not given, the one Settings uses when it is read.")
+        var profile: String?
         @Argument(parsing: .remaining, help: "What you need, such as: electricity invoices from 2025, by sender.") var prompt: [String]
 
         func run() async throws {
             let runtime = try await options.runtime()
-            let task = try await runtime.searchTasks.create(prompt: prompt.joined(separator: " "), effort: effort, model: model)
+            let task = try await runtime.searchTasks.create(prompt: prompt.joined(separator: " "), effort: effort, profile: profile)
             if !queueOnly { await Tasks.runQueue(runtime) }
             let detail = try await Tasks.detail(task.id, runtime: runtime)
-            options.emit(detail) { Terminal.detail(detail) }
+            let settings = await runtime.settings.current
+            options.emit(detail) { Terminal.detail(detail, settings: settings) }
         }
     }
 
     struct Show: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
-            abstract: "A search task: what it asks for, how the model read it, its documents arranged by their labels, and its exports.")
+            abstract: "A search task: what it asks for, how the model read it, its documents arranged by their labels, the newest by their own date first, and its exports.")
         @OptionGroup var options: GlobalOptions
         @Flag(help: "Also show how the model read the request: the prompts and its raw answers.") var full = false
         @Argument(help: "The task's number, as `tasks list` shows it.") var task: Int64
@@ -64,14 +67,16 @@ struct Tasks: AsyncParsableCommand {
         func run() async throws {
             let runtime = try await options.runtime()
             let detail = try await Tasks.detail(task, runtime: runtime)
+            let settings = await runtime.settings.current
             guard full else {
-                options.emit(detail) { Terminal.detail(detail) }
+                options.emit(detail) { Terminal.detail(detail, settings: settings) }
                 return
             }
             var trace: (TraceRecord, [TraceStepRecord])?
             if let id = detail.task.lastTrace { trace = try await runtime.traces.trace(id: id) }
             options.emit(Full(detail: detail, trace: trace.map { TraceExport(trace: $0.0, steps: $0.1) })) {
-                Terminal.detail(detail) + "\n\n" + (trace.map { Terminal.steps($0.1, full: true) } ?? "The request has not been read yet.")
+                Terminal.detail(detail, settings: settings) + "\n\n"
+                    + (trace.map { Terminal.steps($0.1, full: true) } ?? "The request has not been read yet.")
             }
         }
 
@@ -89,18 +94,20 @@ struct Tasks: AsyncParsableCommand {
             let runtime = try await options.runtime()
             await Tasks.runQueue(runtime)
             let tasks = try await runtime.searchTasks.store.tasks()
-            options.emit(tasks) { tasks.isEmpty ? "No search tasks yet." : Terminal.table(tasks.map { Terminal.taskRow($0) }) }
+            let settings = await runtime.settings.current
+            options.emit(tasks) { tasks.isEmpty ? "No search tasks yet." : Terminal.table(tasks.map { Terminal.taskRow($0, settings: settings) }) }
         }
     }
 
     struct Update: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
-            abstract: "Rename a task, arrange its set otherwise, or ask it for something else, with another effort or model, which finds its documents again.")
+            abstract: "Rename a task, arrange its set otherwise, or ask it for something else, with another effort or profile, which finds its documents again.")
         @OptionGroup var options: GlobalOptions
         @Option(help: "The task's name; \"\" gives it the model's name back.") var title: String?
         @Option(help: "What the task asks for, in your own words.") var prompt: String?
-        @Option(help: "How much computing the request is read with: low, medium or high.") var effort: TaskEffort?
-        @Option(help: "The model that reads the request; \"\" gives it back to the effort's model of the profile.") var model: String?
+        @Option(help: "How much the model thinks before it answers the request: low (not at all), medium or high (the most).") var effort: TaskEffort?
+        @Option(help: "The model profile that reads the request, by its id as `arrumatorcli profiles` lists it; \"\" gives the task back to the one Settings uses.")
+        var profile: String?
         @Option(help: "What the set is arranged by, outermost first, such as sender,date; `none` for no arrangement; `asked` for what the request asked.")
         var groupBy: String?
         @Flag(help: "Only put a changed task in the queue; the app, `run` or `tasks run` finds its documents.") var queueOnly = false
@@ -108,8 +115,8 @@ struct Tasks: AsyncParsableCommand {
 
         func validate() throws {
             _ = try groupBy.map(Tasks.grouping)
-            if title == nil && prompt == nil && groupBy == nil && effort == nil && model == nil {
-                throw ValidationError("Give --title, --prompt, --group-by, --effort or --model")
+            if title == nil && prompt == nil && groupBy == nil && effort == nil && profile == nil {
+                throw ValidationError("Give --title, --prompt, --group-by, --effort or --profile")
             }
         }
 
@@ -117,10 +124,11 @@ struct Tasks: AsyncParsableCommand {
             let runtime = try await options.runtime()
             let updated = try await runtime.searchTasks.update(task, SearchTaskChange(title: title, prompt: prompt,
                                                                                     grouping: try groupBy.map(Tasks.grouping),
-                                                                                    effort: effort, model: model))
+                                                                                    effort: effort, profile: profile))
             if updated.state.isActive && !queueOnly { await Tasks.runQueue(runtime) }
             let detail = try await Tasks.detail(task, runtime: runtime)
-            options.emit(detail) { Terminal.detail(detail) }
+            let settings = await runtime.settings.current
+            options.emit(detail) { Terminal.detail(detail, settings: settings) }
         }
     }
 
@@ -152,13 +160,14 @@ struct Tasks: AsyncParsableCommand {
             try await runtime.searchTasks.retry(task)
             if !queueOnly { await Tasks.runQueue(runtime) }
             let detail = try await Tasks.detail(task, runtime: runtime)
-            options.emit(detail) { Terminal.detail(detail) }
+            let settings = await runtime.settings.current
+            options.emit(detail) { Terminal.detail(detail, settings: settings) }
         }
     }
 
     struct Add: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
-            abstract: "Add documents to a task's set: by number or path, or every document that has all the labels given.")
+            abstract: "Add documents to a task's set: by number or path, or every document that has all the labels given, at most tasks.maxDocuments, the newest by their own date.")
         @OptionGroup var options: GlobalOptions
         @Option(help: "Add every document with this label, as kind=value, such as type=invoice (repeatable: all of them).")
         var label: [String] = []
@@ -177,7 +186,8 @@ struct Tasks: AsyncParsableCommand {
             var added = try await runtime.searchTasks.add(task, documents: ids)
             if !label.isEmpty { added += try await runtime.searchTasks.add(task, labelled: try label.map(Labels.label)) }
             let detail = try await Tasks.detail(task, runtime: runtime)
-            options.emit(detail) { "Added \(Format.count(added.count, "document"))\n\n" + Terminal.detail(detail) }
+            let settings = await runtime.settings.current
+            options.emit(detail) { "Added \(Format.count(added.count, "document"))\n\n" + Terminal.detail(detail, settings: settings) }
         }
     }
 
@@ -194,7 +204,8 @@ struct Tasks: AsyncParsableCommand {
             for document in documents { ids.append(try await resolveDocument(document, runtime: runtime)) }
             let removed = try await runtime.searchTasks.remove(task, documents: ids)
             let detail = try await Tasks.detail(task, runtime: runtime)
-            options.emit(detail) { "Took out \(Format.count(removed.count, "document"))\n\n" + Terminal.detail(detail) }
+            let settings = await runtime.settings.current
+            options.emit(detail) { "Took out \(Format.count(removed.count, "document"))\n\n" + Terminal.detail(detail, settings: settings) }
         }
     }
 
@@ -232,19 +243,27 @@ struct Tasks: AsyncParsableCommand {
 extension TaskEffort: ExpressibleByArgument {}
 
 extension Terminal {
-    /// A task on one line of a table: number, state, effort, how many documents and exports, name.
-    static func taskRow(_ task: SearchTask) -> [String] {
-        ["#\(task.id)", task.state.rawValue, task.effort.rawValue, Format.count(task.documents.count, "document"),
-         Format.count(task.exports.count, "export"), task.name]
+    /// A task on one line of a table: number, state, effort, the profile that reads it, how many documents and exports,
+    /// name.
+    static func taskRow(_ task: SearchTask, settings: AppSettings) -> [String] {
+        ["#\(task.id)", task.state.rawValue, task.effort.rawValue, profile(task, settings: settings),
+         Format.count(task.documents.count, "document"), Format.count(task.exports.count, "export"), task.name]
     }
 
-    /// A task, what it asks for, its set arranged as it says, and its exports.
-    static func detail(_ detail: SearchTaskDetail) -> String {
+    /// The profile that reads a task, by name: its own, or Settings' profile and which that is now. One the settings no
+    /// longer list is named by its id.
+    static func profile(_ task: SearchTask, settings: AppSettings) -> String {
+        guard let id = task.profile else { return "Settings' profile (\(settings.modelProfiles[settings.profile]?.name ?? settings.profile))" }
+        return settings.modelProfiles[id]?.name ?? "“\(id)”, which the settings no longer list"
+    }
+
+    /// A task, what it asks for and how it is read, its set arranged as it says, and its exports.
+    static func detail(_ detail: SearchTaskDetail, settings: AppSettings) -> String {
         let task = detail.task
         var lines = ["#\(task.id) \(task.name) · \(task.state.rawValue) · \(Format.count(task.documents.count, "document"))",
                      "  asked:       \(task.prompt)"]
-        lines.append("  read with:   \(task.effort.rawValue) effort, " + (task.assignedModel.map { "by \($0) (yours)" } ?? "by the profile's model")
-            + (task.model.map { $0 == task.assignedModel ? "" : "; last read by \($0)" } ?? ""))
+        lines.append("  read with:   \(task.effort.rawValue) effort, by \(profile(task, settings: settings))"
+            + (task.model.map { "; last read by \($0)" } ?? ""))
         if let plan = task.plan { lines.append("  looked for:  \(Terminal.plan(plan))") }
         if let problem = task.problem { lines.append("  problem:     \(problem)") }
         lines.append("  arranged by: " + (task.grouping.isEmpty ? "nothing" : task.grouping.map(\.rawValue).joined(separator: " › "))

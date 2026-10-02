@@ -26,7 +26,8 @@ public struct Harness: Sendable {
             database: env.database, config: config, settings: env.settings, extractor: PlainTestExtractor(), analyzer: analyzer,
             filer: DocumentFiler(database: env.database, placer: placer, index: IndexStore(database: env.database, time: env.time),
                                  registry: SelfChangeRegistry(ttl: config.watcher.selfChangeTTLSeconds, time: env.time), time: env.time),
-            traces: TraceRecorder(database: env.database, appVersion: "test", time: env.time), vectors: VectorIndex(), time: env.time)
+            traces: TraceRecorder(database: env.database, appVersion: "test", time: env.time), vectors: VectorIndex(), trash: env.trash,
+            time: env.time)
     }
 
     /// The same pipeline with `change` made to its configuration, such as retries without delay.
@@ -46,14 +47,15 @@ public struct Harness: Sendable {
     public var labels: LabelActions { LabelActions(database: env.database, time: env.time) }
     public var search: SearchService { SearchService(database: env.database, vectors: VectorIndex(), embedder: nil, config: env.config.search) }
 
-    /// Drops `name` into Incoming and runs the pipeline over it; the document it became.
+    /// Drops `name` into Incoming, or a folder in it when `name` is a path, and runs the pipeline over it; the document
+    /// it became.
     @discardableResult
     public func ingest(_ name: String, text: String) async throws -> DocumentRecord {
         let url = try env.drop(name, text: text)
         await coordinator.enqueue(url)
         await coordinator.drain()
         guard let document = try await services.documents.list(DocumentFilter(), limit: env.config.interface.pageSize)
-            .first(where: { $0.originalFilename == name }) else { throw IngestError.sourceMissing(url.path) }
+            .first(where: { $0.originalFilename == url.lastPathComponent }) else { throw IngestError.sourceMissing(url.path) }
         return document
     }
 }

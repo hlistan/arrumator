@@ -1,10 +1,11 @@
 import Foundation
 
 /// The kinds of label a document is described by, and all it is described by: the local model picks each out of the
-/// document, and the document is found by them, however the archive is arranged. The set follows the metadata archival
-/// description keeps for a record (DCMI Metadata Terms, ISO 23081's agents), the facets of faceted classification
-/// (Ranganathan's personality, matter, energy, space and time) and the fields document managers and key-information
-/// extraction read from personal paperwork; docs/organizing-principles-sources.md#sources-for-labels.
+/// document but the last, the user's own `tag`, and the document is found by them, however the archive is arranged. The
+/// set follows the metadata archival description keeps for a record (DCMI Metadata Terms, ISO 23081's agents), the facets
+/// of faceted classification (Ranganathan's personality, matter, energy, space and time) and the fields document managers
+/// and key-information extraction read from personal paperwork; a tag is a label its owner gives, as the tags of a
+/// personal collection are; docs/organizing-principles-sources.md#sources-for-labels.
 public enum LabelKind: String, Sendable, Codable, CaseIterable {
     /// Who issued or sent the document.
     case sender
@@ -30,9 +31,18 @@ public enum LabelKind: String, Sendable, Codable, CaseIterable {
     case jurisdiction
     /// A language it is written in, as an ISO 639-1 code.
     case language
+    /// The user's own label, as the user writes it: the name of the folder in Incoming the document was put in
+    /// (`IncomingFolders`), or one given by hand. The model is never asked for one and never gives one.
+    case tag
 
     /// A kind a document has at most one label of.
     public var isSingle: Bool { self == .type || self == .date }
+
+    /// Whether labels of the kind are the user's own, never the model's: a tag.
+    public var isUsersOwn: Bool { self == .tag }
+
+    /// The kinds the model reads a document and a search request for, in their order: every kind but the user's own.
+    public static let modelKinds = allCases.filter { !$0.isUsersOwn }
 }
 
 /// One label of a document: a signal of `kind` the model found in it, as `value`.
@@ -70,7 +80,7 @@ extension DocumentLabel {
     /// deadline is ISO 8601 (`YYYY-MM-DD`, from day-first dates too), a period one or two ISO dates of any precision
     /// joined by `/`, a language its ISO 639-1 code, a type one of `DocumentType` other than `other`, an amount and a
     /// reference have a number in them (an amount with its ISO 4217 code before or after it is written `number CODE`),
-    /// and a topic is lowercase.
+    /// and a topic is lowercase. A tag is kept as written.
     public static func normalized(_ value: String, kind: LabelKind) -> DocumentLabel? {
         let written = oneLine(value)
         guard !written.isEmpty else { return nil }
@@ -83,7 +93,7 @@ extension DocumentLabel {
         case .amount: amount(written)
         case .reference: written.contains(where: \.isNumber) ? written : nil
         case .topic: written.lowercased()
-        case .sender, .party, .object, .jurisdiction: written
+        case .sender, .party, .object, .jurisdiction, .tag: written
         }
         return normalized.map { DocumentLabel(kind: kind, value: $0) }
     }

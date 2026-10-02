@@ -43,8 +43,16 @@ public struct DocumentFilter: Sendable, Hashable {
     }
 }
 
+/// The orders documents are listed in. The logs (Incoming, Needs You, Processed) follow when something happened to a
+/// document, the latest first; the documents a person looks for, those the sidebar's labels choose and a search task's,
+/// follow their own date (`documentDate`).
 public enum DocumentOrder: String, Sendable, CaseIterable {
     case recentlyAdded, recentlyFiled, recentlyProcessed
+    /// By the document's own date (`DocumentRecord.documentDate`, the day it was issued), the newest first and the
+    /// undated last; documents of one date by file name as Finder sorts names, then by number. Every document has a
+    /// place of its own in it, so a longer list in this order starts as a shorter one does: loading a page more never
+    /// skips or repeats a document. `byDocumentDate` is the same order over documents in memory.
+    case documentDate
 
     /// The order over `documents d`.
     var sql: String {
@@ -53,7 +61,35 @@ public enum DocumentOrder: String, Sendable, CaseIterable {
         /// When the pipeline finished with it: filed documents by filing time, the rest by arrival.
         case .recentlyProcessed: "COALESCE(d.filed_at, d.added_at) DESC"
         case .recentlyFiled: "d.filed_at DESC"
+        case .documentDate: "\(Self.dateSQL) DESC NULLS LAST, \(Self.fileNameSQL) COLLATE \(DatabaseCollation.localizedStandardCompare.name), d.id"
         }
+    }
+
+    /// A document's `date` label, as `DocumentFilter` reads a label of a kind out of `labels_json`; NULL without one.
+    private static let dateSQL = """
+        (SELECT json_extract(l.value, '$.value') FROM json_each(d.labels_json) l \
+        WHERE json_extract(l.value, '$.kind') = '\(LabelKind.date.rawValue)' LIMIT 1)
+        """
+
+    /// A document's file name (`DocumentRecord.filename`): its path after the last `/`. Trimming every character other
+    /// than `/` off the end of the path leaves its folder, and the name starts right after that.
+    private static let fileNameSQL = "substr(d.path, length(rtrim(d.path, replace(d.path, '/', ''))) + 1)"
+
+    /// `documentDate` over documents already in memory, such as a search task's set: the order the index gives them in.
+    /// Names compare as the index's collation compares them (`localizedStandardCompare`).
+    static func byDocumentDate(_ documents: [DocumentRecord]) -> [DocumentRecord] {
+        documents.map { (document: $0, date: $0.documentDate) }.sorted { a, b in
+            if a.date != b.date {
+                guard let x = a.date else { return false }
+                guard let y = b.date else { return true }
+                return x > y
+            }
+            switch a.document.filename.localizedStandardCompare(b.document.filename) {
+            case .orderedAscending: return true
+            case .orderedDescending: return false
+            case .orderedSame: return (a.document.id ?? 0) < (b.document.id ?? 0)
+            }
+        }.map(\.document)
     }
 }
 
@@ -80,11 +116,13 @@ public struct DocumentStore: Sendable {
         try await database.reader.read { db in try DocumentRecord.filter(Column("uid") == uid).fetchOne(db) }
     }
 
-    /// An existing, still-present document with the same content hash.
+    /// The oldest document in the archive as itself (`DocumentStatus.inArchive`: filed, waiting for the user, parked
+    /// after failing or left for later) recorded with this content hash, other than `id`: what an exact copy of it is a
+    /// copy of. A copy an earlier version filed (`duplicate`) is none.
     public func existing(sha256: String, excluding id: Int64?) async throws -> DocumentRecord? {
         try await database.reader.read { db in
             var r = DocumentRecord.filter(Column("sha256") == sha256)
-                .filter([DocumentStatus.filed, .needsReview, .held].map(\.rawValue).contains(Column("status")))
+                .filter(DocumentStatus.inArchive.map(\.rawValue).contains(Column("status")))
             if let id { r = r.filter(Column("id") != id) }
             return try r.order(Column("id")).fetchOne(db)
         }
@@ -118,12 +156,15 @@ public struct DocumentStore: Sendable {
     }
 
     /// Documents the model has not labelled yet whose text was read, oldest first: those filed before documents were
-    /// labelled, and those it gave no valid answer for.
+    /// labelled, and those it gave no valid answer for, with no labels or with only their tags (`isLabelled`).
     public func unlabelled() async throws -> [Int64] {
         try await database.reader.read { db in
-            try Int64.fetchAll(db, sql: "SELECT id FROM documents WHERE labels_json IS NULL AND content_json IS NOT NULL ORDER BY id")
+            try Int64.fetchAll(db, sql: "SELECT id FROM documents WHERE \(Self.notLabelledSQL) AND content_json IS NOT NULL ORDER BY id")
         }
     }
+
+    /// A document of `documents` the model has not labelled yet (`DocumentRecord.isLabelled`), as a condition.
+    static let notLabelledSQL = "(labels_json IS NULL OR tags_only)"
 
     @discardableResult
     public func save(_ document: DocumentRecord) async throws -> DocumentRecord {

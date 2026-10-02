@@ -66,10 +66,13 @@ public struct Doctor: Sendable {
         add("Ollama running", state.isReady,
             local ? state.summary : "\(state.summary) at \(ollamaURL.absoluteString), a machine on the local network", warnOnly: true)
         var modelStatus: [ModelStatus] = []
-        if state.isReady, let resolved = try? config.models(for: settings.models) {
-            modelStatus = (try? await models.status(for: resolved)) ?? []
-            for m in modelStatus {
-                add("Model \(m.role.rawValue)", m.installed, m.installed ? m.name : "\(m.name) is not installed", warnOnly: m.role == .fast)
+        if state.isReady {
+            do {
+                let profile = try settings.modelProfile()
+                modelStatus = (try? await models.status(for: profile)) ?? []
+                for m in modelStatus { add("Model \(m.role.rawValue)", m.installed, m.installed ? m.name : "\(m.name) is not installed") }
+            } catch {
+                add("Model profile", false, error.localizedDescription)
             }
         }
         if local, let values = try? fm.homeDirectoryForCurrentUser.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]),

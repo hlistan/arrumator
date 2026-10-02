@@ -179,10 +179,11 @@ enum TestConfig {
         try ExtractorRegistry(ollama: ollama, recognizer: recognizer, shell: ShellRunner(time: time), time: time)
     }
 
+    /// A vision model of its own, asked as the pipeline asks the profile's (`PipelineConfig.extractionContext`).
     static func visionOptions() throws -> VisionModelOptions {
         let pipeline = try pipeline()
-        return VisionModelOptions(model: "gemma-test", keepAlive: "1m", numPredict: pipeline.analysis.vlmNumPredict, numCtx: 12288,
-                                  options: pipeline.analysis.llmOptions)
+        return VisionModelOptions(model: "gemma-test", keepAlive: pipeline.ollama.keepAlive.chat, numPredict: pipeline.analysis.vlmNumPredict,
+                                  numCtx: pipeline.analysis.numCtx, options: pipeline.analysis.llmOptions, think: pipeline.analysis.think)
     }
 }
 

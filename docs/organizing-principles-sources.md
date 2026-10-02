@@ -7,7 +7,8 @@ and a document is described by its labels alone: it is found by them, its words 
 
 Every document is labelled with the kinds of metadata archival description keeps for a record, the facets of faceted
 classification, and the fields document managers and key-information extraction read from personal paperwork
-(`labels-system.md`, `LabelKind`). The sources the kinds draw on:
+(`labels-system.md`, `LabelKind`), which the model picks out, and with the tags its owner gives it, which the model
+never does. The sources the kinds draw on:
 
 - **DCMI Metadata Terms** — <https://www.dublincore.org/specifications/dublin-core/dcmi-terms/>: *creator* "An entity
   responsible for making the resource" and *publisher*; *subject* "A topic of the resource"; *coverage* "The spatial or
@@ -31,6 +32,16 @@ classification, and the fields document managers and key-information extraction 
   total) and inv-cdip (invoice number, invoice and due dates, amounts due, totals and tax), as summarised in
   *Multi-Modal Vision vs. Text-Based Parsing: Benchmarking LLM Strategies for Invoice Processing*, 2025 —
   <https://arxiv.org/pdf/2509.04469>.
+- **Tags a person gives**: "Folksonomy is the result of personal free tagging of information and objects (anything with
+  a URL) for one's own retrieval" — Vander Wal, *Folksonomy*, 2007 — <https://vanderwal.net/folksonomy.html>;
+  "Collaborative tagging describes the process by which many users add metadata in the form of keywords to shared
+  content" — Golder & Huberman, *The Structure of Collaborative Tagging Systems*, 2005 —
+  <https://arxiv.org/abs/cs/0508082>. paperless-ngx tags what it takes from the subfolders of its consumption folder
+  with their names: "Set the names of subdirectories as tags for consumed files. E.g.
+  `<CONSUMPTION_DIR>/foo/bar/file.pdf` will add the tags "foo" and "bar" to the consumed file", for "sorting documents
+  with certain tags such as `car` or `todo` prior to consumption. These folders won't be deleted."
+  (`PAPERLESS_CONSUMER_SUBDIRS_AS_TAGS`) —
+  <https://docs.paperless-ngx.com/configuration/#PAPERLESS_CONSUMER_SUBDIRS_AS_TAGS>.
 
 | Kind | Grounded in |
 |---|---|
@@ -46,6 +57,7 @@ classification, and the fields document managers and key-information extraction 
 | `amount` | schema.org Invoice *totalPaymentDue*; SROIE total; inv-cdip amount due; paperless-ngx monetary field |
 | `jurisdiction` | DCMI *coverage* and *spatial*; Ranganathan's space |
 | `language` | DCMI *language*, as ISO 639-1 codes — <https://www.loc.gov/standards/iso639-2/php/code_list.php> ; `Locale.LanguageCode` — <https://developer.apple.com/documentation/foundation/locale/languagecode> |
+| `tag` | The owner's own keywords: personal free tagging for one's own retrieval (Vander Wal) and tagging as metadata people add (Golder & Huberman); paperless-ngx tags, and its subfolders as tags, which inspired a folder in Incoming naming a tag. Unlike paperless-ngx, only the folder at the top of Incoming names one, so a folder of folders, such as `Taxes 2024/Q1`, gives one tag rather than one per level. A tag is the owner's words, so nothing merges it with another unasked, and the model is never asked for one: it describes how the owner sorts, which the document itself cannot say |
 
 | Choice | Sources |
 |---|---|
@@ -74,8 +86,8 @@ How the archive's labels are kept consistent, and how the user's decisions about
 ## Sources for search tasks
 
 How a request in the user's words becomes a search, and how what it finds is arranged and delivered
-([how it works](how-it-works.md#search-tasks), `SearchPlan`, `SearchPromptInterpreter`, `EffortPreset`,
-`DocumentGrouping`, `search-system.md`).
+([how it works](how-it-works.md#search-tasks), `SearchPlan`, `SearchPromptInterpreter`, `ModelProfile`,
+`EffortPreset`, `OllamaShowResponse.think(sending:)`, `DocumentGrouping`, `search-system.md`).
 
 | Choice | Sources |
 |---|---|
@@ -85,8 +97,10 @@ How a request in the user's words becomes a search, and how what it finds is arr
 | The answer is a fixed JSON schema, checked and repaired like a document's; the arrangement is a closed enum of the kinds | Ollama structured outputs — <https://ollama.com/blog/structured-outputs> ; Tam et al., EMNLP 2024 Industry Track (above) |
 | A date, period or deadline asked for is matched by the time it covers, as an interval | ISO 8601 time intervals (`start/end`) and reduced precision (a year, a month), as `schema.org/temporalCoverage` uses them — <https://schema.org/temporalCoverage> |
 | What is found is arranged a level per kind, the order of the levels the user's | Hierarchical faceted metadata: a facet's values become the categories a collection is browsed and grouped by, and a person chooses which facet comes first (Hearst 2006, above) |
-| A request is read with an effort, Low, Medium or High, that spends more or less computation on it: a larger model, thinking before answering, more chances to repair a wrong answer, more of the archive's vocabulary | Answers improve with the computation spent on them at inference, and how much is worth spending depends on the request: Snell, Lee, Xu & Kumar, *Scaling LLM Test-Time Compute Optimally can be More Effective than Scaling Model Parameters*, 2024 — <https://arxiv.org/abs/2408.03314> ; a model improves its answer when given feedback on it and asked again: Madaan et al., *Self-Refine: Iterative Refinement with Self-Feedback*, NeurIPS 2023 — <https://arxiv.org/abs/2303.17651> ; thinking before answering, separately from the structured answer: Ollama, *Thinking* — <https://docs.ollama.com/capabilities/thinking> |
-| The effort is one of three presets rather than a number of tokens or tries | A few named levels of reasoning effort, as model APIs offer them (low, medium, high), which a person can choose between without knowing what each costs: OpenAI, *Reasoning models*, `reasoning.effort` — <https://platform.openai.com/docs/guides/reasoning> |
+| A request is read with an effort, Low, Medium or High: how much the reading model thinks before it answers, with the tokens and time thinking needs, how often a wrong answer goes back to it, and how much of the archive's vocabulary it is shown | Answers improve with the computation spent on them at inference, and how much is worth spending depends on the request: Snell, Lee, Xu & Kumar, *Scaling LLM Test-Time Compute Optimally can be More Effective than Scaling Model Parameters*, 2024 — <https://arxiv.org/abs/2408.03314> ; a model improves its answer when given feedback on it and asked again, as a wrong answer is sent back: Madaan et al., *Self-Refine: Iterative Refinement with Self-Feedback*, NeurIPS 2023 — <https://arxiv.org/abs/2303.17651> |
+| A model is told to think as its `/api/show` allows: switched off or on, or at a level it names, and told nothing it does not list | Ollama's `think` takes `false`, `true` or one of the levels a model lists in `thinking.values` (gpt-oss: low, medium, high), and its thinking comes apart from the structured answer: Ollama, *Thinking* — <https://docs.ollama.com/capabilities/thinking> |
+| The effort is one of three presets of how much the model thinks rather than a number of tokens or tries | A few named levels of reasoning effort, as model APIs offer them (low, medium, high), which say how much a model reasons before it answers and which a person can choose between without knowing what each costs: OpenAI, *Reasoning models*, `reasoning.effort` — <https://platform.openai.com/docs/guides/reasoning> ; the same three names are the levels gpt-oss lists in Ollama (*Thinking*, above) |
+| Which models read (the profile) and how much the reading model thinks (the effort) are chosen apart | A larger model and more computation at inference are separate levers, and which is worth more depends on the request: Snell et al. 2024 (above), who compare the two; model APIs take them as separate parameters, the model and its thinking: Ollama's `model` and `think` (*Thinking*, above), OpenAI's `model` and `reasoning.effort` (above) |
 | A ZIP archive is made by Foundation, reading the folder for uploading, as Finder's Compress does | Apple, `NSFileCoordinator.ReadingOptions.forUploading`, which gives a directory read with it as a ZIP archive of its contents, in a temporary file removed once the reader is done — <https://developer.apple.com/documentation/foundation/nsfilecoordinator/readingoptions/foruploading> |
 
 ## Sources for search

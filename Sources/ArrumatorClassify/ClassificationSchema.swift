@@ -1,7 +1,8 @@
 import ArrumatorCore
 import Foundation
 
-/// The JSON schema sent as Ollama `format`: one list of signals per `LabelKind`, then the file name. Under
+/// The JSON schema sent as Ollama `format`: one list of signals per kind the model gives (`LabelKind.modelKinds`: every
+/// kind but the user's own tags, which it is never asked for), then the file name. Under
 /// constrained decoding the model writes the properties in this order, so what a file name is made of (the sender,
 /// the type, the date) comes first, and the name last, from what it has found. Only string, array and object types are
 /// used, which every grammar backend supports.
@@ -24,7 +25,7 @@ public enum ClassificationSchema {
         ])
     }
 
-    /// The kinds in the order the model writes them.
+    /// The kinds in the order the model writes them: those it gives (`LabelKind.modelKinds`), never a tag.
     static let answerOrder: [LabelKind] = [.sender, .type, .date, .party, .topic, .object, .reference, .period, .deadline, .amount,
                                            .jurisdiction, .language]
 
@@ -43,7 +44,8 @@ public enum ClassificationSchema {
     static let fileNameKey = "file_name"
 }
 
-/// Raw model answer: a list per kind, and the file name.
+/// Raw model answer: a list per kind the schema asks for (`ClassificationSchema.answerOrder`), and the file name. Nothing
+/// else in it is read: a list of tags is none.
 struct AnalysisAnswer: Decodable {
     var signals: [LabelKind: [String]]
     var fileName: String
@@ -58,7 +60,7 @@ struct AnalysisAnswer: Decodable {
     init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: Key.self)
         var signals: [LabelKind: [String]] = [:]
-        for kind in LabelKind.allCases {
+        for kind in ClassificationSchema.answerOrder {
             signals[kind] = try container.decode([String].self, forKey: Key(stringValue: ClassificationSchema.labelsKey(kind)))
         }
         self.signals = signals
@@ -78,12 +80,15 @@ public enum AnswerValidationError: Error, LocalizedError, Hashable {
     case invalid([String])
     /// The answer stopped at its length limit, in tokens, before it was complete.
     case cutOff(Int)
+    /// No answer came within the seconds the request's effort gives one (`LLMClassifier.Effort.timeout`).
+    case timedOut(Double)
 
     public var errorDescription: String? {
         switch self {
         case let .notJSON(why): "The answer is not valid JSON: \(why)"
         case let .invalid(problems): problems.joined(separator: "; ")
         case let .cutOff(limit): "The answer was cut off at its length limit of \(limit) tokens before it was complete; answer more briefly"
+        case let .timedOut(seconds): "No answer came within the \(Int(seconds.rounded())) s an answer may take at this effort; a lower effort thinks less"
         }
     }
 }

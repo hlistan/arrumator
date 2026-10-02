@@ -29,7 +29,7 @@ enum Fixtures {
     static func answer(omitting omitted: LabelKind? = nil, _ overrides: [LabelKind: [String]] = [:],
                        fileName: String = "2026-07-05 EDP Comercial - Fatura eletricidade julho") -> String {
         var fields: [String: JSONValue] = ["file_name": .string(fileName)]
-        for kind in LabelKind.allCases where kind != omitted {
+        for kind in ClassificationSchema.answerOrder where kind != omitted {
             let values = overrides[kind] ?? edpSignals[kind] ?? []
             fields[ClassificationSchema.labelsKey(kind)] = .array(values.map(JSONValue.string))
         }
@@ -59,9 +59,15 @@ struct ClassifyHarness {
     let settings: AppSettings
     let sink = MemoryTraceSink()
 
-    static func make(handler: @escaping MockOllama.ChatHandler) async throws -> ClassifyHarness {
+    /// The profile's chat model, which reads the documents.
+    static let chatModel = "ministral-3:14b"
+
+    /// With `thinking`, the chat model can think and says so with those values; without, it cannot think.
+    static func make(thinking: OllamaShowResponse.Thinking? = nil, handler: @escaping MockOllama.ChatHandler) async throws -> ClassifyHarness {
         let env = try await TestEnvironment.make()
-        let mock = MockOllama(installed: ["ministral-3:14b", "bge-m3"], handler: handler)
+        let mock = MockOllama(installed: [chatModel, "bge-m3"],
+                              modelCapabilities: thinking == nil ? [:] : [chatModel: MockOllama.thinkingCapabilities],
+                              modelThinking: thinking.map { [chatModel: $0] } ?? [:], handler: handler)
         let prompts = PromptBuilder(library: try PromptLibrary.bundled(), config: env.config.analysis, labels: env.config.labels,
                                     naming: env.config.naming)
         let analyzer = DocumentAnalyzer(gate: InferenceGate(api: mock, retryDelays: [], time: env.time),
@@ -71,9 +77,19 @@ struct ClassifyHarness {
 
     var trace: TraceContext { TraceContext(traceID: 1, sink: sink) }
 
-    func analyse(_ content: ExtractedContent, guidance: LabelGuidance = .none) async throws -> AnalysisOutcome {
-        try await analyzer.analyse(content, guidance: guidance, settings: settings, config: env.config, trace: trace)
+    /// Reads `content` under the environment's settings, or under `settings` when given.
+    func analyse(_ content: ExtractedContent, guidance: LabelGuidance = .none, settings: AppSettings? = nil) async throws -> AnalysisOutcome {
+        try await analyzer.analyse(content, guidance: guidance, settings: settings ?? self.settings, config: env.config, trace: trace)
     }
 
     func steps(_ stage: TraceStage) async -> [TraceStep] { await sink.steps.filter { $0.stage == stage } }
+}
+
+extension TraceStep {
+    /// The model calls this step recorded under `TraceStep.exchangeKey`, read back as the trace keeps them.
+    func exchange() throws -> [ModelCall] {
+        let recorded = try JSON.decoder.decode(JSONValue.self, from: Data(try #require(output, "the step recorded its output").utf8))
+        let calls = try #require(recorded[TraceStep.exchangeKey], "a step that asked a model records its calls")
+        return try JSON.decoder.decode([ModelCall].self, from: Data(calls.serialized().utf8))
+    }
 }

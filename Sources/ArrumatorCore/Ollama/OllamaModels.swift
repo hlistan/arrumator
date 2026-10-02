@@ -34,6 +34,15 @@ public enum OllamaError: Error, LocalizedError, Equatable {
         default: false
         }
     }
+
+    /// Whether asking `request` again may get the answer this failure kept from coming: a transient failure, except a
+    /// timeout of a request with a `timeout` of its own, such as a search task's effort gives. That request took longer
+    /// than it may and would take as long again, holding the one model that generates all the while, so it is a failed
+    /// answer rather than a server that is away.
+    public func isTransient(asking request: OllamaChatRequest) -> Bool {
+        if case .timeout = self, request.timeout != nil { return false }
+        return isTransient
+    }
 }
 
 public struct OllamaModelInfo: Sendable, Codable, Hashable {
@@ -60,18 +69,133 @@ public struct OllamaModelInfo: Sendable, Codable, Hashable {
     }
 }
 
+/// How a chat request tells a model to think, as Ollama's `think` takes it
+/// (https://docs.ollama.com/capabilities/thinking): switched off or on, or at a level the model names in `/api/show`
+/// (`OllamaShowResponse.Thinking.values`), such as gpt-oss's "low", "medium" and "high". Coded as that one JSON value: a
+/// bool for a switch, a string for a level. A level without a name tells a model nothing, so it is refused wherever a
+/// value is read: `pipeline.json` that asks for one stops the load, and Ollama's `thinking` metadata that lists one is
+/// read as none (`OllamaShowResponse.init(from:)`).
+public enum OllamaThink: Sendable, Codable, Hashable {
+    case off
+    case on
+    case level(String)
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let on = try? container.decode(Bool.self) {
+            self = on ? .on : .off
+        } else if let name = try? container.decode(String.self) {
+            guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw DecodingError.dataCorruptedError(in: container, debugDescription: "think names no level: give true, false or a level's name")
+            }
+            self = .level(name)
+        } else {
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "think is true, false or the name of a level")
+        }
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .off: try container.encode(false)
+        case .on: try container.encode(true)
+        case let .level(name): try container.encode(name)
+        }
+    }
+
+    /// The value as a request's body carries it.
+    public var json: JSONValue {
+        switch self {
+        case .off: .bool(false)
+        case .on: .bool(true)
+        case let .level(name): .string(name)
+        }
+    }
+}
+
+extension OllamaThink: ExpressibleByBooleanLiteral, ExpressibleByStringLiteral {
+    public init(booleanLiteral value: Bool) { self = value ? .on : .off }
+    public init(stringLiteral value: String) { self = .level(value) }
+}
+
+/// What Ollama's `/api/show` says of a model: what it can do (`capabilities`), what it is (`details`, `modelInfo`), and
+/// how it can be told to think (`thinking`).
 public struct OllamaShowResponse: Sendable, Codable, Hashable {
     public var capabilities: [String]?
     public var modelInfo: [String: JSONValue]?
     public var details: OllamaModelInfo.Details?
+    /// Absent from older servers and from models without the metadata, and nil too when it cannot be read
+    /// (`thinkingProblem`).
+    public var thinking: Thinking?
+    /// Why the `thinking` object could not be read, when it could not, for whoever asked Ollama to log with the model's
+    /// name, which the answer does not carry (`OllamaClient.show(model:)`). Never coded.
+    var thinkingProblem: String?
 
-    public init(capabilities: [String]?, modelInfo: [String: JSONValue]?, details: OllamaModelInfo.Details?) {
+    public init(capabilities: [String]?, modelInfo: [String: JSONValue]?, details: OllamaModelInfo.Details?, thinking: Thinking?) {
         self.capabilities = capabilities
         self.modelInfo = modelInfo
         self.details = details
+        self.thinking = thinking
     }
 
-    public var supportsThinking: Bool { capabilities?.contains("thinking") ?? false }
+    private enum CodingKeys: String, CodingKey {
+        case capabilities, modelInfo, details, thinking
+    }
+
+    /// Reads the answer as Ollama gives it. The `thinking` object is optional metadata, so one the app cannot act on, such
+    /// as a value that is neither a switch nor a level's name, is read as none and the capabilities decide, as on an older
+    /// server, rather than leaving the model unlisted and unused; `OllamaThink` itself stays strict where the app's own
+    /// configuration is read.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        capabilities = try container.decodeIfPresent([String].self, forKey: .capabilities)
+        modelInfo = try container.decodeIfPresent([String: JSONValue].self, forKey: .modelInfo)
+        details = try container.decodeIfPresent(OllamaModelInfo.Details.self, forKey: .details)
+        do {
+            thinking = try container.decodeIfPresent(Thinking.self, forKey: .thinking)
+        } catch {
+            thinking = nil
+            thinkingProblem = String(describing: error)
+        }
+    }
+
+    /// The values `think` may take for a model, and the one it thinks at when not told.
+    public struct Thinking: Sendable, Codable, Hashable {
+        /// Switches (`true`, `false`) and levels the model names; `[false]` alone says it cannot think.
+        public var values: [OllamaThink]?
+        /// How the model thinks when a request does not say.
+        public var `default`: OllamaThink?
+
+        public init(values: [OllamaThink]?, default: OllamaThink?) {
+            self.values = values
+            self.default = `default`
+        }
+    }
+
+    /// The capabilities Ollama lists for a model that generates text, that sees images, that embeds and that can think.
+    public static let completionCapability = "completion"
+    public static let visionCapability = "vision"
+    public static let embeddingCapability = "embedding"
+    public static let thinkingCapability = "thinking"
+
+    /// The values `think` takes for this model, as its `/api/show` says: those it lists, none when it lists only `false`,
+    /// which says it cannot think. A model that lists none (an older server, a model without the metadata, or an empty
+    /// list, which Ollama leaves out) takes the switches, `true` and `false`, when its capabilities say it can think, and
+    /// none otherwise.
+    public var thinkingValues: [OllamaThink] {
+        if let values = thinking?.values, !values.isEmpty { return values == [.off] ? [] : values }
+        return capabilities?.contains(Self.thinkingCapability) == true ? [.on, .off] : []
+    }
+
+    /// What a request that wants `wanted` tells this model (`think`), as its `/api/show` allows (`thinkingValues`); nil
+    /// sends nothing, so the model thinks as it does by default: the wanted value when the model takes it, else on for a
+    /// wanted level when it takes `true`, else nothing.
+    public func think(sending wanted: OllamaThink) -> OllamaThink? {
+        let values = thinkingValues
+        if values.contains(wanted) { return wanted }
+        if case .level = wanted, values.contains(.on) { return .on }
+        return nil
+    }
 }
 
 /// Who speaks in a chat, as Ollama's chat API names them.
@@ -106,13 +230,14 @@ public struct OllamaChatRequest: Sendable, Codable, Hashable {
     public var format: JSONValue?
     public var options: [String: JSONValue]
     public var keepAlive: String?
-    public var think: Bool?
+    /// What the model is told about thinking; nil leaves `think` out, so it thinks as it does by default.
+    public var think: OllamaThink?
     public var stream: Bool
     /// Seconds the answer may take, in place of `ollama.timeouts.chat`; nil for that. Not sent: the client waits.
     public var timeout: Double?
 
     public init(model: String, messages: [OllamaMessage], format: JSONValue?, options: [String: JSONValue],
-                keepAlive: String?, think: Bool?, timeout: Double?) {
+                keepAlive: String?, think: OllamaThink?, timeout: Double?) {
         self.model = model
         self.messages = messages
         self.format = format
@@ -139,7 +264,7 @@ extension OllamaChatRequest {
         ]
         if let format { entries.append(JSONEntry("format", format)) }
         if let keepAlive { entries.append(JSONEntry("keep_alive", .string(keepAlive))) }
-        if let think { entries.append(JSONEntry("think", .bool(think))) }
+        if let think { entries.append(JSONEntry("think", think.json)) }
         return .orderedObject(entries)
     }
 }

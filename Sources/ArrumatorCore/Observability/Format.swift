@@ -11,6 +11,12 @@ public enum Format {
         "\(n) \(noun)\(n == 1 ? "" : "s")"
     }
 
+    /// "a", "a and b", "a, b and c": parts of a sentence, the same in every language the Mac is set to.
+    public static func and(_ parts: [String]) -> String {
+        guard let last = parts.last, parts.count > 1 else { return parts.last ?? "" }
+        return parts.dropLast().joined(separator: ", ") + " and " + last
+    }
+
     public static func date(_ date: Date?) -> String {
         date.map { $0.formatted(date: .abbreviated, time: .shortened) } ?? "—"
     }

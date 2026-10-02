@@ -22,7 +22,7 @@ import Testing
         let kept = await runtime.settings.current.ollamaURL
         #expect(runtime.ollama.baseURL.absoluteString == Self.server && kept == Self.server, "and changes nothing")
         let history = try await runtime.services.history.events(limit: 10, kinds: [.settingsChanged])
-        #expect(history.contains { $0.summary == "Ollama at \(Self.server)" }, "the change is in History")
+        #expect(history.map(\.summary) == ["Ollama at \(Self.server)"], "the change is in History once, and the refused one not at all")
         await runtime.stop()
 
         let reopened = try await home.open()
@@ -30,7 +30,8 @@ import Testing
         await reopened.stop()
         var environment = home.environment
         environment.ollamaURL = "http://127.0.0.1:12345"
-        let overridden = try await ArrumatorRuntime.bootstrap(appVersion: "test", environment: environment, echoLogsToStderr: false)
+        let overridden = try await ArrumatorRuntime.bootstrap(appVersion: "test", environment: environment, echoLogsToStderr: false,
+                                                              trash: home.trash)
         #expect(overridden.ollama.baseURL.absoluteString == "http://127.0.0.1:12345", "ARRUMATOR_OLLAMA_URL takes its place while set")
     }
 

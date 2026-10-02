@@ -16,19 +16,35 @@ public actor MockOllama: OllamaAPI {
     private let dimension: Int
     private let defaultCapabilities: [String]
     private let capabilities: [String: [String]]
+    private let thinking: [String: OllamaShowResponse.Thinking]
+    private var showFailures: [String: OllamaError] = [:]
 
-    /// `capabilities` are what `show` reports for every model, as Ollama lists them ("completion", "vision", …), and
-    /// `modelCapabilities` what it reports for particular models instead.
+    /// `capabilities` are what `show` reports for every model, as Ollama lists them ("completion", "vision", …),
+    /// `modelCapabilities` what it reports for particular models instead, and `modelThinking` how a particular model
+    /// says it can be told to think (`thinking` of `/api/show`); a model not in it says nothing of it, as on older servers.
     public init(installed: [String] = [], dimension: Int = 256, capabilities: [String] = ["completion"],
-                modelCapabilities: [String: [String]] = [:], handler: @escaping ChatHandler) {
+                modelCapabilities: [String: [String]] = [:], modelThinking: [String: OllamaShowResponse.Thinking] = [:],
+                handler: @escaping ChatHandler) {
         self.installed = installed
         self.dimension = dimension
         defaultCapabilities = capabilities
         self.capabilities = modelCapabilities
+        thinking = modelThinking
         self.handler = handler
     }
 
+    /// What a model that can think reports among its capabilities, as Ollama lists them.
+    public static let thinkingCapabilities = ["completion", OllamaShowResponse.thinkingCapability]
+
+    /// What `show` answers for a model with these capabilities that says this of how it thinks.
+    public static func shown(capabilities: [String], thinking: OllamaShowResponse.Thinking?) -> OllamaShowResponse {
+        OllamaShowResponse(capabilities: capabilities, modelInfo: nil, details: nil, thinking: thinking)
+    }
+
     public var chatCount: Int { chatRequests.count }
+
+    /// Makes `show` fail with `error` for `model` from now on, as a server that cannot say what the model can do.
+    public func failShowing(_ model: String, with error: OllamaError) { showFailures[model] = error }
 
     public func version() async throws -> String { "mock" }
 
@@ -36,12 +52,14 @@ public actor MockOllama: OllamaAPI {
         installed.map { OllamaModelInfo(name: $0, model: $0, size: 1, digest: nil, modifiedAt: nil, details: nil) }
     }
 
-    /// A model not among `installed`, when there are any, is not found, as Ollama answers for it.
+    /// A model not among `installed`, when there are any, is not found, as Ollama answers for it; one `failShowing` names
+    /// fails as it was told to.
     public func show(model: String) async throws -> OllamaShowResponse {
+        if let failure = showFailures[model] { throw failure }
         guard installed.isEmpty || installed.map(ModelManager.normalized).contains(ModelManager.normalized(model)) else {
             throw OllamaError.modelNotFound(model)
         }
-        return OllamaShowResponse(capabilities: capabilities[model] ?? defaultCapabilities, modelInfo: nil, details: nil)
+        return Self.shown(capabilities: capabilities[model] ?? defaultCapabilities, thinking: thinking[model])
     }
 
     public func chat(_ request: OllamaChatRequest) async throws -> OllamaChatResponse {
@@ -79,7 +97,21 @@ public actor MockOllama: OllamaAPI {
     }
 }
 
+extension OllamaShowResponse.Thinking {
+    /// How a model that thinks or not, as it is switched, says so (qwen3, deepseek-r1).
+    public static let switches = OllamaShowResponse.Thinking(values: [true, false], default: true)
+    /// How a model that thinks at levels it names, and cannot be switched off, says so (gpt-oss).
+    public static let levels = OllamaShowResponse.Thinking(values: ["low", "medium", "high"], default: "medium")
+    /// How a model that does not think says so.
+    public static let never = OllamaShowResponse.Thinking(values: [false], default: nil)
+}
+
 extension OllamaChatRequest {
     /// Concatenated text of all messages, handy for asserting prompt content.
     public var allText: String { messages.map(\.content).joined(separator: "\n") }
+
+    /// A request of one short message, for checking what its body says of `format` and `think`.
+    public static func sample(format: JSONValue? = nil, think: OllamaThink?) -> OllamaChatRequest {
+        OllamaChatRequest(model: "m", messages: [.user("hi")], format: format, options: [:], keepAlive: "1m", think: think, timeout: nil)
+    }
 }

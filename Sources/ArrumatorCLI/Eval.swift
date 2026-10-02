@@ -4,7 +4,8 @@ import ArrumatorRuntime
 import Foundation
 
 /// Runs a fixture corpus through the full live pipeline in a throw-away home and archive, then scores how each
-/// document was read against `expected.json`: whether it was filed, waited for the user or was taken for a copy; its
+/// document was read against `expected.json`: whether it was filed, waited for the user or was taken for a copy, whose
+/// original is read again in its place; its
 /// type, sender, date and language labels and its file name; whether it got the other labels the corpus expects of it
 /// (parties, objects, references, periods, deadlines, amounts, jurisdictions); and how many labels of each kind
 /// documents got.
@@ -12,8 +13,10 @@ struct Eval: AsyncParsableCommand {
     static let configuration = CommandConfiguration(abstract: "Evaluate the live pipeline on a fixture corpus (expected.json).")
     @OptionGroup var options: GlobalOptions
     @Argument(help: "Fixture directory containing expected.json.") var fixtures: String
-    @Option(help: "Chat model to use instead of the profile's.") var model: String?
-    @Option(help: "Model profile from pipeline.json.") var profile: String?
+    @Option(help: "Chat model to read documents with instead of the profile's.") var model: String?
+    @Option(help: ArgumentHelp("A profile the app comes with to read with, by its id, instead of the one it comes set to. eval runs in "
+        + "a throw-away home with the settings the app comes with, so your own profiles and your changes to the predefined ones are not used."))
+    var profile: String?
     @Option(help: "Passes over the corpus; later passes show how consistently the model reads the same documents.") var passes = 1
     @Option(help: "Only the fixtures whose path starts with this, such as \"pt/\", for a quick look.") var only: String?
     @Option(help: "Write the full report as JSON to this path.") var report: String?
@@ -44,7 +47,9 @@ struct Eval: AsyncParsableCommand {
         var lang: String
         var expected: Expected
         var acceptAlso: AcceptAlso?
-        enum CodingKeys: String, CodingKey { case file, lang, expected, acceptAlso = "accept_also" }
+        /// For a byte-identical copy: the fixture it copies.
+        var duplicateOf: String?
+        enum CodingKeys: String, CodingKey { case file, lang, expected, acceptAlso = "accept_also", duplicateOf = "duplicate_of" }
     }
 
     struct Corpus: Decodable { var fixtures: [Fixture] }
@@ -103,16 +108,19 @@ struct Eval: AsyncParsableCommand {
         let home = FileManager.default.temporaryDirectory.appendingPathComponent("arrumator-eval-\(UUID().uuidString)", isDirectory: true)
         var environment = RuntimeEnvironment.current
         environment.home = home.path
-        // The throw-away folders are chosen before the runtime opens, as the runtime is open on one archive.
-        let (model, profile) = (model, profile)
-        try await SettingsStore(paths: AppPaths.resolve(environment)).update { s in
-            s.archivePath = home.appendingPathComponent("Archive").path
-            s.incomingPath = home.appendingPathComponent("Incoming").path
-            if let profile { s.models.profile = profile }
-            if let model { s.models.chatModel = model }
-        }
+        // The throw-away folders are chosen before the runtime opens, as the runtime is open on one archive; a profile the
+        // settings do not list is refused before anything is read.
+        let store = try SettingsStore(paths: AppPaths.resolve(environment))
+        var chosen = await store.current
+        chosen.archivePath = home.appendingPathComponent("Archive").path
+        chosen.incomingPath = home.appendingPathComponent("Incoming").path
+        if let profile { chosen.profile = profile }
+        if let model { chosen = try chosen.reading(withChatModel: model) }
+        try await store.save(chosen)
+        // A copy goes into a Trash of the throw-away home, never the user's.
         let runtime = try await ArrumatorRuntime.bootstrap(appVersion: Arrumator.version, environment: environment,
-                                                           echoLogsToStderr: options.verbose)
+                                                           echoLogsToStderr: options.verbose,
+                                                           trash: FolderTrash(folder: home.appendingPathComponent("Trash", isDirectory: true)))
         try await runtime.openArchive()
         let settings = await runtime.settings.current
         guard await runtime.lifecycle.ensureRunning().isReady else { throw ValidationError("Ollama is not running") }
@@ -123,19 +131,19 @@ struct Eval: AsyncParsableCommand {
             var passRows: [Row] = []
             for fixture in corpus.fixtures {
                 let source = dir.appendingPathComponent(fixture.file)
-                let name = pass == 1 ? source.lastPathComponent
-                    : "\((source.lastPathComponent as NSString).deletingPathExtension) pass\(pass).\(source.pathExtension)"
-                let target = settings.incomingURL.appendingPathComponent(name)
+                let target = settings.incomingURL.appendingPathComponent(Self.droppedName(fixture.file, pass: pass))
                 try FileManager.default.createDirectory(at: settings.incomingURL, withIntermediateDirectories: true)
                 var data = try Data(contentsOf: source)
-                // Later passes need different bytes, otherwise they are (correctly) taken for copies.
+                // Later passes need different bytes, otherwise they are (correctly) taken for copies of the first's.
                 if pass > 1 { data.append(contentsOf: [UInt8](repeating: 0x0A, count: pass - 1)) }
                 try data.write(to: target)
                 let started = Date()
                 await runtime.coordinator.enqueue(target)
                 await runtime.coordinator.drain()
-                let row = try await score(fixture: fixture, pass: pass, filedFrom: target, seconds: Date().timeIntervalSince(started),
-                                          runtime: runtime)
+                let seconds = Date().timeIntervalSince(started)
+                let row = fixture.expected.status == .duplicate
+                    ? try await scoreCopy(fixture: fixture, pass: pass, dropped: target, seconds: seconds, runtime: runtime)
+                    : try await score(fixture: fixture, pass: pass, filedFrom: target, seconds: seconds, runtime: runtime)
                 passRows.append(row)
                 print(String(format: "%@ %-44@ %-11@ %5.1fs %@", "p\(pass)", fixture.file, row.status, row.seconds, row.fileName))
             }
@@ -147,14 +155,14 @@ struct Eval: AsyncParsableCommand {
                          pass, summary.statusAccuracy * 100, summary.docTypeAccuracy * 100, summary.correspondentAccuracy * 100,
                          summary.dateAccuracy * 100, summary.titleAccuracy * 100, summary.languageAccuracy * 100,
                          summary.labelled * 100, summary.labelsPerDocument, summary.medianSeconds))
-            print("labels per kind: " + LabelKind.allCases.map { String(format: "%@ %.0f%%", $0.rawValue, (summary.coverage[$0.rawValue] ?? 0) * 100) }
+            print("labels per kind: " + LabelKind.modelKinds.map { String(format: "%@ %.0f%%", $0.rawValue, (summary.coverage[$0.rawValue] ?? 0) * 100) }
                 .joined(separator: " · "))
             print(String(format: "expected labels found: %.0f%% (", summary.expectedFound * 100)
-                  + LabelKind.allCases.compactMap { kind in
+                  + LabelKind.modelKinds.compactMap { kind in
                       summary.expectedFoundByKind[kind.rawValue].map { String(format: "%@ %.0f%%", kind.rawValue, $0 * 100) }
                   }.joined(separator: " · ") + ")")
             print(String(format: "sender writings: %.2f each · distinct labels: ", summary.senderWritings)
-                  + LabelKind.allCases.compactMap { kind in summary.distinctByKind[kind.rawValue].map { "\(kind.rawValue) \($0)" } }
+                  + LabelKind.modelKinds.compactMap { kind in summary.distinctByKind[kind.rawValue].map { "\(kind.rawValue) \($0)" } }
                   .joined(separator: " · "))
         }
         if let report {
@@ -163,6 +171,26 @@ struct Eval: AsyncParsableCommand {
         }
         await runtime.stop()
         if let minAccuracy, let first = summaries.first, first.details < minAccuracy { throw ExitCode(1) }
+    }
+
+    /// The name `file` is put into Incoming under in `pass`: its own in the first, then marked with the pass.
+    static func droppedName(_ file: String, pass: Int) -> String {
+        let name = (file as NSString).lastPathComponent
+        return pass == 1 ? name : "\((name as NSString).deletingPathExtension) pass\(pass).\((name as NSString).pathExtension)"
+    }
+
+    /// A byte-identical copy becomes no document of its own: it goes to the Trash, and the document it copies is read again
+    /// in its place, as History records under that document. It is right when that is the document of the fixture the
+    /// corpus says it copies; one taken for no copy, as when `--only` left its original out, is scored as a document.
+    private func scoreCopy(fixture: Fixture, pass: Int, dropped: URL, seconds: Double, runtime: ArrumatorRuntime) async throws -> Row {
+        let event = try await runtime.services.history.events(limit: 1, kinds: [.duplicate]).first
+        guard let event, JSON.decode(CopyPayload.self, from: event.payloadJson)?.copy == dropped.standardizedFileURL.path,
+              let docID = event.docId, let original = try await runtime.services.documents.document(id: docID) else {
+            return try await score(fixture: fixture, pass: pass, filedFrom: dropped, seconds: seconds, runtime: runtime)
+        }
+        let copies = fixture.duplicateOf.map { Self.droppedName($0, pass: pass) }
+        return Row(pass: pass, file: fixture.file, status: EventKind.duplicate.rawValue, statusOK: original.originalFilename == copies,
+                   fileName: original.filename, labels: original.labels, seconds: seconds)
     }
 
     private func score(fixture: Fixture, pass: Int, filedFrom: URL, seconds: Double, runtime: ArrumatorRuntime) async throws -> Row {
@@ -231,7 +259,7 @@ struct Eval: AsyncParsableCommand {
         let ordinary = Set(corpus.filter { $0.expected.status == .filed }.map(\.file))
         let filed = rows.filter { ordinary.contains($0.file) }
         let labelled = filed.filter { $0.labels != nil }
-        let coverage = Dictionary(uniqueKeysWithValues: LabelKind.allCases.map { kind in
+        let coverage = Dictionary(uniqueKeysWithValues: LabelKind.modelKinds.map { kind in
             (kind.rawValue, labelled.isEmpty ? 0 : Double(labelled.filter { $0.labels?.contains { $0.kind == kind } == true }.count)
                 / Double(labelled.count))
         })
@@ -244,7 +272,7 @@ struct Eval: AsyncParsableCommand {
         let writings = Dictionary(grouping: labelled.filter { expectedSender[$0.file] != nil }) { expectedSender[$0.file] ?? "" }
             .values.filter { $0.count > 1 }
             .map { Double(Set($0.compactMap { $0.labels?.values(.sender).first }).count) }
-        let distinct = Dictionary(uniqueKeysWithValues: LabelKind.allCases.map { kind in
+        let distinct = Dictionary(uniqueKeysWithValues: LabelKind.modelKinds.map { kind in
             (kind.rawValue, Set(rows.flatMap { $0.labels?.values(kind) ?? [] }).count)
         })
         return Summary(pass: pass, statusAccuracy: rate(rows.map(\.statusOK)), docTypeAccuracy: rate(rows.map(\.docTypeOK)),

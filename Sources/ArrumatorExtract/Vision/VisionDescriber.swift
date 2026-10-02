@@ -5,7 +5,8 @@ import Foundation
 struct VisionOutcome: Sendable {
     var summary: VisualSummary?
     var model: String
-    var thinkDisabled: Bool
+    /// What the model was told about thinking (`think`); nil when nothing was sent and it thought as it does by default.
+    var think: OllamaThink?
     var imageBytes: Int
     var rawResponse: String?
     var metrics: OllamaMetrics?
@@ -31,7 +32,8 @@ actor VisionDescriber {
     private let ollama: any OllamaAPI
     private let prompts: VisionPrompts
     private let time: any TimeSource
-    private var thinkingSupport: [String: Bool] = [:]
+    /// What each model's `/api/show` said, which decides what it is told about thinking.
+    private var shown: [String: OllamaShowResponse] = [:]
 
     init(ollama: any OllamaAPI, prompts: VisionPrompts, time: any TimeSource) {
         self.ollama = ollama
@@ -41,9 +43,9 @@ actor VisionDescriber {
 
     func describe(jpeg: Data, ocrText: String, options: VisionModelOptions, timeout: Double) async -> VisionOutcome {
         let started = Date()
-        let supportsThinking = await thinking(options.model)
-        let request = Self.request(jpeg: jpeg, options: options, prompts: prompts, disableThinking: supportsThinking)
-        var outcome = VisionOutcome(summary: nil, model: options.model, thinkDisabled: supportsThinking,
+        let think = await think(options.think, to: options.model)
+        let request = Self.request(jpeg: jpeg, options: options, prompts: prompts, think: think)
+        var outcome = VisionOutcome(summary: nil, model: options.model, think: think,
                                     imageBytes: jpeg.count, rawResponse: nil, metrics: nil, error: nil, durationMs: 0)
         let ollama = ollama
         do {
@@ -62,18 +64,19 @@ actor VisionDescriber {
         return outcome
     }
 
-    /// Whether `model` reports the thinking capability (then `think: false` is sent). Cached per model; a failed
-    /// lookup is treated as "no thinking" and retried next time.
-    private func thinking(_ model: String) async -> Bool {
-        if let cached = thinkingSupport[model] { return cached }
-        guard let show = try? await ollama.show(model: model) else { return false }
-        thinkingSupport[model] = show.supportsThinking
-        return show.supportsThinking
+    /// What `model` is told about thinking when `wanted` (`VisionModelOptions.think`, `analysis.think`): what its
+    /// `/api/show` allows of it (`OllamaShowResponse.think(sending:)`), else nothing. What the model said is cached per
+    /// model; a failed lookup tells it nothing and is retried next time.
+    private func think(_ wanted: OllamaThink, to model: String) async -> OllamaThink? {
+        if let cached = shown[model] { return cached.think(sending: wanted) }
+        guard let show = try? await ollama.show(model: model) else { return nil }
+        shown[model] = show
+        return show.think(sending: wanted)
     }
 
     // MARK: Request
 
-    static func request(jpeg: Data, options: VisionModelOptions, prompts: VisionPrompts, disableThinking: Bool) -> OllamaChatRequest {
+    static func request(jpeg: Data, options: VisionModelOptions, prompts: VisionPrompts, think: OllamaThink?) -> OllamaChatRequest {
         let llm = options.options
         return OllamaChatRequest(
             model: options.model,
@@ -88,7 +91,7 @@ actor VisionDescriber {
                 "num_ctx": .number(Double(options.numCtx)),
             ],
             keepAlive: options.keepAlive,
-            think: disableThinking ? false : nil,
+            think: think,
             timeout: nil)
     }
 

@@ -34,7 +34,8 @@ negative/ 90–94   edge cases: a self-made spreadsheet, a copy, a blank scan, a
 ## Fixtures
 
 Status is what the app should make of the file (`expected.status`): file it, have it wait for you (`needsReview`), or
-take it for a copy (`duplicate`).
+take it for a copy (`duplicate`) of the file `duplicate_of` names, making no document of it and reading that file's
+document again in its place.
 
 | File | Kind | Status | Type | Sender | Date | What it exercises |
 |---|---|---|---|---|---|---|
@@ -118,7 +119,7 @@ take it for a copy (`duplicate`).
 |---|---|
 | `lang` | The document's main language as its ISO 639-1 code (`pt`, `ru`, `en`, `de`, `ja`, …), or `und` (no readable text) |
 | `kind` | `pdf-text`, `pdf-scan`, `image-photo`, `image-screenshot`, `docx`, `xlsx`, `text`, `eml` (the generator has no `pptx` fixture yet) |
-| `expected.status` | `filed` for an ordinary document; `needsReview` for one the app cannot read (blank, encrypted, damaged); `duplicate` for the byte-identical copy |
+| `expected.status` | `filed` for an ordinary document; `needsReview` for one the app cannot read (blank, encrypted, damaged); `duplicate` for the byte-identical copy, which reads its original again |
 | `expected.doc_type` | The expected `type` label, from the app's `DocumentType` vocabulary; `null` when the file is not read (duplicate, unreadable) |
 | `expected.correspondent` | The expected `sender` label: the name as the document writes it, in its own script; `accept_also` lists other forms, such as a transliteration |
 | `expected.date` | The expected `date` label: the issue date (never a due, period or birth date) as `YYYY-MM-DD` |

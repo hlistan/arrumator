@@ -27,13 +27,19 @@ say what it is in one vocabulary, so a German electricity bill and a Japanese on
 
 - **Reads anything**: PDF text, Apple Vision OCR for scans and photos, Office files, e-mail, archives, and a local
   vision model for photos without text. It finds the language, dates, and identifiers such as IBANs and tax numbers.
-- **Describes every document by labels.** The local model reads each document once, with a prompt made for this,
-  and picks out who sent it, what type it is, its date, whom and what it concerns, its topics, references, period,
-  deadlines, amounts, jurisdictions and languages: twelve kinds of label, drawn from archival metadata standards.
-  Browse by them in the sidebar, which lists them with how many documents have each, the most used first, in one list or
-  kind by kind, each kind in its colour, and finds any of them as you type. Each label you choose narrows the documents
-  and the labels left to choose. Search by any of them from a terminal (`sender:edp`, `deadline:2026-07`,
-  `jurisdiction:portugal`) and correct any of them.
+- **Describes every document by labels.** The local model reads each document once, with a prompt made for this, and
+  picks out who sent it, what type it is, its date, whom and what it concerns, its topics, references, period,
+  deadlines, amounts, jurisdictions and languages: twelve kinds of label, drawn from archival metadata standards. A
+  thirteenth, `tag`, is yours alone. Browse by them in the sidebar, which lists them with how many documents have each,
+  the most used first, in one list or kind by kind, each kind in its colour, and finds any of them as you type. Each
+  label you choose narrows the documents and the labels left to choose. Search by any of them from a terminal
+  (`sender:edp`, `deadline:2026-07`, `jurisdiction:portugal`, `tag:"taxes 2024"`) and correct any of them.
+- **Tags documents by the folder you drop them in.** Put a folder such as `Taxes 2024` into Incoming, and everything in
+  it, at any depth, is filed with `Taxes 2024` as a tag of yours beside the labels the model gives. Incoming shows the
+  tag under each file before it is read, and the folder stays where it is, for whatever you put there next.
+- **Reads a document again when you put it in again.** An exact copy of a document already in the archive, put into
+  Incoming, is no second document: that document is read again from the start, with the profile in use, renamed and
+  indexed anew, keeping its tags and given that of the folder you put the copy in. The copy goes to the Trash.
 - **Keeps labels one vocabulary, and learns from you.** A label written the way the archive already writes it becomes
   that label, and labels that merely look alike wait for you on the Labels page. Merge two labels or remove one
   everywhere, and every document, and every one read from then on, follows: the model is shown your decisions and the
@@ -42,10 +48,10 @@ say what it is in one vocabulary, so a German electricity bill and a Japanese on
   eletricidade julho.pdf`, and files it at the top of the archive. The app makes no folders.
 - **Finds documents you describe.** Ask in your own words, in any language, for the documents you need ("electricity
   and water bills from 2025, by sender"). The local model turns the request into labels to look for; the documents are
-  found and arranged by their labels, a level per kind. Choose how much effort each request is read with, Low, Medium
-  or High, and which local model reads it: a smaller one to be quicker, a larger one to be more careful. Take any out or
-  add more, as the sidebar narrows them down, and export them into folders by those labels, or as a ZIP archive. Every
-  task and export is kept, to open again.
+  found and arranged by their labels, a level per kind. Choose the effort each request is read with, Low, Medium or
+  High, which is how much the model thinks before it answers, and the model profile that reads it: the one Settings
+  uses, or another, such as Smart, whose model thinks. Take any out or add more, as the sidebar narrows them down, and
+  export them into folders by those labels, or as a ZIP archive. Every task and export is kept, to open again.
 - **Asks when it cannot read a document.** A file the model gave no answer for, or that is encrypted, damaged or
   blank, waits in Needs You, in the archive, instead of being guessed into shape.
 - **Everything can be audited**: the prompts, the model's answers, timings and a full history, with Statistics
@@ -69,15 +75,21 @@ reporting or update check.
 - [Ollama](https://ollama.com), on this Mac or on your local network, with the models of one profile. Arrumator
   starts Ollama when needed and downloads the models when you ask.
 
-| Profile | Reading, images and names | Embeddings | Memory |
+| Profile | Reads documents and requests, describes images, names files | Finds by meaning | Memory |
 |---|---|---|---|
-| `standard` (default) | `ministral-3:14b` | `bge-m3` | ~10 GB |
-| `balanced` | `ministral-3:8b` | `bge-m3` | ~7 GB |
-| `lowMemory` | `gemma4:e2b-it-qat` | `bge-m3` | ~5.5 GB |
+| Fast | `gemma4:e2b-it-qat` | `bge-m3` | ~5.5 GB |
+| Standard (default) | `ministral-3:14b` | `bge-m3` | ~10 GB |
+| Smart | `qwen3.5:9b` | `bge-m3` | not measured; `qwen3.5:9b` is a 6.6 GB download |
 
-One model reads every document, describes images and names files. The profiles were chosen as the best for their
-memory on a 16 GB Mac mini (M5) when Arrumator still filed documents into folders; how well each labels documents
-has not been measured yet. Larger models do not fit such a Mac's memory. The measurements are in
+A model profile is the models Arrumator reads with: in each of these, one model reads every document and search request,
+describes images and names files, and `bge-m3` finds documents by meaning. Choose one under [Settings ›
+Models](docs/using-arrumator.md#models-and-profiles), where you can also give any of them other models, set them back
+with Reset, or add profiles of your own. Smart's model thinks before it answers, which a search task's effort uses;
+documents are read without thinking. Documents already read keep their labels when you choose another profile: put them
+into Incoming again, as they are, to have them read with it. Fast and Standard were chosen as the best for their memory
+on a 16 GB Mac mini (M5) when Arrumator still filed documents into folders, and larger models do not fit such a Mac's
+memory. How well Standard labels documents is measured; Fast's labels have not been measured yet, and Smart has not been
+measured on the evaluation corpus at all, neither its labels, its speed nor its memory. The measurements are in
 [docs/evaluation.md](docs/evaluation.md).
 
 ## Install
@@ -89,9 +101,10 @@ has not been measured yet. Larger models do not fit such a Mac's memory. The mea
 2. Open it. If the release is not notarized (its notes say so), macOS blocks it the first time. Choose **Done**,
    then open System Settings › Privacy & Security, click **Open Anyway** next to the message about Arrumator, and
    confirm ([Apple Support: open an app from an unknown developer](https://support.apple.com/en-us/102445)).
-3. Onboarding asks for your Incoming and Archive folders. Install [Ollama](https://ollama.com) if you haven't:
-   Arrumator starts it when needed. Then download the profile's models under Settings › Models, with the Download
-   button beside each; `arrumatorcli doctor` confirms everything is in place.
+3. Onboarding asks for your Incoming and Archive folders, then for the models. Install [Ollama](https://ollama.com)
+   if you haven't: Arrumator starts it when needed. Choose a profile (Standard unless you choose another) and download
+   its models with the Download button beside each, there or later under Settings › Models; `arrumatorcli doctor`
+   confirms everything is in place.
 
 To check a download, compare it with the release's checksums (`shasum -a 256 -c SHA256SUMS`) or verify where it was
 built (`gh attestation verify <file> --repo hlistan/arrumator`).
@@ -102,7 +115,8 @@ together; [docs/cli.md](docs/cli.md) explains how to use it. To build from sourc
 
 ## Getting started
 
-1. Put a document in `~/Documents/Incoming` (Settings › General changes both folders).
+1. Put a document in `~/Documents/Incoming` (Settings › General changes both folders), or a folder of them: its name
+   becomes a tag of every document in it.
 2. Arrumator reads it, names it and files it at the top of `~/Documents/Archive`, and shows it in **Processed**.
 3. Open the document's row to see its labels and how it was read. Rename it, or take off or add a label, on its card
    if something is wrong. On **Labels**, merge labels that mean the same, or remove one you never want.
@@ -110,8 +124,9 @@ together; [docs/cli.md](docs/cli.md) explains how to use it. To build from sourc
 5. Click a label in the sidebar, such as a sender, to see only its documents; the sidebar then lists only the labels
    those documents have, so a second click, such as a type, narrows them down further, and **Clear** at the top of the
    page lets go of them all. Type in **Filter Labels**, above the labels, to find one.
-6. On **Tasks**, ask for the documents you need in your own words, look over what is found, add or take out any, and
-   export them into folders by their labels (`arrumatorcli tasks new …` from a terminal).
+6. On **Tasks**, ask for the documents you need in your own words, with how much the model thinks and the profile
+   that reads the request under **Read with**, look over what is found, add or take out any, and export them into
+   folders by their labels (`arrumatorcli tasks new …` from a terminal).
 7. Search documents by any word, or by a kind of label, with `arrumatorcli search`: `sender:edp`,
    `party:"maria silva"`, `type:invoice`, `language:russian`.
 

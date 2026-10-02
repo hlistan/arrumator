@@ -110,33 +110,46 @@ extension LogLevel: ExpressibleByArgument {}
 
 struct Models: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
-        abstract: "Local models: status of the configured ones, every one installed that can read a request, and explicit downloads.",
+        abstract: "Local models: those of the profile in use and whether they are installed, every installed model and what it can do, and explicit downloads.",
         subcommands: [Status.self, List.self, Pull.self], defaultSubcommand: Status.self)
 
     struct List: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
-            abstract: "Every installed model that answers in words: those a search task can be given (`tasks new --model`).")
+            abstract: "Every installed model, its size and what a model profile can give it to do: read documents and requests, "
+                + "describe images, find by meaning, and whether it thinks, switched on or off or at the levels it names.")
         @OptionGroup var options: GlobalOptions
         func run() async throws {
             let runtime = try await options.runtime()
             _ = await runtime.lifecycle.ensureRunning()
-            let models = try await runtime.models.chatModels()
-            options.emit(models) { models.isEmpty ? "No model that answers in words is installed." : models.joined(separator: "\n") }
+            let models = try await runtime.models.installed()
+            options.emit(models) {
+                models.isEmpty ? "No model is installed." : Terminal.table(models.map { [$0.name, Terminal.size($0.sizeBytes), Terminal.abilities($0)] })
+            }
         }
     }
 
     struct Status: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            abstract: "The profile in use, and whether each of its models is installed: the one that reads, the one that describes images, the one that embeds.")
         @OptionGroup var options: GlobalOptions
+
+        /// The profile in use, by its id and name, and its models in their roles.
+        struct ProfileStatus: Encodable {
+            var profile: String
+            var name: String
+            var models: [ModelStatus]
+        }
+
         func run() async throws {
             let runtime = try await options.runtime()
             let settings = await runtime.settings.current
             _ = await runtime.lifecycle.ensureRunning()
-            let resolved = try runtime.config.models(for: settings.models)
-            let status = try await runtime.models.status(for: resolved)
+            let profile = try settings.modelProfile()
+            let status = ProfileStatus(profile: settings.profile, name: profile.name, models: try await runtime.models.status(for: profile))
             options.emit(status) {
-                (["Profile \(resolved.profileName)"] + status.map {
+                (["Profile \(profile.name)"] + status.models.map {
                     "\($0.installed ? "✓" : "✗") \($0.role.rawValue.padding(toLength: 10, withPad: " ", startingAt: 0)) \($0.name)"
-                        + ($0.sizeBytes.map { String(format: "  %.1f GB", Double($0) / Units.bytesPerGigabyte) } ?? "")
+                        + ($0.sizeBytes.map { "  " + Terminal.size($0) } ?? "")
                 }).joined(separator: "\n")
             }
         }
@@ -170,5 +183,30 @@ struct Diagnostics: AsyncParsableCommand {
         let contents = try await runtime.exportDiagnostics(to: URL(fileURLWithPath: output.expandingTilde),
                                                            includeDocumentText: includeDocumentText)
         options.emit(contents) { "Wrote \(output): \(contents.logFiles.count) log files, \(contents.traces) traces" }
+    }
+}
+
+extension Terminal {
+    /// A model's size in gigabytes, “6.6 GB”, or nothing when Ollama does not say.
+    static func size(_ bytes: Int64?) -> String {
+        bytes.map { String(format: "%.1f GB", Double($0) / Units.bytesPerGigabyte) } ?? ""
+    }
+
+    /// What an installed model can do: “reads, describes images, thinks (on or off)”, or that a profile can give it nothing.
+    static func abilities(_ model: InstalledModel) -> String {
+        let roles = model.roles.map { role in
+            switch role {
+            case .chat: "reads"
+            case .vision: "describes images"
+            case .embedding: "finds by meaning"
+            }
+        }
+        let switches = [OllamaThink.on, .off].filter(model.thinking.contains)
+        let levels = model.thinking.compactMap { think -> String? in if case let .level(name) = think { name } else { nil } }
+        let ways = [switches == [.on, .off] ? "on or off" : switches == [.on] ? "always" : nil,
+                    levels.isEmpty ? nil : "at " + levels.joined(separator: ", ")].compactMap(\.self)
+        let thinks = ways.isEmpty ? [] : ["thinks (\(ways.joined(separator: "; ")))"]
+        let abilities = roles + thinks
+        return abilities.isEmpty ? "nothing a profile can use" : abilities.joined(separator: ", ")
     }
 }

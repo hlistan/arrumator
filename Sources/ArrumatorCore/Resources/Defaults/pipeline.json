@@ -33,41 +33,10 @@
       600
     ],
     "maxRestartsPerHour": 5,
-    "requiredFreeDiskGBAfterPull": 5
-  },
-  "modelProfiles": {
-    "standard": {
-      "label": "Standard (ministral-3:14b + bge-m3, ~10 GB)",
-      "chatModel": "ministral-3:14b",
-      "visionModel": "ministral-3:14b",
-      "embedModel": "bge-m3",
-      "fastModel": "ministral-3:14b",
-      "numCtx": 12288,
-      "fastNumCtx": 12288,
-      "keepAliveChat": "10m",
-      "keepAliveEmbed": "30m"
-    },
-    "balanced": {
-      "label": "Balanced (ministral-3:8b + bge-m3, ~7 GB)",
-      "chatModel": "ministral-3:8b",
-      "visionModel": "ministral-3:8b",
-      "embedModel": "bge-m3",
-      "fastModel": "ministral-3:8b",
-      "numCtx": 12288,
-      "fastNumCtx": 12288,
-      "keepAliveChat": "10m",
-      "keepAliveEmbed": "30m"
-    },
-    "lowMemory": {
-      "label": "Low memory (gemma4:e2b-it-qat + bge-m3, ~5.5 GB)",
-      "chatModel": "gemma4:e2b-it-qat",
-      "visionModel": "gemma4:e2b-it-qat",
-      "embedModel": "bge-m3",
-      "fastModel": "gemma4:e2b-it-qat",
-      "numCtx": 12288,
-      "fastNumCtx": 12288,
-      "keepAliveChat": "10m",
-      "keepAliveEmbed": "30m"
+    "requiredFreeDiskGBAfterPull": 5,
+    "keepAlive": {
+      "chat": "10m",
+      "embed": "30m"
     }
   },
   "watcher": {
@@ -117,7 +86,7 @@
       8,
       30
     ],
-    "watchdogMinutes": 10
+    "quitTimeout": 5
   },
   "extraction": {
     "ocrLanguages": [
@@ -252,6 +221,7 @@
     "embeddingSummaryChars": 2000,
     "embeddingIdentifiersLimit": 6,
     "embeddingNumCtx": 2048,
+    "numCtx": 12288,
     "llmOptions": {
       "temperature": 0,
       "topK": 1,
@@ -337,7 +307,8 @@
       2,
       2,
       3,
-      2
+      2,
+      4
     ],
     "snippetTokens": 24,
     "debounceMilliseconds": 150,
@@ -347,12 +318,10 @@
     "promptVersion": 2,
     "efforts": {
       "low": {
-        "model": "fast",
-        "fallback": false,
         "think": false,
-        "repairAttempts": 0,
+        "repairAttempts": 1,
         "numPredict": 600,
-        "timeout": 90,
+        "timeout": 180,
         "promptLabels": {
           "sender": 20,
           "party": 10,
@@ -362,12 +331,10 @@
         }
       },
       "medium": {
-        "model": "chat",
-        "fallback": true,
-        "think": false,
+        "think": "medium",
         "repairAttempts": 1,
-        "numPredict": 600,
-        "timeout": 180,
+        "numPredict": 8192,
+        "timeout": 900,
         "promptLabels": {
           "sender": 60,
           "party": 30,
@@ -377,9 +344,7 @@
         }
       },
       "high": {
-        "model": "chat",
-        "fallback": true,
-        "think": true,
+        "think": "high",
         "repairAttempts": 2,
         "numPredict": 8192,
         "timeout": 900,
@@ -428,9 +393,10 @@
         {
           "id": "arrived",
           "title": "Arrived",
-          "detail": "A new file settled in the Incoming folder.",
+          "detail": "A new file settled in the Incoming folder; one put in a folder there was given the folder's name as a tag.",
           "stages": [
-            "hash"
+            "hash",
+            "tag"
           ],
           "logCategories": [
             "watch",
@@ -443,7 +409,7 @@
         {
           "id": "deduplicated",
           "title": "Checked for copies",
-          "detail": "Compared against everything already filed.",
+          "detail": "Compared against everything in the archive: an exact copy has the document it copies read again instead.",
           "stages": [
             "dedupe"
           ],

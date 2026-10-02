@@ -2,6 +2,9 @@ import Foundation
 
 public enum TraceStage: String, Sendable, Codable, CaseIterable {
     case hash, dedupe, extract, ocr, vlm, entities, analyse, consolidate, embed, name, place, index
+    /// A new document was given the tags its file was queued with (`GivenTag`), as the user's rules write them: which
+    /// folder in Incoming or command gave each.
+    case tag
     /// The model read a search task's prompt into a plan.
     case interpret
     /// The documents a search task's plan asks for were found.

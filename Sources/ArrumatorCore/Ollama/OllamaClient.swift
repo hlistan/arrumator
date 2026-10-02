@@ -43,9 +43,16 @@ public struct OllamaClient: OllamaAPI {
         return r.models
     }
 
+    /// What Ollama says of `model`. Thinking metadata that cannot be read is logged here, where the model is known, and
+    /// the capabilities decide how it is told to think (`OllamaShowResponse.thinkingProblem`).
     public func show(model: String) async throws -> OllamaShowResponse {
         struct Body: Encodable { var model: String }
-        return try await post("api/show", body: Body(model: model), timeout: config.timeouts.meta, model: model)
+        let shown: OllamaShowResponse = try await post("api/show", body: Body(model: model), timeout: config.timeouts.meta, model: model)
+        if let problem = shown.thinkingProblem {
+            Log.warning(.ollama, "How the model can be told to think could not be read; its capabilities decide",
+                        ["model": model, "error": problem])
+        }
+        return shown
     }
 
     public func chat(_ request: OllamaChatRequest) async throws -> OllamaChatResponse {

@@ -9,7 +9,7 @@ import Testing
 
     static func step(_ stage: TraceStage, seq: Int) -> TraceStepRecord {
         TraceStepRecord(id: nil, traceId: 1, seq: seq, stage: stage.rawValue, status: .ok, startedAt: TestTime.start,
-                        durationMs: 1, inputJson: #"{"tiers":"ministral-3:14b"}"#,
+                        durationMs: 1, inputJson: #"{"model":"ministral-3:14b"}"#,
                         outputJson: #"[{"user":"\#(documentText)","response":"{\"subjects\":[\"Maria Exemplo\"]}"}]"#, error: nil)
     }
 
@@ -68,7 +68,7 @@ import Testing
         let old = try await recorder.start(header)
         let recent = try await recorder.start(header)
         for trace in [old, recent] {
-            await trace.record(TraceStep(stage: .analyse, input: #"{"tiers":"m"}"#, output: exchange))
+            await trace.record(TraceStep(stage: .analyse, input: #"{"model":"m"}"#, output: exchange))
             await trace.record(TraceStep(stage: .place, input: #"{"to":"/a"}"#, output: #"{"exchange":"not a model's"}"#))
         }
         let oldID = try #require(old.traceID)

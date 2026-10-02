@@ -68,9 +68,13 @@ enum Wording {
     static func waiting(_ reason: String) -> String { "Waiting: \(reason)" }
 
     /// The stage a file is at, and the file.
-    static func working(on file: String, stage: String?) -> String { "\(stage ?? "Working") \(file)" }
+    static func working(on file: String, stage: String) -> String { "\(stage) \(file)" }
 
     static func queued(_ count: Int) -> String { "\(count) queued" }
+
+    /// A search task's request being read, by the model reading it: in the menu bar popover, and the help of the
+    /// spinner beside Tasks in the sidebar.
+    static func readingRequest(with model: String) -> String { "Reading a request with \(model)" }
 
     /// Notification titles.
     static let notifyFiled = "Filed"
@@ -94,6 +98,12 @@ enum Wording {
     static let mergeLabelsAction = "Merge labels"
     static let forgetRuleAction = "Forget rule"
     static let checkModelsAction = "Check models"
+    static let saveSettingsAction = "Save settings"
+    static let useProfileAction = "Use profile"
+    static let addProfileAction = "Add profile"
+    static let changeProfileAction = "Change profile"
+    static let resetProfileAction = "Reset profile"
+    static let removeProfileAction = "Remove profile"
     static let rebuildIndexAction = "Rebuild the index"
     static let exportDiagnosticsAction = "Export diagnostics"
     static let loadDocumentAction = "Load document"
@@ -109,7 +119,6 @@ enum Wording {
     static let askAction = "Ask for documents"
     static let loadTasksAction = "Load tasks"
     static let loadTaskAction = "Load task"
-    static let loadModelsAction = "Load models"
     static let changeTaskAction = "Change task"
     static let findAgainAction = "Find again"
     static let addToTaskAction = "Add to task"
@@ -214,13 +223,22 @@ enum Wording {
                         : date.formatted(.dateTime.day().month(.wide).year())
     }
 
-    /// When the pipeline finished with a document, matching `DocumentOrder.recentlyProcessed`.
-    static func processedAt(_ document: DocumentRecord) -> Date { document.filedAt ?? document.addedAt }
+    /// The day the pipeline finished with a document, as a heading: when it was filed, else when it arrived, matching
+    /// `DocumentOrder.recentlyProcessed`.
+    static func processedDay(_ document: DocumentRecord) -> String { day(document.filedAt ?? document.addedAt) }
+
+    /// The month of a document's own date, as a heading: "March 2023"; or that it has no date. Documents in
+    /// `DocumentOrder.documentDate` come under these a month at a time, the newest first, those without a date last.
+    static func documentMonth(_ document: DocumentRecord) -> String {
+        guard let date = document.documentDate else { return without(.date) }
+        return labelDay(date)?.formatted(.dateTime.month(.wide).year()) ?? date
+    }
 
     // MARK: Labels
 
-    /// Kinds a document's row names first, in this order, before the rest of its labels.
-    static let rowKinds: [LabelKind] = [.date, .sender, .type]
+    /// Kinds a document's row names first, in this order, before the rest of its labels: its date, sender and type, and
+    /// the tags the user gave it.
+    static let rowKinds: [LabelKind] = [.date, .sender, .type, .tag]
 
     /// How many labels a document's row shows beyond those of `rowKinds`.
     static let rowExtraLabels = 3
@@ -251,6 +269,7 @@ enum Wording {
         case .amount: "Amount"
         case .jurisdiction: "Jurisdiction"
         case .language: "Language"
+        case .tag: "Tag"
         }
     }
 
@@ -269,6 +288,7 @@ enum Wording {
         case .amount: "Amounts"
         case .jurisdiction: "Jurisdictions"
         case .language: "Languages"
+        case .tag: "Tags"
         }
     }
 
@@ -299,6 +319,7 @@ enum Wording {
         case .amount: "54.21 EUR"
         case .language: "pt, en, ru"
         case .type: "invoice, receipt, contract"
+        case .tag: "Your own label"
         default: "Label"
         }
     }
@@ -309,10 +330,17 @@ enum Wording {
         switch label.kind {
         case .language: return Locale.current.localizedString(forLanguageCode: label.value) ?? label.value
         case .type: return DocumentType(rawValue: label.value)?.label ?? label.value
-        case .date, .deadline:
-            guard let date = try? Date(label.value, strategy: .iso8601.year().month().day()) else { return label.value }
-            return date.formatted(date: .abbreviated, time: .omitted)
+        case .date, .deadline: return labelDay(label.value)?.formatted(date: .abbreviated, time: .omitted) ?? label.value
         default: return label.value
         }
+    }
+
+    /// That documents have no label of a kind, as a heading: "No date".
+    static func without(_ kind: LabelKind) -> String { "No \(labelKind(kind).lowercased())" }
+
+    /// A date label, `YYYY-MM-DD`, as the start of that day where the user is, so it is shown as the day it names in
+    /// every time zone; nil when it is no day.
+    private static func labelDay(_ value: String) -> Date? {
+        try? Date(value, strategy: Date.ISO8601FormatStyle(timeZone: .current).year().month().day())
     }
 }

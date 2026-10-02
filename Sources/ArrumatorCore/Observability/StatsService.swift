@@ -12,7 +12,8 @@ public struct Insights: Sendable, Codable, Hashable {
     public var generatedAt: Date
     public var documents: Int
     public var statuses: [String: Int]
-    /// Documents the model labelled, and those it has not (filed before labels, or without a valid answer).
+    /// Documents the model labelled, and those it has not (filed before labels, or without a valid answer, with no labels
+    /// or only their tags).
     public var labelled: Int
     public var unlabelled: Int
     /// Labels of each kind across the archive.
@@ -45,9 +46,9 @@ public struct StatsService: Sendable {
         return try await database.reader.read { db in
             let documents = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM documents") ?? 0
             let statuses = try Self.histogram(db, sql: "SELECT status, COUNT(*) FROM documents GROUP BY 1")
-            let labelled = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM documents WHERE labels_json IS NOT NULL") ?? 0
+            let labelled = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM documents WHERE NOT \(DocumentStore.notLabelledSQL)") ?? 0
             let unlabelled = try Int.fetchOne(db, sql: """
-                SELECT COUNT(*) FROM documents WHERE labels_json IS NULL AND content_json IS NOT NULL
+                SELECT COUNT(*) FROM documents WHERE \(DocumentStore.notLabelledSQL) AND content_json IS NOT NULL
                 """) ?? 0
             let labelsByKind = try Self.histogram(db, sql: """
                 SELECT json_extract(l.value, '$.kind'), COUNT(*) FROM documents d, json_each(d.labels_json) l

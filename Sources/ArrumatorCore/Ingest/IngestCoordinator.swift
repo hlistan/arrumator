@@ -2,115 +2,9 @@ import Foundation
 import GRDB
 import UniformTypeIdentifiers
 
-public struct IngestStatus: Sendable, Hashable {
-    /// Files waiting to be filed.
-    public var queued: Int
-    /// Filed documents waiting to have their text read again, after the index was rebuilt from the archive.
-    public var reindexing: Int
-    public var currentPath: String?
-    public var currentStage: JobState?
-    public var waitingForOllama: Bool
-    public var powerPauseReason: String?
-
-    public static let idle = IngestStatus(queued: 0, reindexing: 0, currentPath: nil, currentStage: nil,
-                                          waitingForOllama: false, powerPauseReason: nil)
-}
-
-/// Everything the pipeline needs, assembled by the composition root (app or CLI).
-public struct PipelineServices: Sendable {
-    public var database: AppDatabase
-    public var config: PipelineConfig
-    public var settings: SettingsStore
-    public var extractor: any ContentExtracting
-    public var analyzer: any DocumentAnalyzing
-    public var filer: DocumentFiler
-    public var traces: TraceRecorder
-    public var vectors: VectorIndex
-    public var time: any TimeSource
-
-    public init(database: AppDatabase, config: PipelineConfig, settings: SettingsStore, extractor: any ContentExtracting,
-                analyzer: any DocumentAnalyzing, filer: DocumentFiler, traces: TraceRecorder, vectors: VectorIndex,
-                time: any TimeSource) {
-        self.database = database
-        self.config = config
-        self.settings = settings
-        self.extractor = extractor
-        self.analyzer = analyzer
-        self.filer = filer
-        self.traces = traces
-        self.vectors = vectors
-        self.time = time
-    }
-
-    public var documents: DocumentStore { DocumentStore(database: database, time: time) }
-    public var jobs: JobStore { JobStore(database: database, time: time) }
-    public var history: HistoryStore { HistoryStore(database: database, time: time) }
-    public var index: IndexStore { IndexStore(database: database, time: time) }
-
-    /// Where things are in the archive the settings name.
-    public func layout(_ settings: AppSettings) -> ArchiveLayout {
-        ArchiveLayout(root: settings.archiveURL, records: config.records, watcher: config.watcher)
-    }
-
-    /// Starts a trace stamped with the prompt version and models in force.
-    public func startTrace(docID: Int64?, jobID: Int64?, attempt: Int, source: TraceSource,
-                           settings: AppSettings) async throws -> TraceContext {
-        try await traces.start(TraceHeader(docID: docID, jobID: jobID, attempt: attempt, source: source,
-                                           promptVersion: config.analysis.promptVersion,
-                                           models: try? config.models(for: settings.models), settings: settings))
-    }
-
-    public var labels: LabelStore { LabelStore(database: database, config: config.labels) }
-
-    /// Reads a document with the model, telling it of the archive's labels and the user's decisions about them, and
-    /// keeps its labels one vocabulary with the archive's (`LabelConsolidator`), recording what that changed in the
-    /// trace. Nothing is saved: dry runs and replays read this way too.
-    public func read(_ content: ExtractedContent, settings: AppSettings, trace: TraceContext) async throws -> Reading {
-        var outcome = try await analyzer.analyse(content, guidance: try await labels.guidance(), settings: settings, config: config,
-                                                 trace: trace)
-        guard let given = outcome.labels else { return Reading(outcome: outcome, changes: []) }
-        let consolidator = try await labels.consolidator()
-        let consolidation = await trace.measure(.consolidate, input: given, output: { (c: LabelConsolidation) in c }) {
-            consolidator.consolidate(given)
-        }
-        outcome.labels = consolidation.labels
-        return Reading(outcome: outcome, changes: consolidation.changes)
-    }
-
-    /// Asks the model about a document and keeps what it says: the labels on the document and in the search index
-    /// straight away, and a history event with what it was labelled with, or why it was not.
-    public func analyse(docID: Int64, jobID: Int64?, content: ExtractedContent, settings: AppSettings,
-                        trace: TraceContext) async throws -> AnalysisOutcome {
-        let reading = try await read(content, settings: settings, trace: trace)
-        let outcome = reading.outcome
-        if let labels = outcome.labels {
-            try await index.saveLabels(labels, docID: docID)
-            try await history.record(.analysed, doc: docID, job: jobID, trace: trace.traceID,
-                                     summary: labels.isEmpty ? "Nothing worth a label" : labels.map(\.value).joined(separator: " · "),
-                                     payload: AnalysedPayload(analysis: outcome.analysis, changes: reading.changes))
-        } else {
-            try await history.record(.error, doc: docID, job: jobID, trace: trace.traceID,
-                                     summary: "Not read: " + outcome.analysis.problems.joined(separator: "; "), payload: outcome.analysis)
-        }
-        return outcome
-    }
-}
-
-/// A reading of a document: what the model gave it, its labels kept one vocabulary with the archive's, and what that
-/// changed of what the model gave.
-public struct Reading: Sendable, Codable {
-    public var outcome: AnalysisOutcome
-    public var changes: [LabelChange]
-}
-
-/// What the history keeps of a reading: how the document was read, and which of the model's labels became others.
-public struct AnalysedPayload: Sendable, Codable, Hashable {
-    public var analysis: DocumentAnalysis
-    public var changes: [LabelChange]
-}
-
-/// Runs ingest jobs one at a time through hashing → extracting → analysing → filing.
-/// Every transition is persisted, so a crash or restart resumes from the last completed stage.
+/// Runs ingest jobs one at a time through hashing → extracting → analysing → filing, in the order they were queued
+/// (`JobStore.nextDue`). Every transition is persisted, so a job stopped part way, by quitting, a crash or a forced
+/// quit, keeps its stage and its place, and carries on from its last finished stage first at the next start.
 public actor IngestCoordinator {
     private let services: PipelineServices
     private var worker: Task<Void, Never>?
@@ -142,15 +36,20 @@ public actor IngestCoordinator {
 
     // MARK: Control
 
+    /// Starts the worker. A job stopped part way needs nothing done to it: it is due, and was queued before anything
+    /// that arrived after it, so the worker takes it up first.
     public func start() async {
-        await recoverInterruptedJobs()
         guard worker == nil else { return }
+        await logResumingJobs()
         worker = Task { [weak self] in await self?.runLoop() }
         kick.yield()
     }
 
     /// Stops the worker and waits until it has, so no job is still running once this returns. A job in hand is
-    /// interrupted and carries on from its last finished stage the next time the worker starts.
+    /// interrupted, which is no failure: nothing more is saved of it, so it keeps the stage it is at, with what its
+    /// finished stages saved, and carries on from there the next time the worker starts, before the jobs queued after
+    /// it. Filing that has begun is finished first (`DocumentFiler.file`), so a stop never leaves a file moved without
+    /// its record.
     public func stop() async {
         guard let worker else { return }
         worker.cancel()
@@ -160,9 +59,11 @@ public actor IngestCoordinator {
 
     public func wake() { kick.yield() }
 
-    /// Called by the Incoming watcher for each stable file.
+    /// Called by the Incoming watcher for each stable file, and by `arrumatorcli ingest`, which may give it `tags` of
+    /// its own. The tags the file is given are decided now, from where it is in Incoming (`PipelineServices.tags`), and
+    /// kept with its job.
     @discardableResult
-    public func enqueue(_ url: URL) async -> Int64? {
+    public func enqueue(_ url: URL, tags: [String] = []) async -> Int64? {
         let path = url.standardizedFileURL.path
         do {
             if let known = try await services.documents.document(path: path),
@@ -170,9 +71,13 @@ public actor IngestCoordinator {
                 Log.debug(.ingest, "Ignoring held document", ["path": path, "doc": String(known.id ?? 0)])
                 return nil
             }
-            let id = try await services.jobs.enqueue(path: path, kind: .ingest)
-            try await services.history.record(.arrived, job: id, summary: url.lastPathComponent, payload: ["path": path])
-            Log.info(.ingest, "Queued", ["path": path, "job": id.map(String.init) ?? "-"])
+            var payload = JobPayload()
+            let given = services.tags(for: url, given: tags, settings: await services.settings.current)
+            payload.tags = given.isEmpty ? nil : given
+            let id = try await services.jobs.enqueue(path: path, kind: .ingest, payload: payload)
+            let summary = ([url.lastPathComponent] + [GivenTag.note(given)].compactMap { $0 }).joined(separator: " · ")
+            try await services.history.record(.arrived, job: id, summary: summary, payload: ArrivedPayload(path: path, tags: payload.tags))
+            Log.info(.ingest, "Queued", ["path": path, "job": id.map(String.init) ?? "-", "tags": given.map(\.label.value).joined(separator: ", ")])
             await refreshQueueCount()
             kick.yield()
             return id
@@ -212,15 +117,15 @@ public actor IngestCoordinator {
                 }
             }
             await refreshQueueCount()
-            var wait = await earliestPending().map { $0.timeIntervalSince(services.time.now()) }
+            var wait = await earliestDue().map { $0.timeIntervalSince(services.time.now()) }
             if powerReason != nil { wait = services.config.power.recheckSeconds }
             await waitForKick(timeout: wait.map { max(Self.minimumWait, $0) })
         }
     }
 
     /// When the next active job is due; a queue that cannot be read waits for the next kick.
-    private func earliestPending() async -> Date? {
-        do { return try await services.jobs.earliestPending() } catch {
+    private func earliestDue() async -> Date? {
+        do { return try await services.jobs.earliestDue() } catch {
             Log.error(.ingest, "Could not read the job queue", ["error": error.localizedDescription])
             return nil
         }
@@ -253,19 +158,16 @@ public actor IngestCoordinator {
         status.reindexing = active.filter { $0.kind == .reindex }.count
     }
 
-    /// Jobs interrupted mid-stage are made due again; their persisted payload lets them skip finished work.
-    private func recoverInterruptedJobs() async {
+    /// Logs the jobs that carry on from a stage begun before the worker last stopped: what quitting, a crash or a failure
+    /// that waits to be tried again left part way. They are taken in their turn, by when they were queued.
+    private func logResumingJobs() async {
         do {
-            for var job in try await services.jobs.active() where job.state != .pending {
-                if job.state == .filing, let target = job.payload.targetPath, !FileManager.default.fileExists(atPath: job.sourcePath),
-                   FileManager.default.fileExists(atPath: target) {
-                    Log.warning(.ingest, "Recovered job interrupted after move", ["job": String(job.id ?? 0), "target": target])
-                }
-                job.nextRunAt = services.time.now()
-                try await services.jobs.update(job)
+            for job in try await services.jobs.active() where job.state != .pending {
+                Log.info(.ingest, "Carries on where it stopped", ["job": String(job.id ?? 0), "stage": job.state.rawValue,
+                                                                  "attempt": String(job.attempt)])
             }
         } catch {
-            Log.error(.ingest, "Job recovery failed", ["error": error.localizedDescription])
+            Log.error(.ingest, "Could not read the job queue", ["error": error.localizedDescription])
         }
     }
 
@@ -274,14 +176,12 @@ public actor IngestCoordinator {
     private func process(_ initial: JobRecord) async {
         var job = initial
         let settings = await services.settings.current
-        status.currentPath = job.sourcePath
-        status.currentStage = job.state
+        status.current = job.id.map { IngestStatus.Current(job: $0, path: job.sourcePath, stage: job.state, tags: job.tags) }
         let activity = ProcessInfo.processInfo.beginActivity(options: .userInitiatedAllowingIdleSystemSleep,
                                                              reason: "Filing \(URL(fileURLWithPath: job.sourcePath).lastPathComponent)")
         defer {
             ProcessInfo.processInfo.endActivity(activity)
-            status.currentPath = nil
-            status.currentStage = nil
+            status.current = nil
         }
         let trace: TraceContext
         do {
@@ -296,18 +196,21 @@ public actor IngestCoordinator {
         do {
             try await runStages(&job, payload: &payload, settings: settings, trace: trace)
             status.waitingForOllama = false
+            // A copy is no document: its trace is reached from its event in its original's History (`handOver`).
             await services.traces.finish(trace, outcome: job.state.rawValue, docID: job.docId)
         } catch {
             await handleFailure(&job, payload: payload, error: error, trace: trace)
         }
-        await refreshQueueCount()
+        // A stopped worker reads nothing more: the database cancels a stopped task's reads, which is no error to log.
+        if !Task.isCancelled { await refreshQueueCount() }
     }
 
     private func save(_ job: inout JobRecord, _ payload: JobPayload, state: JobState) async throws {
         job.state = state
         job.setPayload(payload)
         try await services.jobs.update(job)
-        status.currentStage = state
+        status.current?.stage = state
+        status.current?.tags = job.tags
     }
 
     private func runStages(_ job: inout JobRecord, payload: inout JobPayload, settings: AppSettings,
@@ -317,9 +220,20 @@ public actor IngestCoordinator {
             return
         }
         let source = URL(fileURLWithPath: job.sourcePath)
+        // A document read again comes with what earlier stages found of it, and starts at the first stage it lacks: its
+        // text is extracted again only when none was kept.
+        if job.state == .pending, let docID = job.docId, payload.sha256 != nil {
+            if let given = payload.tags { payload.tags = try await services.giveTags(given, docID: docID, trace: trace) }
+            try await save(&job, payload, state: payload.content == nil ? .extracting : .analysing)
+        }
         if job.state == .pending || job.state == .hashing {
             try await save(&job, payload, state: .hashing)
             guard FileManager.default.fileExists(atPath: source.path) else {
+                // A copy that went to the Trash before a stop: what is left of handing it over is done now.
+                if let id = payload.copyOf, let original = try await services.documents.document(id: id) {
+                    try await handOver(source, to: original, job: &job, payload: &payload, settings: settings, trace: trace)
+                    return
+                }
                 try await save(&job, payload, state: .cancelled)
                 try await services.history.record(.missing, doc: job.docId, job: job.id, trace: trace.traceID,
                                                   summary: "\(source.lastPathComponent) disappeared before processing")
@@ -333,10 +247,15 @@ public actor IngestCoordinator {
             payload.size = fingerprint.size
             payload.mtime = fingerprint.modified
             payload.inode = fingerprint.inode
+            if let original = try await original(of: source, sha256: sha, job: job, trace: trace) {
+                try await handOver(source, to: original, job: &job, payload: &payload, settings: settings, trace: trace)
+                return
+            }
             let document = try await ensureDocument(for: job, source: source, sha: sha, fingerprint: fingerprint)
             job.docId = document.id
-            if try await handleDuplicate(document: document, job: &job, payload: payload, settings: settings, trace: trace) {
-                return
+            // The tags are the document's from when it is one, read or not.
+            if let docID = document.id, let given = payload.tags {
+                payload.tags = try await services.giveTags(given, docID: docID, trace: trace)
             }
             try await save(&job, payload, state: .extracting)
         }
@@ -355,7 +274,8 @@ public actor IngestCoordinator {
         guard let content = payload.content else { throw IngestError.contentUnavailable(docID) }
 
         if job.state == .analysing {
-            payload.outcome = try await services.analyse(docID: docID, jobID: job.id, content: content, settings: settings, trace: trace)
+            payload.outcome = try await services.analyse(docID: docID, jobID: job.id, content: content, given: payload.tags ?? [],
+                                                         settings: settings, trace: trace)
             try await save(&job, payload, state: .filing)
         }
         guard let outcome = payload.outcome else { throw IngestError.invalidState("analysis missing") }
@@ -373,41 +293,6 @@ public actor IngestCoordinator {
         let record = DocumentRecord.arrived(path: source.path, sha256: sha, size: fingerprint.size, uttype: uttype,
                                             inode: fingerprint.inode, modified: fingerprint.modified, now: services.time.now())
         return try await services.documents.save(record)
-    }
-
-    /// Returns true when the file was handled as a duplicate of an existing document: filed into the archive beside
-    /// it, unread and unlabelled, or left in Incoming, as the settings say.
-    private func handleDuplicate(document: DocumentRecord, job: inout JobRecord, payload: JobPayload,
-                                 settings: AppSettings, trace: TraceContext) async throws -> Bool {
-        guard job.kind != .adopt, let docID = document.id else { return false }
-        let original = try await trace.measure(.dedupe, input: ["sha256": document.sha256],
-                                               output: { (d: DocumentRecord?) in ["duplicateOf": d?.id.map(String.init) ?? "none"] }) {
-            try await services.documents.existing(sha256: document.sha256, excluding: docID)
-        }
-        guard let original else { return false }
-        var doc = document
-        doc.duplicateOf = original.id
-        doc.status = .duplicate
-        doc = try await services.documents.save(doc)
-        let summary = "\(document.originalFilename) duplicates \(original.filename)"
-        if settings.duplicateAction == .fileInArchive {
-            let analysis = DocumentAnalysis(problems: [summary])
-            _ = try await services.filer.file(doc, source: Self.source(of: doc), analysis: analysis, status: .duplicate,
-                                              directory: services.layout(settings).root, inPlace: false, actor: .system,
-                                              settings: settings, trace: trace, event: .duplicate, recording: nil)
-        } else {
-            try await services.history.record(.duplicate, doc: docID, job: job.id, trace: trace.traceID, summary: summary,
-                                              payload: ["original": String(original.id ?? 0), "path": doc.path])
-        }
-        try await save(&job, payload, state: .duplicate)
-        return true
-    }
-
-    /// The file as it is known before it is read.
-    static func source(of document: DocumentRecord) -> SourceFile {
-        SourceFile(path: document.path, originalFilename: document.originalFilename,
-                   fileExtension: (document.originalFilename as NSString).pathExtension, utType: document.uttype,
-                   byteSize: document.size, createdAt: nil, modifiedAt: document.fileMtime, sha256: document.sha256)
     }
 
     /// Reads a filed document's text and computes its embedding again, asking the model nothing and moving nothing:
@@ -541,7 +426,7 @@ public actor IngestCoordinator {
     }
 
     /// Saves what a failure did to a job and records it in the history. Both are already the failure path, so neither
-    /// throws: what cannot be saved is logged, and the job is found again by the watchdog or at the next start.
+    /// throws: what cannot be saved is logged, and the job, unchanged in the queue, is taken again in its turn.
     private func keep(_ job: JobRecord, event: EventKind?, summary: String, trace: TraceContext) async {
         do { try await services.jobs.update(job) } catch {
             Log.error(.ingest, "Could not save a failed job", ["job": String(job.id ?? 0), "error": error.localizedDescription])
@@ -566,7 +451,7 @@ public actor IngestCoordinator {
             }
             let analysis = DocumentAnalysis(problems: ["Processing failed: \(message)"])
             if FileManager.default.fileExists(atPath: document.path), job.kind == .ingest {
-                _ = try await services.filer.file(document, source: Self.source(of: document), analysis: analysis, status: .failed,
+                _ = try await services.filer.file(document, source: document.unreadSource, analysis: analysis, status: .failed,
                                                   directory: services.layout(settings).root, inPlace: false, actor: .system,
                                                   settings: settings, trace: trace, event: .failed, recording: nil)
             } else {
@@ -580,5 +465,75 @@ public actor IngestCoordinator {
         } catch {
             Log.error(.ingest, "Could not park failed document", ["job": String(job.id ?? 0), "error": error.localizedDescription])
         }
+    }
+}
+
+// MARK: Exact copies
+
+extension IngestCoordinator {
+    /// The document in the archive the file at `source` is an exact copy of: the oldest with its SHA-256
+    /// (`DocumentStore.existing`) whose file, another than `source`, still has it, as the trace's `dedupe` step records;
+    /// nil when there is none, and for a file the user put into the archive (`adopt`), which is a document of its own.
+    /// Its file is hashed again, as it may have been changed since it was filed: a file the archive no longer holds the
+    /// same bytes of is no copy.
+    private func original(of source: URL, sha256: String, job: JobRecord, trace: TraceContext) async throws -> DocumentRecord? {
+        guard job.kind != .adopt else { return nil }
+        let documents = services.documents
+        return try await trace.measure(.dedupe, input: ["sha256": sha256],
+                                       output: { (d: DocumentRecord?) in ["copyOf": d?.id.map(String.init) ?? "none"] }) {
+            guard let found = try await documents.existing(sha256: sha256, excluding: job.docId),
+                  found.url.resolvingSymlinksInPath() != source.resolvingSymlinksInPath(),
+                  FileManager.default.fileExists(atPath: found.path), try HashService.sha256(of: found.url) == sha256 else { return nil }
+            return found
+        }
+    }
+
+    /// Hands a file that is an exact copy of `original` over to it, rather than making a second document of the same
+    /// bytes: the original is given the tags the file was queued with (`PipelineServices.giveTags`), the file goes to
+    /// the Trash, never deleted, and the original is read again from the start, as the file would have been
+    /// (`PipelineServices.queueReadingAgain`), so a copy put into Incoming reads its document again with the profile in
+    /// use. History records this once, under the original. The original is kept with the job first, so a stop part way
+    /// finishes the rest at the next start, the copy in the Trash already or not; a copy the Trash refuses fails the
+    /// job before its original is read, and stays where it is.
+    private func handOver(_ copy: URL, to original: DocumentRecord, job: inout JobRecord, payload: inout JobPayload,
+                          settings: AppSettings, trace: TraceContext) async throws {
+        guard let originalID = original.id else { throw IngestError.documentNotPersisted }
+        payload.copyOf = originalID
+        try await save(&job, payload, state: .hashing)
+        if let given = payload.tags { payload.tags = try await services.giveTags(given, docID: originalID, trace: trace) }
+        var trashed: URL?
+        if FileManager.default.fileExists(atPath: copy.path) {
+            do { trashed = try services.trash.trash(copy) } catch {
+                throw IngestError.notTrashed(copy.path, reason: error.localizedDescription)
+            }
+        }
+        let current = try await services.documents.document(id: originalID) ?? original
+        try await services.queueReadingAgain(current, content: nil, settings: settings)
+        let tags = payload.tags ?? []
+        let summary = ["\(copy.lastPathComponent) is a copy of \(original.filename), which is read again",
+                       trashed.map { _ in "the copy is in the Trash" }, GivenTag.note(tags)].compactMap { $0 }.joined(separator: "; ")
+        try await services.history.record(.duplicate, doc: originalID, job: job.id, trace: trace.traceID, summary: summary,
+                                          payload: CopyPayload(copy: copy.path, trashed: trashed?.path, tags: tags.isEmpty ? nil : tags))
+        try await save(&job, payload, state: .duplicate)
+        Log.info(.ingest, "A copy of a document in the archive; its original is read again",
+                 ["copy": copy.path, "doc": String(originalID), "trashed": trashed?.path ?? "-"])
+    }
+}
+
+/// What History keeps of a file that was an exact copy of a document in the archive, whose event is the original's: where
+/// the copy was and where the Trash put it, and the tags it gave the original. Its keys are none that the events of
+/// copies kept before (`original` and `path`, or `from`, `to` and `problems`) were written under.
+public struct CopyPayload: Sendable, Codable, Hashable {
+    /// The copy's path in Incoming.
+    public var copy: String
+    /// Where the Trash put it; absent when that cannot be told, as when a stop came after it went.
+    public var trashed: String?
+    /// The tags the copy gave its original, and what gave each; absent when it gave none.
+    public var tags: [GivenTag]?
+
+    public init(copy: String, trashed: String?, tags: [GivenTag]?) {
+        self.copy = copy
+        self.trashed = trashed
+        self.tags = tags
     }
 }

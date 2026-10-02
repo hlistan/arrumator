@@ -96,12 +96,14 @@ public struct LabelStore: Sendable {
         try await consolidator().suggestions()
     }
 
-    /// What the model is shown of the archive: the labels it uses most, and the user's merges and unwanted labels.
+    /// What the model is shown of the archive: the labels it uses most, and the user's merges and unwanted labels, of the
+    /// kinds the model gives. It is shown nothing of the user's own tags, which it never gives.
     public func guidance() async throws -> LabelGuidance {
-        let (rules, usage) = try await database.reader.read { db in (try LabelRule.order(Column("id").desc).fetchAll(db), try Self.usage(db)) }
+        let (all, usage) = try await database.reader.read { db in (try LabelRule.order(Column("id").desc).fetchAll(db), try Self.usage(db)) }
+        let rules = all.filter { !$0.kind.isUsersOwn }
         let vocabulary = config.vocabulary
         var used: [LabelKind: [String]] = [:]
-        for (kind, policy) in vocabulary.kinds where policy.promptLimit > 0 {
+        for (kind, policy) in vocabulary.kinds where policy.promptLimit > 0 && !kind.isUsersOwn {
             let values = (usage[kind] ?? []).prefix(policy.promptLimit).map(\.label.value)
             if !values.isEmpty { used[kind] = values }
         }

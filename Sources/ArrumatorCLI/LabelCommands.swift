@@ -22,15 +22,24 @@ struct Labels: AsyncParsableCommand {
     struct Row: Encodable {
         var id: Int64
         var path: String
-        /// Nil until the model has labelled the document.
+        /// Nil while the document has no labels and has not been labelled.
         var labels: [DocumentLabel]?
+        /// Whether the document has been labelled; one that has not may have its tags, the user's own.
+        var labelled: Bool
+
+        init(_ document: DocumentRecord, id: Int64) {
+            self.id = id
+            path = document.path
+            labels = document.labels
+            labelled = document.isLabelled
+        }
     }
 
     static func rows(_ ids: [Int64], runtime: ArrumatorRuntime) async throws -> [Row] {
         var rows: [Row] = []
         for id in ids {
             guard let doc = try await runtime.services.documents.document(id: id) else { throw ValidationError("No document \(id)") }
-            rows.append(Row(id: id, path: doc.path, labels: doc.labels))
+            rows.append(Row(doc, id: id))
         }
         return rows
     }
@@ -57,10 +66,9 @@ struct Labels: AsyncParsableCommand {
             }
             guard let row = try await Labels.rows([id], runtime: runtime).first else { return }
             options.emit(row) {
-                guard let labels = row.labels else {
-                    return "\(row.path)\nNot labelled yet; `arrumatorcli review retry \(row.id)` reads it again."
-                }
-                return row.path + "\n" + Terminal.labelTable(labels, indent: 2)
+                let notYet = "Not labelled yet; `arrumatorcli review retry \(row.id)` reads it again."
+                guard let labels = row.labels else { return "\(row.path)\n\(notYet)" }
+                return row.path + "\n" + Terminal.labelTable(labels, indent: 2) + (row.labelled ? "" : "\n" + notYet)
             }
         }
     }
@@ -78,8 +86,8 @@ struct Labels: AsyncParsableCommand {
             await runtime.coordinator.drain()
             let rows = try await Labels.rows(ids, runtime: runtime)
             options.emit(rows) {
-                (rows.map { "#\($0.id) \($0.path)\n    \(Terminal.labels($0.labels))" }
-                    + ["Labelled \(rows.filter { $0.labels != nil }.count) of \(Format.count(rows.count, "document"))"])
+                (rows.map { "#\($0.id) \($0.path)\n    \(Terminal.labels($0.labels, labelled: $0.labelled))" }
+                    + ["Labelled \(rows.filter(\.labelled).count) of \(Format.count(rows.count, "document"))"])
                     .joined(separator: "\n")
             }
         }
@@ -104,7 +112,7 @@ struct Labels: AsyncParsableCommand {
 
     struct Browse: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
-            abstract: "The documents that have every label given, and the labels they have, to narrow them down further by.")
+            abstract: "The documents that have every label given, the newest by their own date first, and the labels they have, to narrow them down further by.")
         @OptionGroup var options: GlobalOptions
         @Argument(help: "Labels, as kind=value, such as type=invoice sender=EDP; none lists every document and label.")
         var labels: [String] = []
@@ -113,6 +121,7 @@ struct Labels: AsyncParsableCommand {
 
         struct Scope: Encodable {
             var selection: [DocumentLabel]
+            /// As the app lists them: the newest by their own date first, the undated last (`DocumentOrder.documentDate`).
             var documents: [Row]
             /// The labels the documents have, with how many of them have each, as the sidebar lists them: kind by kind,
             /// or all in one list, the most used first (`groupLabelsByKind`).
@@ -124,16 +133,16 @@ struct Labels: AsyncParsableCommand {
         func run() async throws {
             let runtime = try await options.runtime()
             let selection = try labels.map(Labels.label)
-            let documents = try await runtime.services.documents.list(DocumentFilter(labels: selection), order: .recentlyProcessed,
+            let documents = try await runtime.services.documents.list(DocumentFilter(labels: selection), order: .documentDate,
                                                                       limit: Int.max)
             let usage = try await runtime.services.labels.usage(within: selection).matching(matching)
             let grouped = await runtime.settings.current.groupLabelsByKind
             let scope = Scope(selection: selection,
-                              documents: documents.compactMap { d in d.id.map { Row(id: $0, path: d.path, labels: d.labels) } },
+                              documents: documents.compactMap { d in d.id.map { Row(d, id: $0) } },
                               labels: usage.listed(groupedByKind: grouped))
             options.emit(scope) {
                 guard !scope.documents.isEmpty else { return "No document has every one of these labels." }
-                return (scope.documents.map { "#\($0.id) \($0.path)\n    \(Terminal.labels($0.labels))" }
+                return (scope.documents.map { "#\($0.id) \($0.path)\n    \(Terminal.labels($0.labels, labelled: $0.labelled))" }
                     + ["", Format.count(scope.documents.count, "document"), ""]
                     + [Terminal.table(scope.labels.map { [$0.label.kind.rawValue, Terminal.label($0.label),
                                                           Format.count($0.documents, "document")] })])

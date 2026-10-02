@@ -1,8 +1,8 @@
 import Foundation
 
-/// What a model of the profile is used for.
-public enum ModelRole: String, Sendable, Hashable, Codable {
-    case chat, vision, embedding, fast
+/// What a model of the profile is used for (`ModelProfile.roles`, `ModelProfile.model(for:)`).
+public enum ModelRole: String, Sendable, Hashable, Codable, CaseIterable {
+    case chat, vision, embedding
 }
 
 public struct ModelStatus: Sendable, Hashable, Codable {
@@ -10,6 +10,34 @@ public struct ModelStatus: Sendable, Hashable, Codable {
     public var role: ModelRole
     public var installed: Bool
     public var sizeBytes: Int64?
+}
+
+/// A model Ollama has installed, and what a profile can give it to do (`ModelManager.installed()`): what the profile
+/// editor and `arrumatorcli models list` offer for each role.
+public struct InstalledModel: Sendable, Codable, Hashable, Identifiable {
+    public var name: String
+    public var sizeBytes: Int64?
+    /// What Ollama says the model can do, as it lists them: "completion", "vision", "embedding", "thinking", "tools", …
+    public var capabilities: [String]
+    /// The roles of a profile it can take: a model that answers in words reads (`chat`), and describes images (`vision`)
+    /// when it also sees them; one that embeds finds by meaning (`embedding`).
+    public var roles: [ModelRole]
+    /// How it can be told to think (`OllamaShowResponse.thinkingValues`): its switches, `true` and `false`, or the levels
+    /// it names; none for a model that cannot think.
+    public var thinking: [OllamaThink]
+
+    public var id: String { name }
+
+    public init(name: String, sizeBytes: Int64?, shown: OllamaShowResponse) {
+        self.name = name
+        self.sizeBytes = sizeBytes
+        let capabilities = shown.capabilities ?? []
+        self.capabilities = capabilities
+        let answers = capabilities.contains(OllamaShowResponse.completionCapability)
+        roles = [(ModelRole.chat, answers), (.vision, answers && capabilities.contains(OllamaShowResponse.visionCapability)),
+                 (.embedding, capabilities.contains(OllamaShowResponse.embeddingCapability))].filter(\.1).map(\.0)
+        thinking = shown.thinkingValues
+    }
 }
 
 public enum ModelManagerError: Error, LocalizedError {
@@ -35,29 +63,26 @@ public actor ModelManager {
 
     public static func normalized(_ name: String) -> String { name.contains(":") ? name : name + ":latest" }
 
-    public func status(for models: ResolvedModels) async throws -> [ModelStatus] {
+    /// Whether each model of `profile` is installed, in its role, and how large it is.
+    public func status(for profile: ModelProfile) async throws -> [ModelStatus] {
         let installed = try await api.tags()
         let bySize = Dictionary(installed.map { (Self.normalized($0.name), $0.size) }, uniquingKeysWith: { a, _ in a })
-        let roles: [(ModelRole, String)] = [(.chat, models.chat), (.vision, models.vision), (.embedding, models.embed),
-                                            (.fast, models.fast)]
-        return roles.map { role, name in
+        return ModelProfile.roles.map { role in
+            let name = profile.model(for: role)
             let key = Self.normalized(name)
             return ModelStatus(name: name, role: role, installed: bySize.keys.contains(key), sizeBytes: bySize[key] ?? nil)
         }
     }
 
-    /// Every installed model that answers in words, by name in Ollama's order: those a search task can be given to read
-    /// its request. Embedding models, which only turn text into vectors, are not among them.
-    public func chatModels() async throws -> [String] {
-        var names: [String] = []
-        for model in try await api.tags() where try await capabilities(of: model.name).capabilities?.contains(Self.completion) ?? false {
-            names.append(model.name)
+    /// Every installed model in Ollama's order, with its size and what it can do (`InstalledModel`), what Ollama says of
+    /// each read once and kept (`capabilities(of:)`).
+    public func installed() async throws -> [InstalledModel] {
+        var models: [InstalledModel] = []
+        for model in try await api.tags() {
+            models.append(InstalledModel(name: model.name, sizeBytes: model.size, shown: try await capabilities(of: model.name)))
         }
-        return names
+        return models
     }
-
-    /// The capability Ollama lists for a model that generates text.
-    static let completion = "completion"
 
     public func capabilities(of model: String) async throws -> OllamaShowResponse {
         if let cached = capabilities[model] { return cached }
@@ -80,8 +105,9 @@ public actor ModelManager {
     }
 }
 
-/// Serialises generation calls (one large model at a time) and retries transient failures.
-/// Embedding calls use a separate lane so search stays responsive during long classifications.
+/// Serialises generation calls (one large model at a time) and retries transient failures, except an answer that took
+/// longer than its request's own timeout (`OllamaError.isTransient(asking:)`). Embedding calls use a separate lane so
+/// search stays responsive during long classifications.
 public actor InferenceGate {
     private let api: any OllamaAPI
     private let retryDelays: [Double]
@@ -102,7 +128,7 @@ public actor InferenceGate {
         let delays = retryDelays
         let time = time
         return try await generation.withPermit {
-            try await Retry.run(delays: delays, time: time, shouldRetry: { ($0 as? OllamaError)?.isTransient ?? false },
+            try await Retry.run(delays: delays, time: time, shouldRetry: { ($0 as? OllamaError)?.isTransient(asking: request) ?? false },
                                 onRetry: { n, e in
                                     Log.warning(.ollama, "Retrying chat", ["attempt": String(n), "error": e.localizedDescription])
                                 }) {

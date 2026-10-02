@@ -1,10 +1,11 @@
 import ArrumatorCore
 import Foundation
 
-/// The JSON schema a search request is answered in: one list of labels per `LabelKind`, as a document's answer has
-/// them and in the same order, each label with the words of the request that ask for it; then the words the text must
-/// contain, the arrangement and a name. Only string, array and object types are used, which every grammar backend
-/// supports.
+/// The JSON schema a search request is answered in: one list of labels per kind the model gives, as a document's
+/// answer has them and in the same order, each label with the words of the request that ask for it; then the words the
+/// text must contain, the arrangement by those kinds and a name. A task never asks for a tag, the user's own: the user
+/// adds tagged documents to its set and arranges it by them. Only string, array and object types are used, which every
+/// grammar backend supports.
 public enum SearchSchema {
     static let valueKey = "value"
     static let askedAsKey = "asked_as"
@@ -26,13 +27,13 @@ public enum SearchSchema {
         } + [
             JSONEntry(wordsKey, ClassificationSchema.stringArray(maxItems: tasks.maxWords)),
             JSONEntry(groupingKey, ClassificationSchema.stringArray(maxItems: tasks.maxGroupingDepth,
-                                                                     enumValues: LabelKind.allCases.map(\.rawValue))),
+                                                                     enumValues: LabelKind.modelKinds.map(\.rawValue))),
             JSONEntry(titleKey, ClassificationSchema.string()),
         ])
     }
 }
 
-/// Raw answer to a search request.
+/// Raw answer to a search request: a list per kind the schema asks for, and nothing else of labels.
 struct SearchAnswer: Decodable {
     /// A label asked for, and the words of the request the model says ask for it.
     struct Criterion: Decodable {
@@ -53,7 +54,7 @@ struct SearchAnswer: Decodable {
     init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: AnalysisAnswer.Key.self)
         var labels: [LabelKind: [Criterion]] = [:]
-        for kind in LabelKind.allCases {
+        for kind in ClassificationSchema.answerOrder {
             labels[kind] = try container.decode([Criterion].self, forKey: AnalysisAnswer.Key(stringValue: ClassificationSchema.labelsKey(kind)))
         }
         self.labels = labels
@@ -105,7 +106,7 @@ public struct SearchPlanValidator: Sendable {
         let asked = Self.words(request)
         var notes: [String] = []
         var quoted = Set<String>()
-        let criteria = LabelKind.allCases.flatMap { labels(of: $0, in: raw, asked: asked, quoted: &quoted, notes: &notes) }
+        let criteria = LabelKind.modelKinds.flatMap { labels(of: $0, in: raw, asked: asked, quoted: &quoted, notes: &notes) }
         let words = distinct(raw.words.map(DocumentLabel.oneLine).filter { word in
             let key = Self.words(word)
             guard !key.isEmpty else { return false }
@@ -121,7 +122,7 @@ public struct SearchPlanValidator: Sendable {
         }, limit: tasks.maxWords, what: SearchSchema.wordsKey, notes: &notes)
         var grouping: [LabelKind] = []
         for written in raw.grouping {
-            guard let kind = LabelKind(rawValue: written.trimmingCharacters(in: .whitespaces)) else {
+            guard let kind = LabelKind(rawValue: written.trimmingCharacters(in: .whitespaces)), !kind.isUsersOwn else {
                 throw AnswerValidationError.invalid(["\(SearchSchema.groupingKey): “\(written)” is no kind of label"])
             }
             if !grouping.contains(kind) { grouping.append(kind) }
@@ -177,10 +178,12 @@ public struct SearchPlanValidator: Sendable {
 /// The production `SearchPromptInterpreting`. The local model reads the request with the app's own prompt
 /// (`search-system.md`), told the archive's labels in use (`search-archive.md`) and today's date, and answers in a fixed
 /// schema (`SearchSchema`), which `SearchPlanValidator` checks; an invalid answer goes back to the model with what was
-/// wrong, as a document's does. The task's effort (`tasks.efforts`) decides which of the profile's models reads it and
-/// whether the other is asked after, whether it thinks, how often an answer goes back, how long it may be and how much
-/// vocabulary it is shown; a model the user gave the task reads it first, and must be installed. Every call is recorded
-/// in the trace.
+/// wrong, as a document's does. One model reads it: the chat model of the profile it is given, the task's own or the one
+/// Settings uses, which must be installed, with the context documents are read with. The task's effort
+/// (`tasks.efforts`) says how much that model thinks before it answers, with the answer length and time thinking needs,
+/// how often an answer goes back and how much vocabulary it is shown; an answer that takes longer than that time is no
+/// answer, and is not asked for again (`LLMClassifier.ask`). Every call is recorded in the trace, with what the effort
+/// wanted the model told about thinking and what it was sent.
 public struct SearchPromptInterpreter: SearchPromptInterpreting {
     public let gate: InferenceGate
     public let models: ModelManager
@@ -192,13 +195,12 @@ public struct SearchPromptInterpreter: SearchPromptInterpreting {
         self.library = library
     }
 
-    public func interpret(_ prompt: String, effort: TaskEffort, model: String?, vocabulary: [LabelKind: [LabelUsage]], today: String,
-                          settings: AppSettings, config: PipelineConfig, trace: TraceContext) async throws -> SearchInterpretation {
+    public func interpret(_ prompt: String, effort: TaskEffort, profile: ModelProfile, vocabulary: [LabelKind: [LabelUsage]], today: String,
+                          config: PipelineConfig, trace: TraceContext) async throws -> SearchInterpretation {
         let preset = try config.tasks.preset(effort)
-        let tiers = Self.tiers(preset, assigned: model, profile: try config.models(for: settings.models))
-        // A model the user chose that Ollama does not have fails the task with that reason, rather than the profile's
-        // model reading it in its place unasked.
-        if let model { _ = try await models.capabilities(of: model) }
+        // A chat model Ollama does not have fails the task with that reason (`LLMClassifier`), rather than another model
+        // reading it in its place unasked.
+        let model = profile.chatModel
         let validator = SearchPlanValidator(tasks: config.tasks, labels: config.labels)
         let system = try library.render("search-system", [
             "max_per_kind": String(config.tasks.maxValuesPerKind), "max_words": String(config.tasks.maxWords),
@@ -206,11 +208,11 @@ public struct SearchPromptInterpreter: SearchPromptInterpreting {
         let user = try library.render("search-user", ["archive": try archiveBlock(vocabulary, limits: preset.promptLabels),
                                                       "today": today, "request": prompt])
         let library = library
-        let input = ["effort": effort.rawValue, "tiers": tiers.map(\.model).joined(separator: ","), "today": today]
+        let input = InterpretInput(effort: effort, model: model, think: preset.think, today: today)
         let started = Date()
         do {
-            let answer = try await LLMClassifier(gate: gate, models: models, effort: .task(preset, analysis: config.analysis)).ask(
-                system: system, user: user, schema: SearchSchema.plan(config.tasks), tiers: tiers,
+            let answer = try await LLMClassifier(gate: gate, models: models, effort: .task(preset, config: config)).ask(
+                system: system, user: user, schema: SearchSchema.plan(config.tasks), model: model,
                 repairPrompt: { try library.render("repair-user", ["errors": $0]) }, validate: { try validator.validate($0, request: prompt) })
             await trace.record(.interpret, status: answer.calls.count > 1 ? .warn : .ok, startedAt: started, input: input,
                                output: InterpretTrace(answer: answer.answer, exchange: answer.calls))
@@ -223,18 +225,6 @@ public struct SearchPromptInterpreter: SearchPromptInterpreting {
         }
     }
 
-    /// The models that read a request, in order, each once: the one the user gave the task, else the profile's model the
-    /// effort names; then, when the effort falls back, the profile's chat and fast models. A model reads with the context
-    /// of the profile's role it plays, the chat model's when it plays none.
-    static func tiers(_ preset: EffortPreset, assigned: String?, profile: ResolvedModels) -> [LLMClassifier.Tier] {
-        func tier(_ model: String) -> LLMClassifier.Tier {
-            LLMClassifier.Tier(model: model, numCtx: model != profile.chat && model == profile.fast ? profile.fastNumCtx : profile.numCtx,
-                               keepAlive: profile.keepAliveChat)
-        }
-        let first = assigned ?? profile.model(preset.model)
-        return LLMClassifier.Tier.distinct([tier(first)] + (preset.fallback ? [tier(profile.chat), tier(profile.fast)] : []))
-    }
-
     /// The labels the archive uses of each kind `limits` names, the most used first, by the answer's name for their
     /// kind, one kind per line; empty for an archive without any.
     func archiveBlock(_ vocabulary: [LabelKind: [LabelUsage]], limits: [LabelKind: Int]) throws -> String {
@@ -245,6 +235,16 @@ public struct SearchPromptInterpreter: SearchPromptInterpreting {
         guard !used.isEmpty else { return "" }
         return try library.render("search-archive", ["used": used.joined(separator: "\n")]) + "\n\n"
     }
+}
+
+/// What reading a search request records it was read with: the effort, the model, what the effort wanted the model told
+/// about thinking, and the day. What was sent, as the model allows, is each `ModelCall.think` of the exchange, which
+/// retention clears; this stays, so the trace still says how much the model was asked to think once the exchange is gone.
+struct InterpretInput: Encodable {
+    var effort: TaskEffort
+    var model: String
+    var think: OllamaThink
+    var today: String
 }
 
 /// What reading a search request records: the validated plan, and every model call under `TraceStep.exchangeKey`, which

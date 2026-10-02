@@ -7,10 +7,11 @@ public struct TraceHeader: Sendable {
     public var attempt: Int
     public var source: TraceSource
     public var promptVersion: Int
-    public var models: ResolvedModels?
+    /// The profile whose models read, stamped on the trace; nil when it could not be told.
+    public var models: ModelProfile?
     public var settings: AppSettings
 
-    public init(docID: Int64?, jobID: Int64?, attempt: Int, source: TraceSource, promptVersion: Int, models: ResolvedModels?,
+    public init(docID: Int64?, jobID: Int64?, attempt: Int, source: TraceSource, promptVersion: Int, models: ModelProfile?,
                 settings: AppSettings) {
         self.docID = docID
         self.jobID = jobID
@@ -39,8 +40,8 @@ public struct TraceRecorder: TraceSink {
         let id = try await database.writer.write { db in
             var t = TraceRecord(id: nil, docId: header.docID, jobId: header.jobID, attempt: header.attempt,
                                 source: header.source.rawValue, startedAt: now, finishedAt: nil, outcome: nil,
-                                appVersion: appVersion, promptVersion: header.promptVersion, modelChat: header.models?.chat,
-                                modelVision: header.models?.vision, modelEmbed: header.models?.embed,
+                                appVersion: appVersion, promptVersion: header.promptVersion, modelChat: header.models?.chatModel,
+                                modelVision: header.models?.visionModel, modelEmbed: header.models?.embedModel,
                                 settingsJson: JSON.string(header.settings), totalMs: nil)
             try t.insert(db)
             return t.id ?? 0

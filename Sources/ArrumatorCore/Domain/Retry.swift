@@ -19,6 +19,26 @@ public enum Retry {
     }
 }
 
+extension TimeSource {
+    /// Waits for `work` until it ends or `seconds` have passed on this clock, whichever comes first: whether it ended in
+    /// time. Work still running then is left to finish unawaited, never cancelled, and the caller goes on without it, as
+    /// an app quits after a stop that hangs.
+    public func wait(atMost seconds: Double, for work: @escaping @Sendable () async -> Void) async -> Bool {
+        let (ends, end) = AsyncStream<Bool>.makeStream()
+        Task {
+            await work()
+            end.yield(true)
+        }
+        let deadline = Task { [self] in
+            do { try await sleep(seconds: seconds) } catch { return }
+            end.yield(false)
+        }
+        defer { deadline.cancel() }
+        for await inTime in ends { return inTime }
+        return false
+    }
+}
+
 /// FIFO async semaphore; used to serialise model calls across actors.
 public actor AsyncSemaphore {
     private var permits: Int

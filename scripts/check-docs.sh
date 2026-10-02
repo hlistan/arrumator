@@ -1,6 +1,7 @@
 #!/bin/sh
 # Fails when the documentation and the code disagree, wherever the two can be compared mechanically:
-#   - every `arrumatorcli` command and option is in docs/cli.md, and every command docs/cli.md lists exists;
+#   - every `arrumatorcli` command and option is in docs/cli.md, every command docs/cli.md lists exists, and every
+#     option a command's synopsis there names (the first cell of its row) is one the command takes;
 #   - every ARRUMATOR_* variable RuntimeEnvironment reads is in docs/using-arrumator.md, and the documentation names
 #     no other;
 #   - every pipeline.json key the documentation names (`learning.ruleMinSupport`) exists;
@@ -48,7 +49,7 @@ def walk(command, path):
 walk(json.load(open(help_path))["command"], [])
 
 # docs/cli.md lists each command in a table row that starts with its synopsis: `arrumatorcli review [list]`.
-rows = {}
+rows, synopses = {}, {}
 for line in text["docs/cli.md"].splitlines():
     m = re.match(r"\| `arrumatorcli ([^`]*)`", line)
     if m:
@@ -58,6 +59,7 @@ for line in text["docs/cli.md"].splitlines():
                 break
             words.append(word)
         rows[" ".join(words)] = line
+        synopses[" ".join(words)] = m.group(1)
 for command, options in sorted(leaves.items()):
     row = rows.get(command)
     if row is None:
@@ -66,6 +68,9 @@ for command, options in sorted(leaves.items()):
     for option in sorted(options):
         if f"--{option}" not in row:
             problems.append(f"docs/cli.md: `arrumatorcli {command}` does not mention --{option}")
+    # Only the synopsis: the description may name other commands' options, such as the one that undoes what it does.
+    for option in sorted(set(re.findall(r"--([a-z][a-z0-9-]*)", synopses[command])) - options - common):
+        problems.append(f"docs/cli.md: `arrumatorcli {command}` is documented with --{option}, which it does not take")
 for command in sorted(set(rows) - set(leaves)):
     problems.append(f"docs/cli.md: `arrumatorcli {command}` is documented but does not exist")
 

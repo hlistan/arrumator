@@ -1,6 +1,7 @@
 import Foundation
 
-/// Watches the Incoming folder and emits files once they have stopped changing.
+/// Watches the Incoming folder and emits files once they have stopped changing, at any depth: a folder that comes into
+/// Incoming is looked through, as macOS reports a folder moved in whole, not what is in it.
 public actor IncomingWatcher {
     private let config: WatcherConfig
     private let skip: SkipRules
@@ -57,9 +58,16 @@ public actor IncomingWatcher {
     /// Full scan, used at start, after wake and when FSEvents reports dropped events.
     public func rescan() {
         guard let root else { return }
+        Log.debug(.watch, "Rescanned Incoming", ["files": String(scan(root))])
+    }
+
+    /// Considers every file and package in `directory`, at any depth, hidden files and what is inside packages aside;
+    /// how many there were.
+    @discardableResult
+    private func scan(_ directory: URL) -> Int {
         let keys: [URLResourceKey] = [.isRegularFileKey, .isPackageKey]
-        guard let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: keys,
-                                                              options: [.skipsHiddenFiles, .skipsPackageDescendants]) else { return }
+        guard let enumerator = FileManager.default.enumerator(at: directory, includingPropertiesForKeys: keys,
+                                                              options: [.skipsHiddenFiles, .skipsPackageDescendants]) else { return 0 }
         var found = 0
         for case let url as URL in enumerator {
             let v = try? url.resourceValues(forKeys: Set(keys))
@@ -67,10 +75,12 @@ public actor IncomingWatcher {
             consider(url)
             found += 1
         }
-        Log.debug(.watch, "Rescanned Incoming", ["files": String(found)])
+        return found
     }
 
-    private func handle(_ batch: [FSEvent]) {
+    /// Takes in what a batch of FSEvents reports: each file that came or changed, and everything in a folder that came,
+    /// which macOS reports alone when a folder is moved in whole.
+    func handle(_ batch: [FSEvent]) {
         guard let root else { return }
         if batch.contains(where: \.needsRescan) {
             Log.info(.watch, "FSEvents requested rescan", ["events": String(batch.count)])
@@ -81,7 +91,13 @@ public actor IncomingWatcher {
             let url = URL(fileURLWithPath: event.path).standardizedFileURL
             guard url.path.hasPrefix(root.path + "/") else { continue }
             Log.trace(.watch, "FSEvent", ["path": event.path, "flags": String(event.flags, radix: 16)])
-            consider(url)
+            let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isPackageKey, .isSymbolicLinkKey])
+            // What is in a folder the rules ignore, such as a hidden one, is skipped file by file (`consider`).
+            if event.isDirectory, values?.isDirectory == true, values?.isPackage != true, values?.isSymbolicLink != true {
+                Log.debug(.watch, "Folder came into Incoming", ["path": url.path, "files": String(scan(url))])
+            } else {
+                consider(url)
+            }
         }
     }
 

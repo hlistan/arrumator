@@ -1,4 +1,5 @@
 @testable import ArrumatorCore
+import ArrumatorTesting
 import Foundation
 import Testing
 
@@ -33,23 +34,104 @@ import Testing
                 "a model that thought until num_predict ran out stops at its length limit, before writing the answer")
     }
 
-    @Test func embeddingsCapabilitiesAndInstalledModelsDecode() throws {
+    @Test func anEmbeddingAndTheInstalledModelsDecode() throws {
         let embedded = try decode(OllamaEmbedResponse.self, """
             {"model":"bge-m3","embeddings":[[0.010071029,-0.0017594862,0.05007221]],"total_duration":14143917,
              "load_duration":1019500,"prompt_eval_count":8}
             """)
         #expect(embedded.embeddings == [[0.010071029, -0.0017594862, 0.05007221]], "one vector per input")
-        let shown = try decode(OllamaShowResponse.self, """
-            {"modelfile":"FROM x","details":{"format":"gguf","family":"mistral","parameter_size":"14B","quantization_level":"Q4_K_M"},
-             "model_info":{"general.architecture":"mistral3"},"capabilities":["completion","vision","thinking"]}
-            """)
-        #expect(shown.supportsThinking && shown.details?.parameterSize == "14B", "a thinking model is asked not to think aloud")
         let tags = try decode([String: [OllamaModelInfo]].self, """
             {"models":[{"name":"bge-m3:latest","model":"bge-m3:latest","modified_at":"2026-05-10T08:06:48-07:00","size":1157672605,
               "digest":"790764642607","details":{"family":"bert","parameter_size":"566.70M","quantization_level":"F16"}}]}
             """)
         #expect(tags["models"]?.map(\.name) == ["bge-m3:latest"] && tags["models"]?.first?.size == 1_157_672_605,
                 "installed models are found by name, with their size")
+    }
+
+    // MARK: Thinking (https://docs.ollama.com/capabilities/thinking)
+
+    @Test func aModelSaysHowItThinksAsSwitchesAsLevelsOrNotAtAll() throws {
+        let levels = try decode(OllamaShowResponse.self, """
+            {"modelfile":"FROM x","details":{"format":"gguf","family":"gptoss","parameter_size":"20.9B","quantization_level":"MXFP4"},
+             "capabilities":["completion","tools","thinking"],"thinking":{"values":["low","medium","high"],"default":"medium"}}
+            """)
+        #expect(levels.thinking == .levels && levels.details?.parameterSize == "20.9B",
+                "gpt-oss names the levels it thinks at, and the one it thinks at when not told")
+        let switches = try decode(OllamaShowResponse.self, """
+            {"capabilities":["completion","tools","thinking"],"thinking":{"values":[true,false],"default":true}}
+            """)
+        #expect(switches.thinking == .switches, "a model that thinks or not as it is switched lists the two switches")
+        let never = try decode(OllamaShowResponse.self, #"{"capabilities":["completion","vision"],"thinking":{"values":[false]}}"#)
+        #expect(never.thinking == .never, "a model that cannot think says so with the one switch, off")
+        let older = try decode(OllamaShowResponse.self, """
+            {"modelfile":"FROM x","details":{"format":"gguf","family":"mistral","parameter_size":"14B","quantization_level":"Q4_K_M"},
+             "model_info":{"general.architecture":"mistral3"},"capabilities":["completion","vision","thinking"]}
+            """)
+        #expect(older.thinking == nil && older.capabilities?.contains(OllamaShowResponse.thinkingCapability) == true,
+                "an older server, or a model without the metadata, says only that the model can think, by its capability")
+        // What the app cannot act on in the optional `thinking` object leaves the rest of the answer standing.
+        let unreadable = [
+            (#"{"values":[1],"default":true}"#, "a value that is neither a switch nor a level's name"),
+            (#"{"values":["low",""]}"#, "a level without a name, which would tell a model nothing"),
+            (#""yes""#, "a thinking that is no object"),
+        ]
+        for (thinking, what) in unreadable {
+            let shown = try decode(OllamaShowResponse.self, """
+                {"details":{"parameter_size":"9B"},"capabilities":["completion","vision","thinking"],"thinking":\(thinking)}
+                """)
+            #expect(shown.thinking == nil && shown.thinkingProblem != nil,
+                    "\(what) is read as no thinking metadata, and why is kept to be logged with the model's name")
+            #expect(shown.capabilities == ["completion", "vision", "thinking"] && shown.details?.parameterSize == "9B",
+                    "\(what): the rest of the answer is read, so the model is still listed and offered for its roles")
+            #expect(shown.thinkingValues == [.on, .off], "\(what): its capability decides how it is told to think, as on an older server")
+        }
+        #expect(levels.thinkingProblem == nil && older.thinkingProblem == nil, "metadata that reads, or none at all, is no problem")
+        #expect(throws: DecodingError.self, "a level without a name is still refused where the app's own configuration asks for one") {
+            try JSON.decoder.decode(OllamaThink.self, from: Data(#""""#.utf8))
+        }
+    }
+
+    @Test func thinkIsSentAsASwitchOrALevelAndLeftOutWhenUnset() {
+        func body(_ think: OllamaThink?) -> String { OllamaChatRequest.sample(think: think).body.serialized() }
+        #expect(body(false).contains(#""think":false"#), "a model is switched off as Ollama takes it, with false")
+        #expect(body(true).contains(#""think":true"#), "and on with true")
+        #expect(body("high").contains(#""think":"high""#), "a level goes by its name")
+        #expect(!body(nil).contains(#""think""#), "nothing to send leaves the key out, so the model thinks as it does by default")
+        #expect(JSON.string([false, true, "high"] as [OllamaThink]) == #"[false,true,"high"]"#,
+                "a trace records what was sent as the request carried it")
+    }
+
+    @Test func aModelIsSentOnlyAThinkingValueItListsElseItsDefaultStands() {
+        let thinks = MockOllama.thinkingCapabilities
+        let cannot = MockOllama.shown(capabilities: ["completion"], thinking: nil)
+        #expect(cannot.think(sending: true) == nil, "a model that cannot think is not told to")
+        #expect(cannot.think(sending: false) == nil, "nor told not to")
+        #expect(MockOllama.shown(capabilities: thinks, thinking: .never).think(sending: true) == nil,
+                "a model that lists only off cannot think, whatever its capabilities say")
+        let older = MockOllama.shown(capabilities: thinks, thinking: nil)
+        #expect(older.think(sending: false) == false, "a model that lists nothing but can think is switched off as asked")
+        #expect(older.think(sending: true) == true, "and on")
+        #expect(older.think(sending: "high") == true, "and a level is sent as on, which every such model takes")
+        let unlisted = OllamaShowResponse.Thinking(values: nil, default: nil)
+        #expect(MockOllama.shown(capabilities: thinks, thinking: unlisted).think(sending: "high") == true,
+                "a thinking object that lists no values leaves it to the capability")
+        let empty = OllamaShowResponse.Thinking(values: [], default: nil)
+        #expect(MockOllama.shown(capabilities: thinks, thinking: empty).think(sending: true) == true,
+                "and so does an empty list, which Ollama leaves out")
+        let switches = MockOllama.shown(capabilities: thinks, thinking: .switches)
+        #expect(switches.think(sending: false) == false, "a model that lists the switches is switched off as asked")
+        #expect(switches.think(sending: true) == true, "and on")
+        #expect(switches.think(sending: "high") == true, "and a level it does not name is sent as on, which it lists")
+        let levels = MockOllama.shown(capabilities: thinks, thinking: .levels)
+        #expect(levels.think(sending: "high") == "high", "a model that names levels is sent the one wanted")
+        #expect(levels.think(sending: "max") == nil, "a level it does not name is not sent, so it thinks at its default")
+        #expect(levels.think(sending: true) == nil, "nor is on, which it does not list")
+        #expect(levels.think(sending: false) == nil, "nor off, which it does not list: it cannot stop thinking")
+        #expect(MockOllama.shown(capabilities: ["completion"], thinking: .levels).think(sending: "low") == "low",
+                "the levels a model names say it can think even when its capabilities do not")
+        let always = OllamaShowResponse.Thinking(values: [true], default: true)
+        #expect(MockOllama.shown(capabilities: thinks, thinking: always).think(sending: false) == nil,
+                "a model that lists only on is not told off, which it cannot do")
     }
 
     @Test func aDownloadReportsProgressAndEndsOnTheErrorItStreams() throws {
@@ -75,5 +157,27 @@ import Testing
         #expect(OllamaClient.map(URLError(.cannotConnectToHost)) as? OllamaError
                     == .unreachable(URLError(.cannotConnectToHost).localizedDescription), "so does a server that is not running")
         #expect(OllamaClient.map(URLError(.cancelled)) is CancellationError, "and stopping the app is no failure at all")
+    }
+
+    /// A search task's effort gives its request a time of its own (`OllamaChatRequest.timeout`); an answer that takes
+    /// longer would take as long again, holding the one model that generates all the while.
+    @Test func aRequestThatOutlastsItsOwnTimeoutIsNotAskedAgainWhileOneWithoutIs() async throws {
+        let delays = try PipelineConfig.bundledDefaults().ollama.retryDelays
+        try #require(!delays.isEmpty, "the bundled configuration asks again after a transient failure")
+        let timedOut = OllamaError.timeout("/api/chat")
+        var own = OllamaChatRequest.sample(think: nil)
+        own.timeout = 900
+        let slow = MockOllama { _ in throw timedOut }
+        let gate = InferenceGate(api: slow, retryDelays: delays, time: TestTime(.advances))
+        await #expect(throws: timedOut, "the timeout reaches the caller") { try await gate.chat(own) }
+        #expect(await slow.chatCount == 1, "a request that took longer than its own timeout is asked once, and the model is free again")
+        await #expect(throws: timedOut, "one without a timeout of its own") { try await gate.chat(.sample(think: nil)) }
+        #expect(await slow.chatCount == 2 + delays.count, "is asked again after each of ollama.retryDelays, as a server slow for a while may answer")
+        let away = MockOllama { _ in throw OllamaError.unreachable("connection refused") }
+        let waiting = InferenceGate(api: away, retryDelays: delays, time: TestTime(.advances))
+        await #expect(throws: OllamaError.self, "a server that cannot be reached") { try await waiting.chat(own) }
+        #expect(await away.chatCount == 1 + delays.count, "is asked again whatever time the request has of its own")
+        #expect(!timedOut.isTransient(asking: own) && timedOut.isTransient(asking: .sample(think: nil))
+                    && OllamaError.unreachable("x").isTransient(asking: own), "which is what decides it, for the gate and the caller alike")
     }
 }

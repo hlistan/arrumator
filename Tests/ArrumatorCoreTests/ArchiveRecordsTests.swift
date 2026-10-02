@@ -106,6 +106,29 @@ import Testing
                 "a document is found by its labels again, from its record")
     }
 
+    @Test func readingADocumentAgainAfterARebuildAsksTheModelRatherThanOnlyReadingItsText() async throws {
+        let w = try await world()
+        defer { w.h.env.cleanup() }
+        let (database, records) = try freshIndex(w)
+        try await records.rebuild()
+        let analyzer = StubAnalyzer()
+        var services = Harness.services(w.h.env, analyzer: analyzer, config: w.h.env.config)
+        services.database = database
+        services.filer = DocumentFiler(database: database, placer: services.filer.placer, index: IndexStore(database: database, time: w.h.env.time),
+                                       registry: services.filer.registry, time: w.h.env.time)
+        services.traces = TraceRecorder(database: database, appVersion: "test", time: w.h.env.time)
+        let coordinator = IngestCoordinator(services: services)
+        let id = w.documents[0]
+        let filename = try #require(try await services.documents.document(id: id)).filename
+        let queued = try await services.jobs.active()
+        try await ReviewActions(services: services, coordinator: coordinator).retry(id)
+        let active = try await services.jobs.active()
+        #expect(queued.map(\.kind) == [.reindex, .reindex] && active.map(\.kind) == [.reindex, .reanalyse] && active.last?.docId == id,
+                "reading it again takes the place of having its text read, which reading with the model does too")
+        await coordinator.drain()
+        #expect(await analyzer.calls.files == [filename], "so the model reads it, rather than the request waiting unread behind its text")
+    }
+
     @Test func aDocumentNotYetLabelledStaysSoThroughARebuild() async throws {
         let h = try await Harness.make(analyzer: StubAnalyzer(labels: nil))
         defer { h.env.cleanup() }
@@ -166,6 +189,64 @@ import Testing
         #expect(doc.labels == nil && doc.analysis == nil && unlabelled.isEmpty,
                 "it has no labels until it is read again; with no stored text yet, it waits for its text to be read first")
     }
+
+    @Test func aCopyAnEarlierVersionFiledStaysOneAndANewCopyHasItsOriginalReadAgain() async throws {
+        let analyzer = StubAnalyzer()
+        let h = try await Harness.make(analyzer: analyzer)
+        defer { h.env.cleanup() }
+        let text = "EDP electricity July"
+        let original = try h.env.put("bill.txt", text: text)
+        let filedCopy = try h.env.put("bill copy.txt", text: text)
+        let sha = try HashService.sha256(of: original)
+        // Each file carries its identity, by which a rebuild finds it.
+        for (file, uid) in [(original, Self.uid(1)), (filedCopy, Self.uid(2))] { try Xattr.set(Xattr.documentID, uid, on: file) }
+        // As versions that filed copies wrote them: the copy beside its original, marked as a duplicate of it.
+        try """
+        ---
+        arrumator: 1
+        entries:
+        - id: 1
+          uid: \(Self.uid(1))
+          file: bill.txt
+          original_name: bill.txt
+          added: 2026-07-05T10:00:00Z
+          filed: 2026-07-05T10:01:00Z
+          status: filed
+          content_type: public.plain-text
+          size: \(text.utf8.count)
+          sha256: \(sha)
+        - id: 2
+          uid: \(Self.uid(2))
+          file: bill copy.txt
+          original_name: bill copy.txt
+          added: 2026-07-06T10:00:00Z
+          filed: 2026-07-06T10:01:00Z
+          status: duplicate
+          duplicate_of: 1
+          content_type: public.plain-text
+          size: \(text.utf8.count)
+          sha256: \(sha)
+        ---
+        """.write(to: h.env.archive.appendingPathComponent(h.env.config.records.documentsFileName), atomically: true, encoding: .utf8)
+        try await ArchiveRecords(database: h.env.database, settings: h.env.settings, config: h.env.config, registry: nil,
+                                 time: TestTime(.advances)).rebuild()
+        let copy = try #require(try await h.services.documents.document(id: 2))
+        #expect(copy.status == .duplicate && copy.duplicateOf == 1, "a copy an earlier version filed is read back as the copy it is")
+        #expect(try await h.services.jobs.active().map(\.kind) == [.reindex, .reindex], "and both have their text read again for search")
+
+        await h.coordinator.enqueue(try h.env.drop("bill again.txt", text: text))
+        await h.coordinator.drain()
+        let read = await analyzer.calls.files
+        #expect(read == ["bill.txt"],
+                "a new copy has the original read by the model again, in place of having only its text read, never the copy filed before: \(read)")
+        let after = try #require(try await h.services.documents.document(id: 2))
+        #expect(after.status == .duplicate && after.duplicateOf == 1 && after.path == copy.path && FileManager.default.fileExists(atPath: filedCopy.path),
+                "which stays as it was, where it was")
+        #expect(h.env.trashed().map(\.lastPathComponent) == ["bill again.txt"], "and only the new copy goes to the Trash")
+    }
+
+    /// The identity an entry of the archive's record files gives document `id`.
+    static func uid(_ id: Int) -> String { String(format: "5B7A8F4E-0000-0000-0000-%012d", id) }
 
     /// Changes a label of the first document in the top `_documents.md`, as someone editing it by hand would.
     private func editLabelByHand(_ w: World) throws -> URL {

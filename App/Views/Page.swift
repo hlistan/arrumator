@@ -1,3 +1,4 @@
+import ArrumatorCore
 import SwiftUI
 
 /// A page as Things lays one out: the list's symbol and a large title, a line of notes, then sections, all at a
@@ -87,6 +88,9 @@ struct ListRow: View {
     var detail: String?
     var tag: String?
     var subtitle: String?
+    /// The kind of label the subtitle lists, when it lists labels of one kind: shown after a tag in that kind's colour,
+    /// with the kind named in its help, as the sidebar shows a label.
+    var subtitleKind: LabelKind?
     var busy = false
     /// Sentences wrap onto a second line; file names stay on one, shortened in the middle.
     var wraps = false
@@ -109,7 +113,15 @@ struct ListRow: View {
                 if let detail { Text(detail).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle) }
                 if let tag { Tag(tag) }
             }
-            if let subtitle {
+            if let subtitle, let subtitleKind {
+                Label {
+                    Text(subtitle).lineLimit(Style.rowSubtitleMaxLines)
+                } icon: {
+                    Image(systemName: "tag").foregroundStyle(Palette.labelKind(subtitleKind))
+                }
+                .font(.callout).foregroundStyle(.secondary).padding(.leading, Style.rowSubtitleIndent)
+                .help(Wording.labelKinds(subtitleKind))
+            } else if let subtitle {
                 Text(subtitle).font(.callout).foregroundStyle(.secondary).lineLimit(Style.rowSubtitleMaxLines).padding(.leading, Style.rowSubtitleIndent)
             }
         }
@@ -173,4 +185,28 @@ struct Notice: View {
         }
         .font(.callout)
     }
+}
+
+/// Why the last action failed, at the foot of a window until it is clicked away: every window the user acts in shows it,
+/// so a refusal is never lost in a window that is not in front.
+private struct LastError: ViewModifier {
+    @Environment(AppModel.self) private var model
+
+    func body(content: Content) -> some View {
+        content.overlay(alignment: .bottom) {
+            if let error = model.lastError {
+                Label(error, systemImage: "exclamationmark.triangle")
+                    .font(.callout)
+                    .padding(Style.errorBannerInsets)
+                    .background(.regularMaterial, in: .capsule)
+                    .padding()
+                    .onTapGesture { model.lastError = nil }
+            }
+        }
+    }
+}
+
+extension View {
+    /// Shows why the last action failed at the foot of the window (`AppModel.lastError`).
+    func showsLastError() -> some View { modifier(LastError()) }
 }

@@ -313,15 +313,20 @@ public struct VisionModelOptions: Sendable {
     public var model: String
     public var keepAlive: String
     public var numPredict: Int
-    /// The context the model is asked with (`ResolvedModels.visionNumCtx`).
+    /// The context the model is asked with: `analysis.numCtx`, the one documents are read with, so a model that does
+    /// both stays loaded once (`PipelineConfig.extractionContext`).
     public var numCtx: Int
     public var options: AnalysisConfig.LLMOptions
+    /// What a model that can think is told about thinking before it describes an image, sent as the model allows
+    /// (`OllamaShowResponse.think(sending:)`): `analysis.think`, as documents are read.
+    public var think: OllamaThink
 
-    public init(model: String, keepAlive: String, numPredict: Int, numCtx: Int, options: AnalysisConfig.LLMOptions) {
+    public init(model: String, keepAlive: String, numPredict: Int, numCtx: Int, options: AnalysisConfig.LLMOptions, think: OllamaThink) {
         self.model = model
         self.keepAlive = keepAlive
         self.numPredict = numPredict
         self.numCtx = numCtx
         self.options = options
+        self.think = think
     }
 }

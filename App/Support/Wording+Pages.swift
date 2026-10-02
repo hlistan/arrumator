@@ -43,6 +43,9 @@ extension Wording {
 
     /// How long a queued file has waited.
     static func arrived(_ date: Date) -> String { "arrived \(date.formatted(.relative(presentation: .named)))" }
+
+    /// A queued file stopped part way, as when the app quit: it carries on where it stopped when its turn comes.
+    static func carriesOn(arrived date: Date) -> String { "Carries on where it stopped" + labelSeparator + arrived(date) }
 }
 
 // MARK: Needs You, Processed, History, Labelled
@@ -105,6 +108,9 @@ extension Wording {
     static let filterLabels = "Filter Labels"
     static let clearFilter = "Clear Filter"
     static let groupLabelsByKind = "Group Labels by Kind"
+    /// The help of the profile in use, in the bar at the sidebar's foot.
+    static let profileInUseHelp = "The model profile documents are read with, and requests without a profile of their own, "
+        + "as Settings › Models chooses it"
     /// Heads the sidebar's labels when they are in one list.
     static let mostUsedLabels = "Most Used"
 
@@ -167,9 +173,8 @@ extension Wording {
     static let files = "Files"
     static let renameFiles = "Rename files"
     static let transliterate = "Transliterate names to Latin letters"
-    static let exactDuplicates = "Exact duplicates"
-    static let fileCopies = "File copies into the archive"
-    static let leaveCopies = "Leave copies in Incoming"
+    static let copiesFooter = "Put a document into Incoming again, as it is, and the one in the archive is read again with the "
+        + "profile in use, keeping its tags and given that of the folder you put it in. The copy goes to the Trash."
 
     static let ollama = "Ollama"
     static let status = "Status"
@@ -197,9 +202,6 @@ extension Wording {
         return "Models (all run on \(url.host(percentEncoded: false) ?? url.absoluteString))"
     }
 
-    /// A model the profile uses, by its role.
-    static func model(role: String, name: String) -> String { "\(role): \(name)" }
-
     static func installed(_ name: String) -> String { "\(name) installed" }
 
     static let diagnostics = "Diagnostics"
@@ -221,6 +223,63 @@ extension Wording {
     static func rebuilt(_ summary: String, queued: Int) -> String { "\(summary). \(queued) documents are being read again." }
 
     static func exported(traces: Int, logFiles: Int) -> String { "Saved \(traces) traces and \(logFiles) log files." }
+}
+
+// MARK: Model profiles, in Settings › Models
+
+extension Wording {
+    /// What a profile's model in a role does, as Settings names it: the words of `arrumatorcli profiles`.
+    static func role(_ role: ModelRole) -> String {
+        switch role {
+        case .chat: "Reads documents and requests"
+        case .vision: "Describes images"
+        case .embedding: "Finds by meaning"
+        }
+    }
+
+    static let profiles = "Profiles"
+
+    /// Under the profiles: those that come with Arrumator, by their names as they are listed now, and what becomes of a
+    /// change to them and of a new one.
+    static func profilesNote(predefined names: [String]) -> String {
+        let predefined = switch names.count {
+        case 0: ""
+        case 1: "\(Format.and(names)) comes with Arrumator: change it, and Reset sets it back. "
+        default: "\(Format.and(names)) come with Arrumator: change any of them, and Reset sets it back. "
+        }
+        return predefined + "A new profile starts as a copy of the one in use. Documents already read keep their labels: "
+            + "put one into Incoming again, as it is, to have it read with the profile in use."
+    }
+    static let openProfileHelp = "Change its name and models"
+    static let newProfile = "New Profile…"
+    static let newProfileName = "Name of the new profile"
+    static let cancel = "Cancel"
+    static let modelPrompt = "Model, as Ollama names it"
+    static let chooseInstalledModel = "Choose an installed model that can do this"
+    static let modelInstalled = "Installed"
+    static let embeddingNote = "Documents embedded by another model are found by meaning only once they are read again."
+    static let resetProfile = "Reset"
+    static let resetProfileHelp = "Give it back the name and models Arrumator comes with"
+    static let removeProfile = "Remove Profile…"
+    static let removeProfileHelp = "Remove this profile of yours"
+    static let removeProfileInUseHelp = "Settings reads with this profile; choose another above before removing it"
+    static let removeProfileConfirm = "Remove Profile"
+    static let removeProfileNote = "Documents already read with it stay as they are."
+
+    /// What a profile's row says quietly beside its name: that Settings reads with it, and that it is no longer the one
+    /// Arrumator comes with.
+    static func profileState(_ listing: ModelProfileListing) -> String? {
+        let said = (listing.inUse ? ["in use"] : []) + (listing.predefined && listing.changed ? ["changed"] : [])
+        return said.isEmpty ? nil : said.joined(separator: ", ")
+    }
+
+    /// Under the name of a new profile: what it starts as.
+    static func copiesProfile(_ name: String?) -> String {
+        "A copy of " + (name.map { "“\($0)”, " } ?? "") + "the profile in use. Give it other models once it is added."
+    }
+
+    /// Asks before a profile of the user's is removed.
+    static func removeProfileQuestion(_ name: String) -> String { "Remove the profile “\(name)”?" }
 }
 
 // MARK: Processing log
@@ -343,10 +402,11 @@ extension Wording {
     static let nothingFound = "Nothing found. Change the request, or add documents yourself."
     static let readWith = "Read with"
     static let effort = "Effort"
-    static let effortHelp = "How much computing the request is read with: Low is quickest, High reads it most carefully and takes longest"
-    static let readingModel = "Model"
-    static let readingModelHelp = "The model that reads the request: a smaller one is quicker, a larger one more accurate"
-    static let installedModels = "Installed"
+    static let effortHelp = "How much the model thinks before it answers: not at all at Low, the most at High, which takes longest. "
+        + "A model that cannot think reads the same at each, but for how often a wrong answer goes back to it "
+        + "and how much of the archive's labels it is shown"
+    static let readingProfileHelp = "The profile whose model reads the request: Settings' profile, whichever that is when the request is read, "
+        + "or one of its own"
 
     /// An effort, as its picker names it.
     static func effort(_ effort: TaskEffort) -> String {
@@ -357,13 +417,16 @@ extension Wording {
         }
     }
 
-    /// The choice that leaves a task's model to its effort, with the profile's model it is, when known.
-    static func profileModel(_ name: String?) -> String { "Profile's Model" + (name.map { " (\($0))" } ?? "") }
+    /// The choice that leaves a task to the profile Settings uses, whichever that is when the request is read, named.
+    static func settingsProfile(_ name: String?) -> String { "Settings' Profile" + (name.map { " (\($0))" } ?? "") }
 
-    /// A model a task was given that Ollama does not have.
-    static func notInstalled(_ name: String) -> String { "\(name) (not installed)" }
+    /// A profile a task can be given, by its name and the model that reads with it.
+    static func profileChoice(_ profile: ModelProfile) -> String { "\(profile.name) (\(profile.chatModel))" }
 
-    /// Which model read a task last, when it is not the one it is set to be read by.
+    /// A profile a task was given that the settings no longer list, by its id.
+    static func profileGone(_ id: String) -> String { "“\(id)” (no longer in Settings)" }
+
+    /// Which model read a task last.
     static func lastReadBy(_ model: String) -> String { "last read by \(model)" }
 
     /// Asks before a task is removed.
@@ -372,15 +435,40 @@ extension Wording {
     /// Heads the pages that narrow documents down while they are added to a task.
     static func addingTo(_ task: String) -> String { "Adding documents to “\(task)”. Choose labels in the sidebar to narrow them down." }
 
-    /// Where a task is, at the end of its row.
-    static func taskOutcome(_ task: SearchTask) -> String {
-        switch task.state {
-        case .queued: "Waiting to be read"
-        case .interpreting: "Reading the request"
-        case .failed: "Could not read the request"
-        case .ready: Format.count(task.documents.count, "document")
+    /// Where a task is, at the end of its row: while it is in the queue, what the queue does with it
+    /// (`SearchTaskQueueStatus.progress(of:)`); then what it found, or that it found nothing.
+    static func taskOutcome(_ task: SearchTask, progress: SearchTaskProgress?) -> String {
+        if let progress { return taskProgress(progress) }
+        guard task.state != .failed else { return "Could not read the request" }
+        return Format.count(task.documents.count, "document")
             + (task.exports.isEmpty ? "" : labelSeparator + "exported \(task.exports.count == 1 ? "once" : "\(task.exports.count) times")")
+    }
+
+    /// What the queue does with a task, at the end of its row: “Being read by qwen3.5:9b”.
+    static func taskProgress(_ progress: SearchTaskProgress) -> String {
+        switch progress {
+        case let .reading(reading): reading.map { "Being read by \($0.model)" } ?? "Being read"
+        case .waitingForOllama: waitingForOllama
+        case .waitingForTurn: "Waiting for its turn"
+        case .waiting: "Waiting to be read"
         }
+    }
+
+    /// What the queue does with a task, at the top of its card: by which model its request is being read, and for how
+    /// long once `elapsed` is given, or what it waits for. “Reading the request with qwen3.5:9b… 2 min, 14 sec so far”.
+    static func taskProgressLine(_ progress: SearchTaskProgress, elapsed: TimeInterval? = nil) -> String {
+        switch progress {
+        case let .reading(reading):
+            (reading.map { "Reading the request with \($0.model)…" } ?? "Reading the request…") + (elapsed.map { " \(readingTime($0)) so far" } ?? "")
+        case .waitingForOllama: "Waiting for Ollama: it cannot be reached, and is tried again shortly"
+        case .waitingForTurn: "Waiting to be read: another request is being read first"
+        case .waiting: "Waiting to be read…"
+        }
+    }
+
+    /// How long a request has been read, to the second, in at most two units: “2 min, 14 sec”, “1 hr, 3 min”.
+    private static func readingTime(_ seconds: TimeInterval) -> String {
+        Duration.seconds(Int(seconds)).formatted(.units(allowed: [.hours, .minutes, .seconds], width: .abbreviated, maximumUnitCount: 2))
     }
 
     /// What a plan looks for: “Invoice · electricity · 2025; words: meter”.
@@ -393,7 +481,7 @@ extension Wording {
     /// A group of a task's set, as the label its documents share, or that they have none of the kind.
     static func group(_ group: LabelGroup) -> String {
         guard let kind = group.kind else { return "" }
-        guard let value = group.value else { return "No \(labelKind(kind).lowercased())" }
+        guard let value = group.value else { return without(kind) }
         return SearchPlan.timeKinds.contains(kind) ? value : label(DocumentLabel(kind: kind, value: value))
     }
 
