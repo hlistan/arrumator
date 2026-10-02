@@ -3,6 +3,8 @@
 *.xcodeproj/
 xcuserdata/
 DerivedData/
+# Left in the working directory by `swift test --enable-code-coverage`.
+*.profraw
 build/
 dist/
 .DS_Store
@@ -24,3 +26,6 @@ Tests/Fixtures/private/
 
 # QA findings of a run (docs/qa/protocol.md), left for implementation, never committed.
 /docs/qa/reports/
+
+# Findings of a review of the whole project (docs/review/code-review.md), left for implementation, never committed.
+/docs/review/reports/

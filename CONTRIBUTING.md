@@ -52,7 +52,7 @@ needs only `scripts/verify.sh --checks-only`: `scripts/change-scope.sh main` tel
 |---|---|
 | `scripts/verify.sh [--app \| --checks-only] [--no-lint]` | Everything below, then `swift build`, the documentation check, `swift test`, and with `--app` the app build and the unused-code search. With `--checks-only`, the static checks and the documentation check alone, building only `arrumatorcli`. |
 | `scripts/change-scope.sh <base> [<head>]` | Which scope a change falls in, from the files it touches (without `<head>`, uncommitted ones too): `release` (code), `build` (what builds and tests it) or `checks` (anything else). CI builds, tests and releases by it. |
-| `scripts/lint.sh` | Static checks that build nothing: the guideline gates from AGENTS.md (environment, network, crash, quit, trash, debt, icon), secrets, [SwiftLint](https://realm.github.io/SwiftLint/) (`.swiftlint.yml`), [ShellCheck](https://www.shellcheck.net), [actionlint](https://github.com/rhysd/actionlint) and [zizmor](https://docs.zizmor.sh) for the workflows, [markdownlint](https://github.com/DavidAnson/markdownlint-cli2) (`.markdownlint-cli2.jsonc`) and [lychee](https://lychee.cli.rs) for links between documents. |
+| `scripts/lint.sh` | Static checks that build nothing: the guideline gates from AGENTS.md (environment, network, crash, quit, trash, rows, debt, icon), secrets, [SwiftLint](https://realm.github.io/SwiftLint/) (`.swiftlint.yml`), [ShellCheck](https://www.shellcheck.net), [actionlint](https://github.com/rhysd/actionlint) and [zizmor](https://docs.zizmor.sh) for the workflows, [markdownlint](https://github.com/DavidAnson/markdownlint-cli2) (`.markdownlint-cli2.jsonc`) and [lychee](https://lychee.cli.rs) for links between documents. |
 | `scripts/check-secrets.sh [--staged \| --range <revs>…]` | [gitleaks](https://github.com/gitleaks/gitleaks) with `.gitleaks.toml` over every commit, the index, the working tree and untracked files; real documents; with `--range`, commit identities. |
 | `scripts/check-docs.sh <arrumatorcli>` | Every command and option in [docs/cli.md](docs/cli.md), and no option in a command's synopsis there that it does not take, every `ARRUMATOR_*` variable in [docs/using-arrumator.md](docs/using-arrumator.md), every `pipeline.json` key the docs name, and every script here. |
 | `scripts/deadcode.sh` | Unused code across the package, its tests, the command and the app, with [Periphery](https://github.com/peripheryapp/periphery) (`.periphery.yml`). |
@@ -82,6 +82,9 @@ document:
 | [docs/releasing.md](docs/releasing.md) | CI, releases, versions, signing. |
 | [docs/repository-settings.md](docs/repository-settings.md) | The GitHub repository's security settings and the rules that enforce the push protocol. |
 | [docs/qa/protocol.md](docs/qa/protocol.md) | How the app is tested as a user meets it: the method, environment, charters, severity and report. A run's findings go into `docs/qa/reports/`, which Git ignores. |
+| [docs/architecture.md](docs/architecture.md) | How the code is arranged: the modules and what each folder of Core owns, what happens at run time, the concurrency model, the decisions and the checks that keep them. |
+| [docs/review/code-review.md](docs/review/code-review.md) | How a change, and the whole project, is reviewed: the order, what to look for by area, how a finding is written and proved. A full review's findings go into `docs/review/reports/`, which Git ignores. |
+| [docs/review/swift-apple.md](docs/review/swift-apple.md) | What to check in Swift and on Apple's platforms that the compiler and the linters do not settle. |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | This file: setting up, checking, the scripts. |
 
 `scripts/check-docs.sh` catches a command, option, variable, configuration key or script that the documents miss or
@@ -94,11 +97,12 @@ that changes code is released:
 
 1. **Green gates locally.** Work on a branch named for the change (`fix/…`, `feat/…`, `docs/…`, …), never on `main`.
    Start a fix or a feature with a test that fails for the stated reason, then make it pass (AGENTS.md §2 and §3).
-   Push only when the verify command the change's scope calls for (`scripts/change-scope.sh main`) ends with
-   `All checks passed`.
+   Review your own diff by [the code review guidelines](docs/review/code-review.md). Push only when the verify
+   command the change's scope calls for (`scripts/change-scope.sh main`) ends with `All checks passed`.
 2. **Push the branch and get it green on the remote runners.** `git push -u origin <branch>`, open a pull request to
    `main` with the template filled in (`gh pr create`), and wait for CI (`gh pr checks --watch`). Fix any failure on
-   the same branch and push again. A red pull request is never merged.
+   the same branch and push again. A red pull request is never merged. Have the change reviewed by someone who did
+   not write it, as [the code review guidelines](docs/review/code-review.md) describe.
 3. **Squash-merge to `main` and remove the branch.** `gh pr merge --squash --delete-branch`, then
    `git switch main && git pull --ff-only`.
 4. **Release only code.** The merge is released only when its scope is `release`. Any other merge is checked and

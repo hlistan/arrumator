@@ -5,7 +5,8 @@ all of it before every task. Tasks teach it new rules (§2), and it stays short 
 it is merged with the rules it overlaps into one broader rule, replaces those it contradicts or makes obsolete, and goes
 in the section that owns its concern, and what it subsumes is deleted rather than kept beside it. Only the user may
 make a rule demand less or a check catch less. What the product does is in [README.md](README.md); how the pipeline
-decides and files is in [docs/how-it-works.md](docs/how-it-works.md).
+decides and files is in [docs/how-it-works.md](docs/how-it-works.md); how the code is arranged to do it, and why, is
+in [docs/architecture.md](docs/architecture.md).
 
 ## 1. Role and mandate
 
@@ -38,11 +39,12 @@ state (§4.2).
    branch, continue only if it is this task's branch; otherwise ask. No change is ever made on `main`, and the
    pre-commit hook refuses a commit there.
 2. Read this file, [README.md](README.md) and [docs/how-it-works.md](docs/how-it-works.md).
-3. Use §5 to find the modules the change touches. Read their code and tests, and only those. If the change affects how
-   documents are read, labelled or named, also read the app's prompt,
-   [labels-system.md](Sources/ArrumatorClassify/Prompts/labels-system.md).
+3. Use §5 and [docs/architecture.md](docs/architecture.md) to find the modules the change touches. Read their code
+   and tests, and only those. If the change affects how documents are read, labelled or named, also read the app's
+   prompt, [labels-system.md](Sources/ArrumatorClassify/Prompts/labels-system.md).
 4. Before you write code, state the acceptance criteria and the exact command that will prove them: a test, an
-   `arrumatorcli` command or an eval run.
+   `arrumatorcli` command or an eval run; for what only the app shows, the steps in the built app, in a scratch home
+   (§4.3), with the pointer and with the keyboard alone, and what was seen.
 
 Then, for a QA issue, a defect or an architectural task:
 
@@ -50,23 +52,29 @@ Then, for a QA issue, a defect or an architectural task:
 2. **Fix.** Implement or refactor until it passes, following §3 and §4.
 3. **Clean up the tests.** Update or replace the unit and integration tests the change made obsolete, and delete
    flaky, redundant or dead ones.
-4. **Learn.** Every task that fixes a defect, changes code or corrects an inconsistency takes this step, not only the
+4. **Review.** Every change takes this step, documents and scripts included. Before the change is reported as done,
+   read the whole diff as a reviewer would, by [docs/review/code-review.md](docs/review/code-review.md) and, for Swift
+   and the app, [docs/review/swift-apple.md](docs/review/swift-apple.md), and fix what that finds. A change headed for
+   `main` is also reviewed, before it is merged (§8), by someone who did not write it, in a fresh context: a person, or
+   an agent started without your conversation, which reviews and never fixes or approves.
+5. **Learn.** Every task that fixes a defect, changes code or corrects an inconsistency takes this step, not only the
    tasks above, and takes it again when something goes wrong later, such as a check failing on the pull request. Find
    what let the error in and what else went wrong on the way, such as a correction from the user or a reviewer, or a
    decision the rules left open. Turn it into a rule that prevents its whole class of error ("Always…", "Never…",
    "Ensure…"), enforced wherever a script or a test can catch it (a gate in `scripts/lint.sh`, `scripts/check-docs.sh`,
    a test), and fold it into this file in the same change, as the top of the file says. The regression test holds the
    instance; this file holds the class. When the rules and checks already cover what happened, leave the file as it is.
-5. **Report.** Give a Test Coverage and Verification Summary: the happy paths, boundary cases and failure modes now
-   covered, what is not covered, and the verification output (§7). End it with a `[GUIDELINE REFINEMENT]` block saying
-   what the Learn step did to this file, such as
+6. **Report.** Give a Test Coverage and Verification Summary: the happy paths, boundary cases and failure modes now
+   covered, what is not covered, the verification output (§7) and what the review found. End it with a
+   `[GUIDELINE REFINEMENT]` block saying what the Learn step did to this file, such as
    `Refined Guidelines: Merged <old rule> with <new rule> under §<n> to prevent <issue>.`, or which rules and checks
    already covered what happened.
-6. **Deliver** through the push protocol (§8).
+7. **Deliver** through the push protocol (§8).
 
 ## 3. Core principles
 
-These are rules you can check, not aspirations. Each row says how it is checked.
+These are rules you can check, not aspirations. Each row says how it is checked; Review is the review
+[docs/review/code-review.md](docs/review/code-review.md) describes, which also says what each gate does not see.
 
 | Principle | Rule | Checked by |
 |---|---|---|
@@ -181,17 +189,23 @@ These are rules you can check, not aspirations. Each row says how it is checked.
     [docs/evaluation.md](docs/evaluation.md) for measurements; [docs/releasing.md](docs/releasing.md) and
     [CONTRIBUTING.md](CONTRIBUTING.md) for CI, scripts and tools;
     [docs/repository-settings.md](docs/repository-settings.md) for the GitHub repository's settings;
-    [docs/qa/protocol.md](docs/qa/protocol.md) for testing the app as a user meets it; this file for
-    rules, boundaries and commands. Removed behavior is removed from the documentation too, and code comments and CLI
-    help strings count as documentation. `scripts/check-docs.sh`, run by `scripts/verify.sh`, fails when a command,
-    option, `ARRUMATOR_*` variable, `pipeline.json` key or script is missing from the documents or named there without
-    existing. Everything else is checked in review. The report lists the documents the change updated, or says why none
-    needed to change.
+    [docs/qa/protocol.md](docs/qa/protocol.md) for testing the app as a user meets it;
+    [docs/architecture.md](docs/architecture.md) for the modules and what each folder of Core owns, how the parts work
+    together at run time, the concurrency model and the decisions behind them;
+    [docs/review/code-review.md](docs/review/code-review.md) and
+    [docs/review/swift-apple.md](docs/review/swift-apple.md) for how a change, and the whole project, is reviewed; this
+    file for rules, boundaries and commands. Removed behavior is removed from the documentation too, and code comments
+    and CLI help strings count as documentation. `scripts/check-docs.sh`, run by `scripts/verify.sh`, fails when a
+    command, option, `ARRUMATOR_*` variable, `pipeline.json` key or script is missing from the documents or named there
+    without existing. Everything else is checked in review. The report lists the documents the change updated, or says
+    why none needed to change.
 
 ## 5. Boundaries
 
-The target dependencies in `Package.swift` and `project.yml` enforce the "May import" column. Never widen them just to
-make something compile. Instead, move the code to the module that owns it.
+The target dependencies in `Package.swift` and `project.yml` declare the "May import" column. Never widen them just to
+make something compile. Instead, move the code to the module that owns it. A module that arrives through another
+target can be imported without being declared, so an `import` this table does not allow is refused in review. What
+is inside each module is in [docs/architecture.md](docs/architecture.md#building-blocks).
 
 | Path | Owns | May import |
 |---|---|---|
@@ -199,7 +213,7 @@ make something compile. Instead, move the code to the module that owns it.
 | `Sources/ArrumatorExtract` | Turning any file into `ExtractedContent`: format extractors, OCR, vision description, language, dates, identifiers. | Core, CoreXLSX, ZIPFoundation, Apple frameworks. |
 | `Sources/ArrumatorClassify` | Reading documents: the prompt, model calls, the answer schema and its validation into labels and a file name. | Core |
 | `Sources/ArrumatorRuntime` | The composition root: builds and wires the concrete services and starts the background tasks. | Core, Extract, Classify |
-| `Sources/ArrumatorCLI` | `arrumatorcli` commands: argument parsing and output only. | Runtime, Core, Classify |
+| `Sources/ArrumatorCLI` | `arrumatorcli` commands: argument parsing and output only. | Runtime, Core, swift-argument-parser |
 | `App/` | The SwiftUI menu-bar app: `AppModel`, pages and the shared row and card views, presentation only. Its icon is generated (§4.7): change `scripts/app-icon.swift` and regenerate; never edit the images by hand. | Runtime, Core |
 | `Tests/Support` | Shared test doubles and fixtures: `MockOllama`, `StubAnalyzer`, `PerFileAnalyzer`, `TestEnvironment`, `TestTime`, `Harness`. | Core |
 | `Tests/Fixtures`, `Tools/FixtureGen` | The synthetic evaluation corpus and its deterministic generator. Change the generator and regenerate; never edit fixtures or `expected.json` by hand. | — |
@@ -243,6 +257,8 @@ Every `arrumatorcli` command accepts `--json`. [docs/cli.md](docs/cli.md) lists 
 - [ ] Superseded code, config keys, prompts, tests and dependencies are deleted. No TODO markers and no new warnings.
 - [ ] Every document the change affects is updated in the same change (§4.10), and the report lists them.
       `scripts/check-docs.sh` passes as part of `scripts/verify.sh`.
+- [ ] The change was reviewed (§2, Review): what the review found is fixed. Only a finding rated Minor or Nit may
+      stand, reported with its reason.
 - [ ] The Learn step (§2) is done: what the task taught is folded into this file, and the report ends with its
       `[GUIDELINE REFINEMENT]` block.
 - [ ] The report states what breaks for the installed app: lost learned state, renamed config keys, changed CLI output.
@@ -267,6 +283,8 @@ what the change touches, which `scripts/change-scope.sh` decides for your Mac an
 2. **Push the branch and get it green on the remote runners.** `git push -u origin <branch>`, then open a pull request
    to `main` (`gh pr create`) with the template filled in. CI runs both of its jobs on it; wait for them with
    `gh pr checks --watch`. When a check fails, fix it on the same branch and push again, until every check is green.
+   The review by someone who did not write the change (§2) is written into the pull request, and a finding rated
+   Blocker or Major is fixed before the merge.
    A red pull request is never merged, and a check is never skipped or retried until it passes by chance.
 3. **Squash-merge to `main` and remove the branch.** `gh pr merge --squash --delete-branch` puts the whole change on
    `main` as one commit titled after the pull request and deletes the branch on GitHub and here. Then
