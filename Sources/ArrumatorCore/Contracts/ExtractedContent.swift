@@ -31,6 +31,23 @@ public struct SourceFile: Sendable, Codable, Hashable {
 
 public enum ContentKind: String, Sendable, Codable, CaseIterable {
     case textDocument, pdfText, pdfScanned, pdfMixed, image, spreadsheet, presentation, email, archive, media, unknown
+
+    /// What the file is, in words, as History says it: “a scanned PDF”.
+    public var described: String {
+        switch self {
+        case .textDocument: "a text document"
+        case .pdfText: "a PDF"
+        case .pdfScanned: "a scanned PDF"
+        case .pdfMixed: "a partly scanned PDF"
+        case .image: "an image"
+        case .spreadsheet: "a spreadsheet"
+        case .presentation: "a presentation"
+        case .email: "an e-mail"
+        case .archive: "an archive"
+        case .media: "a media file"
+        case .unknown: "a file"
+        }
+    }
 }
 
 public enum TextOrigin: String, Sendable, Codable {
@@ -96,6 +113,22 @@ public struct DetectedDate: Sendable, Codable, Hashable {
 
 public enum StableKeyKind: String, Sendable, Codable, CaseIterable {
     case iban, ptNIF, ruINN, ruOGRN, ruKPP, ruBIK, ruAccount, vatEU, accountNumber, policyOrContract
+
+    /// The identifier in words, as the model is told of it: given a code name, it copies it into a label.
+    public var described: String {
+        switch self {
+        case .iban: "IBAN"
+        case .ptNIF: "Portuguese tax number (NIF)"
+        case .ruINN: "Russian taxpayer number (ИНН)"
+        case .ruOGRN: "Russian company registration number (ОГРН)"
+        case .ruKPP: "Russian tax registration reason code (КПП)"
+        case .ruBIK: "Russian bank code (БИК)"
+        case .ruAccount: "Russian bank account number"
+        case .vatEU: "EU VAT number"
+        case .accountNumber: "account number"
+        case .policyOrContract: "policy or contract number"
+        }
+    }
 }
 
 /// A checksum-validated or label-anchored identifier (IBAN, NIF, ИНН, …): shown to the model with the document, and

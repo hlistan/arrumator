@@ -54,6 +54,20 @@ import Testing
         #expect(pending == 0, "every change has reached a file")
     }
 
+    @Test func theTimesWrittenForPeopleAreTheMacsOwnWithItsZone() async throws {
+        let w = try await world()
+        defer { w.h.env.cleanup() }
+        let history = try String(contentsOf: w.h.env.layout.historyFile(month: RecordKind.month(of: w.h.env.time.now())), encoding: .utf8)
+        let event = try #require(try await w.h.services.history.events(limit: 1).first)
+        let zone = TimeZone.current
+        let parts = Calendar.current.dateComponents(in: zone, from: event.at)
+        let local = String(format: "%04d-%02d-%02dT%02d:%02d:%02d", parts.year ?? 0, parts.month ?? 0, parts.day ?? 0,
+                           parts.hour ?? 0, parts.minute ?? 0, parts.second ?? 0)
+        let line = try #require(history.components(separatedBy: "\n").first { $0.hasPrefix("- ") && $0.hasSuffix(" · " + event.summary) })
+        #expect(line.hasPrefix("- \(local)") && line.range(of: #"^- \S+([+-]\d{2}:\d{2}|Z) · "#, options: .regularExpression) != nil,
+                "the hour the Mac showed when it happened, with its offset, so nobody reads a UTC hour as their own: \(line)")
+    }
+
     @Test func aLostIndexIsRebuiltFromTheArchiveAlone() async throws {
         let w = try await world()
         defer { w.h.env.cleanup() }

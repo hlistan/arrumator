@@ -5,8 +5,9 @@ import Foundation
 
 struct Tasks: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
-        abstract: "Search tasks: ask for documents in your own words, look the set over, edit it, export it.",
-        subcommands: [List.self, New.self, Show.self, Run.self, Update.self, Retry.self, Add.self, Remove.self, Export.self, Delete.self],
+        abstract: "Search tasks: ask for documents in your own words, look the set over, edit it, ask about it, export it.",
+        subcommands: [List.self, New.self, Show.self, Run.self, Update.self, Retry.self, Add.self, Remove.self, Export.self, Delete.self,
+                      Ask.self, Answer.self, Conversation.self, AskAgain.self, Stop.self, Clear.self],
         defaultSubcommand: List.self)
 
     /// The task and its set, arranged, or an error naming the task.

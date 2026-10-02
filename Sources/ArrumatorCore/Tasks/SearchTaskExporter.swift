@@ -42,6 +42,7 @@ struct SearchTaskExporter {
             let root = staging.appendingPathComponent(top, isDirectory: true)
             let manifest = try copy(detail.tree, into: root)
             let (archive, _) = try operations.uniqueDestination(directory: folder, filename: top + "." + Self.zipExtension)
+            try Self.composeNames(under: root)
             try Self.zip(root, to: archive)
             return (archive, manifest)
         }
@@ -93,6 +94,22 @@ struct SearchTaskExporter {
         }
         let name = shown.map { builder.bounded($0, fileExtension: "") } ?? ""
         return name.isEmpty ? builder.bounded(try tasks.withoutLabelFolder(kind), fileExtension: "") : name
+    }
+
+    /// Renames everything under `directory` to its composed (NFC) name. A Mac may write names decomposed, a letter then
+    /// its accent, and a ZIP archive keeps the bytes it finds, which other systems show as loose marks ("Joa\u{0303}o").
+    /// POSIX `rename` writes the bytes it is given, whatever the name looks like as a `String`, and the file system finds a
+    /// name however it is composed; the deepest names go first, so every parent path still holds.
+    static func composeNames(under directory: URL) throws {
+        let walker = FileManager.default.enumerator(at: directory, includingPropertiesForKeys: nil)
+        let entries = (walker?.allObjects as? [URL] ?? []).sorted { $0.pathComponents.count > $1.pathComponents.count }
+        for entry in entries {
+            let name = entry.lastPathComponent, composed = name.precomposedStringWithCanonicalMapping
+            let parent = entry.deletingLastPathComponent().path
+            guard rename(parent + "/" + name, parent + "/" + composed) == 0 else {
+                throw SearchTaskError.exportFailed(entry.path, String(cString: strerror(errno)))
+            }
+        }
     }
 
     /// Packs `directory` into a ZIP archive at `destination`, as Finder's Compress does: Foundation zips a directory read

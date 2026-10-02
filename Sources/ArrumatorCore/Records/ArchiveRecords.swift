@@ -138,6 +138,21 @@ public actor ArchiveRecords {
             guard !entries.isEmpty else { return try await remove(url) }
             return try await write(try FrontMatter.compose(RecordList(entries), body: RecordText.searchTasks(entries)),
                                    to: try directoryMade(for: url))
+        case let .conversation(task):
+            let url = layout(root).conversationFile(task: task)
+            try await readIfEditedByHand(kind, url: url)
+            let tasks = config.tasks
+            let (entries, name, documents) = try await database.reader.read { db -> ([ConversationTurnEntry], String?, [Int64: String]) in
+                let entries = try TaskConversationStore.entries(db, task: task)
+                let name = try SearchTaskRecord.fetchOne(db, key: task).map { SearchTaskStore.name($0, config: tasks) }
+                let named = Set(entries.flatMap { ($0.sources ?? []) + ($0.finding?.documents ?? []) })
+                let documents = Dictionary(try DocumentRecord.fetchAll(db, keys: Array(named)).compactMap { d in d.id.map { ($0, d.filename) } },
+                                           uniquingKeysWith: { a, _ in a })
+                return (entries, name, documents)
+            }
+            guard let name, !entries.isEmpty else { return try await remove(url) }
+            return try await write(try FrontMatter.compose(RecordList(entries), body: RecordText.conversation(entries, task: name, documents: documents)),
+                                   to: try directoryMade(for: url))
         }
     }
 
@@ -271,6 +286,7 @@ public actor ArchiveRecords {
         var history: [(month: String, entries: [EventEntry])] = []
         var labelRules: [LabelRuleEntry]?
         var searchTasks: [SearchTaskEntry]?
+        var conversations: [(task: Int64, entries: [ConversationTurnEntry])] = []
         var hashes: [String: String] = [:]
 
         mutating func merge(_ other: Parsed) {
@@ -278,6 +294,7 @@ public actor ArchiveRecords {
             history += other.history
             labelRules = other.labelRules ?? labelRules
             searchTasks = other.searchTasks ?? searchTasks
+            conversations += other.conversations
             hashes.merge(other.hashes) { _, new in new }
         }
     }
@@ -302,6 +319,7 @@ public actor ArchiveRecords {
         case let .history(month): parsed.history = [(month, try list(EventEntry.self, url))]
         case .labelRules: parsed.labelRules = try list(LabelRuleEntry.self, url)
         case .searchTasks: parsed.searchTasks = try list(SearchTaskEntry.self, url)
+        case let .conversation(task): parsed.conversations = [(task, try list(ConversationTurnEntry.self, url))]
         }
         return parsed
     }
@@ -339,6 +357,10 @@ public actor ArchiveRecords {
             }
             for entry in entries { try SearchTaskStore.restore(entry, db: db) }
         }
+        // After the tasks, whose conversations they are.
+        for (task, entries) in parsed.conversations {
+            try TaskConversationStore.restore(entries, task: task, replacing: replacing, db: db)
+        }
     }
 
     /// Adds or updates a document from its entry, keeping what the index caches about the file.
@@ -370,37 +392,6 @@ public actor ArchiveRecords {
                        arguments: [kind.key])
     }
 
-    // MARK: Finding record files
-
-    /// Every record file in the archive with the kind it holds.
-    private func recordFiles(root: URL) -> [(RecordKind, URL)] {
-        let layout = layout(root)
-        let files: [(RecordKind, URL)] = Self.files(under: root).filter { $0.lastPathComponent == config.records.documentsFileName }.map {
-            (.documents(directory: $0.deletingLastPathComponent().path), $0)
-        }
-        let rules = FileManager.default.fileExists(atPath: layout.labelRules.path) ? [(RecordKind.labelRules, layout.labelRules)] : []
-        let tasks = FileManager.default.fileExists(atPath: layout.searchTasks.path) ? [(RecordKind.searchTasks, layout.searchTasks)] : []
-        return files + historyFiles(layout) + rules + tasks
-    }
-
-    /// The kind of a record file the index knew about, from where it was.
-    private func kind(ofMissing path: String, root: URL) -> RecordKind? {
-        let url = URL(fileURLWithPath: path).standardizedFileURL
-        let layout = layout(root)
-        if url.lastPathComponent == config.records.documentsFileName { return .documents(directory: url.deletingLastPathComponent().path) }
-        if url.path == layout.labelRules.standardizedFileURL.path { return .labelRules }
-        if url.path == layout.searchTasks.standardizedFileURL.path { return .searchTasks }
-        guard url.deletingLastPathComponent().path == layout.history.standardizedFileURL.path else { return nil }
-        return layout.month(ofHistoryFile: url.lastPathComponent).map { .history(month: $0) }
-    }
-
-    private nonisolated func historyFiles(_ layout: ArchiveLayout) -> [(RecordKind, URL)] {
-        let names = (try? FileManager.default.contentsOfDirectory(atPath: layout.history.path)) ?? []
-        return names.compactMap { name in
-            layout.month(ofHistoryFile: name).map { (.history(month: $0), layout.history.appendingPathComponent(name).standardizedFileURL) }
-        }
-    }
-
     // MARK: Rebuilding
 
     /// Cheaply, without walking the archive: whether it has the system folder, or a list of documents at its top,
@@ -426,8 +417,8 @@ public actor ArchiveRecords {
         return try await rebuild()
     }
 
-    /// Reads the whole archive into the index, replacing what it held: documents, history, the rules for labels and the
-    /// search tasks, in one transaction. Then documents are located by the identifier on each file, files without an entry
+    /// Reads the whole archive into the index, replacing what it held: documents, history, the rules for labels, the
+    /// search tasks and the conversations about their documents, in one transaction. Then documents are located by the identifier on each file, files without an entry
     /// are taken in, and every document is queued to have its text read and its embedding computed again. Called on a
     /// new or set-aside index, whose tables are empty, and by `rebuildIndex`.
     @discardableResult
@@ -469,7 +460,7 @@ public actor ArchiveRecords {
     /// Tables a rebuild replaces with what the files say, and working state that cannot outlive the old index.
     /// Documents are updated in place instead, never deleted: their numbers come back unchanged, so their cached text,
     /// embeddings and traces stay attached.
-    static let rebuiltTables = ["events", "label_rules", "search_task_documents", "search_task_exports", "search_tasks"]
+    static let rebuiltTables = ["events", "label_rules", "search_task_documents", "search_task_exports", "search_task_turns", "search_tasks"]
 
     /// Finds documents whose file is not where their entry says by the identifier on each file, and takes in files
     /// that no entry describes.
@@ -523,6 +514,49 @@ public actor ArchiveRecords {
         for document in try await DocumentStore(database: database, time: time).list(DocumentFilter(), limit: Int.max)
         where document.status != .missing && FileManager.default.fileExists(atPath: document.path) {
             if try await jobs.enqueue(path: document.path, kind: .reindex, docID: document.id) != nil { summary.queued += 1 }
+        }
+    }
+}
+
+extension ArchiveRecords {
+    // MARK: Finding record files
+
+    /// Every record file in the archive with the kind it holds.
+    private func recordFiles(root: URL) -> [(RecordKind, URL)] {
+        let layout = layout(root)
+        let files: [(RecordKind, URL)] = Self.files(under: root).filter { $0.lastPathComponent == config.records.documentsFileName }.map {
+            (.documents(directory: $0.deletingLastPathComponent().path), $0)
+        }
+        let rules = FileManager.default.fileExists(atPath: layout.labelRules.path) ? [(RecordKind.labelRules, layout.labelRules)] : []
+        let tasks = FileManager.default.fileExists(atPath: layout.searchTasks.path) ? [(RecordKind.searchTasks, layout.searchTasks)] : []
+        return files + historyFiles(layout) + rules + tasks + conversationFiles(layout)
+    }
+
+    /// The kind of a record file the index knew about, from where it was.
+    private func kind(ofMissing path: String, root: URL) -> RecordKind? {
+        let url = URL(fileURLWithPath: path).standardizedFileURL
+        let layout = layout(root)
+        if url.lastPathComponent == config.records.documentsFileName { return .documents(directory: url.deletingLastPathComponent().path) }
+        if url.path == layout.labelRules.standardizedFileURL.path { return .labelRules }
+        if url.path == layout.searchTasks.standardizedFileURL.path { return .searchTasks }
+        if url.deletingLastPathComponent().path == layout.conversations.standardizedFileURL.path {
+            return layout.task(ofConversationFile: url.lastPathComponent).map { .conversation(task: $0) }
+        }
+        guard url.deletingLastPathComponent().path == layout.history.standardizedFileURL.path else { return nil }
+        return layout.month(ofHistoryFile: url.lastPathComponent).map { .history(month: $0) }
+    }
+
+    private nonisolated func conversationFiles(_ layout: ArchiveLayout) -> [(RecordKind, URL)] {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: layout.conversations.path)) ?? []
+        return names.sorted().compactMap { name in
+            layout.task(ofConversationFile: name).map { (.conversation(task: $0), layout.conversations.appendingPathComponent(name).standardizedFileURL) }
+        }
+    }
+
+    private nonisolated func historyFiles(_ layout: ArchiveLayout) -> [(RecordKind, URL)] {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: layout.history.path)) ?? []
+        return names.compactMap { name in
+            layout.month(ofHistoryFile: name).map { (.history(month: $0), layout.history.appendingPathComponent(name).standardizedFileURL) }
         }
     }
 }

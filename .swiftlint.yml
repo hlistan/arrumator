@@ -1,5 +1,5 @@
-# SwiftLint (https://realm.github.io/SwiftLint/) for the package, the app, the fixture generator and the app icon's
-# generator.
+# SwiftLint (https://realm.github.io/SwiftLint/) for the package, the app, the fixture generator, the app icon's
+# generator and the QA driver.
 # Run by scripts/lint.sh with --strict, so every warning fails the check.
 #
 # The size limits sit just above the largest function, type and file there is today: they stop code growing
@@ -13,6 +13,7 @@ included:
   - Tools/FixtureGen/Package.swift
   - Tools/FixtureGen/Sources
   - scripts/app-icon.swift
+  - scripts/qa-drive.swift
 excluded:
   - Tests/Fixtures
 

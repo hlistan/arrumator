@@ -103,6 +103,22 @@ How a request in the user's words becomes a search, and how what it finds is arr
 | Which models read (the profile) and how much the reading model thinks (the effort) are chosen apart | A larger model and more computation at inference are separate levers, and which is worth more depends on the request: Snell et al. 2024 (above), who compare the two; model APIs take them as separate parameters, the model and its thinking: Ollama's `model` and `think` (*Thinking*, above), OpenAI's `model` and `reasoning.effort` (above) |
 | A ZIP archive is made by Foundation, reading the folder for uploading, as Finder's Compress does | Apple, `NSFileCoordinator.ReadingOptions.forUploading`, which gives a directory read with it as a ZIP archive of its contents, in a temporary file removed once the reader is done — <https://developer.apple.com/documentation/foundation/nsfilecoordinator/readingoptions/foruploading> |
 
+## Sources for conversations
+
+How a question about a task's documents is answered from them ([how it works](how-it-works.md#talking-with-a-tasks-documents),
+`TaskContextBuilder`, `SearchService.relevance`, `TaskAnswerer`, `ConversationAnswerValidator`, `ConversationConfig`,
+`conversation-system.md`).
+
+| Choice | Sources |
+|---|---|
+| An answer is drawn from the documents it is shown, retrieved from the set for the question, rather than from what the model knows | Lewis et al., *Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks*, NeurIPS 2020 — <https://arxiv.org/abs/2005.11401> |
+| What the question concerns most comes first, and the context holds only what fits rather than every document cut short | Models use what is at the start and the end of a long context best, and what is in its middle worst: Liu et al., *Lost in the Middle: How Language Models Use Long Contexts*, TACL 2024 — <https://arxiv.org/abs/2307.03172> |
+| A question finds the documents holding any of its words, each word counting by how rare it is, fused with those alike to it in meaning | BM25 weighs a term by its inverse document frequency, so a common word counts for little: Robertson & Zaragoza, *The Probabilistic Relevance Framework: BM25 and Beyond*, 2009 — <https://doi.org/10.1561/1500000019> ; reciprocal rank fusion (Cormack et al. 2009, [below](#sources-for-search)) |
+| The documents an answer says it draws on are kept only when it was shown them | Checking generated statements against the sources they cite: Gao et al., ALCE, EMNLP 2023 ([above](#sources-for-search-tasks)) |
+| An answer is sampled with a temperature above 0, where a document is read greedily | Greedy and beam decoding make long texts repeat themselves: Holtzman, Buys, Du, Forbes & Choi, *The Curious Case of Neural Text Degeneration*, ICLR 2020 — <https://arxiv.org/abs/1904.09751> |
+| Documents found when the answer is asked for more are offered, and join the set only when the user adds them | Mixed-initiative interaction: the system proposes and the person decides, keeping control of what changes: Horvitz, *Principles of Mixed-Initiative User Interfaces*, CHI 1999 — <https://doi.org/10.1145/302979.303030> |
+| The answer is shown as it is written, its text read from the JSON object as it streams in | Ollama streams a chat answer as a JSON object per line until the last says it is done — <https://github.com/ollama/ollama/blob/main/docs/api.md#generate-a-chat-completion> ; JSON strings and their escapes, RFC 8259 §7 — <https://www.rfc-editor.org/rfc/rfc8259#section-7> |
+
 ## Sources for search
 
 | Choice | Sources |

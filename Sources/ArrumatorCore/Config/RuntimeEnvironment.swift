@@ -11,21 +11,35 @@ public struct RuntimeEnvironment: Sendable {
     public var logLevelName: String?
     /// Extra pipeline override JSON file merged after the user's `pipeline.json`.
     public var pipelineOverridePath: String?
+    /// A folder the app uses as the Trash, as a run in a scratch home must, so a file it has no more use for never
+    /// reaches the user's Trash (AGENTS.md §4.3).
+    public var trashPath: String?
 
-    public init(home: String?, ollamaURL: String?, logLevelName: String?, pipelineOverridePath: String?) {
+    public init(home: String?, ollamaURL: String?, logLevelName: String?, pipelineOverridePath: String?, trashPath: String?) {
         self.home = home
         self.ollamaURL = ollamaURL
         self.logLevelName = logLevelName
         self.pipelineOverridePath = pipelineOverridePath
+        self.trashPath = trashPath
     }
+
+    /// The variable that names the Ollama server, which Settings names when it is set.
+    public static let ollamaURLVariable = "ARRUMATOR_OLLAMA_URL"
 
     public static var current: RuntimeEnvironment {
         let env = ProcessInfo.processInfo.environment
         return RuntimeEnvironment(
             home: env["ARRUMATOR_HOME"].flatMap { $0.isEmpty ? nil : $0.expandingTilde },
-            ollamaURL: env["ARRUMATOR_OLLAMA_URL"].flatMap { $0.isEmpty ? nil : $0 },
+            ollamaURL: env[ollamaURLVariable].flatMap { $0.isEmpty ? nil : $0 },
             logLevelName: env["ARRUMATOR_LOG_LEVEL"].flatMap { $0.isEmpty ? nil : $0 },
-            pipelineOverridePath: env["ARRUMATOR_PIPELINE_CONFIG"].flatMap { $0.isEmpty ? nil : $0.expandingTilde })
+            pipelineOverridePath: env["ARRUMATOR_PIPELINE_CONFIG"].flatMap { $0.isEmpty ? nil : $0.expandingTilde },
+            trashPath: env["ARRUMATOR_TRASH"].flatMap { $0.isEmpty ? nil : $0.expandingTilde })
+    }
+
+    /// Where a file the app has no more use for goes: the folder `ARRUMATOR_TRASH` names, else `userTrash`, which only the
+    /// app and `arrumatorcli` give as the user's Trash (trash gate in `scripts/lint.sh`).
+    public func trash(orElse userTrash: @autoclosure () -> any Trashing) -> any Trashing {
+        trashPath.map { FolderTrash(folder: URL(fileURLWithPath: $0, isDirectory: true)) } ?? userTrash()
     }
 
     /// The level `ARRUMATOR_LOG_LEVEL` sets, nil when it is not set. A value that is no level stops the app with the

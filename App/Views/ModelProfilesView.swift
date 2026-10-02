@@ -26,7 +26,7 @@ struct ModelProfilesView: View {
                     ProfileCard(listing: listing, installed: installed, downloads: downloads) { close(listing.id) }
                 } else {
                     ProfileRow(listing: listing)
-                        .onTapGesture { withAnimation(.snappy) { open = listing.id } }
+                        .rowAction { withAnimation(.snappy) { open = listing.id } }
                 }
             }
             if adding {

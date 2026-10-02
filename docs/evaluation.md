@@ -40,10 +40,16 @@ coverage alone.
 Measured on 2026-09-30 with the `standard` profile (`ministral-3:14b`, `bge-m3`) on an Ollama server on the local
 network, the full corpus, two passes. Prompt version 6 shows the model the archive's labels and your decisions about
 them, and the labels it gives are tidied to the archive's ([keeping labels one
-vocabulary](how-it-works.md#keeping-labels-one-vocabulary)); version 5 did neither:
+vocabulary](how-it-works.md#keeping-labels-one-vocabulary)); version 5 did neither. Version 7, measured on 2026-10-02
+on the same server, tells the types apart that version 6 confused (a fine or an appointment is a letter, a card with a
+social insurance number an id-document, an identity document's sender the office that issued it) and names the
+identifiers it is shown in words rather than by the app's own names; version 6 measured again that day read exactly as
+on 2026-09-30:
 
 | prompt | pass | status | type | sender | date | title | language | labels each | expected labels | median |
 |---|---|---|---|---|---|---|---|---|---|---|
+| 7 | 1 | 100% | 95% | 91% | 98% | 98% | 100% | 14.5 | 92% | 29.0 s |
+| 7 | 2 | 100% | 93% | 91% | 98% | 98% | 100% | 14.5 | 91% | 31.4 s |
 | 6 | 1 | 100% | 89% | 89% | 98% | 93% | 100% | 14.4 | 92% | 28.6 s |
 | 6 | 2 | 100% | 89% | 89% | 98% | 98% | 100% | 14.6 | 93% | 31.1 s |
 | 5 | 1 | 100% | 91% | 95% | 98% | 95% | 100% | 15.0 | 92% | 26.8 s |
@@ -53,6 +59,8 @@ How consistent the labels are, for the same documents:
 
 | prompt | pass | sender writings | senders | parties | topics | objects | references | jurisdictions |
 |---|---|---|---|---|---|---|---|---|
+| 7 | 1 | 1.12 | 48 | 27 | 66 | 109 | 95 | 32 |
+| 7 | 2 | 1.12 | 48 | 28 | 55 | 109 | 84 | 30 |
 | 6 | 1 | 1.25 | 49 | 26 | 63 | 105 | 97 | 26 |
 | 6 | 2 | 1.25 | 49 | 29 | 55 | 103 | 97 | 26 |
 | 5 | 1 | 1.38 | 53 | 37 | 91 | 121 | 84 | 39 |

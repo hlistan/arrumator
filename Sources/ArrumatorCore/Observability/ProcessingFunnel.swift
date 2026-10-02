@@ -19,6 +19,8 @@ public struct FunnelStop: Sendable, Codable, Hashable, Identifiable {
     public var count: Int
     public var severity: FunnelSeverity
     public var id: DocumentStatus { status }
+    /// The document is still being worked on, so it has not stopped at all.
+    public var isUnfinished: Bool { [.arrived, .processing].contains(status) }
 
     public init(status: DocumentStatus, reason: String, count: Int, severity: FunnelSeverity) {
         self.status = status
@@ -57,11 +59,28 @@ public struct ProcessingFunnel: Sendable, Codable, Hashable {
     public var generatedAt: Date
     public var windowDays: Int
     public var documents: Int
+    /// Files in Incoming the app has not taken yet, so not among `documents`.
+    public var waiting: Int
     public var steps: [FunnelStepStats]
 
-    /// The step where most documents stopped, ignoring the last one.
-    public var biggestDropOff: FunnelStepStats? {
-        steps.dropLast().max { $0.dropped < $1.dropped }.flatMap { $0.dropped > 0 ? $0 : nil }
+    public init(generatedAt: Date, windowDays: Int, documents: Int, waiting: Int, steps: [FunnelStepStats]) {
+        self.generatedAt = generatedAt
+        self.windowDays = windowDays
+        self.documents = documents
+        self.waiting = waiting
+        self.steps = steps
+    }
+
+    /// Documents taken but not finished yet: still on their way, not stopped.
+    public var inProgress: Int {
+        steps.reduce(0) { sum, step in sum + step.stoppedHere.filter(\.isUnfinished).reduce(0) { $0 + $1.count } }
+    }
+
+    /// Where most documents that came to an end without being filed stopped, and why: work in progress is not a stop,
+    /// nor a document filed whose steps were not kept, as after a rebuild from the archive.
+    public var mainStop: (step: FunnelStepStats, stop: FunnelStop)? {
+        steps.dropLast().compactMap { step in step.stoppedHere.first { !$0.isUnfinished && $0.status != .filed }.map { (step, $0) } }
+            .max { $0.1.count < $1.1.count }
     }
 
     /// The step that takes the longest at the median.
@@ -96,14 +115,18 @@ extension StatsService {
         let cfg = config.funnel
         let now = time.now()
         let cutoff = now.addingTimeInterval(-Double(days) * Units.secondsPerDay)
+        let active = JobState.allCases.filter(\.isActive).map(\.rawValue)
         return try await database.reader.read { db in
+            let waiting = try Int.fetchOne(db, sql: """
+                SELECT COUNT(*) FROM jobs WHERE doc_id IS NULL AND kind IN (?, ?) AND state IN (\(databaseQuestionMarks(count: active.count)))
+                """, arguments: StatementArguments([JobKind.ingest.rawValue, JobKind.adopt.rawValue] + active)) ?? 0
             let documents = try Row.fetchAll(db, sql: """
                 SELECT d.id AS id, d.status AS status,
                        (SELECT MAX(t.id) FROM traces t WHERE t.doc_id = d.id AND t.source = ?) AS trace_id
                 FROM documents d WHERE d.added_at >= ?
                 """, arguments: [TraceSource.ingest.rawValue, cutoff.unixSeconds])
             guard !documents.isEmpty else {
-                return ProcessingFunnel(generatedAt: now, windowDays: days, documents: 0, steps: Self.emptySteps(cfg))
+                return ProcessingFunnel(generatedAt: now, windowDays: days, documents: 0, waiting: waiting, steps: Self.emptySteps(cfg))
             }
 
             // Every stage a document recorded, and what each cost.
@@ -127,7 +150,9 @@ extension StatsService {
                 }
             }
 
-            return Self.assemble(documents: documents, stagesByTrace: stagesByTrace, cfg: cfg, days: days, now: now)
+            var funnel = Self.assemble(documents: documents, stagesByTrace: stagesByTrace, cfg: cfg, days: days, now: now)
+            funnel.waiting = waiting
+            return funnel
         }
     }
 
@@ -186,7 +211,7 @@ extension StatsService {
                 medianMs: percentile(sorted, 0.5), p95Ms: percentile(sorted, 0.95), ofAll: documents.count)
         }
 
-        return ProcessingFunnel(generatedAt: now, windowDays: days, documents: documents.count, steps: steps)
+        return ProcessingFunnel(generatedAt: now, windowDays: days, documents: documents.count, waiting: 0, steps: steps)
     }
 }
 

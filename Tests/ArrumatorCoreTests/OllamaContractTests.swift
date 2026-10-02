@@ -1,6 +1,7 @@
 @testable import ArrumatorCore
 import ArrumatorTesting
 import Foundation
+import Synchronization
 import Testing
 
 /// The contract with Ollama's HTTP API (https://github.com/ollama/ollama/blob/main/docs/api.md): the answers it gives,
@@ -132,6 +133,76 @@ import Testing
         let always = OllamaShowResponse.Thinking(values: [true], default: true)
         #expect(MockOllama.shown(capabilities: thinks, thinking: always).think(sending: false) == nil,
                 "a model that lists only on is not told off, which it cannot do")
+    }
+
+    /// A streamed answer comes a line at a time (https://github.com/ollama/ollama/blob/main/docs/api.md#generate-a-chat-completion):
+    /// the words and thinking each line adds, and on the last line why it ended and the counters.
+    @Test func aStreamedAnswerAddsUpLineByLineAndEndsOnTheErrorItStreams() throws {
+        let lines = [
+            #"{"model":"qwen3.5:9b","created_at":"2026-07-05T12:00:00Z","message":{"role":"assistant","content":"","thinking":"Sum "},"done":false}"#,
+            #"{"model":"qwen3.5:9b","created_at":"2026-07-05T12:00:01Z","message":{"role":"assistant","content":"","thinking":"them."},"done":false}"#,
+            #"{"model":"qwen3.5:9b","created_at":"2026-07-05T12:00:02Z","message":{"role":"assistant","content":"{\"answer\": \"72"},"done":false}"#,
+            #"{"model":"qwen3.5:9b","created_at":"2026-07-05T12:00:03Z","message":{"role":"assistant","content":",61\"}"},"done":true,"#
+                + #""done_reason":"stop","total_duration":5191566416,"prompt_eval_count":26,"eval_count":298}"#,
+        ]
+        var sofar: [OllamaChatResponse] = []
+        for line in lines {
+            let chunk = try OllamaClient.chatChunk(line, model: "qwen3.5:9b")
+            sofar.append(sofar.last.map { $0.continued(by: chunk) } ?? chunk)
+        }
+        #expect(sofar[1].message.thinking == "Sum them." && sofar[1].message.content.isEmpty && sofar[1].done == false,
+                "thinking adds up before the answer is written")
+        let whole = try #require(sofar.last)
+        #expect(whole.message.content == #"{"answer": "72,61"}"# && whole.message.thinking == "Sum them.", "then the answer's words")
+        #expect(whole.done == true && whole.doneReason == "stop" && whole.metrics.promptTokens == 26 && whole.metrics.outputTokens == 298,
+                "and the last line ends it with its counters, which reach the trace")
+        #expect(throws: OllamaError.answerFailed(model: "qwen3.5:9b", message: "model runner has unexpectedly stopped"),
+                "an error line ends the answer with it, named as such") {
+            try OllamaClient.chatChunk(#"{"error":"model runner has unexpectedly stopped"}"#, model: "qwen3.5:9b")
+        }
+        #expect(!OllamaError.answerFailed(model: "x", message: "y").isTransient, "and it is not asked again behind the user's back")
+        #expect(throws: OllamaError.self, "a line that is no answer is no answer") { try OllamaClient.chatChunk("not json", model: "m") }
+        var streamed = OllamaChatRequest.sample(think: nil)
+        streamed.stream = true
+        #expect(streamed.body.serialized().contains(#""stream":true"#), "a request streamed says so")
+    }
+
+    @Test func theGateStreamsTheAnswerAsItGrowsAndAgainFromItsStartWhenItIsAskedAgain() async throws {
+        let away = Mutex(true)
+        let mock = MockOllama { _ in
+            // The server is away the first time it is asked, and answers the next.
+            if away.withLock({ wasAway in defer { wasAway = false }; return wasAway }) { throw OllamaError.unreachable("not yet") }
+            return "Duas faturas somam 72 EUR"
+        }
+        let gate = InferenceGate(api: mock, retryDelays: [1], time: TestTime(.advances))
+        let seen = Mutex<[String]>([])
+        let whole = try await gate.chat(.sample(think: nil)) { sofar in seen.withLock { $0.append(sofar.message.content) } }
+        #expect(whole.message.content == "Duas faturas somam 72 EUR" && whole.done == true, "the whole answer comes back")
+        #expect(seen.withLock { $0 } == ["Duas ", "Duas faturas ", "Duas faturas somam ", "Duas faturas somam 72 ", "Duas faturas somam 72 EUR"],
+                "each time it grew, the answer so far was given")
+        #expect(await mock.chatCount == 2, "after the server came back, asked again from its start")
+    }
+
+    /// A server that cannot be reached, whatever is asked of it.
+    struct AwayServer: OllamaAPI {
+        func version() async throws -> String { throw OllamaError.unreachable("Could not connect to the server.") }
+        func tags() async throws -> [OllamaModelInfo] { throw OllamaError.unreachable("down") }
+        func show(model: String) async throws -> OllamaShowResponse { throw OllamaError.unreachable("down") }
+        func chat(_ request: OllamaChatRequest, partial: (@Sendable (OllamaChatResponse) async -> Void)?) async throws -> OllamaChatResponse {
+            throw OllamaError.unreachable("down")
+        }
+        func embed(_ request: OllamaEmbedRequest) async throws -> OllamaEmbedResponse { throw OllamaError.unreachable("down") }
+        func pull(model: String) -> AsyncThrowingStream<OllamaPullProgress, any Error> { AsyncThrowingStream { $0.finish() } }
+    }
+
+    @Test func aServerOnAnotherMachineThatCannotBeReachedIsSaidToBeUnreachableNotStopped() async throws {
+        let config = try PipelineConfig.bundledDefaults().ollama
+        let address = try #require(URL(string: "http://192.168.1.254:11434"))
+        let lifecycle = OllamaLifecycle(api: AwayServer(), config: config, management: .external, binaryOverride: nil, address: address,
+                                        time: TestTime(.advances))
+        let state = await lifecycle.check()
+        #expect(state == .unreachable("192.168.1.254"), "nothing is known of whether it runs there, only that it cannot be reached")
+        #expect(state.summary == "Ollama at 192.168.1.254 cannot be reached", "and that is what the app says")
     }
 
     @Test func aDownloadReportsProgressAndEndsOnTheErrorItStreams() throws {

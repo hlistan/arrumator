@@ -34,6 +34,17 @@ public struct DocumentAnalysis: Sendable, Codable, Hashable {
         self.model = model
         self.problems = problems
     }
+
+    /// The problems the reading names, as `problems` holds them and the app tells them apart.
+    public enum Problem {
+        public static let noAnswer = "the model gave no valid answer"
+        public static let encrypted = "encrypted"
+        public static let corrupted = "corrupted"
+        public static let noText = "no text could be read"
+    }
+
+    /// The document had no text to give the model, which saw only its name and format.
+    public var hadNoText: Bool { problems.contains(Problem.noText) }
 }
 
 /// Output of the analysis stage: the analysis, the labels (nil without a valid answer), and the document's embedding

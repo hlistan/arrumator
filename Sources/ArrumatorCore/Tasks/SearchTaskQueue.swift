@@ -68,8 +68,7 @@ public actor SearchTaskQueue {
     private let services: PipelineServices
     private let interpreter: any SearchPromptInterpreting
     private var worker: Task<Void, Never>?
-    private let kick: AsyncStream<Void>.Continuation
-    private let kicks: AsyncStream<Void>
+    private let doorbell = Doorbell()
     private var statusContinuations: [UUID: AsyncStream<SearchTaskQueueStatus>.Continuation] = [:]
     public private(set) var status = SearchTaskQueueStatus.idle {
         didSet { if status != oldValue { for c in statusContinuations.values { c.yield(status) } } }
@@ -81,7 +80,6 @@ public actor SearchTaskQueue {
     public init(services: PipelineServices, interpreter: any SearchPromptInterpreting) {
         self.services = services
         self.interpreter = interpreter
-        (kicks, kick) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
     }
 
     /// What the queue is doing, the current status first, then each change: a subscriber that joins while a request is
@@ -133,7 +131,7 @@ public actor SearchTaskQueue {
         await publish()
         guard worker == nil else { return }
         worker = Task { [weak self] in await self?.runLoop() }
-        kick.yield()
+        doorbell.ring()
     }
 
     /// Stops the worker and waits until it has. A task whose prompt is being read goes back into the queue at the next
@@ -151,7 +149,7 @@ public actor SearchTaskQueue {
 
     /// Tells the queue its tasks changed: it looks for one that is due, and counts again those waiting.
     public func wake() async {
-        kick.yield()
+        doorbell.ring()
         await publish()
     }
 
@@ -168,11 +166,11 @@ public actor SearchTaskQueue {
             if let task = await nextDue() {
                 if await run(task) { continue }
                 // The queue could not be written; it is tried again after a while rather than at once.
-                await waitForKick(timeout: services.config.ingest.retryDelays.last)
+                await doorbell.wait(timeout: services.config.ingest.retryDelays.last, time: services.time)
                 continue
             }
             let wait = await earliestDue().map { max(IngestCoordinator.minimumWait, $0.timeIntervalSince(services.time.now())) }
-            await waitForKick(timeout: wait)
+            await doorbell.wait(timeout: wait, time: services.time)
         }
     }
 
@@ -187,23 +185,6 @@ public actor SearchTaskQueue {
         do { return try await store.earliestDue() } catch {
             Log.error(.search, "Could not read the search task queue", ["error": error.localizedDescription])
             return nil
-        }
-    }
-
-    private func waitForKick(timeout: Double?) async {
-        let kicks = kicks
-        let time = services.time
-        await withTaskGroup(of: Void.self) { group in
-            group.addTask {
-                var it = kicks.makeAsyncIterator()
-                _ = await it.next()
-            }
-            if let timeout {
-                // Woken early by cancellation, the loop checks it and ends.
-                group.addTask { try? await time.sleep(seconds: timeout) }
-            }
-            await group.next()
-            group.cancelAll()
         }
     }
 

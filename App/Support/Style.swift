@@ -139,6 +139,29 @@ enum Style {
     static let readingTimeShownAfter: TimeInterval = 10
     /// Seconds between updates of how long a request has been read, on its card.
     static let readingTimeTick: TimeInterval = 1
+    /// Between the questions of a task's conversation, and the changes made to its set between them.
+    static let conversationSpacing: CGFloat = 18
+    /// Between a question, its answer, and what the answer draws on and found.
+    static let turnSpacing: CGFloat = 8
+    /// Above and below a card's name field, so the descenders of its large font show.
+    static let titleFieldPadding: CGFloat = 2
+    /// Between the paragraphs, headings and list items of an answer.
+    static let answerBlockSpacing: CGFloat = 6
+    /// How far each list within a list, and a quote, is indented in an answer.
+    static let answerListIndent: CGFloat = 18
+    /// Between a list item's marker and its text, and the room its marker has.
+    static let answerMarkerSpacing: CGFloat = 6
+    static let answerMarkerWidth: CGFloat = 14
+    /// Headings up to this level are shown large; deeper ones as a line in bold.
+    static let answerLargeHeadingLevel = 2
+    /// The rule beside a quote in an answer.
+    static let answerQuoteRule: CGFloat = 3
+    /// Between the documents an answer draws on.
+    static let sourceSpacing: CGFloat = 4
+    /// Around a question, set apart from its answer.
+    static let questionInsets = EdgeInsets(top: 6, leading: 10, bottom: 6, trailing: 10)
+    /// Rounding of the ground a question is set on.
+    static let questionCornerRadius: CGFloat = 8
 
     // MARK: Labels
 
@@ -210,10 +233,9 @@ enum Style {
     static let onboardingSpacing: CGFloat = 16
     /// Between the parts of one step of onboarding.
     static let onboardingStepSpacing: CGFloat = 12
-    /// The folders step of onboarding, inside its window.
-    static let onboardingFoldersHeight: CGFloat = 300
-    /// The models step of onboarding, inside its window.
-    static let onboardingModelsHeight: CGFloat = 330
+    /// The symbols beside Welcome's sentences, and between them.
+    static let onboardingBulletWidth: CGFloat = 22
+    static let onboardingBulletSpacing: CGFloat = 10
 
     // MARK: Settings
 
@@ -257,14 +279,8 @@ enum Style {
 
     // MARK: Statistics
 
-    /// Between the parts of the Statistics page, and around them.
-    static let statsSpacing: CGFloat = 16
     /// Around what Statistics shows while it loads or has nothing yet.
     static let statsPlaceholderPadding: CGFloat = 40
-    /// Around the Statistics header.
-    static let statsHeaderInsets = EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16)
-    /// The chooser of the period Statistics covers.
-    static let statsPeriodPickerWidth: CGFloat = 150
     /// How strongly the panels of Statistics are filled.
     static let statsPanelFillOpacity = 0.3
     /// Rounding of the panels of Statistics.
@@ -272,23 +288,23 @@ enum Style {
     /// Space inside a panel of Statistics.
     static let statsPanelPadding: CGFloat = 14
     /// Between the columns of the funnel.
-    static let funnelColumnSpacing: CGFloat = 10
+    static let funnelColumnSpacing: CGFloat = 8
     /// The column of the chevron that opens a funnel step.
     static let funnelChevronWidth: CGFloat = 10
     /// The column of a funnel step's name.
-    static let funnelStepWidth: CGFloat = 230
+    static let funnelStepWidth: CGFloat = 140
     /// The bar of how far files got, on a scale shared by every step.
-    static let funnelBarWidth: CGFloat = 220
+    static let funnelBarWidth: CGFloat = 140
     /// The height of a funnel step's bar.
     static let funnelBarHeight: CGFloat = 12
     /// The funnel's column of files that reached a step.
-    static let funnelReachedWidth: CGFloat = 55
+    static let funnelReachedWidth: CGFloat = 50
     /// The funnel's column of files that stopped at a step.
-    static let funnelStoppedWidth: CGFloat = 60
+    static let funnelStoppedWidth: CGFloat = 55
     /// The funnel's column of the share of all files.
-    static let funnelShareWidth: CGFloat = 80
+    static let funnelShareWidth: CGFloat = 50
     /// The funnel's columns of how long a step took.
-    static let funnelDurationWidth: CGFloat = 70
+    static let funnelDurationWidth: CGFloat = 60
     /// Between a funnel step's error and warning counts.
     static let funnelProblemSpacing: CGFloat = 6
     /// Around a funnel step's row.
@@ -333,7 +349,7 @@ enum Style {
     /// Widest the chooser of a document's runs is.
     static let traceRunPickerMaxWidth: CGFloat = 480
     /// The column of a trace step's stage.
-    static let traceStageWidth: CGFloat = 100
+    static let traceStageWidth: CGFloat = 200
 
     // MARK: Colours
 
@@ -390,7 +406,7 @@ extension DocumentStatus {
 
     var tint: Color {
         switch self {
-        case .filed: Palette.progress
+        case .filed: Palette.processedList
         case .needsReview, .held: Palette.attention
         case .failed, .missing: Palette.problem
         case .duplicate, .undone, .arrived, .processing: Palette.expected

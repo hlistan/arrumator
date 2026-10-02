@@ -77,6 +77,7 @@
     "historyFolderName": "History",
     "labelRulesFileName": "_labels.md",
     "searchTasksFileName": "_tasks.md",
+    "conversationsFolderName": "Conversations",
     "setAsideSuffix": "unreadable"
   },
   "ingest": {
@@ -215,7 +216,7 @@
     "minTextDateScore": 1
   },
   "analysis": {
-    "promptVersion": 6,
+    "promptVersion": 7,
     "excerptChars": 12000,
     "excerptTailDivisor": 6,
     "embeddingSummaryChars": 2000,
@@ -367,6 +368,42 @@
     ],
     "maxDocuments": 1000,
     "withoutLabelFolder": "No {{kind}}"
+  },
+  "conversation": {
+    "promptVersion": 2,
+    "numCtx": 16384,
+    "contextChars": 20000,
+    "documentChars": 8000,
+    "maxListed": 30,
+    "historyChars": 4000,
+    "maxQuestionChars": 2000,
+    "maxSuggested": 50,
+    "sampling": {
+      "temperature": 0.3,
+      "topK": 40,
+      "topP": 0.9,
+      "seed": 42
+    },
+    "efforts": {
+      "low": {
+        "think": false,
+        "repairAttempts": 1,
+        "numPredict": 2048,
+        "timeout": 300
+      },
+      "medium": {
+        "think": "medium",
+        "repairAttempts": 1,
+        "numPredict": 6144,
+        "timeout": 900
+      },
+      "high": {
+        "think": "high",
+        "repairAttempts": 1,
+        "numPredict": 6144,
+        "timeout": 900
+      }
+    }
   },
   "logging": {
     "keepDays": 14,

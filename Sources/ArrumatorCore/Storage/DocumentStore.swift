@@ -106,6 +106,16 @@ public struct DocumentStore: Sendable {
         try await database.reader.read { db in try DocumentRecord.fetchOne(db, key: id) }
     }
 
+    /// The documents with these numbers that the index has, in this order.
+    public func documents(ids: [Int64]) async throws -> [DocumentRecord] {
+        try await database.reader.read { db in try Self.documents(db, ids: ids) }
+    }
+
+    static func documents(_ db: Database, ids: [Int64]) throws -> [DocumentRecord] {
+        let byID = Dictionary(try DocumentRecord.fetchAll(db, keys: ids).compactMap { d in d.id.map { ($0, d) } }, uniquingKeysWith: { a, _ in a })
+        return ids.compactMap { byID[$0] }
+    }
+
     public func document(path: String) async throws -> DocumentRecord? {
         try await database.reader.read { db in
             try DocumentRecord.filter(Column("path") == path).order(Column("id").desc).fetchOne(db)

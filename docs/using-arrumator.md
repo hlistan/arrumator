@@ -7,36 +7,41 @@ documents are read and filed; [the command line](cli.md) does everything the app
 
 The window is deliberately quiet, after [Things](https://culturedcode.com/things/). It has a sidebar with five lists,
 below them the archive's labels, and a bar at its foot. Each list is one page under a large title, with no dashboards.
-Every document row shows at its end what happened to it: filed in the archive, or waiting for you and why ("Waiting for
-you: the model gave no valid answer"), a copy an earlier version filed of another document, or undone and back in
-Incoming. Its date, sender, type and tags, and a few more of its labels, show beneath it. Clicking a row opens the
-document in place as a card with its name and its labels, one row for each kind it has
-([labels](how-it-works.md#labels)), and which model read it and any problem it had. The name can be changed there, any
-label taken off with its ×, and a label added by choosing its kind and writing its value; each change is recorded in
-History. A label's menu opens it on the Labels page, shows the documents that have it, or removes it from every
-document. The card's actions follow the document's state: **Looks Right** confirms it as it is, **Read Again** has the
-model read it again, **Leave for Later** holds it, and **Undo Filing** moves it back to Incoming.
+Every document row shows at its end what happened to it: nothing when it is filed at the top of the archive, or
+where else it is, or waiting for you and why ("Waiting for you: the model gave no valid answer"), a copy an earlier
+version filed of another document, or undone and back in Incoming. Rows are reached with the keyboard too (Tab, with
+keyboard navigation on in System Settings), and Return or Space opens one. Its date, sender, type and tags, and a few
+more of its labels, show beneath it. Clicking a row opens the document in place as a card with its name and its labels,
+one row for each kind it has ([labels](how-it-works.md#labels)), and which model read it, or that no text could be taken
+from it and the model saw only its name, and any problem it had, with what would help when **Read Again** alone cannot:
+a copy saved without its password, or a good copy, put in Incoming. The name can be changed there (a blank one is
+refused, saying so), any label taken off with its × or its menu's **Remove from This Document**, and a label added by
+choosing its kind and writing its value; each change is recorded in History, in words: "Renamed to …; added sender
+“EDP”; removed type “invoice”". A label's menu opens it on the Labels page, shows the documents that have it, or removes
+it from every document. The card's actions follow the document's state: **Looks Right** confirms it as it is, **Read
+Again** has the model read it again, saying it waits to be read after the files already in Incoming, **Leave for Later**
+holds it, and **Undo Filing** moves it back to Incoming.
 
-- **Incoming**: under **In Progress**, the file being worked on now, with a spinner and its step (**Read**,
-  **Analysed**, …); under **Queued**, every other file, in the order they arrived, which is the order they are filed in,
-  each saying when it arrived, or, for a file stopped part way (as when you quit Arrumator), **Carries on where it
-  stopped**, which it does first at the next start, or the error it had and when it is tried again
-  ([how](how-it-works.md#how-a-file-is-handled)). Beneath a file's name, after a grey tag symbol, are the tags it will
-  be given, as a document's labels are beneath its own: the name of the folder in Incoming it is in, such as **Taxes
-  2024** for `Incoming/Taxes 2024/scan.pdf` ([folders in Incoming](how-it-works.md#folders-in-incoming-and-tags)), and
-  for a document read again the tags it keeps; nothing for a file directly in Incoming. An exact copy of a document in
-  the archive leaves for the Trash once it is checked, and that document joins the queue to be read again, under its
-  own name ([exact copies](how-it-works.md#exact-copies)). Then comes what was just
-  processed, grouped by day as on Processed, each with its labels, its tags among them, with **Show More in Processed**
-  for the rest.
+- **Incoming**: under **In Progress**, the file being worked on now, with a spinner and what is being done to it
+  (**Reading its text**, **Being read by the model**, …); under **Queued**, every other file, in the order they arrived,
+  which is the order they are filed in, each saying when it arrived, or, for a file stopped part way (as when you quit
+  Arrumator), **Carries on where it stopped**, which it does first at the next start, or the error it had and when it is
+  tried again ([how](how-it-works.md#how-a-file-is-handled)). Beneath a file's name, after a grey tag symbol, are the
+  tags it will be given, as a document's labels are beneath its own: the name of the folder in Incoming it is in, such
+  as **Taxes 2024** for `Incoming/Taxes 2024/scan.pdf` ([folders in
+  Incoming](how-it-works.md#folders-in-incoming-and-tags)), and for a document read again the tags it keeps; nothing for
+  a file directly in Incoming. An exact copy of a document in the archive leaves for the Trash once it is checked, and
+  that document joins the queue to be read again, under its own name ([exact copies](how-it-works.md#exact-copies)).
+  Then comes what was just processed, grouped by day as on Processed, each with its labels, its tags among them, with
+  **Show More in Processed** for the rest.
 - **Needs You**: documents the model could not read, or that are encrypted, damaged or blank, each with the reason.
 - **Processed**: everything finished, newest first and grouped by day, like Things' Logbook.
 - **Labels**: the archive's labels as one vocabulary ([how](how-it-works.md#keeping-labels-one-vocabulary)). **Look
   Alike** lists pairs of labels written so alike they may be one; open one to merge it either way or keep the two apart.
-  The sidebar counts them, as they wait for you. Below come the labels of each kind the vocabulary keeps, and your tags
-  under **Tags**, which are never merged or offered to merge without you; open one to merge it into another or remove
-  it everywhere, or to show the documents that have it. **What You Decided** lists your
-  rules, each with **Forget**.
+  The sidebar counts them, as they wait for you. Below come the labels of each kind the vocabulary keeps, the most used
+  first, each with how many documents have it, and your tags under **Tags**, which are never merged or offered to merge
+  without you; open one to merge it into another or remove it everywhere, or to show the documents that have it. **What
+  You Decided** lists your rules, each with **Forget**.
 - **Tasks**: ask for documents in your own words ([search tasks](how-it-works.md#search-tasks)). Write what you need in
   the field at the top and press **Find**. Below the field, **Read with** sets how the request is read
   ([profile and effort](how-it-works.md#profile-and-effort)): its effort, **Low**, **Medium** or **High**, how much the
@@ -48,14 +53,16 @@ model read it again, **Leave for Later** holds it, and **Undo Filing** moves it 
   while Ollama cannot be reached (it is tried again after the last of `ingest.retryDelays`), or **Waiting to be read**.
   The card that opens when you press **Find** says the same at its top, in place of the documents not found yet:
   **Reading the request with qwen3.5:9b…** beside a spinner, and how long so far once that is more than a moment, as a
-  model that thinks can take minutes. While a request is read, Tasks in the sidebar has a small spinner, and the menu
-  bar's window says **Reading a request with qwen3.5:9b**, so it shows from any page. Then the task joins the tasks
+  model that thinks can take minutes. While a request is read, or a question about a task's documents answered, Tasks
+  in the sidebar has a small spinner, and the menu bar's window says **Reading a request with qwen3.5:9b**, or
+  **Answering a question with qwen3.5:9b**, so it shows from any page. Then the task joins the tasks
   under **Earlier**, each with how many documents it found and how often it was exported. Open one as a card: its name,
   which you can change there; what you asked, which you can rewrite, and **Find Again**, which reads it again; the
   effort and profile it is **Read with**, either of which you can change, which reads it again (a profile the settings
   no longer list says so), and which model read it last; what the model looked for; and
   what its documents are **Arranged by**, a kind per level, each with a × to take it away and a + to add one, or to go
-  back to what the request asked. Below come the documents, a heading per group that folds away, and in each group the
+  back to what the request asked. Below that, **Documents** and **Conversation** choose what the card shows. Under
+  **Documents** come the documents, a heading per group that folds away, and in each group the
   newest by their own date first, those without a date last, each document with a × under the pointer to take it out
   of the set (a double-click opens it). **Add Documents…** shows every processed document as Processed does, under
   the day it was processed, with a + at the end of its row; choose labels in the sidebar to narrow them down, as
@@ -63,7 +70,18 @@ model read it again, **Leave for Later** holds it, and **Undo Filing** moves it 
   Labels** (as a task finds them: the newest by their own date, at most `tasks.maxDocuments`), and press **Done** to go
   back to the task. **Export** copies the set **To a Folder…** or **As a ZIP Archive…** in a folder you choose, and
   shows it in Finder. Every export is listed on the card, with **Show in Finder** while it is still there. **Remove
-  Task…** removes the task, never what it exported. An event about a task in History opens the task.
+  Task…** removes the task and its conversation, never what it exported. Under **Conversation**, ask about the documents
+  in the field at the foot and press **Ask** ([talking with a task's
+  documents](how-it-works.md#talking-with-a-tasks-documents)). Each question is set apart, its answer below it, as the
+  model writes it, with what the queue does with it meanwhile: **Answering with qwen3.5:9b…** beside a spinner and how
+  long so far, **Thinking…** while a model that thinks has written nothing yet, or what it waits for: the model to
+  begin, its turn, or Ollama, with when it is tried again. Under an answer, **Drawn from** names the documents it drew
+  on, one a line, each to open; when you asked for more documents, it lists those it found outside the task, each with
+  a + to add it, and **Add All**; **Copy** puts the answer on the clipboard, **Ask Again** answers the question again from
+  the documents as they are now, and **Stop**, while it is answered, ends it keeping what came of it. Between questions,
+  the changes made to the task's documents since show where they were made. **Clear Conversation…** removes every
+  question and answer; the documents stay. While a question about a task is answered, its row says **Answering a
+  question**, with a spinner. An event about a task in History opens the task.
 
 Below the lists, the sidebar lists the labels documents have, each with how many of the documents in view have it, the
 most used first. They come in one list under **Most Used**, `interface.sidebarLabels` of them, or, with **Group Labels
@@ -106,7 +124,8 @@ looked for in the file name, the text and the labels; `field:word` or `field:"a 
 ### Statistics
 
 **Statistics** is the whole processing funnel, over the last few days (`stats.windowsDays`). It shows how many files
-arrived, how far they got, where they stopped and why, and how long each step takes. The steps come from
+the app took, and how many more wait in Incoming to be taken, how far they got, how many are still being worked on,
+where those not filed stopped and why, and how long each step takes. The steps come from
 `stats.funnel.steps`: arrived, checked for copies, read, understood, analysed and filed. Every statistic sits under the
 step it describes:
 
@@ -200,9 +219,10 @@ No tunable lives in code. Defaults are bundled in `Sources/ArrumatorCore/Resourc
   when the app starts it, listens on the address the app talks to, with `ollama.serveEnvironment` besides; how long a
   model stays loaded after its last request, `ollama.keepAlive.chat` for the one that reads and describes images and
   `ollama.keepAlive.embed` for the one that finds by meaning), `watcher`, `records` (the names of the archive's record
-  files and of its system and history folders, such as `records.labelRulesFileName` and `records.searchTasksFileName`),
-  `ingest` (attempts and retry delays, and how long quitting waits for the file in hand and the request being read to
-  stop, `ingest.quitTimeout`), `extraction` (OCR and extraction limits), `entities` (dates and identifiers), `analysis`
+  files and of its system and history folders, such as `records.labelRulesFileName`, `records.searchTasksFileName` and
+  `records.conversationsFolderName`), `ingest` (attempts and retry delays, and how long quitting waits for the file in
+  hand, the request being read and the question being answered to stop, `ingest.quitTimeout`), `extraction` (OCR and
+  extraction limits), `entities` (dates and identifiers), `analysis`
   (what the model is shown and how it is asked, such as `analysis.excerptChars`, of which the end of the document gets
   `1 / analysis.excerptTailDivisor`, `analysis.repairAttempts`, the context a document, a search request and an image
   are read with, `analysis.numCtx`, one so that a model that reads and describes images stays loaded once, what a model
@@ -219,8 +239,16 @@ No tunable lives in code. Defaults are bundled in `Sources/ArrumatorCore/Resourc
   set is arranged, `tasks.maxGroupingDepth`, and by what when the request does not say, `tasks.defaultGrouping`, how
   long a task's name from the model may be, `tasks.maxTitleChars`, how many documents a task finds at most, the newest
   by their own date, `tasks.maxDocuments`, and the folder an export puts documents without a label of a level's kind
-  into, `tasks.withoutLabelFolder`), `logging` (with `logging.followInterval`, how often `arrumatorcli logs --follow`
-  looks), `power`, `stats` (the periods Statistics offers, and `stats.defaultWindowDays`, the one it and `arrumatorcli
+  into, `tasks.withoutLabelFolder`), `conversation` (the questions about a task's documents: the context an answer is
+  asked in, `conversation.numCtx`; how much of the set's text it is shown, `conversation.contextChars`, of one
+  document's, `conversation.documentChars`, how many documents it is shown by name alone, `conversation.maxListed`, and
+  how much of the conversation so far, `conversation.historyChars`; how long a question may be,
+  `conversation.maxQuestionChars`; how many documents found outside the task an answer lists at most,
+  `conversation.maxSuggested`; how an answer is sampled, `conversation.sampling`; and at each effort,
+  `conversation.efforts.low`, `conversation.efforts.medium` and `conversation.efforts.high`, `think`, `repairAttempts`,
+  `numPredict` and `timeout`, as a task's efforts have them), `logging` (with `logging.followInterval`, how often
+  `arrumatorcli logs --follow` looks), `power`, `stats` (the periods Statistics offers, and `stats.defaultWindowDays`,
+  the one it and `arrumatorcli
   funnel` show first), `interface` (how many rows a page loads, `interface.pageSize`, how many labels the sidebar lists
   in one list, `interface.sidebarLabels`, and of each kind when grouped, `interface.sidebarLabelsPerKind`, how many
   recent events notifications are drawn from, `interface.notificationEvents`, and how much text `arrumatorcli extract`
@@ -248,6 +276,7 @@ Environment variables:
 | `ARRUMATOR_HOME` | Relocates all state: indexes, settings and logs (`$ARRUMATOR_HOME/Logs`). It does not move the archive or Incoming, which `settings.json` names. |
 | `ARRUMATOR_OLLAMA_URL` | The Ollama server while set, in place of the setting; this Mac or the local network only. |
 | `ARRUMATOR_PIPELINE_CONFIG` | An extra `pipeline.json` override file, applied after yours. |
+| `ARRUMATOR_TRASH` | A folder the app and every command use as the Trash: an exact copy, a file undone or a document taken out goes there rather than to yours. For a run in a scratch `ARRUMATOR_HOME`. |
 | `ARRUMATOR_LOG_LEVEL` | `error`, `warning`, `info`, `debug` or `trace`, over the setting; any other value stops the app with the reason. |
 
 ## Where everything is kept
@@ -255,7 +284,8 @@ Environment variables:
 Everything Arrumator knows that it could not work out again is kept in Markdown files inside the archive, next to what
 it describes: a `_documents.md` in every directory holding documents, with each document's labels, and, in the
 `System` folder at the top of the archive, the history (`History`, one file per month), your rules for labels
-(`_labels.md`) and your search tasks with their exports (`_tasks.md`).
+(`_labels.md`), your search tasks with their exports (`_tasks.md`) and the conversations about their documents
+(`Conversations`, one file per task).
 
 Each archive has its own SQLite index in `~/Library/Application Support/Arrumator/Indexes`, which only indexes those
 files and caches what can be recomputed, such as extracted text and embeddings. If it is lost, damaged or cannot be

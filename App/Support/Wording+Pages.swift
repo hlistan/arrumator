@@ -19,6 +19,10 @@ extension Wording {
     static let leaveForLater = "Leave for Later"
     static let confirmWaitingHelp = "Keep it in the archive as it is"
     static let removeLabelHelp = "Remove this label"
+    static let removeFromDocument = "Remove from This Document"
+
+    /// The × that takes a label off a document, as VoiceOver reads it.
+    static func removeLabelNamed(_ label: String) -> String { "Remove “\(label)”" }
     static let showInLabels = "Show in Labels"
     static let removeFromEveryDocument = "Remove from Every Document…"
     static let removedForGoodFromCard = "Arrumator will not give this label again. You can forget this decision on the Labels page."
@@ -139,10 +143,13 @@ extension Wording {
     static let welcomeLocal = "Everything runs locally with Ollama. No document ever leaves this computer."
     static let welcomeNoFolders = "No folders to keep tidy: every document sits at the top of the archive, found by its labels."
     static let welcomeLabels = "Labels say who sent it, what it is, its dates, amounts, references and more; correct any of them."
-    static let chooseFolders = "Choose your folders"
+    static let chooseFolders = "Your folders, and how Arrumator runs"
     static let ready = "Ready"
-    static let readyIntro = "Arrumator lives in the menu bar. Open it to see what was filed, search by label, and answer documents that need you."
-    static let openAppAtLogin = "Open Arrumator at login"
+    static let readyIntro = "Arrumator lives in the menu bar. Open it to see what was filed, find documents by their labels, "
+        + "and answer documents that need you."
+    static let readyIntroWithoutMenuBar = "The menu bar has no room for Arrumator's icon, so open it from the Dock or by opening it "
+        + "again. Its window shows what was filed, finds documents by their labels, and asks about documents that need you."
+    static let connectOllama = "Connect Ollama"
 }
 
 // MARK: Settings
@@ -173,6 +180,9 @@ extension Wording {
     static let files = "Files"
     static let renameFiles = "Rename files"
     static let transliterate = "Transliterate names to Latin letters"
+    static let filesFooter = "Renamed, a document is named by the model from what it reads: its date, its sender and what it is. "
+        + "Transliterated, a name in another script, such as Cyrillic, is written in Latin letters."
+    static let readingAgain = "Reading Again"
     static let copiesFooter = "Put a document into Incoming again, as it is, and the one in the archive is read again with the "
         + "profile in use, keeping its tags and given that of the folder you put it in. The copy goes to the Trash."
 
@@ -194,7 +204,49 @@ extension Wording {
     static let ollamaServerNote = "This Mac or a machine of yours on the local network, such as http://192.168.1.20:11434. "
         + "Documents are read by the model there; nothing is sent beyond the local network."
 
+    static let copyLogLine = "Copy Line"
+
+    static let noTrace = "No steps are kept of how it was read: they are not brought back when the index is rebuilt "
+        + "from the archive. Read Again reads it anew, and keeps the steps of that reading."
+
+    /// The trace sheet's heading.
+    static func howItWasRead(_ name: String?) -> String { name.map { "How “\($0)” was read" } ?? "How it was read" }
+
+    /// A step of a trace, in words.
+    static func traceStage(_ stage: TraceStage) -> String {
+        switch stage {
+        case .hash: "Fingerprinted"
+        case .dedupe: "Checked for copies"
+        case .extract: "Took its text"
+        case .ocr: "Read the scan"
+        case .vlm: "Described its images"
+        case .entities: "Found dates and numbers"
+        case .analyse: "Read by the model"
+        case .consolidate: "Tidied its labels"
+        case .embed: "Made findable by meaning"
+        case .name: "Named"
+        case .place: "Filed"
+        case .index: "Indexed"
+        case .tag: "Tagged"
+        case .interpret: "Read the request"
+        case .match: "Found the documents"
+        case .context: "Chose what to show"
+        case .answer: "Answered"
+        }
+    }
+
+    /// A line of the processing log, whole, as Copy Line copies it.
+    static func logLine(_ entry: LogEntry) -> String {
+        "\(entry.ts.formatted(.iso8601)) \(entry.level.rawValue) \(entry.cat.rawValue) \(entry.msg) \(logFields(entry.fields))"
+    }
+
     static let managementOnThisMacOnly = "The app starts and stops Ollama only on this Mac."
+
+    /// Under the server field when the environment names the server: why the field and Use change nothing.
+    static func serverFromEnvironment(_ variable: String) -> String {
+        "This address is set by \(variable) where the app was started, and is used in place of the one saved here. "
+            + "Start the app without it to choose the server here."
+    }
 
     /// The models section's title: where they run.
     static func modelsRun(at url: URL?) -> String {
@@ -306,8 +358,12 @@ extension Wording {
 // MARK: Statistics
 
 extension Wording {
-    static let nothingCameThrough = "Nothing has come through yet"
     static let statisticsAppear = "Statistics appear once files have been filed."
+
+    /// Nothing taken in the period, but files wait in Incoming.
+    static func noneTakenYet(waiting: Int) -> String {
+        "\(Format.count(waiting, "file")) \(waiting == 1 ? "waits" : "wait") in Incoming; statistics appear once the app has taken them."
+    }
     static let period = "Period"
     static let everyOneFiled = "Every one of them was filed."
     static let howFarFilesGot = "How far files got"
@@ -337,11 +393,20 @@ extension Wording {
 
     static func lastDays(_ days: Int) -> String { "Last \(days) days" }
 
-    static func arrivedIn(_ documents: Int, days: Int) -> String { "\(documents) files arrived in the last \(days) days." }
+    /// How many files the app took in the period, and how many more wait in Incoming to be taken.
+    static func arrivedIn(_ documents: Int, waiting: Int, days: Int) -> String {
+        let taken = "The app took \(Format.count(documents, "file")) in the last \(days) days"
+        guard waiting > 0 else { return taken + "." }
+        return taken + "; \(waiting) more \(waiting == 1 ? "waits" : "wait") in Incoming."
+    }
 
-    /// Where most files that were not filed stopped, and why.
+    static func stillBeingWorkedOn(_ count: Int) -> String {
+        "\(count) \(count == 1 ? "is" : "are") still being worked on."
+    }
+
+    /// Where most files that came to an end without being filed stopped, and why.
     static func mostStopped(at step: String, count: Int, reason: String) -> String {
-        "Most that did not get filed stopped at \(step.lowercased()): \(count) \(reason.lowercased())."
+        "Of those not filed, most stopped at “\(step)”: \(reason.lowercased()) (\(count))."
     }
 
     static func slowestStep(_ step: String, duration: String) -> String {
@@ -371,6 +436,9 @@ extension Wording {
     static let tasksNotes = "Ask for the documents you need, in your own words. Arrumator reads the request with the local model, "
         + "finds the documents, and arranges them by their labels. Look them over, add or take out any, then export them."
     static let askPrompt = "Which documents do you need? Such as: electricity and water bills from 2025, by sender"
+    /// A task's request field and the conversation's question field, as VoiceOver names them.
+    static let requestField = "Request"
+    static let questionField = "Question"
     static let find = "Find"
     static let noTasksYet = "No tasks yet. Ask for documents above."
     static let earlierTasks = "Earlier"
@@ -391,10 +459,17 @@ extension Wording {
     static let chooseExportFolder = "Choose where to put the export"
     static let removeTask = "Remove Task…"
     static let removeTaskConfirm = "Remove Task"
-    static let removeTaskNote = "What it exported stays where it was put."
+    static let removeTaskNote = "Its conversation goes with it, every question and answer. What it exported stays where it was put."
     static let exportsHeading = "Exports"
     static let noLongerThere = "no longer there"
     static let takeOutHelp = "Take it out of this task"
+    static let takeOut = "Take Out of Task"
+
+    /// The × that takes a document out of a task, as VoiceOver reads it.
+    static func takeOutNamed(_ document: String) -> String { "Take “\(document)” out of this task" }
+
+    /// The × that stops arranging a task's set by a kind, as VoiceOver reads it.
+    static func stopArrangingBy(_ kind: String) -> String { "Stop arranging by \(kind)" }
     static let addToTaskHelp = "Add it to the task"
     static let inTaskHelp = "In the task; click to take it out"
     static let addAllShown = "Add All With These Labels"
@@ -483,6 +558,65 @@ extension Wording {
         guard let kind = group.kind else { return "" }
         guard let value = group.value else { return without(kind) }
         return SearchPlan.timeKinds.contains(kind) ? value : label(DocumentLabel(kind: kind, value: value))
+    }
+
+    // MARK: Conversation
+
+    static let documentsSection = "Documents"
+    static let conversationSection = "Conversation"
+    static let askAboutPrompt = "Ask about these documents: summarize, translate, compare, draft an e-mail, or find more like them"
+    static let ask = "Ask"
+    static let noQuestionsYet = "Ask anything about the documents of this task, in your own words. Each answer is drawn from the "
+        + "documents in it when the question is answered: add or take out documents to change what the next answer sees."
+    static let askAgain = "Ask Again"
+    static let askAgainHelp = "Answer it again, from the documents in the task as they are now"
+    static let stopAnswer = "Stop"
+    static let stopAnswerHelp = "Stop answering; what came of the answer is kept"
+    static let copyAnswer = "Copy"
+    static let copyAnswerHelp = "Copy the answer, to use it elsewhere"
+    static let drawnFrom = "Drawn from"
+    static let answeredAfterLater = "Answered again after the questions below were answered: they followed its earlier answer."
+
+    /// A document an answer draws on, under the pointer: its whole name, as the line may be too short for it.
+    static func openNamedDocument(_ name: String) -> String { "Open \(name)" }
+    static let addAll = "Add All"
+    static let addFoundHelp = "Add it to the task, so the next answers see it"
+    static let inTaskAlready = "In the task"
+    static let thinking = "Thinking…"
+    static let clearConversation = "Clear Conversation…"
+    static let clearConversationConfirm = "Clear Conversation"
+    static let clearConversationNote = "Every question and answer goes. The documents stay in the task."
+    static let answeringRow = "Answering a question"
+
+    /// Asks before a task's conversation is cleared.
+    static func clearConversationQuestion(_ task: String) -> String { "Clear the conversation about “\(task)”?" }
+
+    /// What an answer that asked for more documents looked for, and what it found outside the task.
+    static func found(_ finding: TurnFinding) -> String {
+        if let problem = finding.problem { return "Looked for “\(finding.request)”, but could not: \(problem)" }
+        guard !finding.documents.isEmpty else { return "Looked for “\(finding.request)”: nothing outside this task" }
+        return "Looked for “\(finding.request)”: \(Format.count(finding.documents.count, "document")) outside this task"
+    }
+
+    /// Why an answer is incomplete, or why there is none.
+    static func turnProblem(_ turn: TaskTurn) -> String? {
+        turn.problem.map { (turn.state == .failed ? "Not answered: " : "Incomplete: ") + $0 }
+    }
+
+    /// What the queue does with a question, where its answer will be: by which model it is being answered, and for how
+    /// long once `elapsed` is given, or what it waits for.
+    /// Until the model begins, the question waits for it, which may be loading or reading documents first.
+    static func turnProgressLine(_ progress: TurnProgress, begun: Bool = true, elapsed: TimeInterval? = nil) -> String {
+        switch progress {
+        case let .answering(answering):
+            (answering.map { begun ? "Answering with \($0.model)…" : "Waiting for \($0.model) to begin: it may be loading, or busy reading documents…" }
+                ?? "Being answered…") + (elapsed.map { " \(readingTime($0)) so far" } ?? "")
+        case let .waitingForOllama(until):
+            until.map { "Waiting for Ollama: it cannot be reached, and is tried again at \($0.formatted(date: .omitted, time: .shortened))" }
+                ?? "Waiting for Ollama: trying to reach it again…"
+        case .waitingForTurn: "Waiting to be answered: something else is being read or answered first"
+        case .waiting: "Waiting to be answered…"
+        }
     }
 
     /// An export, as a task's card lists it.

@@ -33,7 +33,7 @@ struct IncomingPage: View {
                 PageSection(Wording.inProgress) {
                     ForEach(working) { job in
                         if let progress = model.ingest.progress(of: job), case let .working(stage) = progress {
-                            ListRow(symbol: progress.symbol, tint: progress.tint, title: job.filename, detail: step(stage),
+                            ListRow(symbol: progress.symbol, tint: progress.tint, title: job.filename, detail: Wording.doing(stage),
                                     subtitle: Wording.labels(job.tags), subtitleKind: .tag, busy: true)
                         }
                     }
@@ -71,11 +71,6 @@ struct IncomingPage: View {
         }) {
             recent = processed
         }
-    }
-
-    /// Where a job is, in the words the processing funnel uses.
-    private func step(_ state: JobState) -> String {
-        model.runtime?.config.stats.funnel.steps.first { $0.jobStates.contains(state) }?.title ?? state.rawValue
     }
 
     /// What a file in the queue waits for: its turn, since it arrived; carrying on where it stopped; or to be tried again

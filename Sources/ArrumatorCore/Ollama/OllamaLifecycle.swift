@@ -8,6 +8,8 @@ public enum OllamaState: Sendable, Hashable, Codable {
     case starting
     case ready(version: String)
     case unhealthy(String)
+    /// A server on another machine, by its host, that does not answer: whether it runs there is not known.
+    case unreachable(String)
 
     public var isReady: Bool { if case .ready = self { true } else { false } }
 
@@ -19,6 +21,7 @@ public enum OllamaState: Sendable, Hashable, Codable {
         case .starting: "Starting Ollama…"
         case let .ready(v): "Ollama \(v) ready"
         case let .unhealthy(why): "Ollama problem: \(why)"
+        case let .unreachable(host): "Ollama at \(host) cannot be reached"
         }
     }
 }
@@ -123,8 +126,13 @@ public actor OllamaLifecycle {
             let v = try await api.version()
             state = .ready(version: v)
         } catch {
-            let install = discover()
-            state = (install.appURL == nil && install.binaryURL == nil) ? .notInstalled : .stopped
+            if !OllamaEndpoint.isThisMac(address) {
+                // What is installed on this Mac says nothing of a server on another machine.
+                state = .unreachable(address.host(percentEncoded: false) ?? address.absoluteString)
+            } else {
+                let install = discover()
+                state = (install.appURL == nil && install.binaryURL == nil) ? .notInstalled : .stopped
+            }
         }
         return state
     }

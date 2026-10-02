@@ -40,7 +40,8 @@ in each form it writes them (`15 мая 2024`, `3. März 2025`, `2025年3月5日
 year first. OCR asks Vision for the document's own language first, then the hints in `extraction.ocrLanguages`, and
 lets Vision detect any other it reads. A script Vision does not read in images is still read from a PDF's text layer,
 an e-mail or a text file. The model reads the document as written and describes it in labels that do not depend on its
-language: names and numbers as the document writes them, topics, objects and jurisdictions in English, dates, amounts and
+language: names and numbers as the document writes them, topics, objects and jurisdictions in English, dates, amounts
+and
 languages in ISO forms. Documents in different languages are therefore found by the same labels. The file name's
 description is in the document's own language.
 
@@ -66,8 +67,9 @@ The answer is untrusted input. It is decoded into typed values and checked, each
 that cannot be read, or leaves a list out, goes back to the model with what was wrong (`analysis.repairAttempts` times),
 and one cut off at its length limit (`analysis.llmOptions.numPredict` tokens) goes back saying so. No other model is
 asked after it: a document it never answers validly waits for you ([below](#documents-that-wait-for-you)). The file name
-goes through the same cleaning every file name does: no path separators, bounded length, and, when Settings says so,
-transliterated.
+goes through the same cleaning every file name does: no path separators or other characters `naming.forbiddenCharacters`
+lists (one between words, as in "Fatura: julho", becomes " - ", one inside a word or number a "-"), bounded length,
+and, when Settings says so, transliterated.
 
 ## Labels
 
@@ -251,7 +253,8 @@ that document to be read again. This is how you have documents read with another
   again after a rebuild of the index.
 - **It keeps its tags**, the folders' and those you gave it, and a copy put into a folder in Incoming, or given `--tag`,
   gives it those tags at once, before it is read; what the model gives replaces what it gave before.
-- **The copy goes to the Trash**, never deleted, as the archive holds the same bytes; take it back from there. A copy the
+- **The copy goes to the Trash**, never deleted, as the archive holds the same bytes; take it back from there. A copy
+  the
   Trash will not take, as on a volume without one, stays in Incoming, and the document is not read again: the copy is
   tried again (`ingest.maxAttempts`) and then recorded as failed, saying why.
 - **History records it once, under the document**: `bill.pdf is a copy of 2026-07-05 EDP Comercial - Fatura.pdf, which
@@ -271,7 +274,8 @@ records the move in History. A file you put into the archive yourself, at the to
 labelled where it is, under its own name. A file removed from the archive is marked missing. Nothing you do in Finder
 is undone by the app.
 
-Reading a document again (`review retry`, **Read Again**) labels and names it again where it is, from the text read of it
+Reading a document again (`review retry`, **Read Again**) labels and names it again where it is, from the text read of
+it
 before, keeping its tags; putting an exact copy of it into Incoming does the same, reading its text from its file again
 too ([exact copies](#exact-copies)). A document you undid is back in Incoming, held; read again, it is filed at the top
 of the archive.
@@ -292,7 +296,9 @@ checked as a document's answer is: each label must be a label of its kind (a dat
 month, a day or a span of them), at most `tasks.maxValuesPerKind` of a kind and `tasks.maxWords` words. Every kind a
 task asks for leaves documents out, so a label nobody asked for, such as the country all your documents are from,
 would silently hide what you wanted: a label is kept only when every word the model quotes for it is a word of your
-request, and a word only when it is in your request and no label already asks for it. What is dropped, and why, is in
+request, but not when every one of them is already quoted by a label of another kind, as "Portugal" in "invoices from
+Portugal" asks for a country, not for documents written in Portuguese; and a word only when it is in your request and
+no label already asks for it. What is dropped, and why, is in
 the task's trace. An answer that cannot be read, or is left asking for nothing at all, goes back to the model with what
 was wrong, as often as the effort's `repairAttempts` says; no other model is asked in its place. A request the model
 never answers validly fails the task, with the reason, and so does an answer that takes longer than the effort's
@@ -326,7 +332,8 @@ filed. Finding them again keeps the documents you added and leaves out those you
 
 **Exporting.** A task's set is copied into a new folder named after the task, in a folder you choose outside the
 archive and Incoming, with a folder for each group of the first kind it is arranged by, a folder inside it for each
-group of the next, and the documents at the bottom under their own names; or into a ZIP archive of that folder.
+group of the next, and the documents at the bottom under their own names; or into a ZIP archive of that folder, whose
+names are written with composed accents ("João", not "Joa" and an accent), as other systems expect.
 Documents are copied, never moved, and nothing already there is written over: a name that is taken gets the collision
 suffix (`naming.collisionFormat`). A folder is named after its label as a file name is cleaned, so a label can never
 place a file anywhere else, and the documents without a label of the level's kind go into `tasks.withoutLabelFolder`
@@ -340,10 +347,74 @@ History, and each reading of a request is traced, its prompts and the model's an
 decision, so History does not record it: the queue says it while it lasts, and the app shows it on the task
 ([Tasks](using-arrumator.md#what-the-app-shows-you)). Removing a task leaves what it exported where it was put.
 
+## Talking with a task's documents
+
+Once a task has found its documents, ask about them on its card, under **Conversation**, in your own words and in any
+language: "summarize these invoices", "what do they come to in all?", "translate the contract into English", "write a
+short e-mail to my accountant listing them", "which of them have a deadline in July?". A question joins a queue of its
+own, and the questions in it are answered one at a time, the first asked first (one being answered when you quit is
+answered first at the next start), by the reading model of the task's profile at the task's effort
+([below](#profile-and-effort)), with a prompt of the app's own (`conversation-system.md`). A conversation reads as it
+was held, the first question first.
+
+**What an answer draws on.** The task's set as it is when the question is answered: add documents to the task or take
+them out, and the next answer draws on the set as it is then, while the answers before stay as they were. Between two
+questions, the conversation shows each change made to the set, and to how the task is read, as History recorded it. A
+local model's context holds the text of a few documents, not of a thousand, so an answer is shown what its question
+needs, as retrieval-augmented generation does ([sources](organizing-principles-sources.md#sources-for-conversations)):
+first the documents the last answer drew on, which a question such as "translate it" goes on about; then those the
+question concerns, those holding any of its words, the rarer a word the more it counts, fused with those alike to it in
+meaning, as search finds them; then the rest by their own date, the newest first. In that order each is shown with its
+text, its start and its end cut to `conversation.documentChars` as a document is read, while the text fits in
+`conversation.contextChars`; a document whose text does not fit, or has not been read yet, is listed by its name, date
+and labels, at most `conversation.maxListed`, and the answer is told how many more there are. A set the context holds
+is shown whole. The answer is also shown the conversation so far, the latest questions and answers up to
+`conversation.historyChars`, the latest cut to fit when it alone is longer, and today's date. It is never shown your
+tags. A question is at most `conversation.maxQuestionChars` long.
+
+**The answer** comes in a fixed schema: the answer, in Markdown, in the language of the question unless it asks for
+another, naming documents by their names, working out a total or a comparison the question asks for, and saying when
+documents disagree; the documents it draws on, by their numbers, which it is shown only for this; and, when you asked
+for more documents, a request for them, which it says it is looking for. It is
+untrusted input: a document it says it draws on is kept only when it is one it was shown, as a citation is checked
+against its sources, a number it writes in the answer for a document it was shown is given as that document's name, and
+an answer without words, or that cannot be read, goes back to the model with what was wrong, as often as the effort's
+`repairAttempts` says. It is shown as it is written: the card shows the answer as the model writes it, its paragraphs,
+headings, lists, quotes and code as such, **Thinking…** while a model that thinks has written nothing yet, that it waits
+for the model to begin while the model loads or reads documents first, and how long it has taken once that is more than
+a moment. An answer cut off at its length limit, the effort's `numPredict`, is kept as far as it came, saying it was cut
+off: ask for less, or ask again at a lower effort, which thinks less and so leaves more of the limit to the answer. An
+answer that takes longer than the effort's `timeout` fails the question, keeping what came of it. While Ollama cannot be
+reached a question waits in the queue, as a document does, saying so and when it is tried again, the last of
+`ingest.retryDelays` later, rather than being asked again meanwhile; a reading model that is not installed, or a profile
+the settings no longer list, fails it with the reason.
+
+**Finding more.** Ask for documents beyond the set, such as "find the contract these invoices are billed under", and the
+answer writes a request for them in your words, with what the documents told it: a sender, a reference, a period. That
+request is read as a task's request is, at the task's effort, and the documents it finds that are not in the set, nor
+taken out of it, are listed under the answer, the newest by their own date first, at most `conversation.maxSuggested`.
+Nothing joins the set unless you add it, one by one or with **Add All**, as an addition to the set; the next answer then
+sees it. A request that cannot be read says why, and the answer is kept all the same.
+
+**Stopping, asking again and clearing.** **Stop** ends an answer as it is written, keeping what came of it, or takes a
+question out of the queue. **Ask Again** answers a question again in its place, from the set as it is then; answered
+again after questions below it, it says that they followed its earlier answer. **Copy** puts an answer on the clipboard,
+to paste into an e-mail. **Clear Conversation…** removes every question and answer of the task, one being answered too;
+the documents stay in the task.
+
+Every conversation is kept in the archive beside its task (`System/Conversations/_<task>.md`, [Storage](storage.md)),
+with the questions and answers written out below its data for people to read, so a rebuild brings it back; removing a
+task removes its conversation. Clearing a conversation is recorded in History. A question and its answer are kept in the
+conversation, and each answer is traced: what it was shown (the `context` step), its prompts and the model's answers
+(`answer`), and a request for more documents as it was read and matched (`interpret` and `match`;
+`arrumatorcli tasks conversation <task> --full`). That a question is being answered, and by which model, is no
+decision, so History does not record it: the queue says it while it lasts, and the app shows it.
+
 ## Profile and effort
 
-Two choices decide how a search task's request is read: which models read it, the **profile**, and how much the
-reading model thinks before it answers, the **effort**. A document is read with the profile alone.
+Two choices decide how a search task's request is read, and how what is asked about its documents is answered: which
+models read it, the **profile**, and how much the reading model thinks before it answers, the **effort**. A document is
+read with the profile alone.
 
 A **model profile** is a name and three models: one that reads documents and search requests and names files
 (`chatModel`), one that describes images (`visionModel`) and one that finds documents by meaning (`embedModel`).
@@ -391,12 +462,31 @@ model is switched on and off. `arrumatorcli models list` shows how each installe
 - a model that cannot think, such as Standard's `ministral-3:14b`, is told nothing, so for it the efforts differ only
   by how often a wrong answer goes back and how many of the archive's labels it is shown.
 
-Effort is for search tasks only: a model reading a document or describing an image is told not to think
+Effort is for search tasks and the questions about their documents only: a model reading a document or describing an
+image is told not to think
 (`analysis.think`), as thinking multiplies the time every document takes. A new task gets the effort Settings gives
 new tasks (`taskEffort`, Medium as the app comes), which the Tasks page's effort picker sets.
 
+A question about a task's documents is answered with the task's profile and at its effort too, each effort a preset in
+`conversation.efforts` that says, as a task's does, `think`, `repairAttempts`, `numPredict` and `timeout`; what an
+answer is shown is chosen by `conversation.contextChars` and the keys beside it
+([above](#talking-with-a-tasks-documents)),
+not by the effort. An answer is a text to write rather than a list of labels to fill, so it gets more room, and it is
+sampled as writing is (`conversation.sampling`, a temperature above 0), not decoded greedily as a document is read,
+which repeats itself over a long text ([sources](organizing-principles-sources.md#sources-for-conversations)). It is
+asked in a context of its own, `conversation.numCtx`, larger than `analysis.numCtx`, so a few documents' text, the
+conversation and the answer fit: Ollama loads the model again whenever it goes from reading documents to answering, and
+the larger context takes more memory while it is loaded.
+
+| Effort | Thinks (`think`) | Sent back | An answer may take |
+|---|---|---|---|
+| Low | no (`false`) | once | 2,048 tokens, 300 s |
+| Medium | yes (`"medium"`) | once | 6,144 tokens, 900 s |
+| High | the most (`"high"`) | once | 6,144 tokens, 900 s |
+
 Giving a task another effort or profile sends it back into the queue, to be read again and find its documents again,
-as another request does. Both are kept with the task, in History and in the archive. The task's trace is stamped with
+as another request does, and the next question about its documents is answered with them. Both are kept with the task,
+in History and in the archive. The task's trace is stamped with
 the profile's models, and its `interpret` step records the effort, the model that read and what the effort wanted it
 told about thinking, and with each call to the model what it was sent (`think`, absent when nothing was); the task
 keeps which model read it last.

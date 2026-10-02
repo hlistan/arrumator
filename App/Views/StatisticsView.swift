@@ -32,29 +32,27 @@ private struct StatisticsPage: View {
     private var minimumForShares: Int { config.funnel.minimumForShares }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: Style.statsSpacing) {
-                if let funnel {
-                    if funnel.documents == 0 {
-                        ContentUnavailableView(Wording.nothingCameThrough, systemImage: "chart.bar",
-                                               description: Text(Wording.statisticsAppear))
-                            .frame(maxWidth: .infinity).padding(.vertical, Style.statsPlaceholderPadding)
-                    } else {
-                        verdict(funnel)
-                        FunnelSteps(funnel: funnel, selected: $selected,
-                                    showsShares: funnel.showsShares(minimum: minimumForShares))
-                        if let selected, let step = funnel.steps.first(where: { $0.id == selected }) {
-                            StepDetail(step: step, insights: insights)
-                        }
-                        EndedUp(steps: funnel.steps, documents: funnel.documents)
-                    }
-                } else {
-                    ProgressView().frame(maxWidth: .infinity).padding(Style.statsPlaceholderPadding)
-                }
+        Page(.statistics, notes: funnel.map(verdict)) {
+            Picker(Wording.period, selection: Binding(get: { days }, set: { chosenDays = $0 })) {
+                ForEach(windows, id: \.self) { Text(Wording.lastDays($0)).tag($0) }
             }
-            .padding(Style.statsSpacing)
+            .labelsHidden().fixedSize()
+            if let funnel {
+                if funnel.documents == 0 {
+                    EmptyState(symbol: Destination.statistics.symbol,
+                               text: funnel.waiting > 0 ? Wording.noneTakenYet(waiting: funnel.waiting) : Wording.statisticsAppear)
+                } else {
+                    FunnelSteps(funnel: funnel, selected: $selected,
+                                showsShares: funnel.showsShares(minimum: minimumForShares))
+                    if let selected, let step = funnel.steps.first(where: { $0.id == selected }) {
+                        StepDetail(step: step, insights: insights)
+                    }
+                    EndedUp(steps: funnel.steps, documents: funnel.documents)
+                }
+            } else {
+                ProgressView().frame(maxWidth: .infinity).padding(Style.statsPlaceholderPadding)
+            }
         }
-        .safeAreaInset(edge: .top) { header }
         .task(id: "\(days)|\(model.activity)") {
             let days = days
             funnel = await model.load(Wording.loadStatisticsAction) { try await $0.stats.funnel(days: days) }
@@ -62,33 +60,20 @@ private struct StatisticsPage: View {
         }
     }
 
-    private var header: some View {
-        HStack {
-            Text(Destination.statistics.title).font(.title3.bold())
-            Spacer()
-            Picker(Wording.period, selection: Binding(get: { days }, set: { chosenDays = $0 })) {
-                ForEach(windows, id: \.self) { Text(Wording.lastDays($0)).tag($0) }
-            }
-            .labelsHidden().frame(width: Style.statsPeriodPickerWidth)
-        }
-        .padding(Style.statsHeaderInsets)
-        .background(.bar)
-    }
-
-    /// One sentence in plain words, so the screen can be read without decoding a chart.
-    private func verdict(_ funnel: ProcessingFunnel) -> some View {
-        var parts: [String] = [Wording.arrivedIn(funnel.documents, days: funnel.windowDays)]
-        if let drop = funnel.biggestDropOff, let worst = drop.stoppedHere.first {
-            parts.append(Wording.mostStopped(at: drop.title, count: worst.count, reason: worst.reason))
-        } else {
+    /// A few sentences in plain words, so the page can be read without decoding a chart.
+    private func verdict(_ funnel: ProcessingFunnel) -> String {
+        guard funnel.documents > 0 else { return "" }
+        var parts = [Wording.arrivedIn(funnel.documents, waiting: funnel.waiting, days: funnel.windowDays)]
+        if funnel.inProgress > 0 { parts.append(Wording.stillBeingWorkedOn(funnel.inProgress)) }
+        if let main = funnel.mainStop {
+            parts.append(Wording.mostStopped(at: main.step.title, count: main.stop.count, reason: main.stop.reason))
+        } else if funnel.inProgress == 0 {
             parts.append(Wording.everyOneFiled)
         }
         if let slow = funnel.slowestStep {
             parts.append(Wording.slowestStep(slow.title, duration: Format.duration(slow.medianMs)))
         }
-        return Text(parts.joined(separator: " "))
-            .font(.callout).foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
+        return parts.joined(separator: " ")
     }
 }
 

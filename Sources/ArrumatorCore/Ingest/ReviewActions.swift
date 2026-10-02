@@ -77,9 +77,11 @@ public struct ReviewActions: Sendable {
     /// label of another kind than a tag labels a document not labelled yet; a tag, the user's own, does not
     /// (`DocumentLabel.stored`).
     public func edit(_ docID: Int64, fileName: String?, labels: [DocumentLabel]?) async throws {
+        if let fileName, fileName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { throw IngestError.blankFileName }
         var doc = try await document(docID)
         var edited: [String: String] = [:]
-        if let fileName, !fileName.isEmpty {
+        var said: [String] = []
+        if let fileName {
             let target = services.filer.placer.builder.bounded(fileName, fileExtension: doc.url.pathExtension)
             if target != doc.filename {
                 let operations = services.filer.placer.operations
@@ -93,17 +95,29 @@ public struct ReviewActions: Sendable {
                 doc = try await services.documents.save(doc)
                 try await services.index.updateFilename(docID: docID, filename: doc.filename)
                 edited["fileName"] = url.lastPathComponent
+                said.append("Renamed to “\(url.lastPathComponent)”")
             }
         }
         if let labels {
             let kept = labels.compactMap { DocumentLabel.normalized($0.value, kind: $0.kind) }.distinct()
             if DocumentLabel.stored(kept, labelled: doc.isLabelled).labels != doc.labels {
+                let before = doc.labels ?? []
                 try await services.index.saveLabels(kept, docID: docID, labelled: doc.isLabelled)
                 edited["labels"] = kept.map { "\($0.kind.rawValue): \($0.value)" }.joined(separator: "; ")
+                said += Self.changes(from: before, to: kept)
             }
         }
         guard !edited.isEmpty else { return }
         try await services.history.record(.corrected, actor: .user, doc: docID,
-                                          summary: "Corrected \(edited.keys.sorted().joined(separator: ", "))", payload: edited)
+                                          summary: said.isEmpty ? "Corrected the labels" : said.joined(separator: "; "), payload: edited)
+    }
+
+    /// What a correction changed of a document's labels, as History says it: “added sender “EDP”, type “receipt””,
+    /// “removed type “invoice””; nothing when only their order changed.
+    static func changes(from before: [DocumentLabel], to after: [DocumentLabel]) -> [String] {
+        let said = { (labels: [DocumentLabel]) in labels.map { "\($0.kind.rawValue) “\($0.value)”" }.joined(separator: ", ") }
+        let added = after.filter { !before.contains($0) }
+        let removed = before.filter { !after.contains($0) }
+        return (added.isEmpty ? [] : ["added " + said(added)]) + (removed.isEmpty ? [] : ["removed " + said(removed)])
     }
 }

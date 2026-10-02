@@ -195,6 +195,47 @@ public struct SearchTaskEntry: Codable, Sendable, Hashable {
     }
 }
 
+/// A question about a search task's documents and its answer, as the task's file in `System/Conversations` records it.
+/// The trace and queue times are the index's own and are not kept; a question that was being answered is queued again.
+public struct ConversationTurnEntry: Codable, Sendable, Hashable {
+    public var id: Int64
+    public var question: String
+    public var state: TurnState
+    public var answer: String?
+    /// Absent while the answer draws on none.
+    public var sources: [Int64]?
+    public var finding: TurnFinding?
+    public var model: String?
+    public var problem: String?
+    public var asked: Date
+    public var answered: Date?
+
+    /// In the order a person reads an entry, with the answer and what it found last.
+    enum CodingKeys: String, CodingKey {
+        case id, asked, question, state, model, problem, answered, answer, sources, finding
+    }
+
+    init?(_ record: TaskTurnRecord) {
+        guard let id = record.id else { return nil }
+        self.id = id
+        question = record.question
+        state = record.state
+        answer = record.answer
+        sources = record.sources.isEmpty ? nil : record.sources
+        finding = record.finding
+        model = record.model
+        problem = record.problem
+        asked = record.askedAt
+        answered = record.answeredAt
+    }
+
+    func record(task: Int64) -> TaskTurnRecord {
+        TaskTurnRecord(id: id, taskId: task, question: question, state: state == .answering ? .queued : state, answer: answer,
+                       sourcesJson: sources.map { JSON.string($0) }, findingJson: finding.map { JSON.string($0) }, model: model,
+                       problem: problem, lastTraceId: nil, nextRunAt: state.isActive ? asked : nil, askedAt: asked, answeredAt: answered)
+    }
+}
+
 /// The front matter of a file holding a list.
 struct RecordList<Entry: Codable & Sendable>: Codable, Sendable {
     var arrumator: Int

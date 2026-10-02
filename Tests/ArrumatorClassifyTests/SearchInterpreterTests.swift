@@ -85,6 +85,28 @@ import Testing
         #expect(checked.notes.contains("words: “contador” is not in the request, dropped"), "\(checked.notes)")
     }
 
+    /// A word of the request asks for one thing: "faturas de Portugal" asks for documents under Portuguese law, not also
+    /// for documents written in Portuguese, which would silently hide a Portuguese bill written in English.
+    @Test func wordsTheLabelOfOneKindQuotesGroundNoLabelOfALaterKind() throws {
+        let request = "faturas e recibos de Portugal de 2026, por remetente"
+        let checked = try Self.validator().validate(Self.answer([
+            "senders": .array([]), "types": .array([Self.asked("invoice", "faturas"), Self.asked("receipt", "recibos")]),
+            "topics": .array([]), "dates": .array([Self.asked("2026", "2026")]),
+            "jurisdictions": .array([Self.asked("Portugal", "de Portugal")]),
+            "languages": .array([Self.asked("pt", "Portugal")]),
+        ]), request: request)
+        #expect(checked.plan.labels.values(.jurisdiction) == ["Portugal"], "the first kind the words ground keeps them")
+        #expect(checked.plan.labels.values(.language).isEmpty, "a later kind quoting only those words asks for nothing more")
+        #expect(checked.notes.contains("languages: “pt” is asked for by words a label of another kind quotes (“Portugal”), dropped"),
+                "and the trace says why: \(checked.notes)")
+        let both = try Self.validator().validate(Self.answer([
+            "senders": .array([]), "topics": .array([]), "types": .array([Self.asked("invoice", "invoices")]),
+            "dates": .array([]), "languages": .array([Self.asked("pt", "Portuguese invoices")]),
+        ]), request: "Portuguese invoices")
+        #expect(both.plan.labels.values(.language) == ["pt"],
+                "a quote with words of its own is kept, though an earlier kind quotes some of them too")
+    }
+
     @Test func aDateOrDeadlineAskedForMayBeAnySpanOfTime() throws {
         let request = "invoices from March 2025, from 1.4.2025 to 30.6.2025, last year, due in 2026, in Portuguese, of 54.21 euros"
         let checked = try Self.validator().validate(Self.answer([

@@ -9,6 +9,10 @@ public actor MockOllama: OllamaAPI {
     /// ran out does: an empty answer, done for that reason.
     public static let cutOff = "\u{0}cut off"
 
+    /// What a handler answers to stop at the length limit after `text`, as a model that ran out part way through
+    /// writing does.
+    public static func cutOff(after text: String) -> String { cutOff + text }
+
     public private(set) var chatRequests: [OllamaChatRequest] = []
     public private(set) var embedRequests: [OllamaEmbedRequest] = []
     private let handler: ChatHandler
@@ -62,13 +66,40 @@ public actor MockOllama: OllamaAPI {
         return Self.shown(capabilities: capabilities[model] ?? defaultCapabilities, thinking: thinking[model])
     }
 
-    public func chat(_ request: OllamaChatRequest) async throws -> OllamaChatResponse {
+    /// Answers with what the handler gives. Streamed, the answer grows a word at a time, as Ollama streams it, before
+    /// the whole of it comes back.
+    public func chat(_ request: OllamaChatRequest, partial: (@Sendable (OllamaChatResponse) async -> Void)?) async throws -> OllamaChatResponse {
         chatRequests.append(request)
-        let content = try handler(request)
-        let cut = content == Self.cutOff
-        return OllamaChatResponse(model: request.model, message: .assistant(cut ? "" : content), done: true,
+        let given = try handler(request)
+        let cut = given.hasPrefix(Self.cutOff)
+        let content = cut ? String(given.dropFirst(Self.cutOff.count)) : given
+        if let partial {
+            var sofar = ""
+            for word in Self.words(content) {
+                sofar += word
+                await partial(OllamaChatResponse(model: request.model, message: .assistant(sofar), done: false, doneReason: nil,
+                                                 totalDuration: nil, loadDuration: nil, promptEvalCount: nil, promptEvalDuration: nil,
+                                                 evalCount: nil, evalDuration: nil))
+            }
+        }
+        return OllamaChatResponse(model: request.model, message: .assistant(content), done: true,
                                   doneReason: cut ? OllamaChatResponse.lengthReason : "stop", totalDuration: 1_000_000, loadDuration: 0, promptEvalCount: 10,
                                   promptEvalDuration: 500_000, evalCount: 5, evalDuration: 500_000)
+    }
+
+    /// `text` in pieces that each end after a space, which put back together are `text`.
+    static func words(_ text: String) -> [String] {
+        var pieces: [String] = []
+        var current = ""
+        for character in text {
+            current.append(character)
+            if character == " " {
+                pieces.append(current)
+                current = ""
+            }
+        }
+        if !current.isEmpty { pieces.append(current) }
+        return pieces
     }
 
     public func embed(_ request: OllamaEmbedRequest) async throws -> OllamaEmbedResponse {

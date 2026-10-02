@@ -52,6 +52,12 @@ say what it is in one vocabulary, so a German electricity bill and a Japanese on
   High, which is how much the model thinks before it answers, and the model profile that reads it: the one Settings
   uses, or another, such as Smart, whose model thinks. Take any out or add more, as the sidebar narrows them down, and
   export them into folders by those labels, or as a ZIP archive. Every task and export is kept, to open again.
+- **Talks with the documents a task found.** Ask about them in your own words, in any language: summarize them,
+  translate one, compare them, draft a brief or an e-mail from them, or find the amounts, dates and obligations in them.
+  The local model answers from the documents in the task, the answer appearing as it is written, and names the
+  documents it drew on. Add documents to the task or take them out, and the next answer sees the set as it is then. Ask
+  it to find more, and it looks for them as a task does, listing what it found outside the task for you to add. Every
+  conversation is kept in the archive beside its task.
 - **Asks when it cannot read a document.** A file the model gave no answer for, or that is encrypted, damaged or
   blank, waits in Needs You, in the archive, instead of being guessed into shape.
 - **Everything can be audited**: the prompts, the model's answers, timings and a full history, with Statistics
@@ -126,7 +132,8 @@ together; [docs/cli.md](docs/cli.md) explains how to use it. To build from sourc
    page lets go of them all. Type in **Filter Labels**, above the labels, to find one.
 6. On **Tasks**, ask for the documents you need in your own words, with how much the model thinks and the profile
    that reads the request under **Read with**, look over what is found, add or take out any, and export them into
-   folders by their labels (`arrumatorcli tasks new …` from a terminal).
+   folders by their labels (`arrumatorcli tasks new …` from a terminal). Under **Conversation** on the task's card, ask
+   about them: summarize, translate or compare them, or draft an e-mail from them (`arrumatorcli tasks ask …`).
 7. Search documents by any word, or by a kind of label, with `arrumatorcli search`: `sender:edp`,
    `party:"maria silva"`, `type:invoice`, `language:russian`.
 
@@ -141,6 +148,7 @@ together; [docs/cli.md](docs/cli.md) explains how to use it. To build from sourc
 | [Evaluation](docs/evaluation.md) | The measurements behind the pipeline and the model profiles. |
 | [Sources](docs/organizing-principles-sources.md) | The research behind the kinds of label and how the model is asked. |
 | [Continuous integration and releases](docs/releasing.md) | How changes are checked and released, and how to sign releases. |
+| [QA protocol](docs/qa/protocol.md) | How the app is tested end to end, as a user meets it. |
 
 ## Contributing
 

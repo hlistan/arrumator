@@ -44,6 +44,14 @@ public struct Harness: Sendable {
         let queue = SearchTaskQueue(services: services, interpreter: interpreter)
         return (queue, SearchTaskActions(services: services, queue: queue))
     }
+    /// Conversations about tasks' documents over this pipeline, answered by `answerer`, and requests for more documents
+    /// read by `interpreter`: the queue and what the user does with them.
+    public func conversations(_ answerer: any TaskQuestionAnswering,
+                              interpreter: any SearchPromptInterpreting) -> (queue: TaskConversationQueue, actions: TaskConversationActions) {
+        let queue = TaskConversationQueue(services: services, answerer: answerer, interpreter: interpreter, search: search)
+        return (queue, TaskConversationActions(services: services, queue: queue))
+    }
+
     public var labels: LabelActions { LabelActions(database: env.database, time: env.time) }
     public var search: SearchService { SearchService(database: env.database, vectors: VectorIndex(), embedder: nil, config: env.config.search) }
 

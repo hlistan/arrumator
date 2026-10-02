@@ -177,7 +177,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Wind
 
     private func makeWindow(_ id: WindowID) -> NSWindow {
         let content: AnyView = switch id {
-        case .main: AnyView(MainWindow())
+        // The view's own minimum too: the hosting controller sets the window's minimum from its view's.
+        case .main: AnyView(MainWindow().frame(minWidth: Style.mainWindowMinimum.width, minHeight: Style.mainWindowMinimum.height))
         case .onboarding: AnyView(OnboardingView())
         case .settings: AnyView(SettingsView())
         }
@@ -192,6 +193,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Wind
         }
         window.center()
         window.setFrameAutosaveName("arrumator.\(id.rawValue)")
+        // A frame saved smaller than the minimum, by an earlier version or a script, is not restored as it was.
+        if id == .main {
+            let content = window.contentRect(forFrameRect: window.frame).size
+            if content.width < Style.mainWindowMinimum.width || content.height < Style.mainWindowMinimum.height {
+                window.setContentSize(CGSize(width: max(content.width, Style.mainWindowMinimum.width),
+                                             height: max(content.height, Style.mainWindowMinimum.height)))
+            }
+        }
         window.isReleasedWhenClosed = false
         window.delegate = self
         windows[id] = window

@@ -58,6 +58,7 @@ needs only `scripts/verify.sh --checks-only`: `scripts/change-scope.sh main` tel
 | `scripts/deadcode.sh` | Unused code across the package, its tests, the command and the app, with [Periphery](https://github.com/peripheryapp/periphery) (`.periphery.yml`). |
 | `scripts/bootstrap.sh` | Installs the tools and enables the hooks (see above). |
 | `scripts/release.sh` | Builds a release into `dist/`; see [Continuous integration and releases](docs/releasing.md). |
+| `scripts/qa-drive.sh <command> <pid> [arguments]` | Drives one running Arrumator, by its process number, through the macOS accessibility API, as the [QA protocol](docs/qa/protocol.md) does: reads its window's elements, presses, clicks, types, sends keys, scrolls, resizes and screenshots its windows and no other. It never reads the system's Apple menu or an open file panel, which list the user's own files. It builds `scripts/qa-drive.swift` into `build/qa-drive` the first time and whenever that changed; `help` lists the commands. The terminal it runs in needs Accessibility in System Settings › Privacy & Security. |
 | `scripts/app-icon.sh [<folder>]` | Draws the app icon into `App/Assets.xcassets/AppIcon.appiconset`, every size macOS asks for: a page arriving in a tray, drawn by `scripts/app-icon.swift` in the Incoming list's colour, which it reads from `Palette.incomingList` and stops when it cannot. The drawing is the project's own, made of paths with no SF Symbol, image, font or text, as Apple's licence does not allow symbols, or glyphs like them, in an app icon; the icon gate in `scripts/lint.sh` checks it. The images are build inputs and are committed: run it after changing that colour or the drawing, and never edit them by hand. With `<folder>` it writes the set there instead, to look at first. |
 
 A change to how documents are read (the prompt, the answer schema and its validation, the label kinds, the `analysis`
@@ -80,6 +81,7 @@ document:
 | [docs/evaluation.md](docs/evaluation.md) | Measurements behind the pipeline and the model profiles. |
 | [docs/releasing.md](docs/releasing.md) | CI, releases, versions, signing. |
 | [docs/repository-settings.md](docs/repository-settings.md) | The GitHub repository's security settings and the rules that enforce the push protocol. |
+| [docs/qa/protocol.md](docs/qa/protocol.md) | How the app is tested as a user meets it: the method, environment, charters, severity and report. A run's findings go into `docs/qa/reports/`, which Git ignores. |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | This file: setting up, checking, the scripts. |
 
 `scripts/check-docs.sh` catches a command, option, variable, configuration key or script that the documents miss or

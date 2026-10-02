@@ -54,7 +54,7 @@ public struct TestEnvironment: Sendable {
     }
 
     /// An environment that reads none of the process's variables: tests never depend on how they were started.
-    public static let isolated = RuntimeEnvironment(home: nil, ollamaURL: nil, logLevelName: nil, pipelineOverridePath: nil)
+    public static let isolated = RuntimeEnvironment(home: nil, ollamaURL: nil, logLevelName: nil, pipelineOverridePath: nil, trashPath: nil)
 
     /// Where things are in the archive.
     public var layout: ArchiveLayout { ArchiveLayout(root: archive, records: config.records, watcher: config.watcher) }

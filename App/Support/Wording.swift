@@ -68,13 +68,26 @@ enum Wording {
     static func waiting(_ reason: String) -> String { "Waiting: \(reason)" }
 
     /// The stage a file is at, and the file.
-    static func working(on file: String, stage: String) -> String { "\(stage) \(file)" }
+    static func working(on file: String, stage: String) -> String { "\(stage): \(file)" }
+
+    /// What is being done to a file at a stage, while it is: "Reading its text", not the funnel's "Read".
+    static func doing(_ state: JobState) -> String {
+        switch state {
+        case .pending: "Waiting"
+        case .hashing: "Checking for copies"
+        case .extracting: "Reading its text"
+        case .analysing: "Being read by the model"
+        case .filing: "Filing"
+        case .done, .duplicate, .needsReview, .failed, .held, .cancelled: "Finishing"
+        }
+    }
 
     static func queued(_ count: Int) -> String { "\(count) queued" }
 
     /// A search task's request being read, by the model reading it: in the menu bar popover, and the help of the
     /// spinner beside Tasks in the sidebar.
     static func readingRequest(with model: String) -> String { "Reading a request with \(model)" }
+    static func answeringQuestion(with model: String) -> String { "Answering a question with \(model)" }
 
     /// Notification titles.
     static let notifyFiled = "Filed"
@@ -125,6 +138,11 @@ enum Wording {
     static let takeOutOfTaskAction = "Take out of task"
     static let exportAction = "Export"
     static let removeTaskAction = "Remove task"
+    static let askQuestionAction = "Ask about the documents"
+    static let askAgainAction = "Ask again"
+    static let stopAnswerAction = "Stop answering"
+    static let clearConversationAction = "Clear the conversation"
+    static let loadConversationAction = "Load the conversation"
 
     // MARK: Shared across pages
 
@@ -137,6 +155,9 @@ enum Wording {
     static let looksRight = "Looks Right"
     static let readAgain = "Read Again"
     static let showWithoutLabel = "Show documents without this label too"
+
+    /// The × that lets go of a label chosen in the sidebar, as VoiceOver reads it.
+    static func letGoOf(_ label: String) -> String { "Stop narrowing by “\(label)”" }
     static let showOnlyWithLabel = "Show only documents with this label"
     /// Stands for a value there is none of.
     static let noValue = "—"
@@ -203,10 +224,32 @@ enum Wording {
         return "\(reason) · \(preposition) \(place)"
     }
 
+    /// What a document's row ends with: nothing for one filed at the top of the archive, where the place would say the
+    /// same on every row and its date already leads the line beneath; else where it is, or what happened to it.
+    static func rowDetail(of document: DocumentRecord, archive: URL?, incoming: URL?) -> String? {
+        if document.status == .filed, place(of: document, archive: archive, incoming: incoming) == archiveFolder { return nil }
+        return outcome(of: document, archive: archive, incoming: incoming)
+    }
+
     /// Who read the document, as a sentence.
     static func reader(_ analysis: DocumentAnalysis) -> String {
-        analysis.model.map { "Read by \($0)" } ?? "Not read by the model"
+        guard let model = analysis.model else { return "Not read by the model" }
+        return analysis.hadNoText ? "No text could be taken from it, so \(model) saw only its name" : "Read by \(model)"
     }
+
+    /// What would help a document that waits for the user, when Read Again alone cannot.
+    static func advice(_ analysis: DocumentAnalysis) -> String? {
+        if analysis.problems.contains(DocumentAnalysis.Problem.encrypted) {
+            return "Read Again cannot open it: open it with its password, save a copy without one, and put that copy in Incoming."
+        }
+        if analysis.problems.contains(DocumentAnalysis.Problem.corrupted) {
+            return "Read Again cannot mend a damaged file: put a good copy of it in Incoming."
+        }
+        return nil
+    }
+
+    /// Said once Read Again has put a document back in the queue.
+    static let readAgainQueued = "Waiting to be read again, after the files already in Incoming."
 
     /// How a document arrived, under its name on its card.
     static func arrived(as name: String, at date: Date) -> String {

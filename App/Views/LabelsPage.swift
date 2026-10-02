@@ -30,7 +30,7 @@ struct LabelsPage: View {
                         } else {
                             ListRow(symbol: "questionmark.circle", tint: Palette.attention,
                                     title: Wording.alike(suggestion.value, suggestion.into), detail: Wording.labelKind(suggestion.kind))
-                                .onTapGesture { withAnimation(.snappy) { openSuggestion = suggestion.id } }
+                                .rowAction { withAnimation(.snappy) { openSuggestion = suggestion.id } }
                         }
                     }
                 }
@@ -59,8 +59,10 @@ struct LabelsPage: View {
                 if model.openLabel == item.label {
                     LabelCard(label: item.label, others: all.map(\.label.value).filter { $0 != item.label.value })
                 } else {
-                    ListRow(symbol: "tag", tint: .secondary, title: Wording.label(item.label))
-                        .onTapGesture { withAnimation(.snappy) { model.openLabel = item.label } }
+                    // The most used first, each with how many documents have it, which is why it comes where it does.
+                    ListRow(symbol: "tag", tint: .secondary, title: Wording.label(item.label),
+                            detail: Format.count(item.documents, "document"))
+                        .rowAction { withAnimation(.snappy) { model.openLabel = item.label } }
                 }
             }
             if shown.count < all.count {
@@ -145,6 +147,7 @@ struct LabelCard: View {
             HStack(spacing: Style.inlineControlSpacing) {
                 Text(Wording.mergeInto).foregroundStyle(.secondary)
                 TextField(Wording.labelPrompt(label.kind), text: $into)
+                    .accessibilityLabel(Wording.labelPrompt(label.kind))
                     .textFieldStyle(.roundedBorder).frame(width: Style.mergeFieldWidth)
                     .onSubmit { merge() }
                 if !candidates.isEmpty {

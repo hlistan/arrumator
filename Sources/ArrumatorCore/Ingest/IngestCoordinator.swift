@@ -8,8 +8,7 @@ import UniformTypeIdentifiers
 public actor IngestCoordinator {
     private let services: PipelineServices
     private var worker: Task<Void, Never>?
-    private let kick: AsyncStream<Void>.Continuation
-    private let kicks: AsyncStream<Void>
+    private let doorbell = Doorbell()
     private var statusContinuations: [UUID: AsyncStream<IngestStatus>.Continuation] = [:]
     public private(set) var status = IngestStatus.idle {
         didSet { if status != oldValue { for c in statusContinuations.values { c.yield(status) } } }
@@ -18,9 +17,15 @@ public actor IngestCoordinator {
     /// Floor for loop sleeps so a job due "now" does not spin.
     static let minimumWait = 0.2
 
+    /// What reading a file's text found, as History says it: how much text, from what. The language is the model's label
+    /// to give: the detector's guess, which a mixed page misleads, is not repeated.
+    static func extractedSummary(_ content: ExtractedContent) -> String {
+        content.text.isEmpty ? "No text in \(content.kind.described)"
+            : "Read \(Format.count(content.text.count, "character")) of text from \(content.kind.described)"
+    }
+
     public init(services: PipelineServices) {
         self.services = services
-        (kicks, kick) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
     }
 
     public func statusUpdates() -> AsyncStream<IngestStatus> {
@@ -42,7 +47,7 @@ public actor IngestCoordinator {
         guard worker == nil else { return }
         await logResumingJobs()
         worker = Task { [weak self] in await self?.runLoop() }
-        kick.yield()
+        doorbell.ring()
     }
 
     /// Stops the worker and waits until it has, so no job is still running once this returns. A job in hand is
@@ -57,7 +62,7 @@ public actor IngestCoordinator {
         self.worker = nil
     }
 
-    public func wake() { kick.yield() }
+    public func wake() { doorbell.ring() }
 
     /// Called by the Incoming watcher for each stable file, and by `arrumatorcli ingest`, which may give it `tags` of
     /// its own. The tags the file is given are decided now, from where it is in Incoming (`PipelineServices.tags`), and
@@ -79,7 +84,7 @@ public actor IngestCoordinator {
             try await services.history.record(.arrived, job: id, summary: summary, payload: ArrivedPayload(path: path, tags: payload.tags))
             Log.info(.ingest, "Queued", ["path": path, "job": id.map(String.init) ?? "-", "tags": given.map(\.label.value).joined(separator: ", ")])
             await refreshQueueCount()
-            kick.yield()
+            doorbell.ring()
             return id
         } catch {
             Log.error(.ingest, "Could not queue file", ["path": path, "error": error.localizedDescription])
@@ -119,32 +124,15 @@ public actor IngestCoordinator {
             await refreshQueueCount()
             var wait = await earliestDue().map { $0.timeIntervalSince(services.time.now()) }
             if powerReason != nil { wait = services.config.power.recheckSeconds }
-            await waitForKick(timeout: wait.map { max(Self.minimumWait, $0) })
+            await doorbell.wait(timeout: wait.map { max(Self.minimumWait, $0) }, time: services.time)
         }
     }
 
-    /// When the next active job is due; a queue that cannot be read waits for the next kick.
+    /// When the next active job is due; a queue that cannot be read waits for the doorbell to ring.
     private func earliestDue() async -> Date? {
         do { return try await services.jobs.earliestDue() } catch {
             Log.error(.ingest, "Could not read the job queue", ["error": error.localizedDescription])
             return nil
-        }
-    }
-
-    private func waitForKick(timeout: Double?) async {
-        let kicks = kicks
-        let time = services.time
-        await withTaskGroup(of: Void.self) { group in
-            group.addTask {
-                var it = kicks.makeAsyncIterator()
-                _ = await it.next()
-            }
-            if let timeout {
-                // Woken early by cancellation, the loop checks it and ends.
-                group.addTask { try? await time.sleep(seconds: timeout) }
-            }
-            await group.next()
-            group.cancelAll()
         }
     }
 
@@ -267,7 +255,7 @@ public actor IngestCoordinator {
             payload.content = content
             try await storeExtraction(docID: docID, content: content)
             try await services.history.record(.extracted, doc: docID, job: job.id, trace: trace.traceID,
-                                              summary: "\(content.kind.rawValue), \(content.text.count) chars, \(content.language.primary)",
+                                              summary: Self.extractedSummary(content),
                                               payload: ["warnings": content.warnings.map(\.code.rawValue).joined(separator: ",")])
             try await save(&job, payload, state: .analysing)
         }

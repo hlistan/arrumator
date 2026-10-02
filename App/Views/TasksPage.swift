@@ -6,7 +6,7 @@ import SwiftUI
 /// then the tasks, those still in the queue first and the rest newest first. A task in the queue says what the queue
 /// does with it, as its status says (`AppModel.taskQueue`): being read, with a spinner, and by which model, or what it
 /// waits for. A task opens in place as a card with its documents arranged by their labels, to look over, add to, take
-/// from and export (`SearchTaskActions`).
+/// from and export (`SearchTaskActions`), and a conversation about them (`ConversationView`).
 struct TasksPage: View {
     @Environment(AppModel.self) private var model
     @State private var tasks: [SearchTask] = []
@@ -23,6 +23,7 @@ struct TasksPage: View {
         Page(.tasks, notes: Wording.tasksNotes) {
             HStack(alignment: .firstTextBaseline, spacing: Style.askSpacing) {
                 TextField(Wording.askPrompt, text: $prompt, axis: .vertical)
+                    .accessibilityLabel(Wording.requestField)
                     .lineLimit(1...Style.askMaxLines)
                     .textFieldStyle(.roundedBorder)
                     .onSubmit(ask)
@@ -56,9 +57,11 @@ struct TasksPage: View {
             TaskCard(taskID: task.id, profiles: profiles) { if model.openTask == task.id { model.openTask = nil } }
         } else {
             let progress = model.taskQueue.progress(of: task)
-            ListRow(symbol: task.state.symbol, tint: task.state.tint, title: task.name, detail: Wording.taskOutcome(task, progress: progress),
-                    subtitle: task.name == task.prompt ? nil : task.prompt, busy: progress?.isReading == true)
-                .onTapGesture { withAnimation(.snappy) { model.openTask = task.id } }
+            let answering = progress == nil && model.conversation.answering?.task == task.id
+            ListRow(symbol: task.state.symbol, tint: task.state.tint, title: task.name,
+                    detail: answering ? Wording.answeringRow : Wording.taskOutcome(task, progress: progress),
+                    subtitle: task.name == task.prompt ? nil : task.prompt, busy: progress?.isReading == true || answering)
+                .rowAction { withAnimation(.snappy) { model.openTask = task.id } }
         }
     }
 
@@ -130,8 +133,9 @@ struct ReadingControls: View {
 
 /// A task opened in place: while it is in the queue, what the queue does with it (`TaskProgressLine`); what it asks for,
 /// with what effort and by which profile, and how the model read it; its name, effort, profile and arrangement to change;
-/// its documents arranged by their labels, each to take out; ways to add more and to export them; and every export made
-/// of them.
+/// then either its documents, arranged by their labels, each to take out, with ways to add more and to export them and
+/// every export made of them, or the conversation about them (`ConversationView`), answered with the same effort and
+/// profile.
 struct TaskCard: View {
     @Environment(AppModel.self) private var model
     let taskID: Int64
@@ -142,6 +146,7 @@ struct TaskCard: View {
     @State private var name = ""
     @State private var prompt = ""
     @State private var confirmingRemoval = false
+    @State private var section = Section.documents
     @FocusState private var editingName: Bool
     @FocusState private var editingPrompt: Bool
 
@@ -151,12 +156,22 @@ struct TaskCard: View {
                 header(detail.task)
                 if let progress = model.taskQueue.progress(of: detail.task) { TaskProgressLine(progress: progress) }
                 request(detail.task)
-                if detail.task.state == .ready && detail.tree.count == 0 {
-                    Text(Wording.nothingFound).foregroundStyle(.secondary)
+                Picker(Wording.documentsSection, selection: $section) {
+                    Text(Wording.documentsSection).tag(Section.documents)
+                    Text(Wording.conversationSection).tag(Section.conversation)
                 }
-                SetLevel(group: detail.tree, taskID: taskID)
-                actions(detail.task)
-                exports(detail.task)
+                .pickerStyle(.segmented).labelsHidden().fixedSize()
+                switch section {
+                case .documents:
+                    if detail.task.state == .ready && detail.tree.count == 0 {
+                        Text(Wording.nothingFound).foregroundStyle(.secondary)
+                    }
+                    SetLevel(group: detail.tree, taskID: taskID)
+                    actions(detail.task)
+                    exports(detail.task)
+                case .conversation:
+                    ConversationView(task: detail.task)
+                }
             } else {
                 ProgressView().frame(maxWidth: .infinity)
             }
@@ -177,12 +192,20 @@ struct TaskCard: View {
         }
     }
 
+    /// What the card shows below what the task asks for.
+    enum Section: Hashable {
+        case documents, conversation
+    }
+
     private func header(_ task: SearchTask) -> some View {
         HStack(alignment: .firstTextBaseline) {
             Image(systemName: task.state.symbol).foregroundStyle(task.state.tint)
             TextField(Wording.name, text: $name)
+                .accessibilityLabel(Wording.name)
                 .textFieldStyle(.plain)
                 .font(.title3.weight(.semibold))
+                // A plain field is as tall as its line, which cuts the descenders of a large font.
+                .padding(.vertical, Style.titleFieldPadding)
                 .focused($editingName)
                 .onSubmit { editingName = false }
             Spacer(minLength: 0)
@@ -198,6 +221,7 @@ struct TaskCard: View {
                 label(Wording.asked)
                 HStack(alignment: .firstTextBaseline, spacing: Style.inlineControlSpacing) {
                     TextField(Wording.askPrompt, text: $prompt, axis: .vertical)
+                        .accessibilityLabel(Wording.requestField)
                         .lineLimit(1...Style.askMaxLines)
                         .textFieldStyle(.roundedBorder)
                         .focused($editingPrompt)
@@ -253,7 +277,7 @@ struct TaskCard: View {
                 HStack(spacing: Style.chipContentSpacing) {
                     Text(Wording.labelKind(kind)).foregroundStyle(Palette.labelKind(kind))
                     Button { change(SearchTaskChange(grouping: .by(task.grouping.filter { $0 != kind }))) } label: {
-                        Image(systemName: "xmark.circle.fill")
+                        Image(systemName: "xmark.circle.fill").accessibilityLabel(Wording.stopArrangingBy(Wording.labelKind(kind)))
                     }
                     .buttonStyle(.plain).foregroundStyle(.secondary)
                 }
@@ -331,9 +355,12 @@ struct TaskCard: View {
         Task { await model.perform(Wording.changeTaskAction) { _ = try await $0.searchTasks.update(id, change) } }
     }
 
-    /// Asks where, exports there, and shows the export in Finder.
+    /// Asks where, exports there, and shows the export in Finder. The panel opens where the task was last exported to, or
+    /// beside the archive, never wherever a panel was last left.
     private func export(_ format: ExportFormat) {
-        guard let path = FolderPicker.choose(title: Wording.chooseExportFolder, startingAt: nil) else { return }
+        let last = detail?.task.exports.last.map { URL(fileURLWithPath: $0.path).deletingLastPathComponent().path }
+        let start = last ?? model.settings?.archiveURL.deletingLastPathComponent().path
+        guard let path = FolderPicker.choose(title: Wording.chooseExportFolder, startingAt: start) else { return }
         let id = taskID
         Task {
             guard let export = await model.load(Wording.exportAction, {
@@ -429,21 +456,25 @@ private struct SetDocument: View {
     var body: some View {
         HStack(spacing: Style.rowAccessorySpacing) {
             ListRow(symbol: document.status.symbol, tint: document.status.tint, title: document.filename,
-                    detail: Wording.outcome(of: document, archive: model.settings?.archiveURL, incoming: model.settings?.incomingURL),
+                    detail: Wording.rowDetail(of: document, archive: model.settings?.archiveURL, incoming: model.settings?.incomingURL),
                     subtitle: Wording.labels(document.labels))
                 .onTapGesture(count: 2) { model.open(document.path) }
                 .help(Wording.doubleClickToOpen)
-            Button {
-                guard let id = document.id else { return }
-                let task = taskID
-                Task { await model.perform(Wording.takeOutOfTaskAction) { _ = try await $0.searchTasks.remove(task, documents: [id]) } }
-            } label: {
-                Image(systemName: "xmark.circle.fill")
+            Button(action: takeOut) {
+                Image(systemName: "xmark.circle.fill").accessibilityLabel(Wording.takeOutNamed(document.filename))
             }
             .buttonStyle(.plain).foregroundStyle(.secondary).help(Wording.takeOutHelp)
             .opacity(hovering ? 1 : 0)
         }
         .onHover { hovering = $0 }
+        .accessibilityAction(named: Wording.takeOut, takeOut)
+        .contextMenu { Button(Wording.takeOut, action: takeOut) }
+    }
+
+    private func takeOut() {
+        guard let id = document.id else { return }
+        let task = taskID
+        Task { await model.perform(Wording.takeOutOfTaskAction) { _ = try await $0.searchTasks.remove(task, documents: [id]) } }
     }
 }
 

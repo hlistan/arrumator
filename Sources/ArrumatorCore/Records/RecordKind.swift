@@ -11,9 +11,12 @@ public enum RecordKind: Hashable, Sendable {
     case labelRules
     /// The user's search tasks and their exports.
     case searchTasks
+    /// The questions about one search task's documents and their answers, by the task's number.
+    case conversation(task: Int64)
 
     static let documentsPrefix = "documents:"
     static let historyPrefix = "history:"
+    static let conversationPrefix = "conversation:"
     static let labelRulesKey = "labels"
     static let searchTasksKey = "tasks"
 
@@ -24,6 +27,7 @@ public enum RecordKind: Hashable, Sendable {
         case let .history(month): Self.historyPrefix + month
         case .labelRules: Self.labelRulesKey
         case .searchTasks: Self.searchTasksKey
+        case let .conversation(task): Self.conversationPrefix + String(task)
         }
     }
 
@@ -39,6 +43,8 @@ public enum RecordKind: Hashable, Sendable {
             self = .documents(directory: directory)
         } else if key.hasPrefix(Self.historyPrefix) {
             self = .history(month: String(key.dropFirst(Self.historyPrefix.count)))
+        } else if key.hasPrefix(Self.conversationPrefix), let task = Int64(key.dropFirst(Self.conversationPrefix.count)) {
+            self = .conversation(task: task)
         } else {
             return nil
         }

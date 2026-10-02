@@ -26,6 +26,12 @@ final class AppModel {
     /// Ollama. Taking a task to read records nothing in History, so pages that show tasks reload on this too
     /// (`taskActivity`).
     var taskQueue = SearchTaskQueueStatus.idle
+    /// What the conversation queue is doing: the question it answers and by which model, what waits, and whether it
+    /// waits for Ollama; without the answer being written (`ConversationQueueStatus.settled`), which `answerSoFar` has, so
+    /// what shows this changes as a question is taken or done, not with every word.
+    var conversation = ConversationQueueStatus.idle
+    /// What has come so far of the answer being written, which only the question it answers shows.
+    var answerSoFar: AnswerProgress?
     var ollama = OllamaState.unknown
     var recent: [EventRecord] = []
     var reviewCount = 0
@@ -36,6 +42,9 @@ final class AppModel {
     /// What the Tasks page and a task's card reload on with `.task(id:)`: History growing, and the search task queue's
     /// status changing, as it does when a task's request starts being read.
     var taskActivity: String { "\(activity)|\(taskQueue)" }
+    /// What a task's conversation reloads on with `.task(id:)`: History growing, and the conversation queue taking a
+    /// question or ending its answer; not each word of the answer being written.
+    var conversationActivity: String { "\(activity)|\(conversation)" }
     /// What the Incoming page reloads on with `.task(id:)`: History growing, and the ingest worker's status changing, as it
     /// does when the worker takes a file, moves it to its next stage or finishes it.
     var ingestActivity: String { "\(activity)|\(ingest)" }
@@ -67,8 +76,9 @@ final class AppModel {
     func start() async {
         guard runtime == nil else { return }
         do {
-            let runtime = try await ArrumatorRuntime.bootstrap(appVersion: Self.version, environment: .current, echoLogsToStderr: false,
-                                                               trash: SystemTrash())
+            let environment = RuntimeEnvironment.current
+            let runtime = try await ArrumatorRuntime.bootstrap(appVersion: Self.version, environment: environment, echoLogsToStderr: false,
+                                                               trash: environment.trash(orElse: SystemTrash()))
             self.runtime = runtime
             settings = await runtime.settings.current
             observe(runtime)
@@ -121,6 +131,8 @@ final class AppModel {
             settings = await next.settings.current
             ingest = .idle
             taskQueue = .idle
+            conversation = .idle
+            answerSoFar = nil
             openDocument = nil
             observe(next)
             activity &+= 1
@@ -141,6 +153,14 @@ final class AppModel {
             },
             Task { [weak self] in
                 for await status in await runtime.taskQueue.statusUpdates() { self?.taskQueue = status }
+            },
+            Task { [weak self] in
+                for await status in await runtime.conversationQueue.statusUpdates() {
+                    guard let self else { return }
+                    // Set only when changed: setting a value the same as it was still tells every view that shows it.
+                    if conversation != status.settled { conversation = status.settled }
+                    if answerSoFar != status.answering?.progress { answerSoFar = status.answering?.progress }
+                }
             },
             Task { [weak self] in
                 for await state in await runtime.lifecycle.states() { self?.ollama = state }
@@ -307,11 +327,27 @@ final class AppModel {
     func reveal(_ path: String) { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) }
     func open(_ path: String) { NSWorkspace.shared.open(URL(fileURLWithPath: path)) }
 
+    /// Puts `text` on the clipboard, in place of what was there.
+    func copy(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    /// What the search tasks are at work on, seen from any page: a request being read, else a question being answered;
+    /// nil while neither is.
+    var tasksAtWork: String? {
+        if let reading = taskQueue.reading { return Wording.readingRequest(with: reading.model) }
+        guard let answering = conversation.answering else { return nil }
+        // Tried again while Ollama is away, a question waits for it until the model begins, as the question itself says.
+        if conversation.waitingForOllama, !answering.progress.begun { return Wording.waitingForOllama }
+        return Wording.answeringQuestion(with: answering.model)
+    }
+
     var statusSymbol: String {
         if case .failed = phase { return "exclamationmark.triangle" }
         if settings?.paused == true { return "pause.circle" }
         switch ollama {
-        case .unhealthy, .notInstalled: return "exclamationmark.triangle"
+        case .unhealthy, .notInstalled, .unreachable: return "exclamationmark.triangle"
         default: break
         }
         if ingest.current != nil { return "tray.and.arrow.down.fill" }
@@ -328,17 +364,18 @@ final class AppModel {
         return nil
     }
 
-    /// What the app is doing, in the menu bar popover: a document being filed first, then a search request being read.
+    /// What the app is doing, in the menu bar popover: a document being filed first, then a search request being read or a
+    /// question about a task's documents being answered.
     var statusLine: String {
         if case let .failed(why) = phase { return why }
         if settings?.onboardingCompleted == true, !watching { return Wording.startingForFolders }
         if settings?.paused == true { return Wording.paused }
         if let reason = ingest.powerPauseReason { return Wording.waiting(reason) }
-        if ingest.waitingForOllama || taskQueue.waitingForOllama { return Wording.waitingForOllama }
+        if ingest.waitingForOllama || taskQueue.waitingForOllama || conversation.waitingForOllama { return Wording.waitingForOllama }
         if let current = ingest.current {
-            return Wording.working(on: (current.path as NSString).lastPathComponent, stage: current.stage.rawValue.capitalized)
+            return Wording.working(on: (current.path as NSString).lastPathComponent, stage: Wording.doing(current.stage))
         }
-        if let reading = taskQueue.reading { return Wording.readingRequest(with: reading.model) }
+        if let work = tasksAtWork { return work }
         return ingest.queued > 0 ? Wording.queued(ingest.queued) : Wording.idle
     }
 }
