@@ -21,28 +21,33 @@ public actor MockOllama: OllamaAPI {
     private let defaultCapabilities: [String]
     private let capabilities: [String: [String]]
     private let thinking: [String: OllamaShowResponse.Thinking]
+    private let remoteHosts: [String: String]
     private var showFailures: [String: OllamaError] = [:]
 
     /// `capabilities` are what `show` reports for every model, as Ollama lists them ("completion", "vision", …),
     /// `modelCapabilities` what it reports for particular models instead, and `modelThinking` how a particular model
     /// says it can be told to think (`thinking` of `/api/show`); a model not in it says nothing of it, as on older servers.
+    /// `remoteHosts` names the models the server runs elsewhere, with where, as Ollama lists and describes a model of its
+    /// cloud (`remote_host`).
     public init(installed: [String] = [], dimension: Int = 256, capabilities: [String] = ["completion"],
                 modelCapabilities: [String: [String]] = [:], modelThinking: [String: OllamaShowResponse.Thinking] = [:],
-                handler: @escaping ChatHandler) {
+                remoteHosts: [String: String] = [:], handler: @escaping ChatHandler) {
         self.installed = installed
         self.dimension = dimension
         defaultCapabilities = capabilities
         self.capabilities = modelCapabilities
         thinking = modelThinking
+        self.remoteHosts = remoteHosts
         self.handler = handler
     }
 
     /// What a model that can think reports among its capabilities, as Ollama lists them.
     public static let thinkingCapabilities = ["completion", OllamaShowResponse.thinkingCapability]
 
-    /// What `show` answers for a model with these capabilities that says this of how it thinks.
-    public static func shown(capabilities: [String], thinking: OllamaShowResponse.Thinking?) -> OllamaShowResponse {
-        OllamaShowResponse(capabilities: capabilities, modelInfo: nil, details: nil, thinking: thinking)
+    /// What `show` answers for a model with these capabilities that says this of how it thinks, and that the server runs
+    /// at `remoteHost`, when it runs it elsewhere.
+    public static func shown(capabilities: [String], thinking: OllamaShowResponse.Thinking?, remoteHost: String? = nil) -> OllamaShowResponse {
+        OllamaShowResponse(capabilities: capabilities, modelInfo: nil, details: nil, thinking: thinking, remoteModel: nil, remoteHost: remoteHost)
     }
 
     public var chatCount: Int { chatRequests.count }
@@ -53,7 +58,8 @@ public actor MockOllama: OllamaAPI {
     public func version() async throws -> String { "mock" }
 
     public func tags() async throws -> [OllamaModelInfo] {
-        installed.map { OllamaModelInfo(name: $0, model: $0, size: 1, digest: nil, modifiedAt: nil, details: nil) }
+        installed.map { OllamaModelInfo(name: $0, model: $0, remoteModel: nil, remoteHost: remoteHosts[$0], size: 1, digest: nil, modifiedAt: nil,
+                                        details: nil) }
     }
 
     /// A model not among `installed`, when there are any, is not found, as Ollama answers for it; one `failShowing` names
@@ -63,7 +69,7 @@ public actor MockOllama: OllamaAPI {
         guard installed.isEmpty || installed.map(ModelManager.normalized).contains(ModelManager.normalized(model)) else {
             throw OllamaError.modelNotFound(model)
         }
-        return Self.shown(capabilities: capabilities[model] ?? defaultCapabilities, thinking: thinking[model])
+        return Self.shown(capabilities: capabilities[model] ?? defaultCapabilities, thinking: thinking[model], remoteHost: remoteHosts[model])
     }
 
     /// Answers with what the handler gives. Streamed, the answer grows a word at a time, as Ollama streams it, before

@@ -37,7 +37,9 @@
     "keepAlive": {
       "chat": "10m",
       "embed": "30m"
-    }
+    },
+    "maxResponseBytes": 67108864,
+    "modelLocationMaxAge": 60
   },
   "watcher": {
     "fsEventsLatency": 1.0,

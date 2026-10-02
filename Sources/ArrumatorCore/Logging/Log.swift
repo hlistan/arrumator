@@ -17,6 +17,19 @@ public struct LogEntry: Sendable, Codable, Identifiable, Hashable {
     public var job: String? { fields["job"] }
     public var doc: String? { fields["doc"] }
     public var trace: String? { fields["trace"] }
+
+    /// The fields a diagnostics export keeps of a line without the user's consent (`DiagnosticsExporter`): identifiers
+    /// of the app's own records, counts of them, stages, durations, models, versions and the like, none of which ever
+    /// comes from a document. Every other field, a path, a file name, tags, an error's description, may hold what a
+    /// document says or is called, and stays out. It is an allow-list: a field added at a call site stays out of the
+    /// export until it is shown here to come from no document. The unified log keeps a line the same way, its message
+    /// public and its fields private (`Log.log`), and a message is a `StaticString`, so it is always a constant.
+    public static let shareableFields: Set<String> = [
+        "job", "doc", "trace", "task", "turn", "attempt", "stage", "event", "check", "action", "endpoint", "model", "engine",
+        "version", "type", "ms", "waited", "delay", "documents", "queued", "missing", "adopted", "files", "events", "count",
+        "steps", "tasks", "questions", "sources", "rows", "dim", "fts", "semantic", "pid", "status", "resume", "window",
+        "visible", "x", "width", "screen",
+    ]
 }
 
 /// Structured logging: os_log + daily-rotated JSONL files + in-memory ring buffer for the Logs tab.
@@ -71,7 +84,11 @@ public final class Log: Sendable {
 
     public func setMinLevel(_ level: LogLevel) { state.withLock { $0.minLevel = level } }
 
-    public func log(_ level: LogLevel, _ cat: LogCategory, _ msg: String, _ fields: [String: String] = [:]) {
+    /// Logs `message` with `fields`. The message is a `StaticString`, so the compiler refuses one built at run time: it is
+    /// public in the unified log and kept whole by a diagnostics export, while what varies goes in the fields, which are
+    /// private there and kept by allow-list (`LogEntry.shareableFields`).
+    public func log(_ level: LogLevel, _ cat: LogCategory, _ message: StaticString, _ fields: [String: String] = [:]) {
+        let msg = message.description
         let logger = Logger(subsystem: Self.subsystem, category: cat.rawValue)
         let fieldText = fields.isEmpty ? "" : " " + fields.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: " ")
         switch level {
@@ -149,9 +166,9 @@ public final class Log: Sendable {
 
     // MARK: Convenience
 
-    public static func error(_ cat: LogCategory, _ msg: String, _ fields: [String: String] = [:]) { shared.log(.error, cat, msg, fields) }
-    public static func warning(_ cat: LogCategory, _ msg: String, _ fields: [String: String] = [:]) { shared.log(.warning, cat, msg, fields) }
-    public static func info(_ cat: LogCategory, _ msg: String, _ fields: [String: String] = [:]) { shared.log(.info, cat, msg, fields) }
-    public static func debug(_ cat: LogCategory, _ msg: String, _ fields: [String: String] = [:]) { shared.log(.debug, cat, msg, fields) }
-    public static func trace(_ cat: LogCategory, _ msg: String, _ fields: [String: String] = [:]) { shared.log(.trace, cat, msg, fields) }
+    public static func error(_ cat: LogCategory, _ msg: StaticString, _ fields: [String: String] = [:]) { shared.log(.error, cat, msg, fields) }
+    public static func warning(_ cat: LogCategory, _ msg: StaticString, _ fields: [String: String] = [:]) { shared.log(.warning, cat, msg, fields) }
+    public static func info(_ cat: LogCategory, _ msg: StaticString, _ fields: [String: String] = [:]) { shared.log(.info, cat, msg, fields) }
+    public static func debug(_ cat: LogCategory, _ msg: StaticString, _ fields: [String: String] = [:]) { shared.log(.debug, cat, msg, fields) }
+    public static func trace(_ cat: LogCategory, _ msg: StaticString, _ fields: [String: String] = [:]) { shared.log(.trace, cat, msg, fields) }
 }

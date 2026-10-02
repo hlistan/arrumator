@@ -302,7 +302,9 @@ extension Terminal {
             + export.skipped.map { "\n  #\($0.document) not copied: \($0.reason)" }.joined()
     }
 
-    /// A trace's steps, one per line, with their inputs and outputs when `full`.
+    /// A trace's steps, one per line: its place, stage, status and duration. With `full`, also what each was given,
+    /// what it gave and why it failed, which hold the document's text, name, identifiers and labels; without, nothing
+    /// of the document, so the lines can be pasted into a bug report (`DiagnosticsExporter.shareable`).
     static func steps(_ steps: [TraceStepRecord], full: Bool) -> String {
         var lines: [String] = []
         for s in steps {
@@ -310,13 +312,10 @@ extension Terminal {
             let stage = s.stage.padding(toLength: 13, withPad: " ", startingAt: 0)
             let status = s.status.rawValue.padding(toLength: 7, withPad: " ", startingAt: 0)
             lines.append("\(seq) \(stage) \(status) \(Int(s.durationMs)) ms")
+            guard full else { continue }
             if let e = s.error { lines.append("      error: \(e)") }
-            if full {
-                if let i = s.inputJson { lines.append("      in:  \(i)") }
-                if let o = s.outputJson { lines.append("      out: \(o)") }
-            } else if let o = s.outputJson {
-                lines.append("      \(o.prefix(240))")
-            }
+            if let i = s.inputJson { lines.append("      in:  \(i)") }
+            if let o = s.outputJson { lines.append("      out: \(o)") }
         }
         return lines.joined(separator: "\n")
     }

@@ -88,13 +88,18 @@ These are rules you can check, not aspirations. Each row says how it is checked;
 
 1. **Everything stays local.** Document data never leaves the machines the user runs: this Mac, or the user's own Ollama
    server on the local network. The only network client is `OllamaClient`, behind `OllamaConnection`, whose
-   `NetworkGuardProtocol` session lets through only the one configured server. That server's address
-   (`AppSettings.ollamaURL`, or `ARRUMATOR_OLLAMA_URL`) must pass `OllamaEndpoint.validated`: loopback, private or
-   link-local addresses, `localhost` or a `.local` name. Never widen that rule to a public host. Never create another
-   `URLSession` or use `URLSession.shared`. Never add a dependency, telemetry, crash reporter, update check or web view
-   that can reach the network. Models are downloaded only when the user presses Download. Document text is kept only in
-   the database and traces, and is sent only to that Ollama server. It never goes into logs, and it goes into
-   diagnostics only when the user opts in.
+   `NetworkGuardProtocol` session lets a request reach only the one configured server, and by no other route: the guard
+   first, every proxy off, redirects refused, the host compared in one form and carried on each request (a test for
+   each route). That server's address (`AppSettings.ollamaURL`, or `ARRUMATOR_OLLAMA_URL`) must pass
+   `OllamaEndpoint.validated`: loopback, private or link-local addresses, `localhost` or a `.local` name, and nothing
+   but a scheme, host, port and path. Never widen that rule to a public host, and never read with a model the server
+   runs elsewhere (`ModelLocation`): local means where the model runs, not only where the server is. Never create
+   another `URLSession` or use `URLSession.shared`. Never add a dependency, telemetry, crash reporter, update check or
+   web view that can reach the network. Models are downloaded only when the user presses Download. Document text is kept
+   only in the database and traces, and is sent only to that Ollama server. It never goes into logs: a log message is a
+   `StaticString`, and what varies goes in fields. What is made to be shared (diagnostics, the trace a bug report asks
+   for) is built by allow-list, field by field (`DiagnosticsExporter.shareable`, `LogEntry.shareableFields`), and holds
+   nothing derived from a document (its text, names, identifiers or labels) unless the user opts in.
 2. **The user's files and learned state are never collateral damage.** The archive, Incoming, what a user writes into
    the record files and the extended attribute holding the original file name are the user's data. No code path may
    delete a document: a file the app has no more use for, such as an exact copy of a document in the archive, goes to
@@ -135,7 +140,8 @@ These are rules you can check, not aspirations. Each row says how it is checked;
    decoded from (the classify tests fail when one reaches a schema or prompt, and `PipelineConfig.problems` refuses one
    in its configuration). Decode its answer into the typed schema, validate it with `AnswerValidator`, and send a
    document without a valid answer to Needs You. Names from the model go through `FilenameBuilder` before they reach
-   the disk. The app builds every path itself: the model supplies a file name, never a directory.
+   the disk. The app builds every path itself: the model supplies a file name, never a directory. Nothing the model
+   writes becomes active where it is shown: a link or an image in its Markdown is plain text (`AnswerMarkdown`).
 6. **Logic stays below the UI.** Views and CLI commands call Runtime and Core, and they only present and parse. Views
    learn of a change only from Core, through History (`AppDatabase.activity()`) or a stream of live state (the queues'
    `statusUpdates()`, `OllamaLifecycle.states()`, `SettingsStore.changes()`): a state the user watches is recorded in

@@ -9,13 +9,14 @@ import Testing
     private func profile() throws -> ModelProfile { try AppSettings.bundledDefaults().modelProfile() }
 
     /// The report on an environment whose Ollama double has `installed`, under its settings as `change` leaves them.
-    private func report(installed: [String], settings change: (inout AppSettings) -> Void = { _ in }) async throws -> DoctorReport {
+    private func report(installed: [String], remoteHosts: [String: String] = [:],
+                        settings change: (inout AppSettings) -> Void = { _ in }) async throws -> DoctorReport {
         let env = try await TestEnvironment.make()
         defer { env.cleanup() }
         try FileManager.default.createDirectory(at: env.archive, withIntermediateDirectories: true)
         var settings = await env.settings.current
         change(&settings)
-        let mock = MockOllama(installed: installed) { _ in "{}" }
+        let mock = MockOllama(installed: installed, remoteHosts: remoteHosts) { _ in "{}" }
         let address = try OllamaEndpoint.validated(settings.ollamaURL)
         let lifecycle = OllamaLifecycle(api: mock, config: env.config.ollama, management: .external, binaryOverride: nil,
                                         address: address, time: env.time)
@@ -43,6 +44,17 @@ import Testing
         #expect(embedding.status == .error && embedding.detail == "\(profile.embedModel) is not installed",
                 "without its embedding model nothing is found by meaning, so the check fails and names the model to download")
         #expect(report.hasErrors, "and doctor exits saying a check failed")
+    }
+
+    @Test func aModelOfTheProfileThatOllamaRunsElsewhereIsAnErrorSayingWhere() async throws {
+        let profile = try profile()
+        let host = "https://ollama.com:443"
+        let report = try await report(installed: [profile.chatModel, profile.visionModel, profile.embedModel],
+                                      remoteHosts: [profile.chatModel: host])
+        let chat = try #require(report.checks.first { $0.name == "Model chat" })
+        #expect(chat.status == .error && chat.detail.contains(host) && chat.detail.contains(profile.chatModel),
+                "a model the server sends elsewhere reads nothing, so the check fails saying where it runs: \(chat.detail)")
+        #expect(report.models.first?.remoteHost == host && report.hasErrors, "and the report says so")
     }
 
     @Test func settingsThatUseNoProfileTheyListAreAnErrorNamingIt() async throws {

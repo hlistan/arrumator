@@ -14,14 +14,17 @@ import Testing
         var support: URL { root.appendingPathComponent("support", isDirectory: true) }
         var archive: URL { root.appendingPathComponent("Archive", isDirectory: true) }
 
-        static func make() throws -> Home {
+        /// Port 9 is the discard service: nothing answers there, so every model check sees Ollama as not running.
+        static let nowhere = "http://127.0.0.1:9"
+
+        /// A home whose settings save `ollamaURL` as the Ollama server.
+        static func make(ollamaURL: String = nowhere) throws -> Home {
             let root = FileManager.default.temporaryDirectory.appendingPathComponent("arrumator-cli-\(UUID().uuidString)", isDirectory: true)
             let home = Home(root: root)
             try FileManager.default.createDirectory(at: home.support, withIntermediateDirectories: true)
-            // Port 9 is the discard service: nothing answers there, so every model check sees Ollama as not running.
             let settings: [String: String] = ["incomingPath": root.appendingPathComponent("Incoming").path,
                                               "archivePath": home.archive.path,
-                                              "ollamaURL": "http://127.0.0.1:9", "ollamaManagement": "external"]
+                                              "ollamaURL": ollamaURL, "ollamaManagement": "external"]
             try JSONEncoder().encode(settings).write(to: home.support.appendingPathComponent("settings.json"))
             return home
         }
@@ -447,5 +450,86 @@ import Testing
         for line in lines {
             #expect((try? JSONSerialization.jsonObject(with: Data(line.utf8))) is [String: Any], "every line is a JSON object: \(line)")
         }
+    }
+}
+
+/// What may be pasted into a public bug report.
+extension CommandLineTests {
+    /// What a bug report asks for, a trace without --full and diagnostics without consent, holds nothing of a document
+    /// read by the real extractor: neither its text nor its name nor the identifier read from it (AGENTS.md §4.1).
+    @Test func aTraceAndDiagnosticsHoldNothingOfTheDocumentUnlessAskedFor() throws {
+        let home = try Home.make()
+        defer { home.cleanup() }
+        let file = home.root.appendingPathComponent("Incoming/Fatura-Exemplo.txt")
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("Cliente Maria Exemplo, NIF 503504564, fatura de julho".utf8).write(to: file)
+        let sentinels = ["Maria Exemplo", "503504564", "Fatura-Exemplo"]
+        // No model answers here: the file is extracted and waits to be read, and its trace says so.
+        let ingested = try run(home, ["ingest", "--json", file.path])
+        let id = try #require(try JSON.decoder.decode([DocumentRecord].self, from: ingested.stdout).first?.id, "\(ingested.text) \(ingested.stderr)")
+
+        let full = try run(home, ["trace", String(id), "--full"])
+        #expect(full.status == 0 && full.text.contains("Maria Exemplo"), "with --full, the trace shows what was read: \(full.text) \(full.stderr)")
+        let plain = try run(home, ["trace", String(id)])
+        #expect(plain.status == 0 && plain.text.contains("extract") && plain.text.contains("--full"),
+                "without it, the steps and how to see the rest: \(plain.text) \(plain.stderr)")
+        #expect(sentinels.filter { plain.text.contains($0) }.isEmpty, "and nothing of the document: \(plain.text)")
+        let json = try run(home, ["trace", String(id), "--json"])
+        let exported = try JSON.decoder.decode(TraceExport.self, from: json.stdout)
+        #expect(!exported.steps.isEmpty && exported.steps.allSatisfy { $0.inputJson == nil && $0.outputJson == nil && $0.error == nil },
+                "its JSON keeps each step's stage, status and timing alone: \(json.text)")
+
+        for consent in [false, true] {
+            let zip = home.root.appendingPathComponent("diagnostics-\(consent).zip")
+            let exportedZip = try run(home, ["diagnostics", zip.path] + (consent ? ["--include-document-text"] : []))
+            #expect(exportedZip.status == 0, "\(exportedZip.stderr)")
+            let files = try unzipped(zip, into: home.root.appendingPathComponent("unzipped-\(consent)", isDirectory: true))
+            #expect(files.contains { $0.key.contains("/logs/") }, "the export holds the log of what was done: \(files.keys.sorted())")
+            for sentinel in sentinels {
+                let holding = files.filter { String(decoding: $0.value, as: UTF8.self).contains(sentinel) }.keys.sorted()
+                #expect(holding.isEmpty != consent,
+                        consent ? "with consent, \(sentinel) is shared" : "without consent, \(sentinel) is in no file of the export: \(holding)")
+            }
+        }
+    }
+
+    /// Every file `zip` holds, by its path in the zip, unzipped into `folder` with macOS's archiver.
+    private func unzipped(_ zip: URL, into folder: URL) throws -> [String: Data] {
+        let ditto = Process()
+        ditto.executableURL = URL(fileURLWithPath: DiagnosticsExporter.dittoPath)
+        ditto.arguments = ["-x", "-k", zip.path, folder.path]
+        try ditto.run()
+        ditto.waitUntilExit()
+        try #require(ditto.terminationStatus == 0, "the export is a zip")
+        let found = FileManager.default.enumerator(at: folder, includingPropertiesForKeys: [.isRegularFileKey])?.allObjects ?? []
+        var files: [String: Data] = [:]
+        for case let url as URL in found where (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true {
+            files[String(url.standardizedFileURL.path.dropFirst(folder.standardizedFileURL.path.count))] = try Data(contentsOf: url)
+        }
+        return files
+    }
+}
+
+/// The Ollama server, as the command line gives it.
+extension CommandLineTests {
+    /// An address an earlier version saved that this one refuses stops every command, saying where it is saved and how
+    /// to give another; giving another is the one command that never opens the archive with the old one first.
+    @Test func anOllamaAddressThatCannotBeUsedIsNamedAndMendedFromTheCommandLine() throws {
+        let home = try Home.make(ollamaURL: "http://ollama:s3cret@127.0.0.1:9")
+        defer { home.cleanup() }
+        let stopped = try run(home, ["labels", "browse", "--json"])
+        #expect(stopped.status != 0 && stopped.stderr.contains("ollamaURL") && stopped.stderr.contains("settings --ollama-url")
+                    && !stopped.stderr.contains("s3cret"),
+                "a command stops naming the setting and how to give another, never the password: \(stopped.stderr)")
+        let elsewhere = try run(home, ["settings", "--ollama-url", "http://ollama.example.com:11434"])
+        #expect(elsewhere.status != 0 && elsewhere.stderr.contains("ollama.example.com"), "an address it refuses mends nothing: \(elsewhere.stderr)")
+        let unreadable = try run(home, ["settings", "--ollama-url", "http://ollama:s3cret@gpu box:11434"])
+        #expect(unreadable.status != 0 && unreadable.stderr.contains("does not read as an address") && !unreadable.stderr.contains("s3cret"),
+                "nor does one that does not read as an address, which is never repeated: \(unreadable.stderr)")
+        let mended = try run(home, ["settings", "--json", "--ollama-url", Home.nowhere])
+        #expect(mended.status == 0, "a good address is taken in its place: \(mended.stderr)")
+        #expect(try settings(home).ollamaURL == Home.nowhere, "and saved, so every command runs again")
+        let events = try JSON.decoder.decode([EventRecord].self, from: try run(home, ["history", "--json"]).stdout)
+        #expect(events.map(\.summary) == ["Ollama at \(Home.nowhere)"], "and the change is in History once: \(events.map(\.summary))")
     }
 }

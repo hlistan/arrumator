@@ -84,7 +84,16 @@ public final class ArrumatorRuntime: Sendable {
         try paths.moveSingleIndex(to: try paths.indexURL(for: current.archiveURL))
         return try ArrumatorRuntime(appVersion: appVersion, environment: environment, logLevelOverride: logLevelOverride,
                                     time: time, paths: paths, config: config, settings: settings, archive: current.archiveURL,
-                                    ollamaURL: try OllamaEndpoint.validated(environment.ollamaURL ?? current.ollamaURL), trash: trash)
+                                    ollamaURL: try configuredOllama(environment: environment, settings: current, paths: paths), trash: trash)
+    }
+
+    /// The Ollama server to talk to: the one the environment names in place of the saved setting, else the setting. One
+    /// this version refuses, such as an address an earlier version saved with a password in it, stops the start saying
+    /// where it came from and how to give another (AGENTS.md §4.2); `arrumatorcli settings --ollama-url` gives the
+    /// runtime the new one in its place, so it can always mend it.
+    private static func configuredOllama(environment: RuntimeEnvironment, settings: AppSettings, paths: AppPaths) throws -> URL {
+        if let given = environment.ollamaURL { return try OllamaEndpoint.validated(given, from: .environment) }
+        return try OllamaEndpoint.validated(settings.ollamaURL, from: .settings(paths.settingsURL))
     }
 
     /// Points the app at the Ollama server at `address` — this Mac or a machine on the local network — from now on,
@@ -239,7 +248,7 @@ public final class ArrumatorRuntime: Sendable {
     /// with the reason instead of stopping what it describes.
     private func audit(_ kind: EventKind, actor: EventActor, summary: String, payload: (any Encodable & Sendable)?) async {
         do { try await services.history.record(kind, actor: actor, summary: summary, payload: payload) } catch {
-            Log.error(.db, "Could not record an event in the history", ["kind": kind.rawValue, "error": error.localizedDescription])
+            Log.error(.db, "Could not record an event in the history", ["event": kind.rawValue, "error": error.localizedDescription])
         }
     }
 

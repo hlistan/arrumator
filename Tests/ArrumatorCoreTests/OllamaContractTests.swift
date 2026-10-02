@@ -147,7 +147,7 @@ import Testing
         ]
         var sofar: [OllamaChatResponse] = []
         for line in lines {
-            let chunk = try OllamaClient.chatChunk(line, model: "qwen3.5:9b")
+            let chunk = try OllamaClient.chatChunk(Data(line.utf8), model: "qwen3.5:9b")
             sofar.append(sofar.last.map { $0.continued(by: chunk) } ?? chunk)
         }
         #expect(sofar[1].message.thinking == "Sum them." && sofar[1].message.content.isEmpty && sofar[1].done == false,
@@ -158,10 +158,10 @@ import Testing
                 "and the last line ends it with its counters, which reach the trace")
         #expect(throws: OllamaError.answerFailed(model: "qwen3.5:9b", message: "model runner has unexpectedly stopped"),
                 "an error line ends the answer with it, named as such") {
-            try OllamaClient.chatChunk(#"{"error":"model runner has unexpectedly stopped"}"#, model: "qwen3.5:9b")
+            try OllamaClient.chatChunk(Data(#"{"error":"model runner has unexpectedly stopped"}"#.utf8), model: "qwen3.5:9b")
         }
         #expect(!OllamaError.answerFailed(model: "x", message: "y").isTransient, "and it is not asked again behind the user's back")
-        #expect(throws: OllamaError.self, "a line that is no answer is no answer") { try OllamaClient.chatChunk("not json", model: "m") }
+        #expect(throws: OllamaError.self, "a line that is no answer is no answer") { try OllamaClient.chatChunk(Data("not json".utf8), model: "m") }
         var streamed = OllamaChatRequest.sample(think: nil)
         streamed.stream = true
         #expect(streamed.body.serialized().contains(#""stream":true"#), "a request streamed says so")
@@ -206,23 +206,23 @@ import Testing
     }
 
     @Test func aDownloadReportsProgressAndEndsOnTheErrorItStreams() throws {
-        let pulling = try OllamaClient.progress(#"{"status":"pulling 6a0746a1ec1a","digest":"6a0746a1ec1a","total":4000,"completed":1000}"#,
+        let pulling = try OllamaClient.progress(Data(#"{"status":"pulling 6a0746a1ec1a","digest":"6a0746a1ec1a","total":4000,"completed":1000}"#.utf8),
                                                 model: "bge-m3")
         #expect(pulling.fraction == 0.25, "Settings shows how far the download is")
         #expect(throws: OllamaError.pullFailed(model: "bge-m3", message: "pull model manifest: file does not exist"),
                 "an error line is a failed download, named as such, not a server error to retry") {
-            try OllamaClient.progress(#"{"error":"pull model manifest: file does not exist"}"#, model: "bge-m3")
+            try OllamaClient.progress(Data(#"{"error":"pull model manifest: file does not exist"}"#.utf8), model: "bge-m3")
         }
         #expect(!OllamaError.pullFailed(model: "x", message: "y").isTransient, "a failed download is not retried behind the user's back")
     }
 
     @Test func everyFailureBecomesTheErrorThePipelineActsOn() throws {
-        #expect(OllamaClient.failure(try response(200), body: "{}", model: "m") == nil, "success is no failure")
-        #expect(OllamaClient.failure(try response(404), body: #"{"error":"model 'm' not found"}"#, model: "m") == .modelNotFound("m"),
+        #expect(OllamaClient.failure(try response(200), body: "{}", endpoint: .chat, model: "m") == nil, "success is no failure")
+        #expect(OllamaClient.failure(try response(404), body: #"{"error":"model 'm' not found"}"#, endpoint: .chat, model: "m") == .modelNotFound("m"),
                 "a model Ollama does not have holds the document until it is downloaded")
-        let busy = OllamaClient.failure(try response(503), body: "busy", model: "m")
+        let busy = OllamaClient.failure(try response(503), body: "busy", endpoint: .chat, model: "m")
         #expect(busy == .http(status: 503, body: "busy") && busy?.isTransient == true, "a server error is retried with backoff")
-        let bad = OllamaClient.failure(try response(400), body: "bad", model: "m")
+        let bad = OllamaClient.failure(try response(400), body: "bad", endpoint: .chat, model: "m")
         #expect(bad == .http(status: 400, body: "bad") && bad?.isTransient == false, "a bad request is not")
         #expect(OllamaClient.map(URLError(.timedOut)) as? OllamaError == .timeout("request"), "a timeout keeps the document waiting")
         #expect(OllamaClient.map(URLError(.cannotConnectToHost)) as? OllamaError

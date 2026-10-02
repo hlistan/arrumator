@@ -424,6 +424,7 @@ The gates are line patterns, so they see less than their rule says, and review c
 | Rule | The check sees | Review also asks |
 |---|---|---|
 | Everything stays local (§4.1) | `URLSession`, `NWConnection`, `WKWebView` and `import Network` in Swift sources. | A child process, a framework that loads remote content, a link rendered from a model's answer, the session's proxy and redirect behaviour. |
+| Log messages are constants (§4.1) | The compiler: `Log`'s message is a `StaticString`, so a message built at run time does not compile. | A field on `LogEntry.shareableFields` whose value comes from a document; a constant message that itself names a document. |
 | Nothing is deleted (§4.2) | Who calls `trashItem` and `SystemTrash()`. | `removeItem`, an atomic write over an existing file, a move that replaces. |
 | Rows open from the keyboard (§4.7) | A single-tap `onTapGesture` outside `rowAction`. | A double-click gesture, a hover-only control, an icon-only button without a name. |
 | Module boundaries (§5) | The dependencies each target declares. | The `import` lines themselves: a module reached through another target can be imported without being declared. |

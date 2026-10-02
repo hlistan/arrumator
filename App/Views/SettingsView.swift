@@ -172,7 +172,7 @@ struct ModelSettingsView: View {
                         LabeledContent(Wording.role(role)) {
                             HStack(spacing: Style.inlineControlSpacing) {
                                 Text(name).textSelection(.enabled)
-                                ModelAvailability(name: name, installed: status.first { $0.name == name }?.installed, downloads: downloads)
+                                ModelAvailability(name: name, status: status.first { $0.name == name }, downloads: downloads)
                             }
                         }
                     }
@@ -242,6 +242,7 @@ struct AdvancedSettings: View {
                 Stepper(Wording.keepPrompts(days: (model.settings ?? loaded).traceRawRetentionDays),
                         value: setting(model, loaded, \.traceRawRetentionDays), in: Style.retentionDays, step: Style.retentionDaysStep)
                 NamedToggle(Wording.includeText, isOn: $includeText)
+                Text(Wording.includeTextNote).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 Button(Wording.exportDiagnostics) { Task { await export() } }
                 if let exportMessage { Text(exportMessage).font(.caption) }
             }

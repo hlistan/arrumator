@@ -47,7 +47,7 @@ public actor OllamaLifecycle {
     public private(set) var state: OllamaState = .unknown {
         didSet {
             guard state != oldValue else { return }
-            Log.info(.ollama, "State: \(state.summary)")
+            Log.info(.ollama, "Ollama's state changed", ["state": state.summary])
             for c in continuations.values { c.yield(state) }
         }
     }

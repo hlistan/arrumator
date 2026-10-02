@@ -15,10 +15,6 @@ public enum TraceStage: String, Sendable, Codable, CaseIterable {
     /// The model answered a question about a task's documents.
     case answer
 
-    /// The step records what the document says: prompts holding its text, the model's answers drawn from it, or the
-    /// labels made of those answers. Reading a task's prompt shows the model the archive's labels, drawn from them.
-    public var holdsDocumentContent: Bool { [.analyse, .vlm, .consolidate, .interpret, .answer].contains(self) }
-
     /// The step talked to a model, and keeps the prompts and raw answers under `TraceStep.exchangeKey` of its output.
     public var exchangesWithModel: Bool { [.analyse, .vlm, .interpret, .answer].contains(self) }
 }

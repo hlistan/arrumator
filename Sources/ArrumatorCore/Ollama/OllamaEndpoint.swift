@@ -10,32 +10,88 @@ public enum OllamaEndpoint {
     static let localhostName = "localhost"
     static let localLinkSuffix = ".local"
 
-    /// `address` as a URL, when it names this Mac or the local network.
-    public static func validated(_ address: String) throws -> URL {
-        let trimmed = address.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let url = URL(string: trimmed), let scheme = url.scheme?.lowercased(), schemes.contains(scheme),
-              let host = url.host(percentEncoded: false)?.lowercased(), !host.isEmpty else {
-            throw OllamaError.invalidBaseURL(address)
+    /// Why an address cannot be used, said without the address, which may hold a password. A user name or password
+    /// would reach the log and History with the address, and a query or fragment means nothing to Ollama; a host
+    /// written with escapes is one host when checked and another when compared.
+    public enum Problem: String, Sendable, Hashable {
+        case unreadable = "it does not read as an address"
+        case scheme = "its scheme is not http or https"
+        case noHost = "it names no host"
+        case escapedHost = "its host is written with percent escapes"
+        case userInfo = "it has a user name or password"
+        case query = "it has a query"
+        case fragment = "it has a fragment"
+    }
+
+    /// Where the address the app talks to came from, which an address that cannot be used is reported with.
+    public enum Source: Sendable, Hashable {
+        /// The setting `ollamaURL`, saved in this settings file.
+        case settings(URL)
+        /// The variable `RuntimeEnvironment.ollamaURLVariable`.
+        case environment
+    }
+
+    /// An address an error suggests, the one Ollama listens on at this Mac.
+    static let example = "http://127.0.0.1:11434"
+
+    /// `address`, which came from `source`, as `validated` takes it; an address it refuses is reported as
+    /// `OllamaError.unusableAddress`, saying where it came from and how to give another.
+    public static func validated(_ address: String, from source: Source) throws -> URL {
+        do {
+            return try validated(address)
+        } catch {
+            throw OllamaError.unusableAddress(source, reason: error.localizedDescription)
         }
-        guard isLocal(host: host) else { throw OllamaError.nonLocalHost(host) }
+    }
+
+    /// `address` as a URL, when it names this Mac or the local network by a scheme, a host, a port and a path alone.
+    public static func validated(_ address: String) throws -> URL {
+        guard let url = URL(string: address.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            throw OllamaError.invalidAddress(.unreadable)
+        }
+        _ = try localHost(of: url)
         return url
+    }
+
+    /// The host of `url`, in the form `host(of:)` gives, when `url` names this Mac or the local network by a scheme, a
+    /// host, a port and a path alone. What is wrong is said without the address (`Problem`).
+    static func localHost(of url: URL) throws -> String {
+        if url.user(percentEncoded: true) != nil || url.password(percentEncoded: true) != nil {
+            throw OllamaError.invalidAddress(.userInfo)
+        }
+        if url.query(percentEncoded: true) != nil { throw OllamaError.invalidAddress(.query) }
+        if url.fragment(percentEncoded: true) != nil { throw OllamaError.invalidAddress(.fragment) }
+        guard let scheme = url.scheme?.lowercased(), schemes.contains(scheme) else { throw OllamaError.invalidAddress(.scheme) }
+        guard let written = url.host(percentEncoded: true), !written.isEmpty else { throw OllamaError.invalidAddress(.noHost) }
+        guard let host = host(of: url) else { throw OllamaError.invalidAddress(.escapedHost) }
+        guard isLocal(host: host) else { throw OllamaError.nonLocalHost(host) }
+        return host
+    }
+
+    /// The host of `url` in the one form it is checked in, allowed in and compared in everywhere (`validated`,
+    /// `OllamaClient`, `NetworkGuardProtocol`): as the URL writes it, lowercased, without the brackets of an IPv6
+    /// address. A host written with percent escapes has none: read decoded it is one host, and as written another, so
+    /// what was checked would not be what is compared or reached.
+    static func host(of url: URL) -> String? {
+        guard let written = url.host(percentEncoded: true), written == url.host(percentEncoded: false) else { return nil }
+        let host = unbracketed(written.lowercased())
+        return host.isEmpty ? nil : host
     }
 
     /// Whether `url` is this Mac itself, where the app may start Ollama; another machine's server is left alone.
     public static func isThisMac(_ url: URL) -> Bool {
-        guard let host = url.host(percentEncoded: false)?.lowercased() else { return false }
-        let bare = unbracketed(host)
-        if bare == localhostName { return true }
-        if let v4 = IPv4.bytes(bare) { return v4.first == IPv4.loopbackFirstOctet }
-        if let v6 = IPv6.bytes(bare) { return IPv6.isLoopback(v6) }
+        guard let host = host(of: url) else { return false }
+        if host == localhostName { return true }
+        if let v4 = IPv4.bytes(host) { return v4.first == IPv4.loopbackFirstOctet }
+        if let v6 = IPv6.bytes(host) { return IPv6.isLoopback(v6) }
         return false
     }
 
+    /// Whether `host`, in the form `host(of:)` gives, is this Mac or the local network.
     static func isLocal(host: String) -> Bool {
-        let bare = unbracketed(host)
-        if bare == localhostName || bare.hasSuffix(localLinkSuffix) { return true }
-        if let v4 = IPv4.bytes(bare) { return IPv4.isLocal(v4) }
-        if let v6 = IPv6.bytes(bare) { return IPv6.isLocal(v6) }
+        if host == localhostName || host.hasSuffix(localLinkSuffix) { return true }
+        if let v4 = IPv4.bytes(host) { return IPv4.isLocal(v4) }
+        if let v6 = IPv6.bytes(host) { return IPv6.isLocal(v6) }
         return false
     }
 

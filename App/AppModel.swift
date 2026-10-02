@@ -222,7 +222,7 @@ final class AppModel {
             lastError = nil
         } catch {
             lastError = Wording.failure(what, error.localizedDescription)
-            Log.error(.ui, what, ["error": error.localizedDescription])
+            Log.error(.ui, "An action failed", ["action": what, "error": error.localizedDescription])
         }
         await refresh()
         return result
@@ -248,7 +248,7 @@ final class AppModel {
             return nil
         } catch {
             lastError = Wording.failure(what, error.localizedDescription)
-            Log.error(.ui, what, ["error": error.localizedDescription])
+            Log.error(.ui, "A read for display failed", ["action": what, "error": error.localizedDescription])
             return nil
         }
     }

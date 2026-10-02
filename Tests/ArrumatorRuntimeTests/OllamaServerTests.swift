@@ -35,6 +35,29 @@ import Testing
         #expect(overridden.ollama.baseURL.absoluteString == "http://127.0.0.1:12345", "ARRUMATOR_OLLAMA_URL takes its place while set")
     }
 
+    /// An address an earlier version saved, or the variable gives, that this one refuses stops the app and every command
+    /// (AGENTS.md §4.2): with where the address came from and what to do, never with the password it may hold.
+    @Test func anAddressThatCannotBeUsedStopsTheStartSayingWhereItCameFromAndWhatToDo() async throws {
+        let home = try await RuntimeHome.make()
+        defer { home.cleanup() }
+        let saved = "http://ollama:s3cret@127.0.0.1:11434"
+        try await SettingsStore(paths: home.paths).update { $0.ollamaURL = saved }
+        let fromSettings = OllamaError.unusableAddress(.settings(home.paths.settingsURL), reason: OllamaError.invalidAddress(.userInfo).localizedDescription)
+        await #expect(throws: fromSettings, "the saved address is refused, naming the file it is saved in") { try await home.open() }
+        let said = fromSettings.localizedDescription
+        #expect(said.contains(home.paths.settingsURL.path) && said.contains("ollamaURL") && said.contains("arrumatorcli settings --ollama-url")
+                    && !said.contains("s3cret"),
+                "it names the setting and its file and how to give another, and never the password: \(said)")
+
+        var environment = home.environment
+        environment.ollamaURL = "http://ollama.example.com:11434"
+        let fromVariable = OllamaError.unusableAddress(.environment, reason: OllamaError.nonLocalHost("ollama.example.com").localizedDescription)
+        await #expect(throws: fromVariable, "an address the variable gives is refused, naming the variable, whatever is saved") {
+            _ = try await ArrumatorRuntime.bootstrap(appVersion: "test", environment: environment, echoLogsToStderr: false, trash: home.trash)
+        }
+        #expect(fromVariable.localizedDescription.contains(RuntimeEnvironment.ollamaURLVariable), "\(fromVariable.localizedDescription)")
+    }
+
     @Test func theAppStartsOllamaOnlyOnThisMac() throws {
         var settings = try AppSettings.bundledDefaults()
         settings.ollamaManagement = .launchApp

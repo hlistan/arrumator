@@ -208,7 +208,7 @@ private struct ProfileCard: View {
                 }
                 .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help(Wording.chooseInstalledModel)
             }
-            ModelAvailability(name: saved, installed: status.first { $0.name == saved }?.installed, downloads: downloads)
+            ModelAvailability(name: saved, status: status.first { $0.name == saved }, downloads: downloads)
         }
     }
 
@@ -342,14 +342,18 @@ final class ModelDownloads {
 struct ModelAvailability: View {
     @Environment(AppModel.self) private var model
     let name: String
-    /// nil until Ollama has said.
-    let installed: Bool?
+    /// What Ollama says of the model; nil until it has said.
+    let status: ModelStatus?
     let downloads: ModelDownloads
 
     var body: some View {
-        if installed == true {
+        if let host = status?.remoteHost {
+            Label(Wording.modelRunsElsewhere(at: host), systemImage: "exclamationmark.triangle.fill")
+                .labelStyle(.titleAndIcon).font(.caption).foregroundStyle(Palette.attention).help(Wording.modelRunsElsewhereHelp)
+        } else if status?.installed == true {
             Image(systemName: "checkmark.circle.fill").foregroundStyle(Palette.fine).help(Wording.modelInstalled)
-        } else if installed == false {
+                .accessibilityLabel(Wording.modelInstalled)
+        } else if status?.installed == false {
             Button(downloads.busy && downloads.model == name ? Wording.downloading : Wording.download) {
                 guard let runtime = model.runtime else { return }
                 Task { await downloads.pull(name, with: runtime) }

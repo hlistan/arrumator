@@ -144,12 +144,24 @@ colours rather than the system accent, which macOS greys out whenever the window
 Settings › Models says where the models run and which models read your documents; onboarding shows its first two
 sections. **Ollama** is the server: its status, its address under **Server**, and, on this Mac, whether the app starts
 it (**Management**). The server must be this Mac, a private or link-local address, or a `.local` name, such as
-`http://192.168.1.20:11434`; anything else is refused (`arrumatorcli settings --ollama-url`). Below it, **Profile**
-chooses the model profile documents are read with, and the requests of search tasks without a profile of their own
-([profile and effort](how-it-works.md#profile-and-effort)), and lists its three models: the one that **Reads documents
-and requests**, and names files, the one that **Describes images** and the one that **Finds by meaning**, each with a
-mark when it is installed, or **Download** when it is not. The bar at the foot of the main window's sidebar chooses the
-profile in use too.
+`http://192.168.1.20:11434`; anything else is refused (`arrumatorcli settings --ollama-url`), as is an address with a
+user name or password, a query or a fragment. An address saved by an earlier version that this one refuses stops the app
+and every command, saying it is the `ollamaURL` in `settings.json`; `arrumatorcli settings --ollama-url <address>` gives
+another, and the app starts again. The app talks to that server alone: through no proxy, whatever the
+system's settings, and it follows no redirect the server answers with. Nor does it read with a model the server sends
+elsewhere: one of Ollama's cloud models, named so (a tag `cloud` or one ending in `-cloud`, such as
+`gpt-oss:120b-cloud`) or described by Ollama as running at another host, as a model made from one is. The app asks the
+server where a model runs before it sends it anything, and trusts the answer for `ollama.modelLocationMaxAge` seconds
+(60) at most, so a model remade on the server from a cloud model is sent nothing once that has passed; a download of the
+model, and a listing of the models or a description of one that says it runs elsewhere, as Settings and the doctor
+read, count at once. Nothing is sent to a model that runs elsewhere: what would be read with it fails, naming the model
+and where it runs, as the doctor and `arrumatorcli models status` say too. Nor is anything sent to a model whose place
+the server does not say: the work waits while the server cannot answer, as when Ollama is away, and fails otherwise.
+Below it, **Profile** chooses the model profile documents are read with, and the requests of search tasks without a
+profile of their own ([profile and effort](how-it-works.md#profile-and-effort)), and lists its three models: the one
+that **Reads documents and requests**, and names files, the one that **Describes images** and the one that **Finds by
+meaning**, each with a mark when it is installed, or **Download** when it is not. The bar at the foot of the main
+window's sidebar chooses the profile in use too.
 
 **Profiles** lists every profile, Fast, Standard and Smart first, each with the model that reads with it, and says which
 is in use and which predefined one you changed. Click one to open it in place: change its name, or any of its three
@@ -198,10 +210,14 @@ documents embedded by another model are found by meaning only once they are read
 - **Statistics**: documents by status, labelled and not yet labelled, labels by kind, corrections and confirmations,
   rules about labels and labels tidied,
   latency per stage, OCR quality and extraction warnings (`arrumatorcli stats`).
-- **Diagnostics**: one zip with logs, recent traces, doctor report and settings; document text is excluded unless you
-  ask for it: the steps that exchanged it with the model (reading a document, describing an image) and the one that
-  tidied the labels drawn from it keep their timings but neither what they sent nor what came back
-  (`arrumatorcli diagnostics <zip> [--include-document-text]`).
+- **Diagnostics**: one zip with logs, recent traces, doctor report and settings, for a bug report. Unless you ask for
+  document text, it holds nothing derived from a document or its file: no text or preview, metadata, file name or path,
+  identifier, label or question. Each step of a trace keeps its stage, status, start and duration, and each line of a
+  log its time, level, category and message, and of its fields only those that never come from a document, such as the
+  numbers of a document, job or trace, an attempt, a stage, a duration or a model; a line versions 0.1.1 to 0.1.4
+  wrote for a History event, its summary in the message, is left out. Asked for, it holds the traces and logs whole
+  (`arrumatorcli diagnostics <zip> [--include-document-text]`). `arrumatorcli trace <doc>` without `--full` likewise
+  shows each step's stage, status and duration alone.
 
 ## Configuration
 
@@ -218,7 +234,11 @@ No tunable lives in code. Defaults are bundled in `Sources/ArrumatorCore/Resourc
 - `pipeline.json`: every pipeline tunable, in sections: `ollama` (timeouts, retries, how it is started; `ollama serve`,
   when the app starts it, listens on the address the app talks to, with `ollama.serveEnvironment` besides; how long a
   model stays loaded after its last request, `ollama.keepAlive.chat` for the one that reads and describes images and
-  `ollama.keepAlive.embed` for the one that finds by meaning), `watcher`, `records` (the names of the archive's record
+  `ollama.keepAlive.embed` for the one that finds by meaning; each of `ollama.timeouts` bounds how long a request may
+  wait for more of its answer and, but for a download, how long the whole of it may take, and 0 is no timeout; the
+  most bytes one answer may hold, a reply or all the lines of an answer streamed, and one line of a download's
+  progress, `ollama.maxResponseBytes`; how long what the server said of where a model runs is trusted,
+  `ollama.modelLocationMaxAge`, 0 to ask before every request), `watcher`, `records` (the names of the archive's record
   files and of its system and history folders, such as `records.labelRulesFileName`, `records.searchTasksFileName` and
   `records.conversationsFolderName`), `ingest` (attempts and retry delays, and how long quitting waits for the file in
   hand, the request being read and the question being answered to stop, `ingest.quitTimeout`), `extraction` (OCR and
@@ -274,7 +294,7 @@ Environment variables:
 | Variable | Effect |
 |---|---|
 | `ARRUMATOR_HOME` | Relocates all state: indexes, settings and logs (`$ARRUMATOR_HOME/Logs`). It does not move the archive or Incoming, which `settings.json` names. |
-| `ARRUMATOR_OLLAMA_URL` | The Ollama server while set, in place of the setting; this Mac or the local network only. |
+| `ARRUMATOR_OLLAMA_URL` | The Ollama server while set, in place of the setting; this Mac or the local network only, and an address that is not stops the app and every command, naming the variable. |
 | `ARRUMATOR_PIPELINE_CONFIG` | An extra `pipeline.json` override file, applied after yours. |
 | `ARRUMATOR_TRASH` | A folder the app and every command use as the Trash: an exact copy, a file undone or a document taken out goes there rather than to yours. For a run in a scratch `ARRUMATOR_HOME`. |
 | `ARRUMATOR_LOG_LEVEL` | `error`, `warning`, `info`, `debug` or `trace`, over the setting; any other value stops the app with the reason. |

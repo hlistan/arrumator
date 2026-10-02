@@ -167,7 +167,8 @@ private struct TurnView: View {
 }
 
 /// An answer, its Markdown shown block by block (`AnswerMarkdown`): paragraphs, headings, lists with their markers, quotes
-/// and code, each with its emphasis, links and inline code.
+/// and code, each with its emphasis and inline code; a link shows as its words and address, and an image as its words,
+/// so nothing in an answer can be clicked.
 private struct Answer: View {
     let text: String
 

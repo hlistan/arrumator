@@ -70,7 +70,11 @@ public struct Doctor: Sendable {
             do {
                 let profile = try settings.modelProfile()
                 modelStatus = (try? await models.status(for: profile)) ?? []
-                for m in modelStatus { add("Model \(m.role.rawValue)", m.installed, m.installed ? m.name : "\(m.name) is not installed") }
+                for m in modelStatus {
+                    let detail = m.remoteHost.map { "\(m.name) runs at \($0), beyond this Mac and the local network, and is never read with" }
+                        ?? (m.installed ? m.name : "\(m.name) is not installed")
+                    add("Model \(m.role.rawValue)", m.installed && m.remoteHost == nil, detail)
+                }
             } catch {
                 add("Model profile", false, error.localizedDescription)
             }
@@ -89,14 +93,14 @@ public struct Doctor: Sendable {
                                           "index": (try? paths.indexURL(for: settings.archiveURL))?.path ?? "none yet", "settings": paths.settingsURL.path],
                                   checks: checks, models: modelStatus, ollama: state.summary)
         for c in checks where c.status != .ok {
-            Log.log(c.status == .error ? .error : .warning, .app, "Doctor: \(c.name)", ["detail": c.detail])
+            Log.log(c.status == .error ? .error : .warning, .app, "A doctor check did not pass", ["check": c.name, "detail": c.detail])
         }
         return report
     }
 }
 
 extension Log {
-    public static func log(_ level: LogLevel, _ cat: LogCategory, _ msg: String, _ fields: [String: String] = [:]) {
+    public static func log(_ level: LogLevel, _ cat: LogCategory, _ msg: StaticString, _ fields: [String: String] = [:]) {
         shared.log(level, cat, msg, fields)
     }
 }

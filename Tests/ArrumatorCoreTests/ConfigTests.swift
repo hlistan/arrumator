@@ -389,6 +389,7 @@ import Testing
             #expect(throws: OllamaError.self, "\(address)") { _ = try OllamaEndpoint.validated(address) }
         }
         #expect(OllamaEndpoint.isThisMac(try OllamaEndpoint.validated("http://localhost:11434")), "localhost is this Mac")
+        #expect(OllamaEndpoint.isThisMac(try OllamaEndpoint.validated("http://LOCALHOST:11434")), "however it is cased")
         #expect(!OllamaEndpoint.isThisMac(try OllamaEndpoint.validated("http://192.168.1.239:11434")), "an address on the local network is another machine")
         let config = try PipelineConfig.bundledDefaults().ollama
         #expect(throws: OllamaError.self, "the client itself refuses a host beyond the local network") {
@@ -396,15 +397,52 @@ import Testing
         }
     }
 
-    @Test func networkGuardBlocksNonLocalRequests() async throws {
-        let config = try PipelineConfig.bundledDefaults().ollama
-        _ = try OllamaClient(config: config, baseURL: try OllamaEndpoint.validated("http://192.168.1.239:11434"), time: TestTime(.advances))
-        NetworkGuardProtocol.resetViolations()
-        let session = URLSession(configuration: NetworkGuardProtocol.guardedConfiguration())
-        await #expect(throws: (any Error).self, "a request beyond the local network fails") {
-            _ = try await session.data(from: URL(string: "https://example.com/")!)
+    /// An address names a scheme, a host, a port and a path. A user name and password would go into the log and History
+    /// with it, and a query or fragment means nothing to Ollama; a host written with escapes is one host when checked
+    /// and another when compared, so it is refused rather than read two ways.
+    @Test func anOllamaAddressNamesItsServerAndNothingElse() throws {
+        let refused: [(String, OllamaError)] = [
+            ("http://ollama:s3cret@192.168.1.239:11434", .invalidAddress(.userInfo)),
+            ("http://ollama@localhost:11434", .invalidAddress(.userInfo)),
+            ("http://127.0.0.1:11434/?model=x", .invalidAddress(.query)),
+            ("http://127.0.0.1:11434/#top", .invalidAddress(.fragment)),
+            ("http://127.0.0.%31:11434", .invalidAddress(.escapedHost)),
+            ("http://gpu%2Dbox.local:11434", .invalidAddress(.escapedHost)),
+            ("ftp://192.168.1.2", .invalidAddress(.scheme)),
+            ("http://", .invalidAddress(.noHost)),
+            ("http://ollama:s3cret@gpu box:11434", .invalidAddress(.unreadable)),
+        ]
+        for (address, error) in refused {
+            #expect(throws: error, "\(address)") { _ = try OllamaEndpoint.validated(address) }
         }
-        #expect(NetworkGuardProtocol.violations.contains { $0.contains("example.com") }, "and is recorded, so Doctor can report it")
+        let said = OllamaError.invalidAddress(.userInfo).localizedDescription
+        #expect(!said.contains("s3cret") && said.contains("a user name or password"), "what is refused is named, never the password: \(said)")
+        // Addresses that do not read as a URL at all, a space in the host or an unclosed IPv6 bracket, with a password.
+        for unreadable in ["http://ollama:s3cret@gpu box:11434", "http://ollama:s3cret@[fe80::1:11434"] {
+            do {
+                _ = try OllamaEndpoint.validated(unreadable)
+                Issue.record("\(unreadable) is refused")
+            } catch {
+                #expect(!error.localizedDescription.contains("s3cret"), "an address that does not read is never repeated: \(error.localizedDescription)")
+            }
+        }
+        #expect(try OllamaEndpoint.validated("http://192.168.1.239:11434/ollama").path() == "/ollama", "a path, as a proxy of the user's serves it, is kept")
+        let config = try PipelineConfig.bundledDefaults().ollama
+        #expect(throws: OllamaError.invalidAddress(.userInfo), "the client itself refuses one") {
+            try OllamaClient(config: config, baseURL: try #require(URL(string: "http://ollama:s3cret@127.0.0.1:11434")), time: TestTime(.advances))
+        }
+    }
+
+    @Test func ollamasTimeoutsAndAnswerSizeAreRefusedWhereTheyMakeNoSense() throws {
+        var config = try PipelineConfig.bundledDefaults()
+        #expect(config.ollama.maxResponseBytes > 1 << 20, "the bundled limit holds the largest answer the app asks for, an embedding batch")
+        config.ollama.timeouts.chat = -1
+        config.ollama.maxResponseBytes = 0
+        config.ollama.modelLocationMaxAge = -1
+        #expect(config.problems.contains("ollama.timeouts.chat cannot be negative: 0 is no timeout")
+                    && config.problems.contains("ollama.maxResponseBytes must be at least 1")
+                    && config.problems.contains("ollama.modelLocationMaxAge cannot be negative: 0 asks before every request"),
+                "\(config.problems)")
     }
 }
 

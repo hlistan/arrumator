@@ -258,7 +258,10 @@ extension Wording {
 
     static let diagnostics = "Diagnostics"
     static let logDetail = "Log detail"
-    static let includeText = "Include document text in diagnostics"
+    static let includeText = "Include documents' text, names and labels in diagnostics"
+    /// What the export holds with and without the user's consent (`DiagnosticsExporter`).
+    static let includeTextNote = "Without it, the export holds nothing derived from a document. With it, traces and logs go "
+        + "whole: the documents' text, names, paths, identifiers and labels, the prompts and the model's answers."
     static let exportDiagnostics = "Export diagnostics…"
     static let diagnosticsFileName = "arrumator-diagnostics.zip"
     static let index = "Index"
@@ -309,6 +312,10 @@ extension Wording {
     static let modelPrompt = "Model, as Ollama names it"
     static let chooseInstalledModel = "Choose an installed model that can do this"
     static let modelInstalled = "Installed"
+    /// A model Ollama sends elsewhere, which nothing is read with (`ModelStatus.remoteHost`).
+    static func modelRunsElsewhere(at host: String) -> String { "Runs at \(host): never used" }
+    static let modelRunsElsewhereHelp = "Ollama sends this model's requests beyond this Mac and the local network, so documents are "
+        + "never read with it. Choose a model Ollama runs itself."
     static let embeddingNote = "Documents embedded by another model are found by meaning only once they are read again."
     static let resetProfile = "Reset"
     static let resetProfileHelp = "Give it back the name and models Arrumator comes with"

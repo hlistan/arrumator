@@ -171,9 +171,10 @@ struct History: AsyncParsableCommand {
 }
 
 struct Trace: AsyncParsableCommand {
-    static let configuration = CommandConfiguration(abstract: "Show how a document was processed: every stage, its inputs, outputs and timing.")
+    static let configuration = CommandConfiguration(
+        abstract: "Show how a document was processed: every stage, its status and timing, and with --full its inputs and outputs.")
     @OptionGroup var options: GlobalOptions
-    @Flag(help: "Include full stage inputs and outputs (prompts, raw model responses).") var full = false
+    @Flag(help: "Include each stage's inputs, outputs and errors (the document's text, prompts, raw model responses).") var full = false
     @Argument(help: "Document id or file path.") var document: String
 
     func run() async throws {
@@ -183,11 +184,17 @@ struct Trace: AsyncParsableCommand {
               let (trace, steps) = try await runtime.traces.trace(id: id) else {
             throw ValidationError("No trace recorded for document \(docID)")
         }
-        options.emit(TraceExport(trace: trace, steps: steps)) {
+        // Without --full nothing of the document is shown, so the output can go into a bug report.
+        let shown = DiagnosticsExporter.shareable(steps, includeDocumentText: full)
+        options.emit(TraceExport(trace: full ? trace : DiagnosticsExporter.shareable(trace), steps: shown)) {
             "Trace #\(id) · \(trace.source) · \(trace.outcome ?? "running") · \(Int(trace.totalMs ?? 0)) ms · "
-                + "models \(trace.modelChat ?? "—") / \(trace.modelEmbed ?? "—")\n" + Terminal.steps(steps, full: full)
+                + "models \(trace.modelChat ?? "—") / \(trace.modelEmbed ?? "—")\n" + Terminal.steps(shown, full: full)
+                + (full ? "" : "\n" + Self.fullHint)
         }
     }
+
+    /// What the output without --full says of what it leaves out.
+    static let fullHint = "Each stage's inputs, outputs and errors hold the document's text and name; --full shows them."
 }
 
 struct Replay: AsyncParsableCommand {

@@ -382,9 +382,12 @@ an answer without words, or that cannot be read, goes back to the model with wha
 `repairAttempts` says. It is shown as it is written: the card shows the answer as the model writes it, its paragraphs,
 headings, lists, quotes and code as such, **Thinking…** while a model that thinks has written nothing yet, that it waits
 for the model to begin while the model loads or reads documents first, and how long it has taken once that is more than
-a moment. An answer cut off at its length limit, the effort's `numPredict`, is kept as far as it came, saying it was cut
-off: ask for less, or ask again at a lower effort, which thinks less and so leaves more of the limit to the answer. An
-answer that takes longer than the effort's `timeout` fails the question, keeping what came of it. While Ollama cannot be
+a moment. Nothing in an answer can act: a link shows as its words followed by its address, and an image as its words,
+so a document that asks the model to end its answer with a link that would carry the document's data elsewhere gets
+nothing clickable. An answer cut off at its length limit, the effort's `numPredict`, is kept as far as it came, saying
+it was cut off: ask for less, or ask again at a lower effort, which thinks less and so leaves more of the limit to the
+answer. An answer that takes longer than the effort's `timeout` fails the question, keeping what came of it. While
+Ollama cannot be
 reached a question waits in the queue, as a document does, saying so and when it is tried again, the last of
 `ingest.retryDelays` later, rather than being asked again meanwhile; a reading model that is not installed, or a profile
 the settings no longer list, fails it with the reason.

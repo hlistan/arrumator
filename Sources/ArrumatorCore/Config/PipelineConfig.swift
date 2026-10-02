@@ -38,6 +38,7 @@ public struct PipelineConfig: Sendable, Codable, Hashable, ValidatedConfiguratio
         for kind in labels.vocabulary.kinds.keys where kind.isUsersOwn {
             problems.append("labels.vocabulary.kinds.\(kind.rawValue): the user's own labels are never kept one vocabulary; remove it")
         }
+        problems += ollama.problems
         problems += tasks.problems
         problems += conversation.problems
         return problems
@@ -57,12 +58,13 @@ public struct PipelineConfig: Sendable, Codable, Hashable, ValidatedConfiguratio
 }
 
 public struct OllamaConfig: Sendable, Codable, Hashable {
+    /// Seconds a request may take: how long it may wait for more of the answer and, but for a download, how long the
+    /// whole answer may take. 0 is no timeout.
     public struct Timeouts: Sendable, Codable, Hashable {
         public var meta: Double
         public var version: Double
         public var chat: Double
         public var embed: Double
-        /// 0 = no timeout.
         public var pull: Double
     }
     public var appBundleIdentifier: String
@@ -79,6 +81,12 @@ public struct OllamaConfig: Sendable, Codable, Hashable {
     public var maxRestartsPerHour: Int
     public var requiredFreeDiskGBAfterPull: Double
     public var keepAlive: KeepAlive
+    /// The most bytes one answer of Ollama's may hold: a reply, or every line of an answer it streams together; a line
+    /// of a download's progress may hold as many. A server that sends more is refused (`OllamaError.responseTooLarge`).
+    public var maxResponseBytes: Int
+    /// Seconds what the server said of where a model runs (`ModelLocation`) is trusted before it is asked again; 0 asks
+    /// before every request. A model the server is told to run elsewhere meanwhile is sent nothing once this has passed.
+    public var modelLocationMaxAge: Double
 
     /// How long Ollama keeps a model loaded after its last request (`keep_alive`), so the next document does not wait
     /// for it to load again.

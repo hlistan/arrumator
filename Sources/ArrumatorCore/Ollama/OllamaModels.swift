@@ -1,10 +1,19 @@
 import Foundation
 
 public enum OllamaError: Error, LocalizedError, Equatable {
-    case invalidBaseURL(String)
+    /// The address cannot be used for this `Problem`; the address itself is never repeated, as it may hold a password.
+    case invalidAddress(OllamaEndpoint.Problem)
+    /// The address the app was to talk to cannot be used, for `reason`: it says where the address came from and how to
+    /// give another, as nothing can start without one.
+    case unusableAddress(OllamaEndpoint.Source, reason: String)
     case nonLocalHost(String)
     case unreachable(String)
     case http(status: Int, body: String)
+    /// Ollama answered `endpoint` by sending the request elsewhere, which the app never follows: it talks to the one
+    /// server it was pointed at.
+    case redirected(endpoint: String, location: String?)
+    /// Ollama's answer to `endpoint` held more than `limit` bytes (`ollama.maxResponseBytes`).
+    case responseTooLarge(endpoint: String, limit: Int)
     case modelNotFound(String)
     case decoding(String)
     case timeout(String)
@@ -13,19 +22,38 @@ public enum OllamaError: Error, LocalizedError, Equatable {
     case pullFailed(model: String, message: String)
     /// Ollama reported a failure part way through an answer it streams.
     case answerFailed(model: String, message: String)
+    /// Ollama runs `model` at `host`, beyond this Mac and the local network, so it is never asked anything.
+    case runsElsewhere(model: String, host: String)
+    /// Where Ollama runs `model` could not be told, for `because`, so it is sent nothing; it waits, as for Ollama being
+    /// away, when that failure would.
+    indirect case locationUnknown(model: String, because: OllamaError)
 
     public var errorDescription: String? {
         switch self {
-        case let .invalidBaseURL(u): "Invalid Ollama URL: \(u)"
+        case let .invalidAddress(problem):
+            "An Ollama address names a scheme, http or https, a host, a port and a path alone, and this one cannot be used: \(problem.rawValue)"
+        case let .unusableAddress(.settings(file), reason):
+            "The Ollama address saved as ollamaURL in \(file.path) cannot be used. \(reason). Give one on this Mac or the local network "
+                + "with `arrumatorcli settings --ollama-url <address>`, such as \(OllamaEndpoint.example), or change ollamaURL in that file"
+        case let .unusableAddress(.environment, reason):
+            "The Ollama address \(RuntimeEnvironment.ollamaURLVariable) gives cannot be used. \(reason). Unset the variable, or set it "
+                + "to an address on this Mac or the local network, such as \(OllamaEndpoint.example)"
         case let .nonLocalHost(h): "Refusing to contact non-local host \(h): recognition must stay on this Mac"
         case let .unreachable(m): "Ollama is not reachable: \(m)"
         case let .http(status, body): "Ollama HTTP \(status): \(body.prefix(300))"
+        case let .redirected(endpoint, location):
+            "Ollama sent \(endpoint) to \(location ?? "another address"), which is not followed: the app talks to the server it was pointed at alone"
+        case let .responseTooLarge(endpoint, limit): "Ollama's answer to \(endpoint) is larger than \(limit) bytes (ollama.maxResponseBytes)"
         case let .modelNotFound(m): "Model \(m) is not installed in Ollama"
         case let .decoding(m): "Unexpected Ollama response: \(m)"
         case let .timeout(what): "Ollama timed out: \(what)"
         case .emptyResponse: "Ollama returned an empty response"
         case let .pullFailed(model, message): "Downloading \(model) failed: \(message)"
         case let .answerFailed(model, message): "\(model) stopped answering: \(message)"
+        case let .runsElsewhere(model, host):
+            "\(model) runs at \(host), beyond this Mac and the local network, so nothing is read with it: choose a model Ollama runs itself"
+        case let .locationUnknown(model, because):
+            "Where Ollama runs \(model) cannot be told, so nothing is sent to it: \(because.localizedDescription)"
         }
     }
 
@@ -34,6 +62,7 @@ public enum OllamaError: Error, LocalizedError, Equatable {
         switch self {
         case .unreachable, .timeout, .emptyResponse: true
         case let .http(status, _): status >= 500
+        case let .locationUnknown(_, because): because.isTransient
         default: false
         }
     }
@@ -48,17 +77,26 @@ public enum OllamaError: Error, LocalizedError, Equatable {
     }
 }
 
+/// A model Ollama lists (`/api/tags`).
 public struct OllamaModelInfo: Sendable, Codable, Hashable {
     public var name: String
     public var model: String?
+    /// The model the server sends a request for this one to, and where, when it runs it elsewhere: a model of Ollama's
+    /// cloud pulled as a stub, or one created from it (`remote_model` and `remote_host` of `ListModelResponse` in
+    /// Ollama's api/types.go; its chat handler forwards to the host, server/routes.go, Ollama 0.18.2).
+    public var remoteModel: String?
+    public var remoteHost: String?
     public var size: Int64?
     public var digest: String?
     public var modifiedAt: String?
     public var details: Details?
 
-    public init(name: String, model: String?, size: Int64?, digest: String?, modifiedAt: String?, details: Details?) {
+    public init(name: String, model: String?, remoteModel: String?, remoteHost: String?, size: Int64?, digest: String?,
+                modifiedAt: String?, details: Details?) {
         self.name = name
         self.model = model
+        self.remoteModel = remoteModel
+        self.remoteHost = remoteHost
         self.size = size
         self.digest = digest
         self.modifiedAt = modifiedAt
@@ -130,19 +168,26 @@ public struct OllamaShowResponse: Sendable, Codable, Hashable {
     /// Absent from older servers and from models without the metadata, and nil too when it cannot be read
     /// (`thinkingProblem`).
     public var thinking: Thinking?
+    /// Where the server sends a request for the model, when it runs it elsewhere, as `OllamaModelInfo.remoteHost`
+    /// (`ShowResponse` in Ollama's api/types.go).
+    public var remoteModel: String?
+    public var remoteHost: String?
     /// Why the `thinking` object could not be read, when it could not, for whoever asked Ollama to log with the model's
     /// name, which the answer does not carry (`OllamaClient.show(model:)`). Never coded.
     var thinkingProblem: String?
 
-    public init(capabilities: [String]?, modelInfo: [String: JSONValue]?, details: OllamaModelInfo.Details?, thinking: Thinking?) {
+    public init(capabilities: [String]?, modelInfo: [String: JSONValue]?, details: OllamaModelInfo.Details?, thinking: Thinking?,
+                remoteModel: String?, remoteHost: String?) {
         self.capabilities = capabilities
         self.modelInfo = modelInfo
         self.details = details
         self.thinking = thinking
+        self.remoteModel = remoteModel
+        self.remoteHost = remoteHost
     }
 
     private enum CodingKeys: String, CodingKey {
-        case capabilities, modelInfo, details, thinking
+        case capabilities, modelInfo, details, thinking, remoteModel, remoteHost
     }
 
     /// Reads the answer as Ollama gives it. The `thinking` object is optional metadata, so one the app cannot act on, such
@@ -154,6 +199,8 @@ public struct OllamaShowResponse: Sendable, Codable, Hashable {
         capabilities = try container.decodeIfPresent([String].self, forKey: .capabilities)
         modelInfo = try container.decodeIfPresent([String: JSONValue].self, forKey: .modelInfo)
         details = try container.decodeIfPresent(OllamaModelInfo.Details.self, forKey: .details)
+        remoteModel = try container.decodeIfPresent(String.self, forKey: .remoteModel)
+        remoteHost = try container.decodeIfPresent(String.self, forKey: .remoteHost)
         do {
             thinking = try container.decodeIfPresent(Thinking.self, forKey: .thinking)
         } catch {

@@ -1,7 +1,10 @@
 import Foundation
 
 /// An answer's Markdown, block by block, for the app to show as paragraphs, headings, lists, quotes and code rather than
-/// the characters that mark them. Each block keeps its inline emphasis, links and code.
+/// the characters that mark them. Each block keeps its inline emphasis and code. The answer is untrusted, as a document
+/// it read can tell the model what to write (OWASP, LLM05 Improper Output Handling), so nothing in it becomes active
+/// where it is shown: a link becomes its words, followed by its address as plain text when the two differ, so a click
+/// opens nothing and nothing is hidden; an image becomes its words (`inert`).
 public enum AnswerMarkdown {
     /// One block: its text, what it is, and how many lists it sits within beyond the first.
     public struct Block: Sendable, Hashable, Identifiable {
@@ -26,7 +29,8 @@ public enum AnswerMarkdown {
     /// when nothing of it can be read as Markdown.
     public static func blocks(_ markdown: String) -> [Block]? {
         let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .full, failurePolicy: .returnPartiallyParsedIfPossible)
-        guard let parsed = try? AttributedString(markdown: markdown, options: options) else { return nil }
+        guard let read = try? AttributedString(markdown: markdown, options: options) else { return nil }
+        let parsed = inert(read)
         var blocks: [Block] = []
         var lastBlock: Int?
         var lastItem: Int?
@@ -54,6 +58,25 @@ public enum AnswerMarkdown {
             }
         }
         return blocks
+    }
+
+    /// `text` with nothing that acts when shown: each link becomes its words, and its address in parentheses after them
+    /// when the two differ, as plain text in the link's block and emphasis; each image becomes its words. A link written
+    /// across runs of different emphasis is one range of `runs[\.link]`, so its address is written once.
+    static func inert(_ text: AttributedString) -> AttributedString {
+        var shown = AttributedString()
+        for (link, range) in text.runs[\.link] {
+            var words = AttributedString(text[range])
+            words.link = nil
+            words.imageURL = nil
+            let said = String(words.characters)
+            shown += words
+            if let address = link?.absoluteString, address != said {
+                let attributes = words.runs.last?.attributes ?? AttributeContainer()
+                shown += AttributedString(" (\(address))", attributes: attributes)
+            }
+        }
+        return shown
     }
 
     /// What a block is, from the components of its intent, innermost first.

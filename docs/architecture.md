@@ -119,7 +119,7 @@ answers** (Classify validates them), and **the network** (one client, one host).
 
 | Goal | Approach | Where |
 |---|---|---|
-| Privacy | One network client behind a guard that admits one validated local host; a lint gate refuses any other. Logs carry identifiers and paths, never text. | `Ollama/`, `scripts/lint.sh` |
+| Privacy | One network client behind a guard that admits one validated local host, with no proxy and no redirect; a lint gate refuses any other client. Logs carry identifiers and paths, never text; what leaves for a bug report, diagnostics and plain traces, is chosen by allow-list and holds nothing of a document without consent. | `Ollama/`, `Observability/DiagnosticsExporter.swift`, `scripts/lint.sh` |
 | Data safety | The archive is the record and SQLite an index over it: every change commits to the index, triggers mark the record file it touches in the same transaction, and the file is written from the index. Files move, never copy over or delete; what is no longer needed goes to the Trash. | `Records/`, `FileOps/`, [Storage](storage.md) |
 | Auditability | Each stage records a trace step; each change records one History event, in the action the app and the command line share. | `Storage/TraceRecorder.swift`, `Storage/HistoryStore.swift` |
 | Resumability | Queues live in SQLite. A job's stage and what its finished stages found are saved after each stage; the worker takes the oldest due job, so a stopped job resumes first. | `Storage/JobStore.swift`, `Ingest/IngestCoordinator.swift` |
@@ -315,8 +315,8 @@ actor as its default isolation; the package modules do not, as they are librarie
 |---|---|---|
 | Actor | Every component with mutable state of its own. | The three workers; `IncomingWatcher`, `ArchiveWatcher`, `ArchiveReconciler`; `ArchiveRecords`; `SettingsStore`; `OllamaLifecycle`, `ModelManager`, `InferenceGate`; `SearchService`, `VectorIndex`; `OCRService`, `VisionDescriber`, `ShellRunner` |
 | `Sendable` struct | Stores and services without state: they hold the database and the clock. | `DocumentStore`, `JobStore`, `DocumentFiler`, `ReviewActions`, `ExtractorRegistry`, `DocumentAnalyzer` |
-| `Mutex` | Short synchronous sections shared across isolation. | `OllamaConnection`, the guard's allowed hosts |
-| `@unchecked Sendable` | Only where a system API forces it. | `FSEventStream`, `NetworkGuardProtocol` |
+| `Mutex` | Short synchronous sections shared across isolation. | `OllamaConnection`, the guard's record of what it refused |
+| `@unchecked Sendable` | Only where a system API forces it. | `FSEventStream` |
 | Main actor | The app: `AppModel` and every view. | `App/` |
 
 The rules a change must keep:
@@ -353,7 +353,7 @@ change that replaces it; the earlier one stays in Git's history, as superseded c
 
 | # | Decision | Because | Recorded |
 |---|---|---|---|
-| 1 | One network client, behind a guard that admits one validated local host. | Privacy must not depend on every call site being careful. | §4.1; `Ollama/NetworkGuard.swift` |
+| 1 | One network client, behind a guard that admits one validated local host: each request carries the host its client was pointed at, the session uses no proxy and follows no redirect. | Privacy must not depend on every call site being careful, nor on the system's proxy settings or on what a server answers. | §4.1; `Ollama/NetworkGuard.swift` |
 | 2 | The archive is the record, SQLite is an index over it. | An index can be lost, damaged or outgrown; plain files next to the documents cannot be taken hostage by a schema. | [Storage](storage.md) |
 | 3 | A document is described by labels; the app makes no folders. | Folders force one place for a document that belongs to several. | [How it works](how-it-works.md#labels), [sources](organizing-principles-sources.md) |
 | 4 | Persistent queues with one order, the order of queueing; due time only gates. | A stopped item must resume first, and a retry must not overtake. | §3; `Storage/JobStore.swift` |
@@ -384,7 +384,7 @@ shortened.
 
 | # | Goal | When | Then | Known to hold by |
 |---|---|---|---|---|
-| Q1 | Privacy | Any code asks for a URL whose host is not the configured server. | The request fails before it leaves, and the doctor reports it. | Network gate in `scripts/lint.sh`; the endpoint and guard tests in `ConfigTests` |
+| Q1 | Privacy | Any code asks for a URL whose host is not the configured server, a system proxy is set, or the server answers with a redirect. | The request fails before it leaves, and the doctor reports it; no proxy is used; the redirect is not followed. | Network gate in `scripts/lint.sh`; `NetworkGuardTests`, `OllamaClientTests`, the endpoint tests in `ConfigTests` |
 | Q2 | Privacy | The user points the app at an address beyond this Mac and the local network. | The address is refused and nothing changes. | `OllamaServerTests`, `ConfigTests` |
 | Q3 | Data safety | A file in Incoming has the bytes of a document in the archive. | The copy goes to the Trash, never deleted, and only after the original's bytes are checked again. | `IngestTests`; trash gate |
 | Q4 | Data safety | The model names a file with a path in it. | The name is cleaned to one path component; a name that is not one is refused. | `FilenameBuilderTests`, `SearchTaskExportTests` |
@@ -393,7 +393,7 @@ shortened.
 | Q7 | Resumability | Ollama goes away for an hour. | Documents, requests and questions wait in their queues and cost no attempt. | `IngestTests`, `SearchTaskTests`, `ConversationTests` |
 | Q8 | Auditability | The user asks how a document got its labels. | Its trace shows each stage, the prompts, the raw answers and what consolidation changed. | `LabelingTests`, `DocumentAnalyzerTests` |
 | Q9 | Untrusted answers | The model answers with invalid JSON, a missing list or a value that is no label of its kind. | The answer is repaired or the value dropped; without a valid answer the document waits for the user. | `DocumentAnalyzerTests`, `SearchInterpreterTests`, `TaskAnswererTests` |
-| Q10 | Testability | `swift test` runs on a Mac without Ollama. | Every suite passes; nothing sleeps or reads the wall clock. | `scripts/verify.sh`; `MockOllama`, `TestTime` |
+| Q10 | Testability | `swift test` runs on a Mac without Ollama. | Every suite passes; nothing sleeps or reads the wall clock. | `scripts/verify.sh`; `MockOllama`, `StubOllamaServer` (the HTTP client over its own session), `TestTime` |
 | Q11 | Changeability | A tunable changes. | One key in `Defaults/pipeline.json` and its field; a key no field reads fails the load. | `ConfigTests` |
 | Q12 | Accessibility | A row that opens on a click. | It opens with Return, Space and VoiceOver's default action. | Rows gate; [QA protocol](qa/protocol.md) |
 
@@ -407,6 +407,7 @@ evolutionary architecture, and what each protects.
 |---|---|
 | Only `RuntimeEnvironment` reads the process environment. | `scripts/lint.sh`, environment gate |
 | Only `OllamaClient` opens connections, through the guard. | `scripts/lint.sh`, network gate |
+| A log message is a constant; what varies goes in its fields, which a diagnostics export keeps by allow-list. | `swift build`: `Log`'s message is a `StaticString`; `DiagnosticsTests` |
 | No `fatalError` or `try!` in shipped code. | `scripts/lint.sh`, crash gate; SwiftLint `force_unwrapping` |
 | Work at quit runs before AppKit lets the app end. | `scripts/lint.sh`, quit gate |
 | Only `SystemTrash` and a move across volumes call `trashItem`; everything else goes through `Trashing`. | `scripts/lint.sh`, trash gate |

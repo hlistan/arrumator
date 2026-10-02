@@ -23,8 +23,12 @@ struct GlobalOptions: ParsableArguments {
     @Flag(name: .long, help: "Echo log lines to stderr.")
     var verbose = false
 
-    func runtime() async throws -> ArrumatorRuntime {
-        let environment = RuntimeEnvironment.current
+    /// The runtime every command works through, its archive open. `ollamaURL`, an address already validated, is the
+    /// Ollama server it talks to in place of the saved one, as `settings --ollama-url` needs to mend a saved address
+    /// the runtime would refuse.
+    func runtime(ollamaURL: URL? = nil) async throws -> ArrumatorRuntime {
+        var environment = RuntimeEnvironment.current
+        if let ollamaURL { environment.ollamaURL = ollamaURL.absoluteString }
         let runtime = try await ArrumatorRuntime.bootstrap(appVersion: Arrumator.version, environment: environment,
                                                            echoLogsToStderr: verbose, trash: environment.trash(orElse: SystemTrash()))
         try await runtime.openArchive()
@@ -166,7 +170,10 @@ struct Settings: AsyncParsableCommand {
     }
 
     func run() async throws {
-        let runtime = try await options.runtime()
+        // A new server is checked before anything opens, and the runtime talks to it rather than to the saved one, which
+        // may be an address this version refuses: so the command that gives another can always run.
+        let server = try ollamaURL.map { try OllamaEndpoint.validated($0) }
+        let runtime = try await options.runtime(ollamaURL: server)
         // The profile first: one the settings do not list is refused before anything else is saved.
         if let profile { try await runtime.profiles.use(profile) }
         try await runtime.settingsActions.change(given)

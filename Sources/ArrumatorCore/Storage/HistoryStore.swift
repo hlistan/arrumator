@@ -40,7 +40,7 @@ public struct HistoryStore: Sendable {
         try event.insert(db)
         // The summary names labels, file names and problems drawn from the document, which never go into a log (§4.1).
         Log.debug(.ingest, "Event recorded", [
-            "kind": kind.rawValue, "doc": doc.map(String.init) ?? "-", "job": job.map(String.init) ?? "-",
+            "event": kind.rawValue, "doc": doc.map(String.init) ?? "-", "job": job.map(String.init) ?? "-",
             "trace": trace.map(String.init) ?? "-",
         ])
         return event.id ?? 0

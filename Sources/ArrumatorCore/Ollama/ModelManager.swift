@@ -10,6 +10,8 @@ public struct ModelStatus: Sendable, Hashable, Codable {
     public var role: ModelRole
     public var installed: Bool
     public var sizeBytes: Int64?
+    /// Where Ollama runs the model when not on its own server (`ModelLocation.remoteHost`): nothing is read with it.
+    public var remoteHost: String?
 }
 
 /// A model Ollama has installed, and what a profile can give it to do (`ModelManager.installed()`): what the profile
@@ -25,18 +27,22 @@ public struct InstalledModel: Sendable, Codable, Hashable, Identifiable {
     /// How it can be told to think (`OllamaShowResponse.thinkingValues`): its switches, `true` and `false`, or the levels
     /// it names; none for a model that cannot think.
     public var thinking: [OllamaThink]
+    /// Where Ollama runs it when not on its own server (`ModelLocation.remoteHost`): a profile can then give it nothing.
+    public var remoteHost: String?
 
     public var id: String { name }
 
-    public init(name: String, sizeBytes: Int64?, shown: OllamaShowResponse) {
+    public init(name: String, sizeBytes: Int64?, shown: OllamaShowResponse, remoteHost: String?) {
         self.name = name
         self.sizeBytes = sizeBytes
         let capabilities = shown.capabilities ?? []
         self.capabilities = capabilities
         let answers = capabilities.contains(OllamaShowResponse.completionCapability)
-        roles = [(ModelRole.chat, answers), (.vision, answers && capabilities.contains(OllamaShowResponse.visionCapability)),
-                 (.embedding, capabilities.contains(OllamaShowResponse.embeddingCapability))].filter(\.1).map(\.0)
+        let roles = [(ModelRole.chat, answers), (.vision, answers && capabilities.contains(OllamaShowResponse.visionCapability)),
+                     (.embedding, capabilities.contains(OllamaShowResponse.embeddingCapability))].filter(\.1).map(\.0)
+        self.roles = remoteHost == nil ? roles : []
         thinking = shown.thinkingValues
+        self.remoteHost = remoteHost
     }
 }
 
@@ -50,7 +56,8 @@ public enum ModelManagerError: Error, LocalizedError {
     }
 }
 
-/// Tracks which configured models are installed, their capabilities, and downloads missing ones on request.
+/// Tracks which configured models are installed, their capabilities and which run elsewhere, and downloads missing
+/// ones on request.
 public actor ModelManager {
     private let api: any OllamaAPI
     private let config: OllamaConfig
@@ -63,23 +70,27 @@ public actor ModelManager {
 
     public static func normalized(_ name: String) -> String { name.contains(":") ? name : name + ":latest" }
 
-    /// Whether each model of `profile` is installed, in its role, and how large it is.
+    /// Whether each model of `profile` is installed, in its role, how large it is, and where it runs when not on the
+    /// server itself.
     public func status(for profile: ModelProfile) async throws -> [ModelStatus] {
         let installed = try await api.tags()
-        let bySize = Dictionary(installed.map { (Self.normalized($0.name), $0.size) }, uniquingKeysWith: { a, _ in a })
+        let listed = Dictionary(installed.map { (Self.normalized($0.name), $0) }, uniquingKeysWith: { a, _ in a })
         return ModelProfile.roles.map { role in
             let name = profile.model(for: role)
-            let key = Self.normalized(name)
-            return ModelStatus(name: name, role: role, installed: bySize.keys.contains(key), sizeBytes: bySize[key] ?? nil)
+            let entry = listed[Self.normalized(name)]
+            return ModelStatus(name: name, role: role, installed: entry != nil, sizeBytes: entry?.size,
+                               remoteHost: ModelLocation.remoteHost(of: name, said: entry?.remoteHost))
         }
     }
 
-    /// Every installed model in Ollama's order, with its size and what it can do (`InstalledModel`), what Ollama says of
-    /// each read once and kept (`capabilities(of:)`).
+    /// Every installed model in Ollama's order, with its size, what it can do and where it runs when not on the server
+    /// itself (`InstalledModel`), what Ollama says of each read once and kept (`capabilities(of:)`).
     public func installed() async throws -> [InstalledModel] {
         var models: [InstalledModel] = []
         for model in try await api.tags() {
-            models.append(InstalledModel(name: model.name, sizeBytes: model.size, shown: try await capabilities(of: model.name)))
+            let shown = try await capabilities(of: model.name)
+            models.append(InstalledModel(name: model.name, sizeBytes: model.size, shown: shown,
+                                         remoteHost: ModelLocation.remoteHost(of: model.name, said: model.remoteHost ?? shown.remoteHost)))
         }
         return models
     }
