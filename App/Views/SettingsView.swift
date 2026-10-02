@@ -268,7 +268,7 @@ struct AdvancedSettings: View {
     }
 
     private func rebuild() async {
-        let summary = await model.load(Wording.rebuildIndexAction) { try await $0.records.rebuildIndex() }
+        let summary = await model.load(Wording.rebuildIndexAction) { try await $0.rebuildIndex() }
         rebuildMessage = summary.map { Wording.rebuilt($0.summary, queued: $0.queued) }
     }
 

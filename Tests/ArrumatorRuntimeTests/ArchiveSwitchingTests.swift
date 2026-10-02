@@ -50,7 +50,7 @@ import Testing
         try FileManager.default.removeItem(at: home.paths.indexesDirectory)
 
         let rebuilt = try await home.open()
-        #expect(rebuilt.opening == .created, "a lost index is made anew")
+        #expect(try await rebuilt.services.history.events(limit: 50, kinds: [.rebuilt]).count == 1, "a lost index is made anew and rebuilt")
         #expect(try await marks(rebuilt) == ["Kept in the archive"], "and the history comes back from the archive")
     }
 
@@ -66,7 +66,8 @@ import Testing
         }
 
         let runtime = try await home.open()
-        #expect(runtime.opening == .existing, "the index was moved, not rebuilt")
+        let pending = try await runtime.database.pendingRebuild()
+        #expect(try await runtime.services.history.events(limit: 50, kinds: [.rebuilt]).isEmpty && pending == nil, "the index was moved, not rebuilt")
         #expect(try await marks(runtime) == ["Written before"], "its history comes with it")
         #expect(!FileManager.default.fileExists(atPath: single.path), "the old index is not left behind")
         #expect(FileManager.default.fileExists(atPath: runtime.index.path), "it is the archive's own index now")
@@ -80,7 +81,7 @@ import Testing
         try await SettingsStore(paths: home.paths).update { $0.archivePath = aliased }
         let first = try await home.open()
         let again = try await home.open()
-        #expect(again.index == first.index && again.opening == .existing, "one folder has one index, before and after it exists")
+        #expect(again.index == first.index, "one folder has one index, before and after it exists")
         await #expect(throws: ArchiveSwitchError.self, "another spelling of the archive is the archive") {
             _ = try await again.switchArchive(to: home.folder("Aliased").path)
         }

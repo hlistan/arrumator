@@ -34,9 +34,12 @@ public struct Doctor: Sendable {
         self.time = time
     }
 
-    /// - Parameter ollamaURL: the server in use; one on another machine is the user's to install and run.
+    /// - Parameters:
+    ///   - ollamaURL: the server in use; one on another machine is the user's to install and run.
+    ///   - unreadableRecords: the archive's record files that cannot be read (`ArchiveRecords.unreadableFiles`), each a
+    ///     failed check, as the app neither reads nor writes them until the user corrects them.
     public func run(settings: AppSettings, config: PipelineConfig, lifecycle: OllamaLifecycle, models: ModelManager,
-                    ollamaURL: URL) async -> DoctorReport {
+                    ollamaURL: URL, unreadableRecords: [UnreadableRecordFile]) async -> DoctorReport {
         var checks: [DoctorCheck] = []
         let fm = FileManager.default
         func add(_ name: String, _ ok: Bool, _ detail: String, warnOnly: Bool = false) {
@@ -56,6 +59,8 @@ public struct Doctor: Sendable {
         } catch {
             add("Database", false, error.localizedDescription)
         }
+        if unreadableRecords.isEmpty { add("Record files", true, "none found that cannot be read") }
+        for file in unreadableRecords { add("Record file", false, "\(file.path): \(file.reason)") }
         let local = OllamaEndpoint.isThisMac(ollamaURL)
         if local {
             let install = await lifecycle.discover()

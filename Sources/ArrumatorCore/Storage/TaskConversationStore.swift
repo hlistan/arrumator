@@ -226,9 +226,8 @@ extension TaskConversationStore {
 
     /// Adds and updates a task's questions and answers from its file, and when `replacing` also removes those the file
     /// no longer has, keeping what the index keeps of its own (each one's trace, and when a waiting question is next
-    /// tried). A file of a task the index does not have is not read: its number points nowhere.
+    /// tried). The task is one the index has (`ParsedRecords.apply`).
     static func restore(_ entries: [ConversationTurnEntry], task: Int64, replacing: Bool, db: Database) throws {
-        guard try SearchTaskRecord.exists(db, key: task) else { return }
         let existing = Dictionary(try records(db, task: task).compactMap { r in r.id.map { ($0, r) } }, uniquingKeysWith: { a, _ in a })
         if replacing {
             try db.execute(sql: "DELETE FROM search_task_turns WHERE task_id = ? AND id NOT IN (\(ArchiveRecords.ids(entries.map(\.id))))",

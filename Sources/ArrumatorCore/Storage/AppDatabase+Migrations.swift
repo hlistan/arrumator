@@ -249,6 +249,7 @@ extension AppDatabase {
             CREATE INDEX proposals_status ON proposals(status, created_at DESC);
 
             CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            INSERT INTO meta (key, value) VALUES ('rebuild_pending', 'unread'); -- made now, so it holds nothing of its archive yet (v19)
             """)
 
             try db.create(virtualTable: "document_fts", using: FTS5()) { t in
@@ -630,9 +631,7 @@ extension AppDatabase {
             """)
         }
 
-        registerSearchTaskMigrations(&m)
-        registerTagMigrations(&m)
-        registerConversationMigrations(&m)
+        for register in [registerSearchTaskMigrations, registerTagMigrations, registerConversationMigrations, registerRecordMigrations] { register(&m) }
 
         return m
     }

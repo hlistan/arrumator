@@ -237,6 +237,7 @@ final class AppModel {
             result = try await action(runtime)
             lastError = nil
         } catch {
+            let error = await runtime.database.explained(error)
             lastError = Wording.failure(what, error.localizedDescription)
             Log.error(.ui, "An action failed", ["action": what, "error": error.localizedDescription])
         }

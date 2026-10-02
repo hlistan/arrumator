@@ -106,12 +106,14 @@ public struct AppPaths: Sendable {
     var singleIndexURL: URL { supportDirectory.appendingPathComponent("arrumator.sqlite") }
 
     /// Moves the one database of earlier versions into place as the index of the archive the settings name, unless
-    /// that archive has an index already. Returns whether it moved.
+    /// that archive has an index already. Returns whether it moved. Its write-ahead log is written into it first: the
+    /// files are moved one at a time, and a stop between two would otherwise leave its last changes behind.
     @discardableResult
     public func moveSingleIndex(to index: URL) throws -> Bool {
         let fm = FileManager.default
         guard fm.fileExists(atPath: singleIndexURL.path), !fm.fileExists(atPath: index.path) else { return false }
         try fm.createDirectory(at: indexesDirectory, withIntermediateDirectories: true)
+        try AppDatabase.checkpoint(singleIndexURL)
         for suffix in [""] + AppDatabase.companionSuffixes where fm.fileExists(atPath: singleIndexURL.path + suffix) {
             try fm.moveItem(atPath: singleIndexURL.path + suffix, toPath: index.path + suffix)
         }

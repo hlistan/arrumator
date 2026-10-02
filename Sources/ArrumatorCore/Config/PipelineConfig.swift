@@ -39,6 +39,7 @@ public struct PipelineConfig: Sendable, Codable, Hashable, ValidatedConfiguratio
             problems.append("labels.vocabulary.kinds.\(kind.rawValue): the user's own labels are never kept one vocabulary; remove it")
         }
         problems += ollama.problems
+        if database.observationRetry <= 0 { problems.append("database.observationRetry must be more than 0") }
         problems += tasks.problems
         problems += conversation.problems
         return problems
@@ -599,6 +600,9 @@ public struct MaintenanceConfig: Sendable, Codable, Hashable {
 public struct DatabaseConfig: Sendable, Codable, Hashable {
     /// Seconds a write waits for another process holding the index, the app or `arrumatorcli`, before it fails.
     public var busyTimeout: Double
+    /// Seconds before the app watches the index again after watching it failed (`AppDatabase.activity()`,
+    /// `pendingRecords()`): its lists, and the writer of the record files, hear of changes again after that.
+    public var observationRetry: Double
 }
 
 /// One step of the processing funnel: the trace stages it covers, and how it is described to the user.
@@ -617,22 +621,4 @@ public struct FunnelConfig: Sendable, Codable, Hashable {
     /// Below this many documents in the window, percentages are noise, so only counts are shown.
     public var minimumForShares: Int
     public var steps: [FunnelStepConfig]
-}
-
-extension PipelineConfig {
-    /// What extraction is given for a file under `settings`: its tunables, and the vision model of the profile in use when
-    /// images may be described. The ingest pipeline and `arrumatorcli ingest --dry-run` extract alike with it.
-    public func extractionContext(settings: AppSettings) throws -> ExtractionContext {
-        ExtractionContext(config: extraction, entities: entities, vision: settings.enableVLM ? try visionOptions(settings: settings) : nil)
-    }
-
-    /// Images are described with the context and keep-alive documents are read with (`analysis.numCtx`,
-    /// `ollama.keepAlive.chat`): a profile that reads and describes images with one model keeps it loaded once, rather
-    /// than Ollama loading it again with another context for every image. The model thinks as it does reading a
-    /// document (`analysis.think`).
-    private func visionOptions(settings: AppSettings) throws -> VisionModelOptions {
-        VisionModelOptions(model: try settings.modelProfile().visionModel, keepAlive: ollama.keepAlive.chat,
-                           numPredict: analysis.vlmNumPredict, numCtx: analysis.numCtx, options: analysis.llmOptions,
-                           think: analysis.think)
-    }
 }

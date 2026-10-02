@@ -275,7 +275,8 @@ No tunable lives in code. Defaults are bundled in `Sources/ArrumatorCore/Resourc
   recent events notifications are drawn from, `interface.notificationEvents`, and how much text `arrumatorcli extract`
   prints, `interface.extractPreviewChars`), `maintenance` (how often the app prunes logs, trims traces and looks for
   files `arrumatorcli` queued, `maintenance.interval`) and `database` (how long a write waits for another process using
-  the index, `database.busyTimeout`). Override any subset in `~/Library/Application Support/Arrumator/pipeline.json`.
+  the index, `database.busyTimeout`, and how long the app waits before it watches the index again after watching it
+  failed, `database.observationRetry`, more than 0). Override any subset in `~/Library/Application Support/Arrumator/pipeline.json`.
 
 A configuration the app cannot run with stops it with the key and the reason: an empty `ingest.retryDelays`, a negative
 `analysis.repairAttempts` or an effort that is not low, medium or high in `pipeline.json`; a `profile` that
@@ -313,9 +314,12 @@ files and caches what can be recomputed, such as extracted text and embeddings. 
 migrated, the app rebuilds it from the archive and reads each document's text again in the background; one that is only
 locked by another process or on a full disk is left as it is, and the app says why it cannot start. Switching away
 from an archive that cannot be written to, as when its disk is gone, still switches; the app says that archive's record
-files wait, and they are written when you open it again. You can edit the
-files by hand; the app reads the change back and never overwrites it, not even one it cannot read. The design, and what
-a rebuild does and does not keep, is in [Storage](storage.md).
+files wait, and they are written when you open it again. You can edit the files by hand; the app reads the change back
+and never overwrites it, not even one it cannot read, which `arrumatorcli doctor` names with the reason. An index cannot
+be rebuilt without such a file: the app then files nothing, shows at the foot of the window that reading the archive
+failed, with the file and why, and refuses any change you ask for with the same reason, until the file is corrected or
+moved out of the archive and the index rebuilt in Settings › Advanced, which starts the filing again, or the app opened
+again. The design, and what a rebuild does and does not keep, is in [Storage](storage.md).
 
 The app is not sandboxed: it watches folders you choose, writes extended attributes, and starts Ollama. It uses the
 hardened runtime and makes no network requests other than to your Ollama server.

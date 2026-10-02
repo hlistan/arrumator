@@ -2,6 +2,7 @@ import ArrumatorClassify
 import ArrumatorCore
 import ArrumatorExtract
 import Foundation
+import Synchronization
 
 /// Composition root shared by the app and the CLI: builds every service from configuration and runs the
 /// background machinery (watchers, ingest worker, Ollama supervision, maintenance). A runtime is open on one archive,
@@ -20,8 +21,6 @@ public final class ArrumatorRuntime: Sendable {
     /// Where the archive's index is kept (`AppPaths.indexURL`).
     public let index: URL
     public let database: AppDatabase
-    /// Whether the index was found, created or rebuilt when the runtime opened it.
-    public let opening: AppDatabase.Opening
     /// The archive's record files, which the database indexes (docs/storage.md).
     public let records: ArchiveRecords
     public let settings: SettingsStore
@@ -152,10 +151,13 @@ public final class ArrumatorRuntime: Sendable {
         let halted = await halt(forGood: false)
         do {
             let waiting = try await services.jobs.cancelActive(kinds: [.ingest])
-            try await services.history.record(
-                .settingsChanged, actor: .user,
-                summary: "Switched to the archive at \(target.path)" + (waiting > 0 ? "; \(Format.count(waiting, "file")) waiting in Incoming go there" : ""),
-                payload: ["archive": target.path])
+            // An index not rebuilt from its archive takes no event; leaving that archive must stay possible.
+            if try await database.pendingRebuild() != .unread {
+                try await services.history.record(
+                    .settingsChanged, actor: .user,
+                    summary: "Switched to the archive at \(target.path)" + (waiting > 0 ? "; \(Format.count(waiting, "file")) waiting in Incoming go there" : ""),
+                    payload: ["archive": target.path])
+            }
         } catch {
             Log.error(.app, "Could not switch archives; staying on this one", ["to": target.path, "error": error.localizedDescription])
             await resume(halted)
@@ -200,12 +202,11 @@ public final class ArrumatorRuntime: Sendable {
             .export(to: zip, doctor: await runDoctor(), settings: await settings.current, includeDocumentText: includeDocumentText)
     }
 
-    /// Brings the index in line with the archive before anything else uses it: a new or set-aside index is rebuilt
-    /// from the record files, otherwise record files changed on disk are read again; then every stale record file is
-    /// written. Reads the archive, so macOS may first ask for access to it.
+    /// Brings the index in line with the archive before anything else uses it: an index created or set aside and not
+    /// rebuilt since, as it records itself, is rebuilt from the record files, otherwise record files changed on disk are
+    /// read again; then every stale record file is written. Reads the archive, so macOS may first ask for access to it.
     public func openArchive() async throws {
-        if opening.needsRebuild, try await records.archiveHasRecords() {
-            let summary = try await records.rebuild()
+        if let summary = try await records.rebuildIfPending() {
             Log.info(.app, "Index rebuilt from the archive", ["documents": String(summary.documents), "queued": String(summary.queued)])
         } else {
             try await records.reconcile()
@@ -225,8 +226,8 @@ public final class ArrumatorRuntime: Sendable {
         self.settings = settings
         self.archive = archive
         index = try paths.indexURL(for: archive)
-        (database, opening) = try AppDatabase.open(at: index, config: config.database, setAsideSuffix: config.records.setAsideSuffix,
-                                                   time: time) {
+        (database, _) = try AppDatabase.open(at: index, config: config.database, setAsideSuffix: config.records.setAsideSuffix,
+                                             time: time) {
             ArchiveRecords.mayHoldRecords(archive: archive, config: config)
         }
         registry = SelfChangeRegistry(ttl: config.watcher.selfChangeTTLSeconds, time: time)
@@ -300,19 +301,42 @@ public final class ArrumatorRuntime: Sendable {
             if let unread {
                 Log.error(.app, "Could not bring the index in line with the archive", ["error": unread.localizedDescription])
             }
-            await begin()
+            // Why the archive could not be read says more than that its index was not rebuilt from it.
+            do { try await beginOnRebuiltIndex() } catch { throw unread ?? error }
             if let unread { throw unread }
         }) else { throw CancellationError() }
         try await step.value
     }
 
     /// Starts Ollama supervision, the ingest worker, the search task queue, the conversation queue, both watchers and
-    /// maintenance. Returns once they have started. A runtime starts once: a second start does nothing more, and one
-    /// after `stop()` nothing at all.
-    public func start() async {
-        guard let step = await tasks.starting(reading: false, { [self] in await begin() }) else { return }
+    /// maintenance. Returns once they have started, saying whether they have. A runtime starts once: a second start does
+    /// nothing more, and one after `stop()` nothing at all. An index not yet rebuilt from its archive, as when its rebuild
+    /// was refused for a record file that cannot be read (`openArchive`), starts nothing, until it is rebuilt
+    /// (`rebuildIndex()`): what the workers did would be filed over the user's records once it was rebuilt.
+    @discardableResult
+    public func start() async -> Bool {
+        guard let step = await tasks.starting(reading: false, { [self] in try await beginOnRebuiltIndex() }) else { return false }
         // Why the archive could not be read, when `openAndStart()` began the step, is its caller's to show.
         _ = await step.result
+        return await tasks.isStarted
+    }
+
+    /// Starts the work (`begin()`) on an index rebuilt from its archive. On one that is not, it starts nothing, and lets
+    /// the step that started go, so that the start after its rebuild begins one of its own; it is decided within that
+    /// step, so a stop meanwhile is waited for like any start.
+    private func beginOnRebuiltIndex() async throws {
+        let pending: AppDatabase.PendingRebuild?
+        do { pending = try await database.pendingRebuild() } catch {
+            Log.error(.app, "Not started: whether the index was rebuilt from the archive cannot be read", ["error": error.localizedDescription])
+            await tasks.refused()
+            throw error
+        }
+        if let pending {
+            Log.error(.app, "Not started: the index has not been rebuilt from the archive", ["state": pending.rawValue])
+            await tasks.refused()
+            throw await database.notRebuilt()
+        }
+        await begin()
     }
 
     private func begin() async {
@@ -434,6 +458,16 @@ public final class ArrumatorRuntime: Sendable {
         _ = await (ingest, reading, answering)
     }
 
+    /// Rebuilds the index from the archive's record files, as the user asks in Settings › Advanced, and starts the work
+    /// on it when a start was refused, as when an earlier rebuild was refused for a record file the user has since
+    /// corrected. A runtime not started yet, as before onboarding, or stopped, starts nothing.
+    @discardableResult
+    public func rebuildIndex() async throws -> RebuildSummary {
+        let summary = try await records.rebuild()
+        if await tasks.startWasRefused { await start() }
+        return summary
+    }
+
     /// Stops as `stop()` does, before the app quits, waiting for it at most `ingest.quitTimeout` seconds: a stop that
     /// takes longer, such as a page being read that cannot be interrupted, goes on while the app quits, and the job it
     /// was on carries on where it stopped at the next start. The Ollama server the app started is stopped either way,
@@ -499,7 +533,8 @@ public final class ArrumatorRuntime: Sendable {
     }
 
     public func runDoctor() async -> DoctorReport {
-        await doctor.run(settings: await settings.current, config: config, lifecycle: lifecycle, models: models, ollamaURL: ollama.baseURL)
+        await doctor.run(settings: await settings.current, config: config, lifecycle: lifecycle, models: models, ollamaURL: ollama.baseURL,
+                         unreadableRecords: await records.unreadableFiles())
     }
 }
 
@@ -515,6 +550,8 @@ actor BackgroundTasks {
     private var stepReads = false
     private var wasRead = false
     private var step: Task<Void, any Error>?
+    /// The last step let go of itself, as its index was not rebuilt from its archive (`refused()`).
+    private(set) var startWasRefused = false
     private var tasks: [String: Task<Void, Never>] = [:]
 
     /// The step that starts the runtime: `body`, begun now, the first time; the same step after that, until the runtime
@@ -526,8 +563,23 @@ actor BackgroundTasks {
         step = begun
         stepReads = reading
         wasRead = false
+        startWasRefused = false
         return begun
     }
+
+    /// The step that starts the runtime started nothing, as the index is not rebuilt: it is let go, so the next start
+    /// begins one of its own. Called from within that step, which is the runtime's only one until a stop, after which it
+    /// is cancelled and nothing is let go.
+    func refused() {
+        guard !closed else { return }
+        step = nil
+        stepReads = false
+        wasRead = false
+        startWasRefused = true
+    }
+
+    /// Whether the work is started: a step began it and was not let go, and the runtime is not stopped.
+    var isStarted: Bool { !closed && step != nil }
 
     /// The step that starts the runtime has read the archive.
     func opened() { wasRead = true }

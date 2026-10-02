@@ -2,6 +2,7 @@ import ArgumentParser
 import ArrumatorCore
 import ArrumatorRuntime
 import Foundation
+import Synchronization
 
 @main
 struct Arrumator: AsyncParsableCommand {
@@ -14,6 +15,58 @@ struct Arrumator: AsyncParsableCommand {
         subcommands: [Doctor.self, Run.self, Ingest.self, Extract.self, Search.self, Labels.self, Tasks.self, History.self, Trace.self, Replay.self,
                       Review.self, Archive.self, Funnel.self, Stats.self, Rebuild.self, Logs.self,
                       Models.self, Profiles.self, Diagnostics.self, Eval.self, Settings.self])
+
+    /// Runs the command given, then writes the record files its changes marked, also when it failed part way: a command
+    /// ends with its process, and nothing else would write them until the app or another command did (docs/storage.md).
+    static func main() async {
+        let opened = OpenedArchives()
+        do {
+            try await OpenedArchives.$current.withValue(opened) {
+                var command = try await asyncParseAsRoot()
+                if var asyncCommand = command as? any AsyncParsableCommand {
+                    try await asyncCommand.run()
+                } else {
+                    try command.run()
+                }
+            }
+        } catch {
+            await opened.flushAfterFailure()
+            exit(withError: error)
+        }
+        do {
+            try await opened.flush()
+        } catch {
+            exit(withError: error)
+        }
+    }
+}
+
+/// The archives a command opened (`GlobalOptions.runtime`), whose record files `Arrumator.main` writes before the command
+/// exits.
+final class OpenedArchives: Sendable {
+    /// Those of the command running in this task.
+    @TaskLocal static var current: OpenedArchives?
+
+    private let runtimes = Mutex<[ArrumatorRuntime]>([])
+
+    func add(_ runtime: ArrumatorRuntime) {
+        runtimes.withLock { $0.append(runtime) }
+    }
+
+    /// Writes every record file the command's changes marked.
+    func flush() async throws {
+        for runtime in runtimes.withLock({ $0 }) { try await runtime.records.flush() }
+    }
+
+    /// Writes them after the command failed, whose error is the one it exits with: one that cannot be written is said
+    /// before it.
+    func flushAfterFailure() async {
+        do {
+            try await flush()
+        } catch {
+            FileHandle.standardError.write(Data("Error: \(error.localizedDescription)\n".utf8))
+        }
+    }
 }
 
 struct GlobalOptions: ParsableArguments {
@@ -23,14 +76,16 @@ struct GlobalOptions: ParsableArguments {
     @Flag(name: .long, help: "Echo log lines to stderr.")
     var verbose = false
 
-    /// The runtime every command works through, its archive open. `ollamaURL`, an address already validated, is the
-    /// Ollama server it talks to in place of the saved one, as `settings --ollama-url` needs to mend a saved address
-    /// the runtime would refuse.
+    /// The runtime open on the archive the settings name, its index brought in line with the archive. What the command
+    /// changes is written into the archive's record files before it exits (`Arrumator.main`). `ollamaURL`, an address
+    /// already validated, is the Ollama server it talks to in place of the saved one, as `settings --ollama-url` needs to
+    /// mend a saved address the runtime would refuse.
     func runtime(ollamaURL: URL? = nil) async throws -> ArrumatorRuntime {
         var environment = RuntimeEnvironment.current
         if let ollamaURL { environment.ollamaURL = ollamaURL.absoluteString }
         let runtime = try await ArrumatorRuntime.bootstrap(appVersion: Arrumator.version, environment: environment,
                                                            echoLogsToStderr: verbose, trash: environment.trash(orElse: SystemTrash()))
+        OpenedArchives.current?.add(runtime)
         try await runtime.openArchive()
         return runtime
     }
@@ -97,7 +152,7 @@ enum Terminal {
 }
 
 struct Doctor: AsyncParsableCommand {
-    static let configuration = CommandConfiguration(abstract: "Check the environment: folders, database, Ollama, models, disk, network.")
+    static let configuration = CommandConfiguration(abstract: "Check the environment: folders, database and record files, Ollama, models, disk, network.")
     @OptionGroup var options: GlobalOptions
 
     func run() async throws {
@@ -127,7 +182,7 @@ struct Run: AsyncParsableCommand {
 
     func run() async throws {
         let runtime = try await options.runtime()
-        await runtime.start()
+        guard await runtime.start() else { throw await runtime.database.notRebuilt() }
         let current = await runtime.settings.current
         print("Watching \(current.incomingPath) → \(current.archivePath). Press Ctrl-C to stop.")
         for await status in await runtime.coordinator.statusUpdates() {

@@ -8,8 +8,7 @@ import Testing
 /// REAL column and fails to decode, so both the record strategy and SQL comparisons are pinned here.
 @Suite struct DateStorageTests {
     @Test func recordsStoreDatesAsUnixSeconds() throws {
-        let queue = try DatabaseQueue()
-        try AppDatabase.migrator.migrate(queue)
+        let queue = try AppDatabase.inMemory().writer
         let filed = Date(timeIntervalSince1970: 1_800_000_000)
         try queue.write { db in
             var doc = DocumentRecord.arrived(path: "/tmp/a.pdf", sha256: "h", size: 1, uttype: "pdf", inode: nil, modified: nil,

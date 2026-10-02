@@ -213,11 +213,13 @@ table in [AGENTS.md §5](../AGENTS.md#5-boundaries).
 ### Starting and stopping
 
 `ArrumatorRuntime.bootstrap` loads the configuration and settings, opens the archive's index and wires the services.
-`openArchive()` brings the index in line with the record files: a new index is rebuilt from them, an existing one
-reads back whatever changed on disk. `start()` then starts the three queue workers and, as named background tasks, the
-Ollama supervision and the audit of its state, the two watcher pumps, the record-file writer, the settings
-subscription and hourly maintenance. The app does both as one step the runtime owns, `openAndStart()`, off the main
-actor, as macOS may hold the first read of the archive behind its prompt for access.
+`openArchive()` brings the index in line with the record files: an index that records it is still to be rebuilt, being
+new or its rebuild refused or cut short, is rebuilt from them, any other reads back whatever changed on disk. `start()`
+then starts the three queue workers and, as named background tasks, the Ollama supervision and the audit of its state,
+the two watcher pumps, the record-file writer, the settings subscription and hourly maintenance; on an index still to
+be rebuilt, as when a record file that cannot be read refused its rebuild, it starts nothing until the index is rebuilt
+(`rebuildIndex()`). The app does both as one step the runtime owns, `openAndStart()`, off the main actor, as macOS may
+hold the first read of the archive behind its prompt for access.
 
 A runtime runs once. `stop()` cancels the step that starts it and every task, then waits: for the step, so nothing
 it goes on to start is left running; for the three queues, stopped together, as one worker may wait for another, as
@@ -280,9 +282,16 @@ documents again after a rebuild always gives way to new arrivals.
 ### The index and the record files
 
 A change commits to SQLite; triggers on every recorded table mark the record file it touches in the same transaction;
-`ArchiveRecords.flush` renders each marked file from the index and writes it atomically; a checksum of what was written
-is kept, so a file changed by hand is noticed, read back and merged rather than overwritten. The four steps and their
-guarantees are in [Storage](storage.md#keeping-files-and-index-together).
+`ArchiveRecords.flush` renders each marked file from the index and writes it atomically, in the app as soon as the
+change commits and in `arrumatorcli` before the command exits (`Arrumator.main`); a checksum of what was written
+is kept, so a file changed by hand is noticed, read back and merged rather than overwritten. Every read of a record file
+goes through `RecordFile.text`, which tells a file that is not there from one that cannot be read; one that cannot be
+read is never written over or removed, and is reported (`ArchiveRecords.unreadableFiles`, the doctor). Flushing, reading
+back and rebuilding take turns on `ArchiveRecords`, as each awaits the index between reading a file and writing it, and
+whether a file read back replaces or merges, or whether a rebuild replaces the index, is decided in the transaction
+that does it. An index that has read nothing of its archive yet refuses every change to the tables the record files
+hold, by triggers, in any process, until its rebuild replaces it; `AppDatabase.explained` turns that refusal into the
+error the user sees. The four steps and their guarantees are in [Storage](storage.md#keeping-files-and-index-together).
 
 ### A search task and a conversation
 

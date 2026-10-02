@@ -12,8 +12,11 @@ help. `run` and `models pull` always print text, `logs --json` prints each log l
 and `eval` writes its JSON report with `--report`.
 
 A command opens the archive named in your settings, and can write that archive's record files and create the
-archive's `System` folder. To experiment, set `ARRUMATOR_HOME` to a scratch folder and put a `settings.json` there
-whose `incomingPath` and `archivePath` point at scratch folders too: `ARRUMATOR_HOME` alone does not move the archive.
+archive's `System` folder: what it changes is written into the record files before it exits, also when it fails part
+way. When the archive's index is new and a record file cannot be read, every command stops, naming the file and why,
+until it is corrected or moved out of the archive. To experiment, set `ARRUMATOR_HOME` to a scratch folder and put a
+`settings.json` there whose `incomingPath` and `archivePath` point at scratch folders too: `ARRUMATOR_HOME` alone does
+not move the archive.
 
 The app reads its settings once, when it starts. While it runs, it does not see settings and model profiles changed
 with `settings` or `profiles` until it is restarted, and a setting changed in the app before then writes the app's
@@ -25,7 +28,7 @@ settings over theirs; quit it first, or restart it after.
 
 | Command | What it does |
 |---|---|
-| `arrumatorcli doctor` | Check the environment: folders, the archive's index, Ollama, models, disk, network. Exits with 1 when a check fails; Ollama not running is a warning. |
+| `arrumatorcli doctor` | Check the environment: folders, the archive's index and record files, Ollama, models, disk, network. Each record file that cannot be read is a failed check naming it and why. Exits with 1 when a check fails; Ollama not running is a warning. |
 | `arrumatorcli run` | Run headless: watch Incoming and file documents until interrupted, printing the file in hand, its stage and the tags it is given. |
 | `arrumatorcli ingest <files>… [--dry-run] [--tag <tag>]…` | File documents now: read, label and name them, and move them to the top of the archive, then show the documents they became, with their tags. An exact copy of a document in the archive becomes none: it goes to the Trash, that document is read again in its place, given the copy's tags, and shown ([exact copies](how-it-works.md#exact-copies)). A file in a folder in Incoming is given the folder's name as a tag, as the app gives it ([folders in Incoming](how-it-works.md#folders-in-incoming-and-tags)); `--tag`, repeatable up to `labels.maxPerKind` times, gives each file a tag of your own besides, such as `--tag "Taxes 2024"`, at most `labels.maxPerKind` tags in all, the folder's first; one with no name is refused. A file the model cannot read yet, as while Ollama is away, is shown with its tags as it waits. `--dry-run` reads and labels without moving files or recording anything, and shows the labels, the tags and what gives each, the name and how the document was read; `--json` gives the tags under `tags`, each with its `source` (`folder` or `command`) and the `folder`. |
 | `arrumatorcli settings [--incoming <folder>] [--profile <profile>] [--ollama launchApp\|spawnServe\|external] [--ollama-url <url>] [--paused true\|false] [--show-in-dock true\|false] [--rename-files true\|false] [--transliterate true\|false] [--notify-on-filed true\|false] [--notify-on-review true\|false] [--pause-on-battery true\|false] [--log-level <level>] [--trace-retention-days <days>] [--group-labels-by-kind true\|false] [--task-effort low\|medium\|high]` | Show or change settings, every one Settings in the app changes, each change recorded once in History, in words made of what changed (`Changed logLevel to debug`). `--profile` is the model profile documents are read with, by its id as `profiles` lists it (`fast`, `standard`, `smart` or one of yours), recorded as `Reading with the profile “Smart”`; one the settings do not list is refused and nothing is saved, as are settings the app could not start with. `--ollama-url` must be this Mac or a machine on the local network, such as `http://192.168.1.20:11434`, with no user name or password, query or fragment; it is checked before anything opens and used in place of the saved one, so it mends a saved address that every other command, and the app, stop at, naming it. `--paused` pauses or resumes filing and records it in History, as the app does. `--log-level` is the lowest level logged (error, warning, info, debug, trace); `--trace-retention-days` how long a reading's prompts and raw answers are kept in its trace. `--group-labels-by-kind` lists the sidebar's labels, and those `labels browse` lists, kind by kind rather than in one list, the most used first. `--task-effort` is the effort a new search task is read with when `tasks new` is given none, as the Tasks page's effort picker sets it. Switch archives with `arrumatorcli archive switch`. |
@@ -124,7 +127,7 @@ join a queue of their own, kept with the task in `System/Conversations`, which `
 |---|---|
 | `arrumatorcli archive [show]` | The archive documents are filed into, and its index. |
 | `arrumatorcli archive switch <path>` | File into another archive from now on, with its own documents and history. The folder is created if it does not exist; one that was an archive is opened as it was left. When the record files of the archive left cannot be written, the switch is made and a note on standard error names that archive: they are written when it is next opened. |
-| `arrumatorcli rebuild` | Rebuild the index from the archive's record files. Changes not yet written to them are written first; documents then have their text read again in the background of the app or `arrumatorcli run`. |
+| `arrumatorcli rebuild` | Rebuild the index from the archive's record files. Changes not yet written to them are written first; documents then have their text read again in the background of the app or `arrumatorcli run`. A record file that cannot be read stops it before anything changes, naming the file. |
 
 ## Insight and diagnostics
 

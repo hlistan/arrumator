@@ -30,8 +30,11 @@ public struct SkipRules: Sendable {
     /// True if `url` is inside any path component that is itself ignored (e.g. a hidden directory).
     public func isInsideIgnoredDirectory(_ url: URL, root: URL) -> Bool {
         let rootComponents = root.standardizedFileURL.pathComponents.count
-        return url.standardizedFileURL.pathComponents.dropFirst(rootComponents).dropLast().contains { component in
-            watcher.ignoredNamePrefixes.contains { component.hasPrefix($0) }
-        }
+        return url.standardizedFileURL.pathComponents.dropFirst(rootComponents).dropLast().contains(where: isIgnoredDirectory(named:))
+    }
+
+    /// True if a directory of this name, and all it holds, is ignored.
+    public func isIgnoredDirectory(named name: String) -> Bool {
+        watcher.ignoredNamePrefixes.contains { name.hasPrefix($0) }
     }
 }

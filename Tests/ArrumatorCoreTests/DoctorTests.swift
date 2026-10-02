@@ -8,8 +8,9 @@ import Testing
     /// The profile the bundled settings read with.
     private func profile() throws -> ModelProfile { try AppSettings.bundledDefaults().modelProfile() }
 
-    /// The report on an environment whose Ollama double has `installed`, under its settings as `change` leaves them.
-    private func report(installed: [String], remoteHosts: [String: String] = [:],
+    /// The report on an environment whose Ollama double has `installed` (with where it runs each model of `remoteHosts`),
+    /// under its settings as `change` leaves them, with the archive's record files that cannot be read.
+    private func report(installed: [String], remoteHosts: [String: String] = [:], unreadable: [UnreadableRecordFile] = [],
                         settings change: (inout AppSettings) -> Void = { _ in }) async throws -> DoctorReport {
         let env = try await TestEnvironment.make()
         defer { env.cleanup() }
@@ -22,7 +23,7 @@ import Testing
                                         address: address, time: env.time)
         return await Doctor(database: env.database, paths: env.paths, appVersion: "test", time: env.time)
             .run(settings: settings, config: env.config, lifecycle: lifecycle, models: ModelManager(api: mock, config: env.config.ollama),
-                 ollamaURL: address)
+                 ollamaURL: address, unreadableRecords: unreadable)
     }
 
     @Test func aHealthyIndexAndTheProfilesModelsAreReportedHealthy() async throws {
@@ -35,6 +36,18 @@ import Testing
                     && report.models.map(\.name) == [profile.chatModel, profile.visionModel, profile.embedModel],
                 "the three models of the profile in use are checked, each in its role")
         #expect(report.checks.filter { $0.name.hasPrefix("Model ") }.map(\.status) == [.ok, .ok, .ok], "and each is installed")
+        #expect(report.checks.first { $0.name == "Record files" }?.status == .ok, "and every record file of the archive can be read")
+    }
+
+    @Test func eachRecordFileThatCannotBeReadIsAnErrorNamingItAndWhy() async throws {
+        let profile = try profile()
+        let files = [UnreadableRecordFile(path: "/Archive/System/_labels.md", reason: "not valid YAML at line 4, column 9"),
+                     UnreadableRecordFile(path: "/Archive/Kept/_documents.md", reason: "it is not UTF-8 text")]
+        let report = try await report(installed: [profile.chatModel, profile.visionModel, profile.embedModel], unreadable: files)
+        let checks = report.checks.filter { $0.name == "Record file" }
+        #expect(checks.map(\.status) == [.error, .error] && checks.map(\.detail) == files.map { "\($0.path): \($0.reason)" },
+                "the user is told which files the app neither reads nor writes, and why, to correct them: \(checks)")
+        #expect(report.hasErrors && !report.checks.contains { $0.name == "Record files" }, "and the doctor fails until they read again")
     }
 
     @Test func aModelOfTheProfileThatIsNotInstalledIsAnError() async throws {

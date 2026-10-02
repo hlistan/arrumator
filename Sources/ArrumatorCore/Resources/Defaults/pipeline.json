@@ -539,6 +539,7 @@
     "interval": 3600
   },
   "database": {
-    "busyTimeout": 5
+    "busyTimeout": 5,
+    "observationRetry": 5
   }
 }

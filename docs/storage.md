@@ -23,14 +23,20 @@ no other folders in the archive.
 
 Every file starts with YAML front matter holding the exact data, followed by a Markdown rendering for people. The front
 matter is what the app reads; the rendering is regenerated on every write. The rendering gives times as the Mac shows
-them, with their offset from UTC (`2026-10-02T11:40:58+01:00`).
+them, with their offset from UTC (`2026-10-02T11:40:58+01:00`). The front matter starts with the version of its format,
+`arrumator: 1`; a file of a later format, which a newer version of Arrumator wrote, is not read and not written over.
 
 A document's entry sits next to the document: `_documents.md` lists the files in its own directory by name. Renaming or
 moving a directory of yours therefore never touches a record, and a file moved in Finder is found again by the
 identifier Arrumator stores on it as an extended attribute.
 
 Identifiers in the records are the database's own: document and event numbers are written into the files and restored
-exactly on a rebuild, so references between records keep working.
+exactly on a rebuild, so references between records keep working. A document is the one its identity (`uid`) names: an
+entry whose number the index gives another document, as in a folder copied in from another archive whose numbers also
+start at 1, is taken in under a number of its own, and its list is written again with it. A copy whose original the
+archive does not have (`duplicate_of`) is read as a copy of nothing, as an event about a document gone is. An entry's
+`file` is the name of a file in its folder, never a path: a list with an entry that holds a path, such as
+`../../x.pdf`, is not read.
 
 ## One index per archive
 
@@ -49,7 +55,8 @@ or a `_documents.md` at its top, the index is rebuilt from them; otherwise it st
 path is the same case: its new index is rebuilt from its records.
 
 Earlier versions kept one index, `arrumator.sqlite`, for whichever archive the settings named. The first start of this
-version moves it into place as that archive's index, so nothing it held is lost.
+version moves it into place as that archive's index, so nothing it held is lost: its write-ahead log is written into it
+first, so the database file alone holds everything when it is moved.
 
 ## What the database only indexes or caches
 
@@ -61,10 +68,12 @@ version moves it into place as that archive's index, so nothing it held is lost.
   folder it is in again. A tag a document already has is in its entry.
 - **Positions in the file-system event stream** and similar bookkeeping.
 
-Some working state is deliberately not kept in files and does not survive a rebuild:
+Some working state is deliberately not kept in files, so a lost index loses it:
 
 - **Traces**, the full exchange with the model for each document and each search task's request. What the model read
-  the document as, and its labels, are in the document's entry; what it read a request as is in the task's entry.
+  the document as, and its labels, are in the document's entry; what it read a request as is in the task's entry. A
+  rebuild on request keeps the traces, and which document and which History event each belongs to, as reading a
+  history file back after an edit does; a search task and a question lose the link to theirs until they are next read.
 - **When a waiting search task, or question about its documents, is next tried.** A task that was waiting in the
   queue, or whose request was being read, is waiting again after a rebuild, and so is a question waiting or being
   answered. Each answer's trace is the index's own too.
@@ -73,7 +82,8 @@ Some working state is deliberately not kept in files and does not survive a rebu
 
 1. A change is made in the database. Triggers on every recorded table mark the record files the change touches, in the
    same transaction, so no code path can forget one and a mark survives a crash.
-2. As soon as the transaction commits, the app writes each marked file from the index, atomically: to a temporary file
+2. As soon as the transaction commits, the app writes each marked file from the index, and a command of
+   `arrumatorcli` writes them before it exits, also when it fails part way, atomically: to a temporary file
    in the same directory, then renamed over the old one, which APFS guarantees is all or nothing. The file's SHA-256 is
    kept in the index. A file changed again while it was being written stays marked and is written again.
 3. When the app starts, and whenever the archive watcher sees a record file change that the app did not make, every
@@ -81,10 +91,19 @@ Some working state is deliberately not kept in files and does not survive a rebu
    files synchronised from another Mac, and anything else that changed the files behind the app's back.
 4. A file edited by hand is never overwritten. If the index has changes of its own for the same file, the edit is merged
    in: what the file changes wins, and what the index added is kept. Otherwise the file replaces what the index held
-   for it. Removing a document's entry never removes the document; its entry is written back. A rule for labels
-   changed by hand is followed by readings from then on; the documents it concerns keep the labels they have.
-   A file edited so that it can no longer be read, such as broken YAML, is not written over: the app says which file
-   and why, keeps what the index holds, and writes the directory's changes once the file reads again.
+   for it. Which of the two is decided in the transaction that applies the file, so a change committed while the file
+   was read is merged with it, never replaced. Removing a document's entry never removes the document; its entry is
+   written back. A rule for labels changed by hand is followed by readings from then on; the documents it concerns keep
+   the labels they have.
+   A file is written over or removed only when it holds what the app last wrote or has just read: one the index has
+   no checksum for, such as a file another Mac synchronised, is read first.
+   A file that is there but cannot be read, such as one edited into broken YAML, saved again as UTF-16 by an editor or
+   whose permissions keep the app out, is never taken for a missing or empty one and never written over or removed,
+   nor are the files in a folder of the archive whose contents cannot be listed:
+   the app logs which file or folder and why (the line and column where the YAML breaks, or the field whose value it
+   does not read, never what the file says there), `arrumatorcli doctor` names it, every other file is still read, and
+   the index keeps what it holds and writes the file's changes once it reads again. That is so for an index that holds
+   the archive; a new one is not rebuilt without the file (see [Rebuilding](#rebuilding)).
 
 The window in which a change exists only in the database is the time it takes to write one file, and a mark left by a
 crash in that window is written at the next start. A mark that could not be written as the app switched away from the
@@ -93,18 +112,41 @@ archive stays in that archive's index until it is next opened ([One index per ar
 ## Rebuilding
 
 The app rebuilds the index when the database is missing, damaged or cannot be migrated, and on request (`arrumatorcli
-rebuild`, or Settings › Advanced). A database that is damaged or cannot be migrated is moved aside, never deleted, as
-`<name>.sqlite.unreadable-<date>`. That only happens when the archive has record files to rebuild from; otherwise the
-app stops and says why, rather than starting with an empty index. A database that cannot be opened only for the moment,
-because another process holds it longer than `database.busyTimeout`, the disk is full or the file may not be read, is
-never moved aside: the app stops and says why, and starts once that has passed. A rebuild on request first writes every
-change not yet in the files. Documents are then updated in place from their entries and keep their numbers, so their
+rebuild`, or Settings › Advanced). A new index records in itself that it is to be rebuilt, in the transaction of its
+first migration, so a stop at any point while it is made leaves it marked; a rebuild records it too, in the
+transaction that replaces the index. Only the rebuild's last step clears it, so a rebuild that never ran, as when the
+app quits before onboarding opens the archive, or that was refused or cut short is done the next time the archive is
+opened; documents queued to be read again are not queued twice. Until then the app starts no work on the index:
+nothing is filed into it, read back into it or written from it, and whatever the user asks to change in it, a label,
+a rule, a search task, a question, or a setting with the History event that records it, is refused by the index
+itself, whatever process asks, with the same reason, naming the record files to correct, rather than kept for the
+rebuild to drop. A setting
+is saved in `settings.json` all the same; only its History event is refused. Switching to another archive stays
+possible, unrecorded in this one. An archive without record files has nothing to rebuild from, so its new index is
+complete as it is made, and takes what the user changes at once, during onboarding too. A database that
+is damaged or cannot be migrated is moved aside, never deleted, as `<name>.sqlite.unreadable-<date>`. That only happens
+when the archive has record files to rebuild from; otherwise the app stops and says why, rather than starting with an
+empty index. A database that cannot be opened only for the moment, because another process holds it longer than
+`database.busyTimeout`, the disk is full or the file may not be read, is never moved aside: the app stops and says
+why, and starts once that has passed. A rebuild of an index that holds the archive, as on request, first writes
+every change not yet in the files. Documents are then updated in place from their entries and keep their numbers, so their
 cached text, embeddings and traces stay attached; everything else recorded in files is replaced by what the files say.
+The index is replaced only if it holds no change the files do not and no file was written while the archive was read,
+which the transaction that replaces it checks; a change committed meanwhile, by the app's worker or by a command, is
+written into the files and the archive read again, at most three times before the rebuild gives up and says so.
+
+A record file that cannot be read, or a folder of the archive whose contents cannot be listed, stops every rebuild
+before anything changes, naming each and why: a rebuild without it would leave the index without what it holds, and
+what the app did next would be written over the file once it read again. The index stays to be rebuilt, so the app
+starts no work on it, and every `arrumatorcli` command stops with the same message. Correct the file, or move it out of
+the archive, then rebuild the index in Settings › Advanced, which starts the work once it succeeds, open Arrumator
+again, or run the command again.
 
 A rebuild reads every `_documents.md`, the history, the rules for labels, the search tasks and their conversations; a
 task's set keeps only the documents the archive still has entries for, and a conversation of a task `_tasks.md` does not
-have is left where it is, unread. Documents whose file is not where their
-entry says are looked up by the identifier on the file. Files that have no entry, at the top of the archive or in a
+have is left where it is, unread, and read again until its task is back; no new task is given its number. Documents
+whose file is not where their entry says are looked up by the identifier on the file, and one marked missing whose file
+is found again is filed again where it is. Files that have no entry, at the top of the archive or in a
 folder of yours at any depth, are taken in where they are and read by the model; the `System` folder and an Incoming
 folder kept inside the archive are left out. Then, in the background and giving way to new arrivals, each document's
 text is extracted again and its embedding recomputed. The model is not asked again: labels come back from the entries.
@@ -118,7 +160,8 @@ version migrates the index: documents stay where they are, and what the decision
 its labels (its sender, type, date, reporting year, topic tags and language as `sender`, `type`, `date`, `period`,
 `topic` and `language`) while the name the model gave it, the model and why it waited for you become how it was read.
 Titles are not kept. The tables of folders, rules, filing memories, corrections, proposals, logic, rethink plans and
-senders are dropped, as are history events of kinds that no longer exist. Every record file is written again in the new
+senders are dropped, as are history events of kinds that no longer exist; a history file of those versions read back,
+by a rebuild or after an edit, drops them too and reads the rest. Every record file is written again in the new
 shape. Those older files, `_senders.md` among them, are left alone in the archive and no longer read. A `_documents.md`
 entry written by an earlier version that a rebuild reads without that migration (on another Mac, say) comes back
 without labels; its document is labelled when it is read again (`arrumatorcli labels unlabelled`, once its text has
@@ -127,7 +170,8 @@ been read again). Read any document again (`arrumatorcli review retry`) to give 
 Search tasks of earlier versions could be given a model of their own, which `_tasks.md` kept as `assignedModel`. A
 model is not a profile, so it is not read as one: such a task follows the profile Settings uses, the index forgets the
 model when it is migrated, `_tasks.md` is written again without it, and a rebuild that reads an older `_tasks.md`
-leaves it out too. Give the task a profile to read it with another model.
+leaves it out too. Give the task a profile to read it with another model. A task in a `_tasks.md` of the versions before
+efforts, which has no `effort`, is read with `medium`, as it was read then and as migrating the index gave it.
 
 Tags came after labels. The first start of the version that brought them makes the full-text index again with a column
 for tags, from the text the index already holds, so nothing is read again or lost, and adds to each document whether

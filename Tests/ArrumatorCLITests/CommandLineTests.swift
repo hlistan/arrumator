@@ -533,3 +533,75 @@ extension CommandLineTests {
         #expect(events.map(\.summary) == ["Ollama at \(Home.nowhere)"], "and the change is in History once: \(events.map(\.summary))")
     }
 }
+
+/// The archive's record files as commands leave them (docs/storage.md).
+extension CommandLineTests {
+    @Test func aCommandThatChangesTheIndexWritesTheRecordFilesBeforeItExits() throws {
+        let home = try Home.make()
+        defer { home.cleanup() }
+        _ = try file(home, [("a.txt", [DocumentLabel(kind: .sender, value: "EDP Comercial")])])
+        let config = try PipelineConfig.bundledDefaults()
+        let layout = ArchiveLayout(root: home.archive, records: config.records, watcher: config.watcher)
+        let merged = try run(home, ["labels", "merge", "sender=EDP Comercial", "--into", "EDP"])
+        #expect(merged.status == 0, "the label is merged: \(merged.stderr)")
+        // Read straight after the command, with no other command, nor the app, to write them since.
+        let rules = try String(contentsOf: layout.labelRules, encoding: .utf8)
+        #expect(rules.contains("action: merge") && rules.contains("target: EDP"), "the rule is in the archive when the command exits: \(rules)")
+        let listing = try String(contentsOf: home.archive.appendingPathComponent(config.records.documentsFileName), encoding: .utf8)
+        #expect(listing.contains("value: EDP\n") && !listing.contains("value: EDP Comercial"), "and so is the label it changed: \(listing)")
+    }
+
+    @Test func aRecordFileThatCannotBeReadStopsNoCommandOnTheIndexButStopsItsRebuildNamingIt() throws {
+        let home = try Home.make()
+        defer { home.cleanup() }
+        _ = try file(home, [("a.txt", [DocumentLabel(kind: .type, value: "invoice")])])
+        #expect(try run(home, ["history", "--json"]).status == 0, "the index is made and rebuilt from the archive")
+        let kept = home.archive.appendingPathComponent("Kept", isDirectory: true)
+        try FileManager.default.createDirectory(at: kept, withIntermediateDirectories: true)
+        let listing = kept.appendingPathComponent(try PipelineConfig.bundledDefaults().records.documentsFileName)
+        // A list of a folder of the user's, broken by hand: its front matter is no longer valid YAML.
+        let broken = "---\narrumator: 1\nentries: [unclosed\n---\n"
+        try broken.write(to: listing, atomically: true, encoding: .utf8)
+        let history = try run(home, ["history", "--json"])
+        #expect(history.status == 0, "on an index that holds the archive, every command still runs: \(history.stderr)")
+        let doctor = try run(home, ["doctor", "--json"])
+        let report = try JSON.decoder.decode(DoctorReport.self, from: doctor.stdout)
+        let check = try #require(report.checks.first { $0.name == "Record file" }, "the doctor names the file: \(report.checks)")
+        #expect(check.status == .error && check.detail.contains("Kept/") && check.detail.contains("line"),
+                "with where it breaks, so the user can correct it: \(check.detail)")
+        #expect(doctor.status == 1, "and fails until it reads again")
+
+        // The index is lost: a new one cannot be rebuilt without the file.
+        try FileManager.default.removeItem(at: home.support.appendingPathComponent("Indexes"))
+        for round in 1...2 {
+            let refused = try run(home, ["history", "--json"])
+            #expect(refused.status == 1 && refused.stderr.contains(listing.path) && refused.stderr.contains("line") && refused.stderr.contains("Correct"),
+                    "every command stops, naming the file, where it breaks and what to do (\(round)): \(refused.stderr)")
+        }
+        #expect(try String(contentsOf: listing, encoding: .utf8) == broken, "the file is left as the user left it")
+        try "---\narrumator: 1\nentries: []\n---\n".write(to: listing, atomically: true, encoding: .utf8)
+        let corrected = try run(home, ["history", "--json"])
+        let events = try JSON.decoder.decode([EventRecord].self, from: corrected.stdout)
+        #expect(corrected.status == 0 && events.contains { $0.kind == .rebuilt }, "once it is corrected, the index is rebuilt: \(corrected.stderr)")
+    }
+
+    @Test func aCommandThatFailsPartWayWritesWhatItChangedBeforeItExits() throws {
+        let home = try Home.make()
+        defer { home.cleanup() }
+        let config = try PipelineConfig.bundledDefaults()
+        let layout = ArchiveLayout(root: home.archive, records: config.records, watcher: config.watcher)
+        func paused() throws -> Int {
+            let months = try FileManager.default.contentsOfDirectory(at: layout.history, includingPropertiesForKeys: nil)
+            // Each event once, in the data the app reads back; the list below it says it again.
+            return try months.map { try String(contentsOf: $0, encoding: .utf8) }.joined().components(separatedBy: "summary: Processing paused").count - 1
+        }
+        #expect(try run(home, ["settings", "--paused", "true"]).status == 0 && (try paused()) == 1, "filing is paused")
+        // Pausing again saves no settings and is recorded; then the new server is refused, as the folder that keeps the
+        // settings can no longer be written.
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: home.support.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: home.support.path) }
+        let result = try run(home, ["settings", "--paused", "true", "--ollama-url", "http://127.0.0.1:10"])
+        #expect(result.status == 1, "the command fails with the reason: \(result.stderr)")
+        #expect(try paused() == 2, "what it changed before it failed is in the archive's history when it exits")
+    }
+}

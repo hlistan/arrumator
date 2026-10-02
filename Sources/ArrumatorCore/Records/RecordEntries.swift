@@ -5,6 +5,19 @@ public enum RecordSchema {
     public static let version = 1
 }
 
+/// Why a record file's front matter is not read.
+public enum RecordFormatError: Error, LocalizedError {
+    /// A later version of Arrumator wrote it, in a format this one does not know: its entries may mean something else.
+    case newer(Int)
+
+    public var errorDescription: String? {
+        switch self {
+        case let .newer(version):
+            "a newer version of Arrumator wrote it, in record format \(version); this version reads format \(RecordSchema.version)"
+        }
+    }
+}
+
 /// One document, as the `_documents.md` of its directory records it. The file is named, not located: the entry
 /// sits next to the document, so moving or renaming the directory never touches it.
 public struct DocumentEntry: Codable, Sendable, Hashable {
@@ -58,6 +71,17 @@ public struct DocumentEntry: Codable, Sendable, Hashable {
         filed = record.filedAt
     }
 
+    /// Whether `file` names one file of the entry's folder: a name, never a path, which an entry edited to hold
+    /// `../../x.pdf` would make of it, pointing outside the archive (AGENTS.md §4.5).
+    var namesOneFile: Bool {
+        !file.isEmpty && !Self.directoryNames.contains(file) && !Self.notInNames.contains { file.contains($0) }
+    }
+
+    /// The names a directory gives itself and its parent.
+    static let directoryNames: Set<String> = [".", ".."]
+    /// What no file name holds (POSIX): the separator of a path's names, and NUL.
+    static let notInNames = [FilenameBuilder.pathSeparator, "\u{0}"]
+
     /// The index row for this entry in `directory`. What the index caches about the file (its text, inode, times of
     /// extraction) starts empty and is filled in again when the document is read. Labels are kept as the index keeps
     /// them (`DocumentLabel.stored`), so an entry edited by hand to give a document a label of another kind than a tag
@@ -97,6 +121,34 @@ public struct EventEntry: Codable, Sendable, Hashable {
         EventRecord(id: id, at: at, docId: document, jobId: nil, traceId: nil, kind: kind, actor: actor, summary: summary,
                     payloadJson: payload)
     }
+
+    /// Kinds of event the releases that filed into folders recorded, which no longer exist. Migrating the index dropped
+    /// them from it (`v11_labelsNotFolders`), and a history file read back drops them as well (docs/storage.md), rather
+    /// than leaving the whole month unread.
+    public static let removedKinds: Set<String> = [
+        "classified", "refiled", "folderCreated", "folderRenamed", "folderRemoved", "descriptionChanged", "ruleInduced",
+        "ruleDisabled", "ruleChanged", "proposalCreated", "proposalResolved", "logicChanged", "rethink", "rethought",
+        "learned", "forgot",
+    ]
+}
+
+/// One entry of a history file as read: an event, or one of a kind that no longer exists (`EventEntry.removedKinds`),
+/// which is dropped. Any other kind the app does not know leaves the file unread, as one a later version wrote.
+enum HistoryLine: Decodable, Sendable {
+    case event(EventEntry)
+    case ofRemovedKind
+
+    private enum Key: String, CodingKey { case kind }
+
+    init(from decoder: any Decoder) throws {
+        let kind = try decoder.container(keyedBy: Key.self).decode(String.self, forKey: .kind)
+        self = EventEntry.removedKinds.contains(kind) ? .ofRemovedKind : .event(try EventEntry(from: decoder))
+    }
+
+    var event: EventEntry? {
+        guard case let .event(event) = self else { return nil }
+        return event
+    }
 }
 
 /// One of the user's rules for labels, as `System/_labels.md` records it.
@@ -134,7 +186,9 @@ public struct SearchTaskEntry: Codable, Sendable, Hashable {
     public var title: String?
     public var grouping: [LabelKind]?
     public var state: SearchTaskState
-    public var effort: TaskEffort
+    /// How much the model thinks before it answers the task's request; always written. Absent from the entries of the
+    /// releases before efforts (v0.1.7, v0.1.9), whose tasks are read as `effortBeforeEfforts`.
+    public var effort: TaskEffort?
     /// The id of the model profile the user gave the task; absent for one that follows the profile Settings uses.
     public var profile: String?
     public var plan: SearchPlan?
@@ -183,8 +237,13 @@ public struct SearchTaskEntry: Codable, Sendable, Hashable {
         updated = record.updatedAt
     }
 
+    /// The effort of a task an entry without one describes: those releases read every task as `medium` reads it now, and
+    /// migrating the index gave their tasks `medium` (`v15_taskEffort`), so a file read back gives it too.
+    static let effortBeforeEfforts = TaskEffort.medium
+
     var record: SearchTaskRecord {
-        SearchTaskRecord(id: id, prompt: prompt, title: title, groupingJson: grouping.map { JSON.string($0) }, effort: effort,
+        SearchTaskRecord(id: id, prompt: prompt, title: title, groupingJson: grouping.map { JSON.string($0) },
+                         effort: effort ?? Self.effortBeforeEfforts,
                          profile: profile, state: state == .interpreting ? .queued : state, planJson: plan.map { JSON.string($0) }, model: model,
                          problem: problem, lastTraceId: nil, nextRunAt: state.isActive ? created : nil, createdAt: created, updatedAt: updated)
     }
@@ -237,12 +296,27 @@ public struct ConversationTurnEntry: Codable, Sendable, Hashable {
 }
 
 /// The front matter of a file holding a list.
-struct RecordList<Entry: Codable & Sendable>: Codable, Sendable {
+struct RecordList<Entry: Sendable>: Sendable {
     var arrumator: Int
     var entries: [Entry]
+
+    enum CodingKeys: String, CodingKey { case arrumator, entries }
 
     init(_ entries: [Entry]) {
         arrumator = RecordSchema.version
         self.entries = entries
+    }
+}
+
+extension RecordList: Encodable where Entry: Encodable {}
+
+extension RecordList: Decodable where Entry: Decodable {
+    /// The format's version is read first: a file a newer version wrote is refused before its entries are taken for
+    /// this version's.
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        arrumator = try container.decode(Int.self, forKey: .arrumator)
+        guard arrumator <= RecordSchema.version else { throw RecordFormatError.newer(arrumator) }
+        entries = try container.decode([Entry].self, forKey: .entries)
     }
 }

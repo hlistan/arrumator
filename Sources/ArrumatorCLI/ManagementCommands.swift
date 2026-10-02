@@ -97,11 +97,12 @@ func report(_ id: Int64, runtime: ArrumatorRuntime, options: GlobalOptions) asyn
 struct Rebuild: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         abstract: "Rebuild the index from the archive's record files. Changes not yet written to them are written first; "
-            + "documents then have their text read again in the background of the app or `arrumatorcli run`.")
+            + "documents then have their text read again in the background of the app or `arrumatorcli run`. A record file that "
+            + "cannot be read stops it before anything changes, naming the file.")
     @OptionGroup var options: GlobalOptions
 
     func run() async throws {
-        let summary = try await options.runtime().records.rebuildIndex()
+        let summary = try await options.runtime().records.rebuild()
         options.emit(summary) { summary.summary + ". \(summary.queued) documents queued to be read again." }
     }
 }
