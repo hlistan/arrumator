@@ -98,19 +98,28 @@ final class AppModel {
         startWatching(runtime)
     }
 
-    /// Starts watching off the main actor. macOS blocks the first access to the Documents folder until the user
-    /// answers its permission prompt, and the windows and the menu bar item must appear regardless.
+    /// Opens the archive and starts the work off the main actor (`ArrumatorRuntime.openAndStart()`): macOS blocks the
+    /// first access to the Documents folder until the user answers its permission prompt, and the windows and the menu
+    /// bar item must appear regardless. The runtime owns that step, so quitting or switching archives meanwhile stops it,
+    /// and what it says comes only while the runtime it began on is still the app's.
     private func startWatching(_ runtime: ArrumatorRuntime) {
         guard watcherStart == nil else { return }
         watcherStart = Task.detached { [weak self] in
+            let unread: String?
             do {
-                try await runtime.openArchive()
+                try await runtime.openAndStart()
+                unread = nil
+            } catch is CancellationError {
+                // Stopped first, by quitting or by a switch of archives: nothing started.
+                return
             } catch {
-                Log.error(.app, "Could not bring the index in line with the archive", ["error": error.localizedDescription])
-                await MainActor.run { self?.lastError = Wording.failure(Wording.readArchiveAction, error.localizedDescription) }
+                unread = error.localizedDescription
             }
-            await runtime.start()
-            await MainActor.run { self?.watching = true }
+            await MainActor.run {
+                guard let self, self.runtime === runtime else { return }
+                if let unread { self.lastError = Wording.failure(Wording.readArchiveAction, unread) }
+                self.watching = true
+            }
         }
     }
 
@@ -121,10 +130,10 @@ final class AppModel {
               URL(fileURLWithPath: path.expandingTilde).standardizedFileURL.path != runtime.archive.path else { return }
         switchingArchive = true
         defer { switchingArchive = false }
-        // An archive still being opened is opened fully first, so its runtime never starts after it was stopped.
-        await watcherStart?.value
+        // An archive still being opened stops being opened, and its runtime starts nothing after (`stop()`).
         do {
-            let next = try await runtime.switchArchive(to: path)
+            let switched = try await runtime.switchArchive(to: path)
+            let next = switched.runtime
             watcherStart = nil
             watching = false
             self.runtime = next
@@ -136,12 +145,19 @@ final class AppModel {
             openDocument = nil
             observe(next)
             activity &+= 1
-            lastError = nil
+            // The archive left, when its record files could not be written, is named, as they wait for it to be opened.
+            lastError = switched.unwritten.map { Wording.failure(Wording.switchArchivesAction, $0.note) }
             await refresh()
             if settings?.onboardingCompleted == true { startWatching(next) }
         } catch {
             lastError = Wording.failure(Wording.switchArchivesAction, error.localizedDescription)
             Log.error(.ui, "Could not switch archives", ["error": error.localizedDescription])
+            // A switch that failed once this archive had stopped starts it again, reading it first if it was being read
+            // then: the app follows that start as it followed the first.
+            if !watching, settings?.onboardingCompleted == true {
+                watcherStart = nil
+                startWatching(runtime)
+            }
         }
     }
 

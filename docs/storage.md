@@ -35,9 +35,14 @@ exactly on a rebuild, so references between records keep working.
 ## One index per archive
 
 The index of an archive is `~/Library/Application Support/Arrumator/Indexes/<name>.sqlite`, named after the first bytes
-of the SHA-256 of the archive's path. Switching archives stops everything working on the one in use, writes its record
-files, and opens the other archive's index in its place: its documents and history. Files waiting in Incoming are taken
-off the old archive's queue and filed into the new one.
+of the SHA-256 of the archive's path. Switching archives opens the other archive's index, stops everything working on
+the one in use, takes the files waiting in Incoming off its queue (they are filed into the new one), records the switch
+in its history and writes its record files; only then do the settings name the other archive, whose documents and
+history take its place. A switch that fails on the way changes nothing: the app goes on with the archive it had, its
+queue as it was, and a switch it had recorded is followed in History by `Stayed on the archive at …` with the reason.
+An archive whose record files cannot be written then, as on a disk that is gone, does not keep you from switching away:
+its index keeps what they lack, they are written when it is next opened, and the app, or `arrumatorcli archive switch`,
+says so, naming the archive.
 
 A folder that has never been an archive gets a new index. If it already holds record files, such as a `System` folder
 or a `_documents.md` at its top, the index is rebuilt from them; otherwise it starts empty. An archive moved to another
@@ -82,7 +87,8 @@ Some working state is deliberately not kept in files and does not survive a rebu
    and why, keeps what the index holds, and writes the directory's changes once the file reads again.
 
 The window in which a change exists only in the database is the time it takes to write one file, and a mark left by a
-crash in that window is written at the next start.
+crash in that window is written at the next start. A mark that could not be written as the app switched away from the
+archive stays in that archive's index until it is next opened ([One index per archive](#one-index-per-archive)).
 
 ## Rebuilding
 

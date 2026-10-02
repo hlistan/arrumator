@@ -8,25 +8,16 @@ import Testing
 /// be tried again holds up none behind it. Quitting stops the queues before the app ends, and a stop never separates a
 /// move into the archive from its record.
 @Suite struct IngestQueueTests {
-    /// Whether the worker takes files on this Mac now, with pausing on battery turned off as these tests turn it off: a
-    /// Mac too hot to work makes it wait.
-    static func workerRuns() throws -> Bool {
-        var settings = try AppSettings.bundledDefaults()
-        settings.pauseOnBattery = false
-        return PowerState.current().pauseReason(settings: settings, config: try PipelineConfig.bundledDefaults().power) == nil
-    }
-
     /// The pipeline over files read by an analyzer that holds the reading `holding` names until the worker is stopped,
     /// with an archive to file into and a worker that runs on battery too.
     private func world(_ holding: Holding) async throws -> (h: Harness, analyzer: StubAnalyzer) {
         let analyzer = StubAnalyzer(during: { try await holding.read($0) })
         let h = try await Harness.make(analyzer: analyzer)
-        try await h.env.settings.update { $0.pauseOnBattery = false }
-        try FileManager.default.createDirectory(at: h.env.archive, withIntermediateDirectories: true)
+        try await h.readyToWork()
         return (h, analyzer)
     }
 
-    @Test(.enabled("the worker waits while the Mac is too hot to work") { try IngestQueueTests.workerRuns() })
+    @Test(.enabled("the worker waits while the Mac is too hot to work") { try Harness.workerRuns() })
     func aFileStoppedPartWayCarriesOnFirstAtTheNextStartBeforeTheFilesThatArrivedAfterIt() async throws {
         let holding = Holding()
         let (h, analyzer) = try await world(holding)
@@ -94,7 +85,7 @@ import Testing
         #expect(extracted == 3, "a file stopped while the model read it carries on from its last finished stage: it is not extracted again")
     }
 
-    @Test(.enabled("the worker waits while the Mac is too hot to work") { try IngestQueueTests.workerRuns() })
+    @Test(.enabled("the worker waits while the Mac is too hot to work") { try Harness.workerRuns() })
     func whatAFileInTheQueueAndTheOneInHandShowIsTheTagTheyWillBeGivenThroughAStopAndARestart() async throws {
         let holding = Holding()
         let (h, _) = try await world(holding)
@@ -277,12 +268,6 @@ import Testing
 actor IngestFollower {
     private(set) var received: [IngestStatus] = []
     func add(_ status: IngestStatus) { received.append(status) }
-}
-
-/// A stop that ends: whether its task was cancelled, each time it ended.
-actor Ending {
-    private(set) var ended: [Bool] = []
-    func end() { ended.append(Task.isCancelled) }
 }
 
 /// Holds the model's reading of a file, when told to, until the worker is stopped, as a model still thinking when the

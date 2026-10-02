@@ -48,8 +48,8 @@ public actor ArchiveWatcher {
     private var excluded: [String] = []
     private var stream: FSEventStream?
     private var pumpTask: Task<Void, Never>?
-    private let output: AsyncStream<[ArchiveChange]>.Continuation
-    public nonisolated let changes: AsyncStream<[ArchiveChange]>
+    /// Who is sent the changes, each by a stream of its own (`changes()`).
+    private var subscribers: [UUID: AsyncStream<[ArchiveChange]>.Continuation] = [:]
     static let lastEventKey = "archive_fsevents_last_id"
     static let deviceKey = "archive_fsevents_device"
 
@@ -60,8 +60,20 @@ public actor ArchiveWatcher {
         self.skip = skip
         self.registry = registry
         self.database = database
-        (changes, output) = AsyncStream<[ArchiveChange]>.makeStream(bufferingPolicy: .unbounded)
     }
+
+    /// The changes the user makes in the archive, from now on, for as long as the caller listens, through every stop and
+    /// start of the watcher. Every caller is given a stream of its own, as `IncomingWatcher.stableFiles()` is, and every
+    /// change is kept until it is read.
+    public func changes() -> AsyncStream<[ArchiveChange]> {
+        let id = UUID()
+        let (stream, continuation) = AsyncStream<[ArchiveChange]>.makeStream(bufferingPolicy: .unbounded)
+        subscribers[id] = continuation
+        continuation.onTermination = { [weak self] _ in Task { await self?.unsubscribe(id) } }
+        return stream
+    }
+
+    private func unsubscribe(_ id: UUID) { subscribers[id] = nil }
 
     /// - Parameter excluding: subtrees handled elsewhere (the Incoming folder when it lives inside the archive).
     public func start(root: URL, excluding: [URL]) async throws {
@@ -92,7 +104,7 @@ public actor ArchiveWatcher {
         pumpTask = nil
     }
 
-    private func handle(_ batch: [FSEvent]) async {
+    func handle(_ batch: [FSEvent]) async {
         guard let root else { return }
         var result: [ArchiveChange] = []
         var recordsChanged = false
@@ -137,7 +149,7 @@ public actor ArchiveWatcher {
         }
         if !result.isEmpty {
             Log.debug(.watch, "Archive changes", ["count": String(result.count)])
-            output.yield(result)
+            for subscriber in subscribers.values { subscriber.yield(result) }
         }
     }
 

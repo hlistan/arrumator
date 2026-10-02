@@ -48,12 +48,9 @@ struct MenuBarView: View {
                     Button(Wording.openArchiveFolder) { if let path = model.settings?.archiveURL.path { model.open(path) } }
                     Divider()
                     Button(Wording.settings) { model.show(.settings) }
-                    Button(Wording.quitApp) {
-                        Task {
-                            await model.runtime?.stop()
-                            NSApp.terminate(nil)
-                        }
-                    }
+                    // Quits as the app menu's Quit does: the app delegate stops the work first, for a bounded time
+                    // (`applicationShouldTerminate`), so every way to quit takes that one path.
+                    Button(Wording.quitApp) { NSApp.terminate(nil) }
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }

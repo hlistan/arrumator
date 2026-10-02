@@ -121,17 +121,28 @@ public actor SearchTaskQueue {
 
     // MARK: Control
 
+    /// Starts the worker, unless it runs: the worker is claimed before anything is awaited, so a second start neither
+    /// makes a second worker nor puts back in the queue what the first has in hand. The worker first puts back in the
+    /// queue, in its place, the task whose prompt was being read when the queue last stopped.
     public func start() async {
+        guard worker == nil else { return }
+        worker = Task { [weak self] in
+            await self?.recoverInterrupted()
+            await self?.runLoop()
+        }
+        doorbell.ring()
+    }
+
+    private func recoverInterrupted() async {
         do {
             let recovered = try await store.recoverInterrupted()
             if recovered > 0 { Log.info(.search, "Search tasks back in the queue", ["tasks": String(recovered)]) }
         } catch {
+            // Stopped before it began: nothing was put back, and the next start does it.
+            guard !Task.isCancelled else { return }
             Log.error(.search, "Could not recover search tasks", ["error": error.localizedDescription])
         }
         await publish()
-        guard worker == nil else { return }
-        worker = Task { [weak self] in await self?.runLoop() }
-        doorbell.ring()
     }
 
     /// Stops the worker and waits until it has. A task whose prompt is being read goes back into the queue at the next

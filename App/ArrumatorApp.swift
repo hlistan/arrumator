@@ -80,7 +80,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Wind
     /// The main actor's work goes on meanwhile: the run loop serves the main queue in its common modes (CFRunLoop.c), and
     /// "in Cocoa applications, this set includes the default, modal, and event tracking modes" (Threading Programming
     /// Guide › Run Loops › Run Loop Modes). The wait is bounded (`ArrumatorRuntime.stopBeforeQuitting()`,
-    /// `ingest.quitTimeout`), so a stop that hangs keeps neither the app from quitting nor the Mac from logging out.
+    /// `ingest.quitTimeout`), so a stop that hangs keeps neither the app from quitting nor the Mac from logging out, and
+    /// the Ollama server the app started ends with it either way. Every way to quit comes here, the Quit of the menu bar
+    /// popover included, which only asks AppKit to terminate; nothing else in the app stops the runtime (quit gate in
+    /// `scripts/lint.sh`).
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let runtime = model.runtime else { return .terminateNow }
         guard !quitting else { return .terminateLater }

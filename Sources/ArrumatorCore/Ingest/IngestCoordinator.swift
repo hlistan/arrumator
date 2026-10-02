@@ -41,12 +41,15 @@ public actor IngestCoordinator {
 
     // MARK: Control
 
-    /// Starts the worker. A job stopped part way needs nothing done to it: it is due, and was queued before anything
+    /// Starts the worker, unless it runs: the worker is claimed before anything is awaited, so a second start never
+    /// makes a second worker. A job stopped part way needs nothing done to it: it is due, and was queued before anything
     /// that arrived after it, so the worker takes it up first.
     public func start() async {
         guard worker == nil else { return }
-        await logResumingJobs()
-        worker = Task { [weak self] in await self?.runLoop() }
+        worker = Task { [weak self] in
+            await self?.logResumingJobs()
+            await self?.runLoop()
+        }
         doorbell.ring()
     }
 

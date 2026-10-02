@@ -241,8 +241,9 @@ No tunable lives in code. Defaults are bundled in `Sources/ArrumatorCore/Resourc
   `ollama.modelLocationMaxAge`, 0 to ask before every request), `watcher`, `records` (the names of the archive's record
   files and of its system and history folders, such as `records.labelRulesFileName`, `records.searchTasksFileName` and
   `records.conversationsFolderName`), `ingest` (attempts and retry delays, and how long quitting waits for the file in
-  hand, the request being read and the question being answered to stop, `ingest.quitTimeout`), `extraction` (OCR and
-  extraction limits), `entities` (dates and identifiers), `analysis`
+  hand, the request being read and the question being answered to stop, `ingest.quitTimeout`, after which the
+  `ollama serve` the app started is stopped all the same), `extraction` (OCR and extraction limits), `entities` (dates
+  and identifiers), `analysis`
   (what the model is shown and how it is asked, such as `analysis.excerptChars`, of which the end of the document gets
   `1 / analysis.excerptTailDivisor`, `analysis.repairAttempts`, the context a document, a search request and an image
   are read with, `analysis.numCtx`, one so that a model that reads and describes images stays loaded once, what a model
@@ -310,7 +311,9 @@ it describes: a `_documents.md` in every directory holding documents, with each 
 Each archive has its own SQLite index in `~/Library/Application Support/Arrumator/Indexes`, which only indexes those
 files and caches what can be recomputed, such as extracted text and embeddings. If it is lost, damaged or cannot be
 migrated, the app rebuilds it from the archive and reads each document's text again in the background; one that is only
-locked by another process or on a full disk is left as it is, and the app says why it cannot start. You can edit the
+locked by another process or on a full disk is left as it is, and the app says why it cannot start. Switching away
+from an archive that cannot be written to, as when its disk is gone, still switches; the app says that archive's record
+files wait, and they are written when you open it again. You can edit the
 files by hand; the app reads the change back and never overwrites it, not even one it cannot read. The design, and what
 a rebuild does and does not keep, is in [Storage](storage.md).
 

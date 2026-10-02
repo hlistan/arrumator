@@ -37,6 +37,20 @@ public struct Harness: Sendable {
         return Harness(env: env, services: Self.services(env, analyzer: services.analyzer, config: config))
     }
 
+    /// Whether the worker takes files on this Mac now, with pausing on battery turned off as `readyToWork()` turns it
+    /// off: a Mac too hot to work makes it wait.
+    public static func workerRuns() throws -> Bool {
+        var settings = try AppSettings.bundledDefaults()
+        settings.pauseOnBattery = false
+        return PowerState.current().pauseReason(settings: settings, config: try PipelineConfig.bundledDefaults().power) == nil
+    }
+
+    /// Readies the worker to file: an archive to file into, and pausing on battery turned off.
+    public func readyToWork() async throws {
+        try await env.settings.update { $0.pauseOnBattery = false }
+        try FileManager.default.createDirectory(at: env.archive, withIntermediateDirectories: true)
+    }
+
     public var review: ReviewActions { ReviewActions(services: services, coordinator: coordinator) }
 
     /// Search tasks over this pipeline, their prompts read by `interpreter`: the queue and what the user does with them.

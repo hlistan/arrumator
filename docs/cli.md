@@ -123,7 +123,7 @@ join a queue of their own, kept with the task in `System/Conversations`, which `
 | Command | What it does |
 |---|---|
 | `arrumatorcli archive [show]` | The archive documents are filed into, and its index. |
-| `arrumatorcli archive switch <path>` | File into another archive from now on, with its own documents and history. The folder is created if it does not exist; one that was an archive is opened as it was left. |
+| `arrumatorcli archive switch <path>` | File into another archive from now on, with its own documents and history. The folder is created if it does not exist; one that was an archive is opened as it was left. When the record files of the archive left cannot be written, the switch is made and a note on standard error names that archive: they are written when it is next opened. |
 | `arrumatorcli rebuild` | Rebuild the index from the archive's record files. Changes not yet written to them are written first; documents then have their text read again in the background of the app or `arrumatorcli run`. |
 
 ## Insight and diagnostics

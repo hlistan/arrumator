@@ -75,9 +75,9 @@ gate crash "no fatalError or try! in shipped code" \
   'fatalError\(|try!' \
   Sources App
 
-gate quit "work at quit runs before AppKit lets the app end (applicationShouldTerminate answering .terminateLater), never in applicationWillTerminate, after which the process ends before work started there has run" \
-  '^App/[^:]+:[0-9]+: *//' \
-  'applicationWillTerminate|willTerminateNotification' \
+gate quit "quitting has one path: work at quit runs before AppKit lets the app end, in applicationShouldTerminate answering .terminateLater and waiting for runtime.stopBeforeQuitting(), which is bounded; never in applicationWillTerminate, after which the process ends before work started there has run, and nothing else in the app stops the runtime, as a control that stops it itself waits without bound before it quits" \
+  '^App/[^:]+:[0-9]+: *//|^App/ArrumatorApp\.swift:[0-9]+: +await runtime\.stopBeforeQuitting\(\)$' \
+  'applicationWillTerminate|willTerminateNotification|\.stop\(\)|stopBeforeQuitting\(' \
   App
 
 gate trash "a file the app has no more use for goes to the Trash through Trashing, which the tests and eval replace with a folder of their own: only SystemTrash and a move across volumes call trashItem, and only the app and arrumatorcli use SystemTrash" \

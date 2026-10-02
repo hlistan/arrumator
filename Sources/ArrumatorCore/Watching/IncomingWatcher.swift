@@ -11,8 +11,8 @@ public actor IncomingWatcher {
     private var pumpTask: Task<Void, Never>?
     private var pollTask: Task<Void, Never>?
     private var candidates: [String: Candidate] = [:]
-    private let output: AsyncStream<URL>.Continuation
-    public nonisolated let stableFiles: AsyncStream<URL>
+    /// Who is sent the files that stopped changing, each by a stream of its own (`stableFiles()`).
+    private var subscribers: [UUID: AsyncStream<URL>.Continuation] = [:]
 
     private struct Candidate {
         var fingerprint: FileFingerprint
@@ -24,8 +24,21 @@ public actor IncomingWatcher {
         self.config = config
         self.skip = skip
         self.time = time
-        (stableFiles, output) = AsyncStream<URL>.makeStream(bufferingPolicy: .unbounded)
     }
+
+    /// Each file once it has stopped changing, from now on, for as long as the caller listens, through every stop and
+    /// start of the watcher. Every caller is given a stream of its own: a stream ends when the task listening to it is
+    /// cancelled, as stopping the app cancels it, and one shared stream would then be ended for every later listener too.
+    /// Every file is kept until it is read, as none may be missed.
+    public func stableFiles() -> AsyncStream<URL> {
+        let id = UUID()
+        let (stream, continuation) = AsyncStream<URL>.makeStream(bufferingPolicy: .unbounded)
+        subscribers[id] = continuation
+        continuation.onTermination = { [weak self] _ in Task { await self?.unsubscribe(id) } }
+        return stream
+    }
+
+    private func unsubscribe(_ id: UUID) { subscribers[id] = nil }
 
     public func start(root: URL) throws {
         stop()
@@ -152,7 +165,7 @@ public actor IncomingWatcher {
                 candidates[path] = nil
                 Log.info(.watch, "File is stable", ["path": path, "size": String(fp.size),
                                                     "waited": String(format: "%.1f", now.timeIntervalSince(c.firstSeen))])
-                output.yield(url)
+                for subscriber in subscribers.values { subscriber.yield(url) }
             } else {
                 candidates[path] = c
             }

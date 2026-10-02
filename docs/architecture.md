@@ -216,13 +216,21 @@ table in [AGENTS.md §5](../AGENTS.md#5-boundaries).
 `openArchive()` brings the index in line with the record files: a new index is rebuilt from them, an existing one
 reads back whatever changed on disk. `start()` then starts the three queue workers and, as named background tasks, the
 Ollama supervision and the audit of its state, the two watcher pumps, the record-file writer, the settings
-subscription and hourly maintenance.
+subscription and hourly maintenance. The app does both as one step the runtime owns, `openAndStart()`, off the main
+actor, as macOS may hold the first read of the archive behind its prompt for access.
 
-`stop()` cancels those tasks, stops the queues and waits for each, stops the watchers, writes the record files and,
-when the app started Ollama, stops it. Quitting goes through `applicationShouldTerminate`, which answers
-`.terminateLater` and waits for `stopBeforeQuitting()`, at most `ingest.quitTimeout` seconds
-([AGENTS.md §3](../AGENTS.md#3-core-principles), "Stopping is awaited"). Switching archives opens the next archive's
-index first, stops this runtime, and returns a new one.
+A runtime runs once. `stop()` cancels the step that starts it and every task, then waits: for the step, so nothing
+it goes on to start is left running; for the three queues, stopped together, as one worker may wait for another, as
+for the generation lane; and for the tasks. Then it stops the watchers, writes the record files and, when the app
+started Ollama, stops it. A start after a stop, or a second one, starts nothing. Quitting has one path:
+`applicationShouldTerminate`, which answers `.terminateLater` and waits for `stopBeforeQuitting()`, at most
+`ingest.quitTimeout` seconds ([AGENTS.md §3](../AGENTS.md#3-core-principles), "Stopping is awaited"); when the stop
+takes longer, the Ollama server the app started is stopped all the same before the app ends. Switching archives opens
+the next archive's index on the same `SettingsStore`, so a change made while it switches is kept by both runtimes, and
+shows the settings can be saved before anything stops. It then stops this runtime (not for good), takes the waiting
+files off its queue, records the switch and writes its record files, and only then saves the settings naming the next
+archive, as this runtime finds its archive by them; a step that fails starts this runtime again as it was. Record files
+that cannot be written are no reason to stay: the switch returns which archive's wait (`ArchiveSwitch.unwritten`).
 
 ### A file from Incoming to the archive
 
@@ -331,6 +339,12 @@ The rules a change must keep:
 - **A stream of state gives the current value first**, then changes, buffering only the newest: the three queues'
   status and Ollama's state. A stream of events (files that stopped changing, changes in the archive, settings changes)
   delivers each event, has no first value and is not cut to the newest.
+- **Every stream is made for the one who listens to it.** A task cancelled while it awaits an `AsyncStream` ends that
+  stream for good, so each subscriber gets a stream of its own (`statusUpdates()`, `stableFiles()`, `changes()`), and
+  a wait never listens to a stream other waits share: the doorbell a worker waits on ends each wait by a one-shot of
+  its own (`Doorbell`, `OneShot`).
+- **Every wait ends when its task is cancelled**, the wait for the generation lane included (`AsyncSemaphore`), and
+  stopping tells everything to stop before it waits for anything.
 - **Blocking work stays off the main actor**, and long loops check for cancellation.
 
 ## What runs through everything
@@ -409,7 +423,7 @@ evolutionary architecture, and what each protects.
 | Only `OllamaClient` opens connections, through the guard. | `scripts/lint.sh`, network gate |
 | A log message is a constant; what varies goes in its fields, which a diagnostics export keeps by allow-list. | `swift build`: `Log`'s message is a `StaticString`; `DiagnosticsTests` |
 | No `fatalError` or `try!` in shipped code. | `scripts/lint.sh`, crash gate; SwiftLint `force_unwrapping` |
-| Work at quit runs before AppKit lets the app end. | `scripts/lint.sh`, quit gate |
+| Quitting has one path: work at quit runs before AppKit lets the app end, and nothing else in the app stops the runtime. | `scripts/lint.sh`, quit gate |
 | Only `SystemTrash` and a move across volumes call `trashItem`; everything else goes through `Trashing`. | `scripts/lint.sh`, trash gate |
 | What opens on a click opens from the keyboard. | `scripts/lint.sh`, rows gate |
 | No `TODO`, `FIXME`, `HACK` or `XXX`. | `scripts/lint.sh`, debt gate |

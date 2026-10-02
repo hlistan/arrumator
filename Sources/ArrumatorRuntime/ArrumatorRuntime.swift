@@ -62,7 +62,7 @@ public final class ArrumatorRuntime: Sendable {
     public let archiveWatcher: ArchiveWatcher
     public let stats: StatsService
     public let doctor: Doctor
-    private let tasks = BackgroundTasks()
+    let tasks = BackgroundTasks()
 
     /// - Parameter trash: where an exact copy of a document in the archive goes once its original is read again in its
     ///   place: the Mac's Trash for the app and the command line, a folder of its own for a run that must leave nothing
@@ -115,8 +115,18 @@ public final class ArrumatorRuntime: Sendable {
 
     /// Stops this runtime and returns one open on the archive at `path`, with that archive's own index; the settings
     /// name it from then on. Files waiting in Incoming are filed into the new archive.
-    /// Call `openArchive()` and then `start()` on the runtime returned, as after `bootstrap`.
-    public func switchArchive(to path: String) async throws -> ArrumatorRuntime {
+    /// Call `openArchive()` and then `start()`, or `openAndStart()`, on the runtime returned, as after `bootstrap`.
+    ///
+    /// Both runtimes keep the settings in one store, so a change made while this one stops, such as a pause, is the
+    /// next one's too, and never names this archive again. This runtime stops before the settings name the next archive,
+    /// as what it does finds the archive by them. A switch is made whole or not at all: the next archive's index opens
+    /// and the settings are shown to be savable before anything stops; then this runtime stops, its waiting files leave
+    /// its queue and its history records the switch, and only then do the settings name the next archive. A step that
+    /// fails starts this runtime again as it was, and a failure to save the settings after the switch was recorded is
+    /// recorded too. The record files of this archive are written before the settings change; when they cannot be, as on
+    /// a disk that is gone, the switch is made all the same, so the user can always switch away, and what they lack,
+    /// kept in its index, is written when it is next opened (`ArchiveSwitch.unwritten`).
+    public func switchArchive(to path: String) async throws -> ArchiveSwitch {
         let chosen = URL(fileURLWithPath: path.expandingTilde, isDirectory: true).standardizedFileURL
         var isDirectory: ObjCBool = false
         if FileManager.default.fileExists(atPath: chosen.path, isDirectory: &isDirectory), !isDirectory.boolValue {
@@ -134,28 +144,44 @@ public final class ArrumatorRuntime: Sendable {
         guard try paths.indexURL(for: target) != index else { throw ArchiveSwitchError.alreadyOpen(target.path) }
         guard !isInsideIncoming(target.path) else { throw ArchiveSwitchError.insideIncoming(archive: target.path, incoming: incoming.path) }
 
-        // The new index opens before anything stops, and whatever fails once this runtime has stopped starts it again,
-        // so a failed switch leaves the app on the archive it was on, running.
-        let nextSettings = try SettingsStore(paths: paths)
         let next = try ArrumatorRuntime(appVersion: appVersion, environment: environment, logLevelOverride: logLevelOverride,
-                                        time: time, paths: paths, config: config, settings: nextSettings, archive: target,
+                                        time: time, paths: paths, config: config, settings: settings, archive: target,
                                         ollamaURL: ollama.baseURL, trash: services.trash)
-        await stop()
+        // The settings in force, saved as they are: the file the switch saves can be written, or nothing stops.
+        try await settings.save(await settings.current)
+        let halted = await halt(forGood: false)
         do {
             let waiting = try await services.jobs.cancelActive(kinds: [.ingest])
             try await services.history.record(
                 .settingsChanged, actor: .user,
                 summary: "Switched to the archive at \(target.path)" + (waiting > 0 ? "; \(Format.count(waiting, "file")) waiting in Incoming go there" : ""),
                 payload: ["archive": target.path])
-            try await records.flush()
-            try await nextSettings.update { $0.archivePath = target.path }
         } catch {
             Log.error(.app, "Could not switch archives; staying on this one", ["to": target.path, "error": error.localizedDescription])
-            await start()
+            await resume(halted)
             throw error
         }
+        var unwritten: UnwrittenRecords?
+        do { try await records.flush() } catch {
+            unwritten = UnwrittenRecords(archive: archive.path, reason: error.localizedDescription)
+            Log.error(.app, "Switching archives; the record files of the archive left wait to be written",
+                      ["archive": archive.path, "error": error.localizedDescription])
+        }
+        do {
+            try await settings.update { $0.archivePath = target.path }
+        } catch {
+            Log.error(.app, "Could not switch archives; staying on this one", ["to": target.path, "error": error.localizedDescription])
+            await audit(.settingsChanged, actor: .system, summary: "Stayed on the archive at \(archive.path): \(error.localizedDescription)",
+                        payload: ["archive": archive.path])
+            do { try await records.flush() } catch {
+                Log.error(.db, "Could not write record files", ["error": error.localizedDescription])
+            }
+            await resume(halted)
+            throw error
+        }
+        await tasks.closeForGood()
         Log.info(.app, "Switched archives", ["from": archive.path, "to": target.path, "index": next.index.path])
-        return next
+        return ArchiveSwitch(runtime: next, unwritten: unwritten)
     }
 
     /// Pauses or resumes filing, from the app or the command line alike: the setting, the worker woken to notice, and
@@ -254,29 +280,67 @@ public final class ArrumatorRuntime: Sendable {
 
     // MARK: Lifecycle
 
+    /// Brings the index in line with the archive (`openArchive()`), then starts the background work (`start()`), as one
+    /// step of the runtime's own that `stop()` ends: stopped while the archive is read, which macOS may hold behind its
+    /// prompt for access to the folder, the runtime starts nothing, then or later. The work starts also when the archive
+    /// could not be read, as Incoming is filed all the same, and why it could not be read is then thrown. Throws
+    /// `CancellationError` when the runtime was stopped first. What the app does once the user has set it up.
+    public func openAndStart() async throws {
+        try await openAndStart(opening: { [self] in try await openArchive() })
+    }
+
+    /// `openAndStart()`, reading the archive with `opening`: what a test holds to stop the runtime while it reads.
+    func openAndStart(opening: @escaping @Sendable () async throws -> Void) async throws {
+        guard let step = await tasks.starting(reading: true, { [self] in
+            var unread: (any Error)?
+            do { try await opening() } catch { unread = error }
+            // Stopped meanwhile: a read that does not notice being stopped, such as one macOS holds, still ends here.
+            try Task.checkCancellation()
+            await tasks.opened()
+            if let unread {
+                Log.error(.app, "Could not bring the index in line with the archive", ["error": unread.localizedDescription])
+            }
+            await begin()
+            if let unread { throw unread }
+        }) else { throw CancellationError() }
+        try await step.value
+    }
+
     /// Starts Ollama supervision, the ingest worker, the search task queue, the conversation queue, both watchers and
-    /// maintenance. Returns immediately.
+    /// maintenance. Returns once they have started. A runtime starts once: a second start does nothing more, and one
+    /// after `stop()` nothing at all.
     public func start() async {
+        guard let step = await tasks.starting(reading: false, { [self] in await begin() }) else { return }
+        // Why the archive could not be read, when `openAndStart()` began the step, is its caller's to show.
+        _ = await step.result
+    }
+
+    private func begin() async {
         // Subscribed before the settings in force are read, so a change made while the runtime starts, or as soon as
         // `start()` returns, is applied too, at worst twice. Whoever changes a setting records it (`SettingsActions`,
         // `setPaused`), so applying records nothing.
         let changes = await settings.changes()
+        // Subscribed before the watchers start, so nothing they find at once is missed.
+        let stableFiles = await incomingWatcher.stableFiles()
+        let archiveChanges = await archiveWatcher.changes()
         let current = await settings.current
         Log.info(.app, "Arrumator starting", ["version": appVersion, "archive": current.archivePath, "incoming": current.incomingPath])
         await audit(.appStarted, actor: .system, summary: "Arrumator \(appVersion) started", payload: nil)
         await apply(current)
         await tasks.run("ollama") { [lifecycle] in
             await lifecycle.ensureRunning()
+            // Stopped while the server was looked for: nothing is left to supervise it for.
+            guard !Task.isCancelled else { return }
             await lifecycle.startMonitoring()
         }
         await coordinator.start()
         await taskQueue.start()
         await conversationQueue.start()
-        await tasks.run("incoming-pump") { [incomingWatcher, coordinator] in
-            for await url in incomingWatcher.stableFiles { await coordinator.enqueue(url) }
+        await tasks.run("incoming-pump") { [coordinator] in
+            for await url in stableFiles { await coordinator.enqueue(url) }
         }
-        await tasks.run("archive-pump") { [archiveWatcher, reconciler, records] in
-            for await changes in archiveWatcher.changes {
+        await tasks.run("archive-pump") { [reconciler, records] in
+            for await changes in archiveChanges {
                 if changes.contains(.recordsChanged) {
                     do { try await records.reconcile() } catch {
                         Log.error(.db, "Could not read changed record files", ["error": error.localizedDescription])
@@ -312,14 +376,30 @@ public final class ArrumatorRuntime: Sendable {
         }
     }
 
-    /// Stops everything `start()` started and waits until it has: the queues first, so the document in hand, the request
-    /// being read and the question being answered stop where they carry on at the next start, then the watchers; the record files are written
-    /// after, so what the queues kept while stopping is in them too, and Ollama, when the app started it, is stopped last.
+    /// Stops everything `start()` started, for good, and waits until it has. Everything is told to stop before anything
+    /// is waited for, as one worker may wait for another, as for the generation lane; what was starting ends first, so
+    /// nothing it goes on to start is left running. The queues stop so that the document in hand, the request being read
+    /// and the question being answered carry on at the next start; the background tasks and then the watchers end; the
+    /// record files are written after, so what the queues kept while stopping is in them too, and Ollama, when the app
+    /// started it, is stopped last.
     public func stop() async {
-        await tasks.cancelAll()
-        await coordinator.stop()
-        await taskQueue.stop()
-        await conversationQueue.stop()
+        await halt(forGood: true)
+    }
+
+    /// What was under way when the runtime halted, so a switch that fails starts it again as it was.
+    struct Halted {
+        let started: Bool
+        /// The step was reading the archive, and had not finished.
+        let unread: Bool
+    }
+
+    /// Stops as `stop()` says; for good, or until a switch that fails starts the runtime again (`resume(_:)`).
+    @discardableResult
+    private func halt(forGood: Bool) async -> Halted {
+        let (starting, halted) = await tasks.close(forGood: forGood)
+        _ = await starting?.result
+        await Self.stopTogether(coordinator, taskQueue, conversationQueue)
+        await tasks.ended()
         await incomingWatcher.stop()
         await archiveWatcher.stop()
         do { try await records.flush() } catch {
@@ -327,16 +407,45 @@ public final class ArrumatorRuntime: Sendable {
         }
         await lifecycle.shutdown()
         Log.info(.app, "Arrumator stopped")
+        return halted
+    }
+
+    /// Starts again, after a switch that failed, what was under way when it halted the runtime: the work, and the reading
+    /// of the archive first when it had not ended. Nothing starts when the runtime has meanwhile stopped for good, as when
+    /// the app quits.
+    private func resume(_ halted: Halted) async {
+        guard halted.started, await tasks.reopen() else { return }
+        guard halted.unread else {
+            await start()
+            return
+        }
+        do { try await openAndStart() } catch {
+            // Why the archive could not be read is logged where it was read; the failed switch is what the user is shown.
+        }
+    }
+
+    /// Stops the three queues together: each is told to stop before any is waited for, so a worker that waits for what
+    /// another holds, as for the generation lane, is never waited for while the other still runs.
+    static func stopTogether(_ coordinator: IngestCoordinator, _ taskQueue: SearchTaskQueue,
+                             _ conversationQueue: TaskConversationQueue) async {
+        async let ingest: Void = coordinator.stop()
+        async let reading: Void = taskQueue.stop()
+        async let answering: Void = conversationQueue.stop()
+        _ = await (ingest, reading, answering)
     }
 
     /// Stops as `stop()` does, before the app quits, waiting for it at most `ingest.quitTimeout` seconds: a stop that
     /// takes longer, such as a page being read that cannot be interrupted, goes on while the app quits, and the job it
-    /// was on carries on where it stopped at the next start. Whether everything stopped in time.
+    /// was on carries on where it stopped at the next start. The Ollama server the app started is stopped either way,
+    /// so it never outlives the app. Whether everything stopped in time.
     @discardableResult
     public func stopBeforeQuitting() async -> Bool {
         let timeout = config.ingest.quitTimeout
         let stopped = await time.wait(atMost: timeout) { [self] in await stop() }
-        if !stopped { Log.warning(.app, "Quitting before everything stopped", ["waited": String(timeout)]) }
+        if !stopped {
+            Log.warning(.app, "Quitting before everything stopped", ["waited": String(timeout)])
+            await lifecycle.shutdown()
+        }
         return stopped
     }
 
@@ -351,6 +460,8 @@ public final class ArrumatorRuntime: Sendable {
             try await incomingWatcher.start(root: current.incomingURL)
             try await archiveWatcher.start(root: current.archiveURL, excluding: [current.incomingURL])
         } catch {
+            // Stopped while it applied them: what was not applied is applied at the next start.
+            guard !Task.isCancelled else { return }
             Log.error(.app, "Could not apply settings", ["error": error.localizedDescription])
         }
         await coordinator.wake()
@@ -392,17 +503,78 @@ public final class ArrumatorRuntime: Sendable {
     }
 }
 
-/// Owns long-running tasks so they can be cancelled together.
+/// The runtime's background work: the step that starts it, the named tasks that step starts, and whether the runtime
+/// stopped. A runtime runs once: once stopped, nothing starts again, and a step begun before the stop starts nothing
+/// more after it (`ArrumatorRuntime.start()`, `stop()`). A switch of archives stops it so that, if the switch fails, it
+/// can start again (`reopen()`), unless it was meanwhile stopped for good.
 actor BackgroundTasks {
+    /// Nothing starts: while the runtime stops, and after it stopped.
+    private var closed = false
+    private var stoppedForGood = false
+    /// Whether the step that starts the runtime reads the archive first, and whether it has.
+    private var stepReads = false
+    private var wasRead = false
+    private var step: Task<Void, any Error>?
     private var tasks: [String: Task<Void, Never>] = [:]
 
+    /// The step that starts the runtime: `body`, begun now, the first time; the same step after that, until the runtime
+    /// is stopped; nil while it is.
+    func starting(reading: Bool, _ body: @escaping @Sendable () async throws -> Void) -> Task<Void, any Error>? {
+        guard !closed else { return nil }
+        if let step { return step }
+        let begun = Task { try await body() }
+        step = begun
+        stepReads = reading
+        wasRead = false
+        return begun
+    }
+
+    /// The step that starts the runtime has read the archive.
+    func opened() { wasRead = true }
+
+    /// Runs `body` as the task named `name`, unless the runtime is stopped.
     func run(_ name: String, _ body: @escaping @Sendable () async -> Void) {
+        guard !closed else { return }
         tasks[name]?.cancel()
         tasks[name] = Task(priority: .utility) { await body() }
     }
 
-    func cancelAll() {
-        for t in tasks.values { t.cancel() }
-        tasks.removeAll()
+    /// Stops, for good or until `reopen()`: cancels the step that starts the runtime, which is given back for the caller
+    /// to wait for, with what was under way, and every task, which `ended()` waits for. A second stop meanwhile, as when
+    /// the app quits while it switches archives, is given the same step, and waits for it too.
+    func close(forGood: Bool) -> (starting: Task<Void, any Error>?, halted: ArrumatorRuntime.Halted) {
+        closed = true
+        if forGood { stoppedForGood = true }
+        step?.cancel()
+        for task in tasks.values { task.cancel() }
+        return (step, ArrumatorRuntime.Halted(started: step != nil, unread: stepReads && !wasRead))
     }
+
+    /// Lets the runtime start again, with a step of its own, after a stop that was not for good; whether it may.
+    func reopen() -> Bool {
+        guard !stoppedForGood else { return false }
+        closed = false
+        step = nil
+        return true
+    }
+
+    /// Keeps the runtime stopped for good, as after a switch that was made.
+    func closeForGood() {
+        closed = true
+        stoppedForGood = true
+    }
+
+    /// Waits until every task `close(forGood:)` cancelled has ended, such as the settings being applied, which would
+    /// otherwise start a watcher after the runtime stopped.
+    func ended() async {
+        while let (name, task) = tasks.first.map({ ($0.key, $0.value) }) {
+            awaiting = name
+            await task.value
+            tasks[name] = nil
+        }
+        awaiting = nil
+    }
+
+    /// The task `ended()` waits for, while it waits: what a test watches for before it lets that task end.
+    private(set) var awaiting: String?
 }

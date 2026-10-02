@@ -34,9 +34,9 @@ import Testing
         try Data().write(to: incoming.appendingPathComponent(".DS_Store"))
         let time = TestTime(.advances)
         let watcher = IncomingWatcher(config: env.config.watcher, skip: SkipRules(watcher: env.config.watcher), time: time)
+        var files = await watcher.stableFiles().makeAsyncIterator()
         try await watcher.start(root: incoming)
         defer { Task { await watcher.stop() } }
-        var files = watcher.stableFiles.makeAsyncIterator()
         let stable = await files.next()
         #expect(stable?.lastPathComponent == "bill.pdf", "the document, once unchanged, and not the system file")
         let waited = time.now().timeIntervalSince(TestTime.start)
@@ -54,7 +54,8 @@ import Testing
         try await watcher.start(root: incoming)
         defer { Task { await watcher.stop() } }
         let taken = Taken()
-        let collecting = Task { for await url in watcher.stableFiles { await taken.add(url.lastPathComponent) } }
+        let stable = await watcher.stableFiles()
+        let collecting = Task { for await url in stable { await taken.add(url.lastPathComponent) } }
         defer { collecting.cancel() }
         // Made elsewhere and moved in whole, as Finder moves a folder on one volume: macOS reports the folder that came,
         // not what is in it.
@@ -67,6 +68,59 @@ import Testing
         await watcher.handle([FSEvent(path: moved.path, flags: UInt32(kFSEventStreamEventFlagItemIsDir | kFSEventStreamEventFlagItemRenamed), id: 1)])
         #expect(await Patience.until { await taken.names == ["scan.pdf", "receipt.pdf"] },
                 "every file in a folder that comes into Incoming is taken in, at any depth, once it has stopped changing")
+    }
+
+    /// The app stops its watchers and the tasks that read them when it stops; started again, a new reader is sent what
+    /// comes, though the one before it was cancelled.
+    @Test func aFileThatComesAfterTheWatcherIsStoppedAndStartedAgainIsTakenIn() async throws {
+        let env = try TestEnvironmentSync.make()
+        defer { env.cleanup() }
+        let incoming = env.root.appendingPathComponent("Incoming", isDirectory: true)
+        let watcher = IncomingWatcher(config: env.config.watcher, skip: SkipRules(watcher: env.config.watcher), time: TestTime(.advances))
+        let first = await watcher.stableFiles()
+        let reading = Task { for await _ in first {} }
+        try await watcher.start(root: incoming)
+        await watcher.stop()
+        reading.cancel()
+        await reading.value
+
+        let taken = Taken()
+        let again = await watcher.stableFiles()
+        let collecting = Task { for await url in again { await taken.add(url.lastPathComponent) } }
+        defer { collecting.cancel() }
+        try await watcher.start(root: incoming)
+        defer { Task { await watcher.stop() } }
+        let bill = incoming.appendingPathComponent("bill.pdf")
+        try Data("a whole document".utf8).write(to: bill)
+        await watcher.handle([FSEvent(path: bill.path, flags: UInt32(kFSEventStreamEventFlagItemIsFile | kFSEventStreamEventFlagItemCreated), id: 1)])
+        #expect(await Patience.until { await taken.names == ["bill.pdf"] },
+                "a file that comes once the watcher is started again is sent to its new reader, as Incoming is watched again")
+    }
+
+    @Test func aChangeInTheArchiveAfterItsWatcherIsStoppedAndStartedAgainIsReported() async throws {
+        let env = try await TestEnvironment.make()
+        defer { env.cleanup() }
+        try FileManager.default.createDirectory(at: env.archive, withIntermediateDirectories: true)
+        let watcher = ArchiveWatcher(config: env.config.watcher, records: env.config.records, skip: SkipRules(watcher: env.config.watcher),
+                                     registry: SelfChangeRegistry(ttl: env.config.watcher.selfChangeTTLSeconds, time: env.time),
+                                     database: env.database)
+        let first = await watcher.changes()
+        let reading = Task { for await _ in first {} }
+        try await watcher.start(root: env.archive, excluding: [env.incoming])
+        await watcher.stop()
+        reading.cancel()
+        await reading.value
+
+        let reported = Reported()
+        let again = await watcher.changes()
+        let collecting = Task { for await changes in again { await reported.add(changes) } }
+        defer { collecting.cancel() }
+        try await watcher.start(root: env.archive, excluding: [env.incoming])
+        defer { Task { await watcher.stop() } }
+        let note = try env.put("note.txt", text: "put there by the user")
+        await watcher.handle([FSEvent(path: note.path, flags: UInt32(kFSEventStreamEventFlagItemIsFile | kFSEventStreamEventFlagItemCreated), id: 1)])
+        #expect(await Patience.until { await reported.changes.contains(.untrackedFile(path: note.path)) },
+                "a file the user puts in the archive once its watcher is started again is reported to the new reader")
     }
 
     @Test func workPausesWhenTheMacIsHotOrItsBatteryLow() throws {
@@ -92,6 +146,12 @@ import Testing
 actor Taken {
     private(set) var names: Set<String> = []
     func add(_ name: String) { names.insert(name) }
+}
+
+/// What the archive watcher reported, in the order it reported it.
+actor Reported {
+    private(set) var changes: [ArchiveChange] = []
+    func add(_ batch: [ArchiveChange]) { changes += batch }
 }
 
 /// A scratch folder and the bundled configuration, for tests that need no database.

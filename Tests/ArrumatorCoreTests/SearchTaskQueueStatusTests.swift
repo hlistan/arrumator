@@ -138,6 +138,24 @@ import Testing
         done.state = .failed
         #expect(readingFirst.progress(of: done) == nil, "nor one that failed")
     }
+
+    @Test func startingTheQueueAgainWhileItReadsARequestLeavesThatRequestBeingRead() async throws {
+        let h = try await Harness.make()
+        defer { h.env.cleanup() }
+        let reading = Signal()
+        let (queue, tasks) = h.searchTasks(StubInterpreter(plans: Self.plans) { _ in
+            reading.fire()
+            try await TestTime(.blocks).sleep(seconds: 1)
+        })
+        let id = try await tasks.create(prompt: SearchTaskTests.prompt).id
+        await queue.start()
+        try #require(await Patience.until { reading.fired }, "the queue reads the request")
+        await queue.start()
+        #expect(try await tasks.store.task(id: id)?.state == .interpreting,
+                "a second start does not put back in the queue the request being read, as if it had been stopped")
+        #expect(await queue.status.reading?.task == id, "which the queue goes on reading")
+        await queue.stop()
+    }
 }
 
 /// What a test sees of the queue while the interpreter double reads a request (its `during` hook), as the queue exists

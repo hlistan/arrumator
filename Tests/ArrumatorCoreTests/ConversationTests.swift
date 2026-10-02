@@ -443,6 +443,25 @@ import Testing
                     && w.h.env.layout.task(ofConversationFile: "_.md") == nil, "a conversation's file is known by its task's number")
         #expect(RecordKind(key: RecordKind.conversation(task: 12).key) == .conversation(task: 12), "and so is its mark")
     }
+
+    @Test func startingTheQueueAgainWhileItAnswersAQuestionLeavesThatQuestionBeingAnswered() async throws {
+        let w = try await world()
+        defer { w.h.env.cleanup() }
+        let answering = Signal()
+        let answerer = StubAnswerer(fallback: Self.reply) { _ in
+            answering.fire()
+            try await TestTime(.blocks).sleep(seconds: 1)
+        }
+        let (queue, talk) = w.h.conversations(answerer, interpreter: StubInterpreter(plans: [:]))
+        let asked = try await talk.ask(w.task.id, question: Self.question)
+        await queue.start()
+        try #require(await Patience.until { answering.fired }, "the queue answers the question")
+        await queue.start()
+        #expect(try await turn(talk, asked.id).state == .answering,
+                "a second start does not put back in the queue the question being answered, as if it had been stopped")
+        #expect(await queue.status.answering?.turn == asked.id, "which the queue goes on answering")
+        await queue.stop()
+    }
 }
 
 extension Array {

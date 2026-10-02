@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 public enum Retry {
     /// Runs `body`, retrying after each delay in `delays`, waited on `time`, while `shouldRetry` accepts the error.
@@ -39,32 +40,71 @@ extension TimeSource {
     }
 }
 
-/// FIFO async semaphore; used to serialise model calls across actors.
-public actor AsyncSemaphore {
-    private var permits: Int
-    private var waiters: [CheckedContinuation<Void, Never>] = []
-
-    public init(permits: Int) { self.permits = permits }
-
-    public func acquire() async {
-        if permits > 0 {
-            permits -= 1
-            return
-        }
-        await withCheckedContinuation { waiters.append($0) }
+/// FIFO async semaphore; used to serialise model calls across actors. A task cancelled while it waits for a permit stops
+/// waiting at once and gives up its place, so a worker that waits for the generation lane stops when it is told to,
+/// without waiting for whoever holds the lane.
+public final class AsyncSemaphore: Sendable {
+    private struct State {
+        var permits: Int
+        /// Who waits for a permit, in the order they asked, each told by its own one-shot whether it got one.
+        var queue: [OneShot<Bool>] = []
     }
 
+    private let state: Mutex<State>
+
+    public init(permits: Int) { state = Mutex(State(permits: permits)) }
+
+    /// Takes a permit, waiting for one in turn when none is free. Throws `CancellationError`, holding no permit, when the
+    /// task is cancelled before it has one.
+    public func acquire() async throws {
+        try Task.checkCancellation()
+        let turn = OneShot<Bool>()
+        let free = state.withLock { state in
+            guard state.permits > 0 else {
+                state.queue.append(turn)
+                return false
+            }
+            state.permits -= 1
+            return true
+        }
+        if free { return }
+        let granted = await withTaskCancellationHandler {
+            await turn.wait()
+        } onCancel: {
+            leave(turn)
+        }
+        guard granted else { throw CancellationError() }
+    }
+
+    /// Gives a permit back, to the first who waits for one.
     public func release() {
-        if waiters.isEmpty {
-            permits += 1
-        } else {
-            waiters.removeFirst().resume()
+        let next: OneShot<Bool>? = state.withLock { state in
+            guard !state.queue.isEmpty else {
+                state.permits += 1
+                return nil
+            }
+            return state.queue.removeFirst()
         }
+        next?.fire(true)
     }
 
-    public func withPermit<T: Sendable>(_ body: @Sendable () async throws -> T) async rethrows -> T {
-        await acquire()
+    /// Takes a waiter whose task was cancelled out of the queue. One no longer in it was given a permit just before, and
+    /// keeps it, to give back when its work, which sees the cancellation, ends.
+    private func leave(_ turn: OneShot<Bool>) {
+        let left = state.withLock { state in
+            guard let place = state.queue.firstIndex(where: { $0 === turn }) else { return false }
+            state.queue.remove(at: place)
+            return true
+        }
+        if left { turn.fire(false) }
+    }
+
+    public func withPermit<T: Sendable>(_ body: @Sendable () async throws -> T) async throws -> T {
+        try await acquire()
         defer { release() }
         return try await body()
     }
+
+    /// How many wait for a permit: what a test watches for before it cancels one of them.
+    var waiting: Int { state.withLock { $0.queue.count } }
 }

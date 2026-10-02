@@ -42,8 +42,58 @@ struct RuntimeHome {
 
     /// What the app and every command do first.
     func open() async throws -> ArrumatorRuntime {
-        let runtime = try await ArrumatorRuntime.bootstrap(appVersion: "test", environment: environment, echoLogsToStderr: false, trash: trash)
+        let runtime = try await bootstrap()
         try await runtime.openArchive()
         return runtime
     }
+
+    /// A runtime whose archive is not read yet, as the app has one before the user has set it up
+    /// (`ArrumatorRuntime.openAndStart()`).
+    func bootstrap() async throws -> ArrumatorRuntime {
+        try await ArrumatorRuntime.bootstrap(appVersion: "test", environment: environment, echoLogsToStderr: false, trash: trash)
+    }
+
+    /// Sets `values` in the section `section` of the home's `pipeline.json`, over the bundled defaults, as a user may.
+    func tune(_ section: String, _ values: [String: JSONValue]) throws {
+        let current = try ConfigLoader.overrideValue(at: paths.pipelineOverrideURL) ?? .object([:])
+        let tuned = ConfigLoader.deepMerge(current, .object([section: .object(values)]))
+        try JSON.prettyEncoder.encode(tuned).write(to: paths.pipelineOverrideURL)
+    }
+
+    /// The watcher's timings for a test that waits for a file dropped into Incoming to be queued: what the real ones
+    /// take seconds over, in a tenth of one.
+    func watchQuickly() throws {
+        try tune("watcher", ["fsEventsLatency": .number(Self.quickly), "stabilityPollInterval": .number(Self.quickly)])
+    }
+
+    static let quickly = 0.1
+
+    /// A stand-in for `ollama serve`: a script that writes its process number into a file and then waits, as a server
+    /// does, until it is stopped. Where the script is, and where it writes its number.
+    func standInServer() throws -> (executable: URL, processNumber: URL) {
+        let executable = root.appendingPathComponent("serve")
+        let processNumber = root.appendingPathComponent("serve.pid")
+        try Data("#!/bin/sh\necho $$ > '\(processNumber.path)'\nexec /bin/sleep \(Self.standInLifetime)\n".utf8).write(to: executable)
+        try FileManager.default.setAttributes([.posixPermissions: Self.executablePermissions], ofItemAtPath: executable.path)
+        return (executable, processNumber)
+    }
+
+    /// How long the stand-in server lives if nothing stops it: far longer than any test waits for it.
+    static let standInLifetime = 300
+    static let executablePermissions = 0o755
+
+    /// Makes `folder` read-only, or writable again: nothing can be saved in it, but in the folders inside it, unless
+    /// `withFoldersInIt`, as on a disk that can no longer be written to.
+    func setWritable(_ writable: Bool, _ folder: URL, withFoldersInIt: Bool) throws {
+        let found = withFoldersInIt ? FileManager.default.enumerator(at: folder, includingPropertiesForKeys: [.isDirectoryKey])?.allObjects ?? [] : []
+        let folders = [folder] + found.compactMap { $0 as? URL }
+            .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
+        for each in folders {
+            try FileManager.default.setAttributes([.posixPermissions: writable ? Self.writableFolder : Self.readOnlyFolder],
+                                                  ofItemAtPath: each.path)
+        }
+    }
+
+    static let writableFolder = 0o755
+    static let readOnlyFolder = 0o555
 }
