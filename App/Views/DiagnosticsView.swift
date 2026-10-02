@@ -35,13 +35,18 @@ struct ProcessingLogView: View {
                 .width(Style.logLevelColumnWidth)
                 TableColumn(Wording.logPart) { Text($0.cat.rawValue).foregroundStyle(.secondary) }.width(Style.logPartColumnWidth)
                 TableColumn(Wording.logWhat) { entry in
-                    Text(entry.msg).lineLimit(1)
+                    Text(entry.msg).lineLimit(1).help(entry.msg)
                 }
+                // Paths end with what tells them apart, so a long detail is shortened in its middle; the whole of it
+                // shows under the pointer, and copies from the line's menu.
                 TableColumn(Wording.logDetailColumn) { entry in
-                    Text(Wording.logFields(entry.fields))
+                    let detail = Wording.logFields(entry.fields)
+                    Text(detail)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
-                        .textSelection(.enabled)
+                        .truncationMode(.middle)
+                        .help(detail)
+                        .contextMenu { Button(Wording.copyLogLine) { model.copy(Wording.logLine(entry)) } }
                 }
             }
             .font(.callout.monospaced())

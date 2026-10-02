@@ -33,11 +33,17 @@ public struct FilenameBuilder: Sendable {
     static let pathSeparator = "/"
     /// What a forbidden character becomes.
     static let replacement = "-"
+    /// What a forbidden character between words becomes ("Fatura: julho"), so the dash is not glued to the word before.
+    static let spacedReplacement = " - "
 
     /// NFC, path separators, forbidden and control characters replaced, no leading dots, collapsed whitespace.
     public func sanitize(_ s: String) -> String {
         var out = s.precomposedStringWithCanonicalMapping
-        for c in [Self.pathSeparator] + config.forbiddenCharacters { out = out.replacingOccurrences(of: c, with: Self.replacement) }
+        for c in [Self.pathSeparator] + config.forbiddenCharacters {
+            let escaped = NSRegularExpression.escapedPattern(for: c)
+            out = out.replacingOccurrences(of: "\\s*\(escaped)\\s+|\\s+\(escaped)", with: Self.spacedReplacement, options: .regularExpression)
+            out = out.replacingOccurrences(of: c, with: Self.replacement)
+        }
         out = String(out.unicodeScalars.map { CharacterSet.controlCharacters.contains($0) ? " " : Character($0) })
         out = out.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
         while out.hasPrefix(".") { out.removeFirst() }

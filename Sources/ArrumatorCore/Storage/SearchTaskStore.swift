@@ -113,7 +113,7 @@ public struct SearchTaskStore: Sendable {
     public func detail(id: Int64) async throws -> SearchTaskDetail? {
         try await database.reader.read { db in
             guard let task = try Self.task(db, id: id, config: config) else { return nil }
-            let documents = try Self.documents(db, ids: task.documents)
+            let documents = try DocumentStore.documents(db, ids: task.documents)
             return SearchTaskDetail(task: task, tree: DocumentGrouping.tree(documents, by: task.grouping))
         }
     }
@@ -157,12 +157,6 @@ public struct SearchTaskStore: Sendable {
     /// How many tasks read with the model profile `profile` names, rather than with the one Settings uses.
     static func count(_ db: Database, profile: String) throws -> Int {
         try SearchTaskRecord.filter(Column("profile") == profile).fetchCount(db)
-    }
-
-    /// The documents with these numbers, in this order.
-    static func documents(_ db: Database, ids: [Int64]) throws -> [DocumentRecord] {
-        let byID = Dictionary(uniqueKeysWithValues: try DocumentRecord.fetchAll(db, keys: ids).compactMap { d in d.id.map { ($0, d) } })
-        return ids.compactMap { byID[$0] }
     }
 
     // MARK: The queue

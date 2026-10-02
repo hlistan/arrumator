@@ -123,16 +123,20 @@ public actor InferenceGate {
 
     public nonisolated var client: any OllamaAPI { api }
 
-    public func chat(_ request: OllamaChatRequest) async throws -> OllamaChatResponse {
+    /// The model's answer to `request`, streamed to `partial` as `OllamaAPI.chat(_:partial:)` streams it. One asked
+    /// again after a transient failure is streamed from its start again. Without `retrying`, a transient failure is
+    /// thrown at once, for a caller that waits for Ollama in a way of its own and says so.
+    public func chat(_ request: OllamaChatRequest, retrying: Bool = true,
+                     partial: (@Sendable (OllamaChatResponse) async -> Void)? = nil) async throws -> OllamaChatResponse {
         let api = api
-        let delays = retryDelays
+        let delays = retrying ? retryDelays : []
         let time = time
         return try await generation.withPermit {
             try await Retry.run(delays: delays, time: time, shouldRetry: { ($0 as? OllamaError)?.isTransient(asking: request) ?? false },
                                 onRetry: { n, e in
                                     Log.warning(.ollama, "Retrying chat", ["attempt": String(n), "error": e.localizedDescription])
                                 }) {
-                try await api.chat(request)
+                try await api.chat(request, partial: partial)
             }
         }
     }
@@ -187,7 +191,9 @@ public struct GatedOllama: OllamaAPI {
     public func version() async throws -> String { try await gate.client.version() }
     public func tags() async throws -> [OllamaModelInfo] { try await gate.client.tags() }
     public func show(model: String) async throws -> OllamaShowResponse { try await gate.client.show(model: model) }
-    public func chat(_ request: OllamaChatRequest) async throws -> OllamaChatResponse { try await gate.chat(request) }
+    public func chat(_ request: OllamaChatRequest, partial: (@Sendable (OllamaChatResponse) async -> Void)?) async throws -> OllamaChatResponse {
+        try await gate.chat(request, partial: partial)
+    }
     public func embed(_ request: OllamaEmbedRequest) async throws -> OllamaEmbedResponse { try await gate.embed(request) }
     public func pull(model: String) -> AsyncThrowingStream<OllamaPullProgress, any Error> { gate.client.pull(model: model) }
 }

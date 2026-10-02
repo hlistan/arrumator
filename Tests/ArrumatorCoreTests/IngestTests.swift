@@ -353,7 +353,33 @@ struct RefusingTrash: Trashing {
         #expect(edited.labels(.topic) == ["electricity"], "the same topic however written is one")
         let search = h.search
         #expect(try await search.fullText(SearchQuery(text: "sender:energia")).hits.map(\.id) == [id], "a corrected label is searchable")
-        #expect(try await h.services.history.events(limit: 5, kinds: [.corrected], docID: id).first?.summary == "Corrected fileName, labels",
-                "History says what was corrected")
+        let summary = try await h.services.history.events(limit: 5, kinds: [.corrected], docID: id).first?.summary ?? ""
+        #expect(summary.hasPrefix("Renamed to “2026-07-05 EDP - Julho.txt”; added ") && summary.contains("sender “EDP Energia”")
+                    && summary.contains("type “receipt”") && summary.contains("; removed ") && summary.contains("type “invoice”"),
+                "History says in words what was corrected: the new name, the labels added and those removed: \(summary)")
+    }
+
+    @Test func historySaysInWordsWhatTextWasReadAndNoLanguageGuess() async throws {
+        let h = try await Harness.make()
+        defer { h.env.cleanup() }
+        let id = try #require(try await h.ingest("bill.txt", text: "EDP electricity July").id)
+        let extracted = try await h.services.history.events(limit: 5, kinds: [.extracted], docID: id).first?.summary
+        #expect(extracted == "Read 20 characters of text from a text document",
+                "what was read, in words, not the extractor's name; the language is the model's label to give: \(extracted ?? "")")
+    }
+
+    @Test func aBlankNameIsRefusedSayingSoAndNothingChanges() async throws {
+        let h = try await Harness.make()
+        defer { h.env.cleanup() }
+        let filed = try await h.ingest("bill.txt", text: "EDP electricity July")
+        let id = try #require(filed.id)
+        for blank in ["", "   ", "\n\t"] {
+            await #expect(throws: IngestError.blankFileName, "a name of nothing is no name: “\(blank)”") {
+                try await h.review.edit(id, fileName: blank, labels: nil)
+            }
+        }
+        let after = try #require(try await h.services.documents.document(id: id))
+        #expect(after.filename == filed.filename && FileManager.default.fileExists(atPath: after.path), "the file keeps its name")
+        #expect(try await h.services.history.events(limit: 5, kinds: [.corrected], docID: id).isEmpty, "and nothing is recorded")
     }
 }

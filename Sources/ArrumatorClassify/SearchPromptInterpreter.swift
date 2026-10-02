@@ -77,7 +77,10 @@ public struct ValidatedSearchPlan: Sendable, Codable, Hashable {
 /// it (`asked_as`) is a word of the request, whatever its case, accents or punctuation: the model must ground each label
 /// in the request, and the app checks the quote, as generated claims are checked against the sources they cite (Gao et
 /// al., ALCE, EMNLP 2023; docs/organizing-principles-sources.md#sources-for-search-tasks). A quote may leave words out
-/// or run them together ("agosto de 2026" from "agosto e setembro de 2026"), but never add one. A word is kept only when
+/// or run them together ("agosto de 2026" from "agosto e setembro de 2026"), but never add one. Words ask for one thing:
+/// a label whose quote has only words a label of an earlier kind (`ClassificationSchema.answerOrder`) already quotes is
+/// dropped, so "faturas de Portugal" asks for documents under Portuguese law and not also for documents written in
+/// Portuguese. A word is kept only when
 /// it is a word of the request and no label's quote already has it.
 ///
 /// A label is kept as a document's label of its kind is (`DocumentLabel.normalized`), except that a date or deadline may
@@ -143,6 +146,8 @@ public struct SearchPlanValidator: Sendable {
     private func labels(of kind: LabelKind, in raw: SearchAnswer, asked: Set<String>, quoted: inout Set<String>,
                         notes: inout [String]) -> [DocumentLabel] {
         let key = ClassificationSchema.labelsKey(kind)
+        // What labels of the kinds before this one quote: words that already ask for something.
+        let earlier = quoted
         let kept = (raw.labels[kind] ?? []).filter { !DocumentLabel.oneLine($0.value).isEmpty }.compactMap { criterion -> String? in
             // A date or deadline asked for may be any span of time, as a period is.
             let normalized = DocumentLabel.normalized(criterion.value, kind: SearchPlan.timeKinds.contains(kind) ? .period : kind)?.value
@@ -153,6 +158,11 @@ public struct SearchPlanValidator: Sendable {
             let quote = Self.words(criterion.askedAs)
             guard !quote.isEmpty, quote.isSubset(of: asked) else {
                 notes.append("\(key): “\(value)” is not asked for by the request (“\(DocumentLabel.oneLine(criterion.askedAs))”), dropped")
+                return nil
+            }
+            guard !quote.isSubset(of: earlier) else {
+                notes.append("\(key): “\(value)” is asked for by words a label of another kind quotes "
+                    + "(“\(DocumentLabel.oneLine(criterion.askedAs))”), dropped")
                 return nil
             }
             quoted.formUnion(quote)

@@ -109,7 +109,12 @@ import Testing
                          #"{"ingest": {"maxAttempts": 0}}"#, #"{"tasks": {"withoutLabelFolder": "No {{label}}"}}"#,
                          #"{"tasks": {"defaultGrouping": ["type", "sender", "date", "party"]}}"#, #"{"tasks": {"maxDocuments": 0}}"#,
                          #"{"tasks": {"efforts": {"low": {"repairAttempts": -1}}}}"#, #"{"tasks": {"efforts": {"high": {"numPredict": 0}}}}"#,
-                         #"{"tasks": {"efforts": {"medium": {"timeout": 0}}}}"#, #"{"tasks": {"efforts": {"extreme": {"think": false}}}}"#] {
+                         #"{"tasks": {"efforts": {"medium": {"timeout": 0}}}}"#, #"{"tasks": {"efforts": {"extreme": {"think": false}}}}"#,
+                         #"{"conversation": {"efforts": {"low": {"repairAttempts": -1}}}}"#, #"{"conversation": {"efforts": {"high": {"timeout": 0}}}}"#,
+                         #"{"conversation": {"efforts": {"medium": {"numPredict": 16384}}}}"#, #"{"conversation": {"contextChars": 0}}"#,
+                         #"{"conversation": {"documentChars": 0}}"#, #"{"conversation": {"maxListed": -1}}"#,
+                         #"{"conversation": {"historyChars": -1}}"#, #"{"conversation": {"maxQuestionChars": 0}}"#,
+                         #"{"conversation": {"maxSuggested": 0}}"#, #"{"conversation": {"efforts": {"extreme": {"think": false}}}}"#] {
             try Data(override.utf8).write(to: env.paths.pipelineOverrideURL)
             #expect(throws: ConfigError.self, "\(override) would crash or stall the pipeline, so it stops the app with the reason") {
                 try PipelineConfig.load(paths: env.paths, environment: TestEnvironment.isolated)
@@ -145,6 +150,26 @@ import Testing
         config.tasks.efforts[.high] = nil
         #expect(config.problems.contains("tasks.efforts.high is missing"), "an effort without its preset stops the app with the reason")
         #expect(throws: ConfigError.self, "and is never read with a guess") { try config.tasks.preset(.high) }
+    }
+
+    @Test func everyEffortAnswersQuestionsWithItsPresetEachAtLeastAsMuchAsTheOneBelowItAndAllWithinTheContext() throws {
+        var config = try PipelineConfig.bundledDefaults()
+        let conversation = config.conversation
+        let low = try conversation.effort(.low), medium = try conversation.effort(.medium), high = try conversation.effort(.high)
+        #expect(low.think == .off && medium.think != .off && high.think != .off,
+                "a question is answered at once at low, and a model that can think does so at medium and high")
+        #expect(low.numPredict <= medium.numPredict && medium.numPredict <= high.numPredict && low.timeout <= medium.timeout
+                    && medium.timeout <= high.timeout && low.repairAttempts <= medium.repairAttempts && medium.repairAttempts <= high.repairAttempts,
+                "each effort gives at least as much as the one below it")
+        #expect([low, medium, high].allSatisfy { $0.numPredict < conversation.numCtx }, "every answer leaves room for what it is shown")
+        #expect(conversation.contextChars + conversation.historyChars + conversation.maxQuestionChars > conversation.documentChars,
+                "the context holds more than one document's text")
+        let options = conversation.options(medium)
+        #expect(options.numPredict == medium.numPredict && options.temperature == conversation.sampling.temperature && options.temperature > 0,
+                "an answer is sampled as writing is, not decoded greedily as a document is read, with its effort's length")
+        config.conversation.efforts[.low] = nil
+        #expect(config.problems.contains("conversation.efforts.low is missing"), "an effort without its preset stops the app with the reason")
+        #expect(throws: ConfigError.self, "and is never answered with a guess") { try config.conversation.effort(.low) }
     }
 
     @Test func aListThatMayNotBeEmptyPicksItsValuesAndRefusesToBeEmpty() throws {
@@ -297,6 +322,17 @@ import Testing
         return refused == name && underlying == paths.map(ConfigLoader.unknownKey).joined(separator: "; ")
     }
 
+    @Test func aScratchRunCanGiveTheAppAFolderAsItsTrashAndOtherwiseItUsesTheUsers() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("trash-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let users = FolderTrash(folder: folder.appendingPathComponent("users", isDirectory: true))
+        let scratch = RuntimeEnvironment(home: nil, ollamaURL: nil, logLevelName: nil, pipelineOverridePath: nil, trashPath: folder.path)
+        let trash = try #require(scratch.trash(orElse: users) as? FolderTrash, "ARRUMATOR_TRASH names a folder the app uses as its Trash")
+        #expect(trash.folder.path == folder.path, "that folder")
+        #expect((TestEnvironment.isolated.trash(orElse: users) as? FolderTrash)?.folder == users.folder,
+                "and without it the Trash is the one the app gives, the user's")
+    }
+
     @Test func aKeyTheAppDoesNotKnowStopsTheLoadNamingItAndKeysItKnowsLoad() async throws {
         let env = try await TestEnvironment.make()
         defer { env.cleanup() }
@@ -305,7 +341,7 @@ import Testing
             try SettingsStore(paths: env.paths)
         } throws: { refuses($0, "settings", unknown: ["models"]) }
         let extra = env.root.appendingPathComponent("extra.json")
-        let environment = RuntimeEnvironment(home: nil, ollamaURL: nil, logLevelName: nil, pipelineOverridePath: extra.path)
+        let environment = RuntimeEnvironment(home: nil, ollamaURL: nil, logLevelName: nil, pipelineOverridePath: extra.path, trashPath: nil)
         for (override, unknown) in [(#"{"modelProfiles": {"standard": {"numCtx": 8192}}}"#, ["modelProfiles"]),
                                     (#"{"tasks": {"efforts": {"low": {"model": "fast", "fallback": false, "repairAttempts": 1}}}}"#,
                                      ["tasks.efforts.low.fallback", "tasks.efforts.low.model"])] {

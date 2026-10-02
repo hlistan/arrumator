@@ -24,8 +24,9 @@ struct GlobalOptions: ParsableArguments {
     var verbose = false
 
     func runtime() async throws -> ArrumatorRuntime {
-        let runtime = try await ArrumatorRuntime.bootstrap(appVersion: Arrumator.version, environment: .current,
-                                                           echoLogsToStderr: verbose, trash: SystemTrash())
+        let environment = RuntimeEnvironment.current
+        let runtime = try await ArrumatorRuntime.bootstrap(appVersion: Arrumator.version, environment: environment,
+                                                           echoLogsToStderr: verbose, trash: environment.trash(orElse: SystemTrash()))
         try await runtime.openArchive()
         return runtime
     }

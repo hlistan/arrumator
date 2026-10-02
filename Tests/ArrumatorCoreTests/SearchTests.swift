@@ -107,6 +107,46 @@ import Testing
                 "when nothing contains the words and nothing is alike enough, search finds nothing")
     }
 
+    /// Fails as it is told to, as an embedding model that is missing or a server that is away.
+    struct FailingEmbedder: Embedder {
+        let modelId = "failing"
+        let error: any Error & Sendable
+        func embed(_ texts: [String]) async throws -> [[Float]] { throw error }
+    }
+
+    @Test func aQuestionOrdersTheDocumentsOfASetByAnyOfItsWordsAndByMeaningAndLeavesTheRestOut() async throws {
+        let db = try AppDatabase.inMemory()
+        let meter = try await insert(db, title: "Meter reading", body: "kilowatt hours read on the meter", sender: "EDP")
+        let power = try await insert(db, title: "Electricity bill", body: "power invoice for July", sender: "EDP")
+        let gas = try await insert(db, title: "Gas bill", body: "gas supply invoice", sender: "Galp")
+        let passport = try await insert(db, title: "Passport", body: "passport scan", sender: "Ministry")
+        let outside = try await insert(db, title: "Other meter", body: "meter meter meter", sender: "EDP")
+        let vectors = VectorIndex()
+        for (id, cosine) in [(meter, Float(0)), (power, 0.9), (gas, 0.3), (passport, 0.2), (outside, 0.95)] {
+            await vectors.upsert(docID: id, vector: [cosine, (1 - cosine * cosine).squareRoot()], model: "fixed")
+        }
+        var config = try PipelineConfig.bundledDefaults().search
+        config.semanticMinSimilarity = 0.5
+        let set = [meter, power, gas, passport]
+        let search = SearchService(database: db, vectors: vectors, embedder: FixedEmbedder(vector: [1, 0]), config: config)
+        #expect(try await search.relevance(of: "What does the meter say about the gas?", among: set) == [gas, meter, power],
+                "those with its words lead, the rarer the word the sooner (gas is in one document, meter in two); then one alike in meaning")
+        #expect(try await !search.relevance(of: "meter passport", among: [meter, power, gas]).contains(passport), "nothing outside the set is ever ordered")
+        let words = SearchService(database: db, vectors: vectors, embedder: nil, config: config)
+        #expect(try await words.relevance(of: "the meter", among: set) == [meter], "without an embedding model, the words alone order them")
+        #expect(try await words.relevance(of: "?!", among: set).isEmpty, "a question without words concerns none")
+        #expect(try await words.relevance(of: "meter", among: []).isEmpty, "and an empty set has none")
+
+        let missing = SearchService(database: db, vectors: vectors, embedder: FailingEmbedder(error: OllamaError.modelNotFound("bge-m3")),
+                                    config: config)
+        #expect(try await missing.relevance(of: "the meter", among: set) == [meter],
+                "an embedding model that is missing leaves the words to order them")
+        let away = SearchService(database: db, vectors: vectors, embedder: FailingEmbedder(error: OllamaError.unreachable("down")), config: config)
+        await #expect(throws: OllamaError.unreachable("down"), "Ollama away is thrown, as the answer must wait for it all the same") {
+            try await away.relevance(of: "the meter", among: set)
+        }
+    }
+
     @Test func queryBuilderEscapes() {
         #expect(FTSQueryBuilder.build("  ") == nil, "a blank query searches for nothing")
         #expect(FTSQueryBuilder.build("a\"b") == "\"a\" \"b\"", "a stray quote cannot break the query")

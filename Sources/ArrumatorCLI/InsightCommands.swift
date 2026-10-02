@@ -41,7 +41,8 @@ struct Funnel: AsyncParsableCommand {
         let runtime = try await options.runtime()
         let funnel = try await runtime.stats.funnel(days: days ?? runtime.config.stats.defaultWindowDays)
         options.emit(funnel) {
-            var out = ["\(funnel.documents) documents in the last \(funnel.windowDays) days"]
+            var out = ["\(funnel.documents) documents in the last \(funnel.windowDays) days"
+                + (funnel.waiting > 0 ? ", \(funnel.waiting) more waiting in Incoming" : "")]
             for step in funnel.steps {
                 var line = "  \(step.title.padding(toLength: 30, withPad: " ", startingAt: 0)) \(step.reached) reached"
                 if step.dropped > 0 { line += ", \(step.dropped) stopped" }
@@ -52,7 +53,9 @@ struct Funnel: AsyncParsableCommand {
                 out += step.stoppedHere.map { "      \($0.count) \($0.reason.lowercased())" }
             }
             if let slow = funnel.slowestStep { out.append("Slowest step: \(slow.title) at \(Int(slow.medianMs)) ms median") }
-            if let drop = funnel.biggestDropOff { out.append("Most documents stopped at: \(drop.title) (\(drop.dropped))") }
+            if let main = funnel.mainStop {
+                out.append("Most documents not filed stopped at: \(main.step.title) (\(main.stop.count) \(main.stop.reason.lowercased()))")
+            }
             return out.joined(separator: "\n")
         }
     }

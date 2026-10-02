@@ -53,25 +53,25 @@ struct GeneralSettings: View {
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             Section(Wording.background) {
-                Toggle(Wording.showInDock, isOn: setting(model, loaded, \.showInDock))
+                NamedToggle(Wording.showInDock, isOn: setting(model, loaded, \.showInDock))
                 if model.menuBarIconHidden {
                     Label(Wording.menuBarFull, systemImage: "exclamationmark.triangle")
                         .font(.callout).foregroundStyle(.secondary)
                 }
-                Toggle(Wording.openAtLogin, isOn: $loginItem).onChange(of: loginItem) { _, on in
+                NamedToggle(Wording.openAtLogin, isOn: $loginItem).onChange(of: loginItem) { _, on in
                     do { try LoginItem.set(on) } catch {
                         loginError = error.localizedDescription
                         loginItem = LoginItem.isEnabled
                     }
                 }
                 if let loginError { Text(loginError).foregroundStyle(Palette.problem).font(.caption) }
-                Toggle(Wording.pauseProcessing, isOn: Binding(get: { (model.settings ?? loaded).paused },
+                NamedToggle(Wording.pauseProcessing, isOn: Binding(get: { (model.settings ?? loaded).paused },
                                                          set: { paused in Task { await model.setPaused(paused) } }))
-                Toggle(Wording.pauseOnBattery, isOn: setting(model, loaded, \.pauseOnBattery))
+                NamedToggle(Wording.pauseOnBattery, isOn: setting(model, loaded, \.pauseOnBattery))
             }
             Section(Wording.notifications) {
-                Toggle(Wording.notifyWhenFiled, isOn: setting(model, loaded, \.notifyOnFiled))
-                Toggle(Wording.notifyWhenReview, isOn: setting(model, loaded, \.notifyOnReview))
+                NamedToggle(Wording.notifyWhenFiled, isOn: setting(model, loaded, \.notifyOnFiled))
+                NamedToggle(Wording.notifyWhenReview, isOn: setting(model, loaded, \.notifyOnReview))
             }
         }
         .formStyle(.grouped)
@@ -81,7 +81,7 @@ struct GeneralSettings: View {
         LabeledContent(title) {
             HStack {
                 if busy { ProgressView().controlSize(.small) }
-                Text(path ?? Wording.noValue).lineLimit(1).truncationMode(.middle).foregroundStyle(.secondary)
+                Text(path ?? Wording.noValue).lineLimit(1).truncationMode(.middle).foregroundStyle(.secondary).help(path ?? "")
                 Button(Wording.choose) {
                     if let chosen = FolderPicker.choose(title: Wording.chooseFolder(title), startingAt: path) { Task { await save(chosen) } }
                 }
@@ -98,13 +98,17 @@ struct FilingSettings: View {
     var body: some View {
         Form {
             Section {
-                Toggle(Wording.renameFiles, isOn: setting(model, loaded, \.renameFiles))
-                Toggle(Wording.transliterate, isOn: setting(model, loaded, \.transliterate))
+                NamedToggle(Wording.renameFiles, isOn: setting(model, loaded, \.renameFiles))
+                NamedToggle(Wording.transliterate, isOn: setting(model, loaded, \.transliterate))
             } header: {
                 Text(Wording.files)
             } footer: {
-                Text(Wording.copiesFooter)
+                Text(Wording.filesFooter)
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            Section(Wording.readingAgain) {
+                Text(Wording.copiesFooter)
+                    .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
         }
         .formStyle(.grouped)
@@ -130,6 +134,8 @@ struct ModelSettingsView: View {
     @State private var serverError: String?
 
     private var onThisMac: Bool { model.runtime.map { OllamaEndpoint.isThisMac($0.ollama.baseURL) } ?? true }
+    /// The environment names the server, so the one chosen here is not used while it does.
+    private let serverFromEnvironment = RuntimeEnvironment.current.ollamaURL != nil
     private var current: AppSettings { model.settings ?? loaded }
     /// The profile Settings reads with: always one the settings list, as the store refuses any other.
     private var inUse: ModelProfile? { current.modelProfiles[current.profile] }
@@ -142,8 +148,10 @@ struct ModelSettingsView: View {
                     TextField(Wording.server, text: $server).onSubmit { connect() }
                     Button(Wording.useServer) { connect() }.disabled(server == model.runtime?.ollama.baseURL.absoluteString)
                 }
+                .disabled(serverFromEnvironment)
                 if let serverError { Text(serverError).font(.caption).foregroundStyle(Palette.attention) }
-                Text(Wording.ollamaServerNote).font(.caption).foregroundStyle(.secondary)
+                Text(serverFromEnvironment ? Wording.serverFromEnvironment(RuntimeEnvironment.ollamaURLVariable) : Wording.ollamaServerNote)
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 Picker(Wording.management, selection: setting(model, loaded, \.ollamaManagement)) {
                     Text(Wording.launchOllamaApp).tag(OllamaManagement.launchApp)
                     Text(Wording.spawnServe).tag(OllamaManagement.spawnServe)
@@ -151,6 +159,7 @@ struct ModelSettingsView: View {
                 }
                 .disabled(!onThisMac)
                 .help(Wording.managementOnThisMacOnly)
+                if !onThisMac { Text(Wording.managementOnThisMacOnly).font(.caption).foregroundStyle(.secondary) }
                 Button(Wording.startOllama) { Task { _ = await model.runtime?.lifecycle.ensureRunning(); await loadStatus() } }
             }
             Section(Wording.modelsRun(at: model.runtime?.ollama.baseURL)) {
@@ -232,7 +241,7 @@ struct AdvancedSettings: View {
                 }
                 Stepper(Wording.keepPrompts(days: (model.settings ?? loaded).traceRawRetentionDays),
                         value: setting(model, loaded, \.traceRawRetentionDays), in: Style.retentionDays, step: Style.retentionDaysStep)
-                Toggle(Wording.includeText, isOn: $includeText)
+                NamedToggle(Wording.includeText, isOn: $includeText)
                 Button(Wording.exportDiagnostics) { Task { await export() } }
                 if let exportMessage { Text(exportMessage).font(.caption) }
             }

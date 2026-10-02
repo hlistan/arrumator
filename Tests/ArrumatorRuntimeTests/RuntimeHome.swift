@@ -21,7 +21,7 @@ struct RuntimeHome {
                                                                                isDirectory: true)
         // Nothing of the process's own environment: the test runs the same however it was started.
         let environment = RuntimeEnvironment(home: root.appendingPathComponent("support").path, ollamaURL: nil,
-                                             logLevelName: LogLevel.error.rawValue, pipelineOverridePath: nil)
+                                             logLevelName: LogLevel.error.rawValue, pipelineOverridePath: nil, trashPath: nil)
         let home = RuntimeHome(root: root, environment: environment)
         try home.paths.ensureDirectories()
         try await SettingsStore(paths: home.paths).update {

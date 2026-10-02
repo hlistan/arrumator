@@ -632,6 +632,7 @@ extension AppDatabase {
 
         registerSearchTaskMigrations(&m)
         registerTagMigrations(&m)
+        registerConversationMigrations(&m)
 
         return m
     }

@@ -41,11 +41,11 @@ public struct DocumentAnalyzer: DocumentAnalyzing {
         let embedding = try await embedding(for: content, senders: labels?.values(.sender) ?? [], settings: settings, config: config,
                                             trace: trace)
         var problems: [String] = []
-        if answer == nil { problems.append("the model gave no valid answer") }
-        if content.hasWarning(.encrypted) { problems.append("encrypted") }
-        if content.hasWarning(.corrupted) { problems.append("corrupted") }
+        if answer == nil { problems.append(DocumentAnalysis.Problem.noAnswer) }
+        if content.hasWarning(.encrypted) { problems.append(DocumentAnalysis.Problem.encrypted) }
+        if content.hasWarning(.corrupted) { problems.append(DocumentAnalysis.Problem.corrupted) }
         if content.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && content.visual == nil {
-            problems.append("no text could be read")
+            problems.append(DocumentAnalysis.Problem.noText)
         }
         // A document that waits for the user keeps its own name: what the model read of it is in doubt.
         let analysis = DocumentAnalysis(fileName: problems.isEmpty ? answer?.answer.fileName : nil, model: answer?.model, problems: problems)

@@ -9,13 +9,18 @@ public enum TraceStage: String, Sendable, Codable, CaseIterable {
     case interpret
     /// The documents a search task's plan asks for were found.
     case match
+    /// What an answer about a task's documents is shown of its set was chosen: which documents with their text, which by
+    /// name alone, by how much the question concerns them.
+    case context
+    /// The model answered a question about a task's documents.
+    case answer
 
     /// The step records what the document says: prompts holding its text, the model's answers drawn from it, or the
     /// labels made of those answers. Reading a task's prompt shows the model the archive's labels, drawn from them.
-    public var holdsDocumentContent: Bool { [.analyse, .vlm, .consolidate, .interpret].contains(self) }
+    public var holdsDocumentContent: Bool { [.analyse, .vlm, .consolidate, .interpret, .answer].contains(self) }
 
     /// The step talked to a model, and keeps the prompts and raw answers under `TraceStep.exchangeKey` of its output.
-    public var exchangesWithModel: Bool { [.analyse, .vlm, .interpret].contains(self) }
+    public var exchangesWithModel: Bool { [.analyse, .vlm, .interpret, .answer].contains(self) }
 }
 
 public enum TraceStatus: String, Sendable, Codable, Comparable {
@@ -32,6 +37,8 @@ public enum TraceSource: String, Sendable, Codable {
     case ingest, eval, replay, cli
     /// A search task's prompt was read and its documents found.
     case task
+    /// A question about a search task's documents was answered.
+    case conversation
 }
 
 /// One recorded pipeline step. Payloads are JSON strings so any Encodable can be stored.

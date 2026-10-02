@@ -7,7 +7,8 @@ corrupting an index costs time, never information: the app rebuilds it from the 
 This is the pattern of plain-text vaults such as Obsidian, whose notes are the source of truth and whose metadata cache
 is disposable and rebuilt from the files ([Obsidian help: how Obsidian stores data](https://help.obsidian.md/Files+and+folders/How+Obsidian+stores+data)).
 Documents are filed at the top of the archive, each directory holding documents lists them beside them, and the
-history, your rules for labels and your search tasks sit in one `System` folder at the top of the archive. The app makes
+history, your rules for labels, your search tasks and the conversations about their documents sit in one `System`
+folder at the top of the archive. The app makes
 no other folders in the archive.
 
 ## What lives where
@@ -17,10 +18,12 @@ no other folders in the archive.
 | The documents in a directory | `<directory>/_documents.md` | One entry per file in that directory: identity, original name, checksum, size, content type, pages, status, the labels that describe it (each a kind and a value, your tags among them; absent while it has none and the model has not labelled it), `tags_only: true` while those labels are only its tags because the model has not labelled it yet, and how it was read: the file name the model gave it, the model, and why it waits for you, if it does. The table below the data shows each file's date, sender, type and other labels. |
 | History | `System/History/_<year>-<month>.md` | One line per event, newest last. |
 | Rules for labels | `System/_labels.md` | Your decisions about labels ([how](how-it-works.md#keeping-labels-one-vocabulary)): each rule's number, kind, label, what it decides (`merge`, `ignore` or `keepApart`), the other label of a merge or of a pair kept apart, and when it was made. There is no file while there are no rules. |
+| Conversations | `System/Conversations/_<task>.md` | The questions about one search task's documents ([how](how-it-works.md#talking-with-a-tasks-documents)), by the task's number: each question's number, when it was asked, the question, its state (`queued`, `answered` or `failed`; one being answered is written as `answering` and waits again after a rebuild), the model that answered, why the answer is incomplete or missing, when it was answered, the answer, the documents it draws on by number, and what it found outside the set when asked for more: the request it wrote, what that was read as, the documents found and why none could be, if so. Below the data, each question with its answer and the documents by name, for people. There is no file while the task has no questions; removing the task removes it. |
 | Search tasks | `System/_tasks.md` | Your search tasks ([how](how-it-works.md#search-tasks)): each task's number, what you asked, the name and arrangement you gave it, its state, the effort it is read with and the model profile you gave it, by its id (none when it follows the one Settings uses), what the model read the request as and which model, why it failed if it did, the documents of its set by number, each `matched`, `added` or `removed` (taken out by you), and every export: its number, when, as a `folder` or a `zip`, where it was put, where each document went inside it and which could not be copied and why. There is no file while there are no tasks. |
 
 Every file starts with YAML front matter holding the exact data, followed by a Markdown rendering for people. The front
-matter is what the app reads; the rendering is regenerated on every write.
+matter is what the app reads; the rendering is regenerated on every write. The rendering gives times as the Mac shows
+them, with their offset from UTC (`2026-10-02T11:40:58+01:00`).
 
 A document's entry sits next to the document: `_documents.md` lists the files in its own directory by name. Renaming or
 moving a directory of yours therefore never touches a record, and a file moved in Finder is found again by the
@@ -57,8 +60,9 @@ Some working state is deliberately not kept in files and does not survive a rebu
 
 - **Traces**, the full exchange with the model for each document and each search task's request. What the model read
   the document as, and its labels, are in the document's entry; what it read a request as is in the task's entry.
-- **When a waiting search task is next tried.** A task that was waiting in the queue, or whose request was being read,
-  is waiting again after a rebuild.
+- **When a waiting search task, or question about its documents, is next tried.** A task that was waiting in the
+  queue, or whose request was being read, is waiting again after a rebuild, and so is a question waiting or being
+  answered. Each answer's trace is the index's own too.
 
 ## Keeping files and index together
 
@@ -91,8 +95,9 @@ never moved aside: the app stops and says why, and starts once that has passed. 
 change not yet in the files. Documents are then updated in place from their entries and keep their numbers, so their
 cached text, embeddings and traces stay attached; everything else recorded in files is replaced by what the files say.
 
-A rebuild reads every `_documents.md`, the history, the rules for labels and the search tasks; a task's set keeps only
-the documents the archive still has entries for. Documents whose file is not where their
+A rebuild reads every `_documents.md`, the history, the rules for labels, the search tasks and their conversations; a
+task's set keeps only the documents the archive still has entries for, and a conversation of a task `_tasks.md` does not
+have is left where it is, unread. Documents whose file is not where their
 entry says are looked up by the identifier on the file. Files that have no entry, at the top of the archive or in a
 folder of yours at any depth, are taken in where they are and read by the model; the `System` folder and an Incoming
 folder kept inside the archive are left out. Then, in the background and giving way to new arrivals, each document's

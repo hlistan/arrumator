@@ -16,7 +16,7 @@ struct DocumentList: View {
             } else {
                 HStack(spacing: Style.rowAccessorySpacing) {
                     row(document)
-                        .onTapGesture { withAnimation(.snappy) { model.openDocument = document.id } }
+                        .rowAction { withAnimation(.snappy) { model.openDocument = document.id } }
                     if let task = model.collecting, let id = document.id {
                         CollectToggle(task: task, document: id)
                     }
@@ -27,7 +27,7 @@ struct DocumentList: View {
 
     private func row(_ d: DocumentRecord) -> some View {
         ListRow(symbol: d.status.symbol, tint: d.status.tint, title: d.filename,
-                detail: Wording.outcome(of: d, archive: model.settings?.archiveURL, incoming: model.settings?.incomingURL),
+                detail: Wording.rowDetail(of: d, archive: model.settings?.archiveURL, incoming: model.settings?.incomingURL),
                 subtitle: Wording.labels(d.labels))
     }
 }
@@ -68,6 +68,8 @@ struct DocumentCard: View {
     @State private var newKind = LabelKind.topic
     @State private var newValue = ""
     @State private var showingTrace = false
+    /// Read Again was pressed: the card says the document waits to be read, until it is.
+    @State private var readAgainAsked = false
     @FocusState private var editingName: Bool
 
     var body: some View {
@@ -88,7 +90,7 @@ struct DocumentCard: View {
             if wasEditing { Task { await rename() } }
         }
         .sheet(isPresented: $showingTrace) {
-            TraceView(documentID: documentID).environment(model).frame(minWidth: Style.traceSheetMinimum.width, minHeight: Style.traceSheetMinimum.height)
+            TraceView(documentID: documentID, name: document?.filename).environment(model).frame(minWidth: Style.traceSheetMinimum.width, minHeight: Style.traceSheetMinimum.height)
         }
     }
 
@@ -103,6 +105,8 @@ struct DocumentCard: View {
                 TextField(Wording.name, text: $name)
                     .textFieldStyle(.plain)
                     .font(.title3.weight(.semibold))
+                    .padding(.vertical, Style.titleFieldPadding)
+                    .accessibilityLabel(Wording.name)
                     .focused($editingName)
                     .onSubmit { editingName = false }
                 placement(d)
@@ -146,6 +150,7 @@ struct DocumentCard: View {
                     }
                     .labelsHidden().frame(width: Style.labelKindPickerWidth)
                     TextField(Wording.labelPrompt(newKind), text: $newValue)
+                        .accessibilityLabel(Wording.labelPrompt(newKind))
                         .textFieldStyle(.roundedBorder)
                         .onSubmit { add(to: labels) }
                     Button(Wording.add) { add(to: labels) }
@@ -166,6 +171,9 @@ struct DocumentCard: View {
                         Text(Wording.reader(analysis))
                         ForEach(analysis.problems, id: \.self) { problem in
                             Text(problem).foregroundStyle(Palette.attention).fixedSize(horizontal: false, vertical: true)
+                        }
+                        if [.needsReview, .failed, .held].contains(d.status), let advice = Wording.advice(analysis) {
+                            Text(advice).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                         }
                     }
                     .textSelection(.enabled)
@@ -188,17 +196,30 @@ struct DocumentCard: View {
                     .help(Wording.confirmFiledHelp)
             case .needsReview, .failed:
                 Button(Wording.leaveForLater) { run(Wording.holdAction) { try await $0.review.hold(documentID) } }
-                Button(Wording.readAgain) { run(Wording.readAgainAction) { try await $0.review.retry(documentID) } }
+                readAgain
                 Button(Wording.looksRight) { run(Wording.confirmAction) { try await $0.review.confirm(documentID) } }
                     .help(Wording.confirmWaitingHelp)
             case .held, .undone:
-                Button(Wording.readAgain) { run(Wording.readAgainAction) { try await $0.review.retry(documentID) } }
+                readAgain
             default:
                 EmptyView()
             }
         }
         .buttonStyle(.borderless)
         .font(.callout)
+    }
+
+    /// Read Again, or, once pressed, that the document waits to be read again.
+    @ViewBuilder private var readAgain: some View {
+        if readAgainAsked {
+            Text(Wording.readAgainQueued).foregroundStyle(.secondary)
+        } else {
+            Button(Wording.readAgain) {
+                Task {
+                    readAgainAsked = await model.perform(Wording.readAgainAction) { try await $0.review.retry(documentID) } != nil
+                }
+            }
+        }
     }
 
     private func label(_ text: String) -> some View {
@@ -220,12 +241,15 @@ struct DocumentCard: View {
         run(Wording.changeLabelsAction) { try await $0.review.edit(documentID, fileName: nil, labels: labels) }
     }
 
-    /// Renames the file when the user leaves the name, as Things saves a field; an unchanged name is left alone.
+    /// Renames the file when the user leaves the name, as Things saves a field; an unchanged name is left alone. A blank
+    /// one is refused, saying why, and the field shows the name the file keeps.
     private func rename() async {
         guard let d = document else { return }
-        let value = name.trimmingCharacters(in: .whitespaces)
-        guard !value.isEmpty, value != (d.filename as NSString).deletingPathExtension else { return }
+        let current = (d.filename as NSString).deletingPathExtension
+        let value = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard value != current else { return }
         await model.perform(Wording.renameAction) { try await $0.review.edit(documentID, fileName: value, labels: nil) }
+        if value.isEmpty { name = current }
     }
 
     private func run(_ what: String, _ action: @escaping @Sendable (ArrumatorRuntime) async throws -> Void) {
@@ -237,7 +261,12 @@ struct DocumentCard: View {
     }
 
     private func load() async {
+        let readBefore = document?.updatedAt
         document = await model.load(Wording.loadDocumentAction) { try await $0.services.documents.document(id: documentID) } ?? nil
+        // Read again since, or no longer waiting: Read Again is offered again where it applies.
+        if document?.updatedAt != readBefore || document.map({ ![.needsReview, .failed, .held, .undone].contains($0.status) }) == true {
+            readAgainAsked = false
+        }
         guard let document, !editingName else { return }
         name = (document.filename as NSString).deletingPathExtension
     }
@@ -256,14 +285,20 @@ struct LabelChip: View {
         HStack(spacing: Style.chipContentSpacing) {
             Text(Wording.label(label)).textSelection(.enabled)
             if hovering {
-                Button(action: remove) { Image(systemName: "xmark.circle.fill") }
-                    .buttonStyle(.plain).foregroundStyle(.secondary).help(Wording.removeLabelHelp)
+                Button(action: remove) {
+                    Image(systemName: "xmark.circle.fill").accessibilityLabel(Wording.removeLabelNamed(Wording.label(label)))
+                }
+                .buttonStyle(.plain).foregroundStyle(.secondary).help(Wording.removeLabelHelp)
             }
         }
         .padding(Style.labelChipInsets)
         .background(Style.hover, in: .capsule)
         .onHover { hovering = $0 }
+        // The × shows only under the pointer; the keyboard and VoiceOver reach the same through an action and the menu.
+        .accessibilityElement(children: .combine)
+        .accessibilityAction(named: Wording.removeFromDocument, remove)
         .contextMenu {
+            Button(Wording.removeFromDocument, action: remove)
             if model.runtime?.config.labels.isWrittenFreely(label.kind) == true {
                 Button(Wording.showInLabels) { model.open(label: label) }
             }

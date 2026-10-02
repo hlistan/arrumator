@@ -281,3 +281,21 @@ import Testing
         }
     }
 }
+
+/// What the app found in the text before the model reads it is put to the model in words, so nothing of the app's own
+/// code names reaches a label (a reference read "ptNIF 539620106").
+@Suite struct DocumentPromptTests {
+    @Test func identifiersAreNamedInWordsNotByTheAppsCodeNames() throws {
+        var config = try PipelineConfig.bundledDefaults()
+        config.analysis.promptIdentifiersLimit = StableKeyKind.allCases.count
+        let prompts = PromptBuilder(library: try PromptLibrary.bundled(), config: config.analysis, labels: config.labels, naming: config.naming)
+        let content = Fixtures.content("apolice.pdf", text: "Apólice 3317018509, NIF 539620106",
+                                       keys: StableKeyKind.allCases.map { StableKey(kind: $0, value: "1") })
+        let block = prompts.documentBlock(content)
+        let line = try #require(block.components(separatedBy: "\n").first { $0.hasPrefix("IDENTIFIERS: ") })
+        for kind in StableKeyKind.allCases {
+            #expect(!line.contains(kind.rawValue), "\(kind.rawValue) is the app's name for it, not words: \(line)")
+        }
+        #expect(line.contains("policy or contract number 1") && line.contains("Portuguese tax number (NIF) 1"), "\(line)")
+    }
+}

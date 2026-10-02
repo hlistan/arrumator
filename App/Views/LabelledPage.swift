@@ -48,7 +48,9 @@ private struct ChosenLabel: View {
         HStack(spacing: Style.chipContentSpacing) {
             Text(Wording.labelKind(label.kind)).foregroundStyle(.secondary)
             Text(Wording.label(label))
-            Button { model.choose(label) } label: { Image(systemName: "xmark.circle.fill") }
+            Button { model.choose(label) } label: {
+                Image(systemName: "xmark.circle.fill").accessibilityLabel(Wording.letGoOf(Wording.label(label)))
+            }
                 .buttonStyle(.plain).foregroundStyle(.secondary).help(Wording.showWithoutLabel)
         }
         .font(.callout)

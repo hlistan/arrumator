@@ -21,3 +21,6 @@ Tests/Fixtures/private/
 .env
 .env.*
 .vscode
+
+# QA findings of a run (docs/qa/protocol.md), left for implementation, never committed.
+/docs/qa/reports/

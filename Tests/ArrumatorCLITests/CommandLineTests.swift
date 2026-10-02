@@ -42,8 +42,9 @@ import Testing
         let process = Process()
         process.executableURL = command
         process.arguments = arguments
-        // Only what the command needs: its scratch home, and a home folder for the disk-space check.
-        process.environment = ["ARRUMATOR_HOME": home.support.path, "HOME": FileManager.default.homeDirectoryForCurrentUser.path]
+        // Only what the command needs: its scratch home and Trash, and a home folder for the disk-space check.
+        process.environment = ["ARRUMATOR_HOME": home.support.path, "ARRUMATOR_TRASH": home.root.appendingPathComponent("Trash").path,
+                               "HOME": FileManager.default.homeDirectoryForCurrentUser.path]
         let out = Pipe()
         let err = Pipe()
         process.standardOutput = out
@@ -390,6 +391,51 @@ import Testing
         #expect(try JSON.decoder.decode([SearchTask].self, from: try run(home, ["tasks", "--json"]).stdout).isEmpty, "and it is gone")
         let events = try JSON.decoder.decode([EventRecord].self, from: try run(home, ["history", "--json"]).stdout)
         #expect(Set(events.map(\.kind)) == [.taskCreated, .taskEdited, .taskRemoved], "each step is in History: \(events.map(\.kind))")
+    }
+
+    /// A question and its answer as `tasks ask --json` gives them, with the documents it names.
+    private struct Answered: Decodable {
+        struct Named: Decodable { var id: Int64; var name: String }
+        var turn: TaskTurn
+        var documents: [Named]
+    }
+
+    private struct Conversation: Decodable {
+        var items: [ConversationItem]
+    }
+
+    @Test func aTasksDocumentsAreAskedAboutStoppedAskedAgainAndClearedFromTheCommandLine() throws {
+        let home = try Home.make()
+        defer { home.cleanup() }
+        let task = try JSON.decoder.decode(SearchTaskDetail.self, from: try run(home, ["tasks", "new", "--queue-only", "--json", "bills"]).stdout).task
+        let id = String(task.id)
+        // No model answers here, so the question only joins the queue.
+        let asked = try run(home, ["tasks", "ask", id, "--queue-only", "--json", "what", "do", "they", "come", "to?"])
+        #expect(asked.status == 0, "a question in several words is one question: \(asked.stderr)")
+        let turn = try JSON.decoder.decode(Answered.self, from: asked.stdout).turn
+        #expect(turn.question == "what do they come to?" && turn.state == .queued && turn.task == task.id && turn.answer == nil,
+                "it waits to be answered")
+        let listed = try JSON.decoder.decode(Conversation.self, from: try run(home, ["tasks", "conversation", id, "--json"]).stdout)
+        #expect(listed.items.compactMap(\.turn).map(\.id) == [turn.id], "the task's conversation holds it")
+        let shown = try run(home, ["tasks", "conversation", id]).text
+        #expect(shown.contains("Question #\(turn.id) · queued") && shown.contains("> what do they come to?"), "and shows it: \(shown)")
+        let stopped = try JSON.decoder.decode(Answered.self, from: try run(home, ["tasks", "stop", String(turn.id), "--json"]).stdout).turn
+        #expect(stopped.state == .failed && stopped.problem == TaskConversationQueue.stoppedProblem, "a question waiting can be stopped")
+        let again = try JSON.decoder.decode(Answered.self, from: try run(home, ["tasks", "ask-again", String(turn.id), "--queue-only", "--json"]).stdout)
+        #expect(again.turn.state == .queued && again.turn.problem == nil, "and asked again")
+        let refused = try run(home, ["tasks", "ask-again", String(turn.id), "--queue-only"])
+        #expect(refused.status != 0 && refused.stderr.contains("still waiting"), "but not while it waits: \(refused.stderr)")
+        #expect(try run(home, ["tasks", "ask", id, "--queue-only", " "]).status != 0, "a question without words is refused")
+        #expect(try run(home, ["tasks", "ask", "999", "--queue-only", "why?"]).stderr.contains("999"), "and one about no task, by its number")
+        let cleared = try run(home, ["tasks", "clear", id, "--json"])
+        #expect(cleared.text.contains(#""removed" : 1"#), "clearing removes the question: \(cleared.text)")
+        #expect(try JSON.decoder.decode(Conversation.self, from: try run(home, ["tasks", "conversation", id, "--json"]).stdout).items.isEmpty,
+                "and the conversation is empty")
+        let answered = try run(home, ["tasks", "answer", "--json"])
+        #expect(answered.status == 0 && answered.text.contains(#""waiting" : 0"#), "with nothing to answer, nothing waits: \(answered.text)")
+        let events = try JSON.decoder.decode([EventRecord].self, from: try run(home, ["history", "--json"]).stdout)
+        #expect(events.contains { $0.kind == .taskEdited && $0.summary.hasPrefix("Cleared the conversation about") },
+                "clearing is recorded in History: \(events.map(\.summary))")
     }
 
     @Test func logsAreReadAsJSONLinesWithoutOpeningTheArchive() throws {

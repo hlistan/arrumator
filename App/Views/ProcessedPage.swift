@@ -19,12 +19,20 @@ struct ProcessedPage: View {
                 Button(Wording.showMore) { pages += 1 }.buttonStyle(.link)
             }
         }
-        .task(id: "\(pages)|\(model.activity)") {
+        .task(id: "\(pages)|\(model.activity)|\(model.openDocument == nil)") {
             let pages = pages
-            documents = await model.load(Wording.loadProcessedAction) {
+            guard let loaded = await model.load(Wording.loadProcessedAction, {
                 try await $0.services.documents.list(DocumentFilter(statuses: DocumentStatus.processed), order: .recentlyProcessed,
                                                      limit: pages * $0.config.interface.pageSize)
-            } ?? []
+            }) else { return }
+            // While a card is open, the rows keep their places, each brought up to date: a document filed meanwhile would
+            // go in above and move the card from under the reader. It shows once the card is closed.
+            if model.openDocument != nil, !documents.isEmpty {
+                let byID = Dictionary(loaded.compactMap { d in d.id.map { ($0, d) } }, uniquingKeysWith: { first, _ in first })
+                documents = documents.map { d in d.id.flatMap { byID[$0] } ?? d }
+            } else {
+                documents = loaded
+            }
         }
     }
 }

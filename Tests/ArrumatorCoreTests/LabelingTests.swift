@@ -97,4 +97,33 @@ import Testing
         let insights = try await StatsService(database: h.env.database, config: h.env.config.stats, time: h.env.time).insights()
         #expect(insights.labelled == 0 && insights.unlabelled == 1, "Statistics counts it as waiting for labels")
     }
+
+    @Test func theFunnelCountsFilesStillInIncomingAndDoesNotCallWorkInProgressAStop() async throws {
+        let h = try await Harness.make()
+        defer { h.env.cleanup() }
+        try await h.ingest("bill.txt", text: "EDP electricity July")
+        let now = h.env.time.now()
+        try await h.env.database.writer.write { db in
+            for name in ["waiting-1.pdf", "waiting-2.pdf"] {
+                try db.execute(sql: """
+                    INSERT INTO jobs (kind, source_path, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
+                    """, arguments: [JobKind.ingest.rawValue, "/Incoming/\(name)", JobState.pending.rawValue, now, now])
+            }
+            try db.execute(sql: "UPDATE documents SET status = ?", arguments: [DocumentStatus.processing.rawValue])
+        }
+        let funnel = try await StatsService(database: h.env.database, config: h.env.config.stats, time: h.env.time).funnel(days: 7)
+        #expect(funnel.documents == 1 && funnel.waiting == 2, "two files wait in Incoming, not yet taken, besides the one taken")
+        #expect(funnel.inProgress == 1, "the one taken is still being worked on")
+        #expect(funnel.mainStop == nil, "a file still being worked on has not stopped anywhere")
+    }
+
+    @Test func aFiledDocumentWhoseStepsWereNotKeptHasNotStoppedAnywhere() async throws {
+        let h = try await Harness.make()
+        defer { h.env.cleanup() }
+        try await h.ingest("bill.txt", text: "EDP electricity July")
+        // As after a rebuild from the archive: the document is filed, and the trace of its steps is gone.
+        try await h.env.database.writer.write { db in try db.execute(sql: "DELETE FROM traces") }
+        let funnel = try await StatsService(database: h.env.database, config: h.env.config.stats, time: h.env.time).funnel(days: 7)
+        #expect(funnel.mainStop == nil && funnel.inProgress == 0, "filed is where a document ends, not where it stopped")
+    }
 }

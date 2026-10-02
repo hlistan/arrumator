@@ -121,6 +121,15 @@ public enum FTSQueryBuilder {
         return parts.isEmpty ? nil : parts.joined(separator: " ")
     }
 
+    /// Any of the words of `text`, each as a term of its own, never a field, a phrase or a prefix: what a sentence is
+    /// searched by. Nil when no word has anything to look for.
+    public static func anyOf(_ text: String) -> String? {
+        let words = text.split { !$0.isLetter && !$0.isNumber }.map(String.init)
+        var seen = Set<String>()
+        let terms = words.filter { seen.insert($0.lowercased()).inserted }.map { "\"" + $0 + "\"" }
+        return terms.isEmpty ? nil : terms.joined(separator: " OR ")
+    }
+
     /// `jurisdiction:`, a field's name and the colon that ends it.
     private static func isField(_ word: String) -> Bool {
         word.hasSuffix(":") && fields.contains(String(word.dropLast()).lowercased())
@@ -233,28 +242,22 @@ public actor SearchService {
         }
     }
 
-    /// Documents that contain the query's words come first, ordered by reciprocal rank fusion (Cormack et al., SIGIR
-    /// 2009) of their full-text rank and, when alike enough, their rank by meaning. Documents found by meaning alone
-    /// follow, most similar first. Similarity is cosine, so every query has nearest neighbours; only those at or above
-    /// `semanticMinSimilarity` are found, which is the similarity floor Elasticsearch's kNN search applies for the same
-    /// reason (its `similarity` parameter).
+    /// Documents that contain the query's words come first, ordered by reciprocal rank fusion of their full-text rank
+    /// and, when alike enough, their rank by meaning (`fusedOrder`). Documents found by meaning alone follow, most similar
+    /// first.
     private func fuse(fts: [SearchHit], semantic: [(docID: Int64, score: Float)]) async throws -> [SearchHit] {
-        let alike = semantic.filter { Double($0.score) >= config.semanticMinSimilarity }
-        guard !alike.isEmpty else { return fts }
-        let meaningRank = Dictionary(alike.enumerated().map { ($1.docID, $0) }, uniquingKeysWith: min)
-        let reciprocal = { (rank: Int) in 1 / (self.config.rrfK + Double(rank + 1)) }
-        let withWords = fts.enumerated().map { rank, hit in
-            var fused = hit
-            fused.score = reciprocal(rank) + (meaningRank[hit.id].map(reciprocal) ?? 0)
-            if meaningRank[hit.id] != nil { fused.sources.insert(.semantic) }
-            return (rank: rank, hit: fused)
+        let order = Self.fusedOrder(fts: fts.map(\.id), semantic: semantic, rrfK: config.rrfK, minSimilarity: config.semanticMinSimilarity)
+        let byID = Dictionary(fts.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        let withWords = order.withWords.compactMap { item in
+            byID[item.id].map { hit in
+                var fused = hit
+                fused.score = item.score
+                if item.byMeaning { fused.sources.insert(.semantic) }
+                return fused
+            }
         }
-        .sorted { ($0.hit.score, $1.rank) > ($1.hit.score, $0.rank) }
-        .map(\.hit)
-        let found = Set(fts.map(\.id))
-        let meaningOnly = alike.filter { !found.contains($0.docID) }
-        guard !meaningOnly.isEmpty else { return withWords }
-        let ids = meaningOnly.map(\.docID)
+        guard !order.meaningOnly.isEmpty else { return withWords }
+        let ids = order.meaningOnly.map(\.id)
         let docs = try await database.reader.read { [ids] db in
             Dictionary(uniqueKeysWithValues: try DocumentRecord.fetchAll(db, keys: ids).compactMap { d in d.id.map { ($0, d) } })
         }
@@ -263,10 +266,65 @@ public actor SearchService {
                 SELECT doc_id, substr(body, 1, ?) AS b FROM document_text WHERE doc_id IN (\(ids.map { _ in "?" }.joined(separator: ",")))
                 """, arguments: [config.vectorSnippetChars] + StatementArguments(ids)).map { ($0["doc_id"] as Int64, $0["b"] as String? ?? "") })
         }
-        return withWords + meaningOnly.compactMap { item in
-            docs[item.docID].map { SearchHit(document: $0, score: Double(item.score), snippet: bodies[item.docID] ?? "",
-                                             sources: [.semantic]) }
+        return withWords + order.meaningOnly.compactMap { item in
+            docs[item.id].map { SearchHit(document: $0, score: Double(item.similarity), snippet: bodies[item.id] ?? "", sources: [.semantic]) }
         }
+    }
+
+    /// Documents that contain the words, `fts` in their full-text rank, first, ordered by reciprocal rank fusion (Cormack
+    /// et al., SIGIR 2009) of that rank and, when alike enough, their rank by meaning; then the documents found by meaning
+    /// alone, most similar first. Similarity is cosine, so every query has nearest neighbours; only those at or above
+    /// `minSimilarity` are found, which is the similarity floor Elasticsearch's kNN search applies for the same reason (its
+    /// `similarity` parameter).
+    static func fusedOrder(fts: [Int64], semantic: [(docID: Int64, score: Float)], rrfK: Double,
+                           minSimilarity: Double) -> (withWords: [(id: Int64, score: Double, byMeaning: Bool)],
+                                                      meaningOnly: [(id: Int64, similarity: Float)]) {
+        let alike = semantic.filter { Double($0.score) >= minSimilarity }
+        let meaningRank = Dictionary(alike.enumerated().map { ($1.docID, $0) }, uniquingKeysWith: min)
+        let reciprocal = { (rank: Int) in 1 / (rrfK + Double(rank + 1)) }
+        let withWords = fts.enumerated().map { rank, id in
+            (rank: rank, id: id, score: reciprocal(rank) + (meaningRank[id].map(reciprocal) ?? 0), byMeaning: meaningRank[id] != nil)
+        }
+        .sorted { ($0.score, $1.rank) > ($1.score, $0.rank) }
+        .map { (id: $0.id, score: $0.score, byMeaning: $0.byMeaning) }
+        let found = Set(fts)
+        return (withWords, alike.filter { !found.contains($0.docID) }.map { (id: $0.docID, similarity: $0.score) })
+    }
+
+    /// The documents among `ids` that `text` concerns, the most first: those holding any of its words, in their text,
+    /// name or labels, fused with their rank by meaning, then those alike to it in meaning alone (`fusedOrder`), as a
+    /// search orders what it finds. A question is no search: it is written in sentences, so any of its words finds a
+    /// document, and BM25 weighs each by how rare it is (Robertson and Zaragoza, "The Probabilistic Relevance Framework:
+    /// BM25 and Beyond", 2009), so a common word counts for little. Without an embedding model, or when it fails, the
+    /// words alone order them; documents `text` does not concern at all are left out. Ollama that cannot be reached is
+    /// thrown, as is stopping: what asks has to wait for Ollama all the same.
+    public func relevance(of text: String, among ids: [Int64]) async throws -> [Int64] {
+        guard !ids.isEmpty else { return [] }
+        let weights = config.bm25Weights.map { String($0) }.joined(separator: ", ")
+        var fts: [Int64] = []
+        if let match = FTSQueryBuilder.anyOf(text) {
+            fts = try await database.reader.read { db in
+                try Int64.fetchAll(db, sql: """
+                    SELECT rowid FROM document_fts WHERE document_fts MATCH ? AND rowid IN (\(databaseQuestionMarks(count: ids.count)))
+                    ORDER BY bm25(document_fts, \(weights))
+                    """, arguments: StatementArguments([match]) + StatementArguments(ids))
+            }
+        }
+        var semantic: [(docID: Int64, score: Float)] = []
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let embedder, trimmed.count >= config.minSemanticQueryChars {
+            do {
+                semantic = await vectors.topK(try await queryVector(trimmed, embedder: embedder), k: ids.count, allowed: Set(ids))
+            } catch let error as OllamaError where error.isTransient {
+                throw error
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                Log.warning(.search, "Relevance by meaning unavailable", ["error": error.localizedDescription])
+            }
+        }
+        let order = Self.fusedOrder(fts: fts, semantic: semantic, rrfK: config.rrfK, minSimilarity: config.semanticMinSimilarity)
+        return order.withWords.map(\.id) + order.meaningOnly.map(\.id)
     }
 
     private func allowedIDs(_ filter: DocumentFilter) async throws -> Set<Int64>? {

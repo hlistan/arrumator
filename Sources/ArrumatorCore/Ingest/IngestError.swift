@@ -1,6 +1,6 @@
 import Foundation
 
-public enum IngestError: Error, LocalizedError {
+public enum IngestError: Error, LocalizedError, Equatable {
     case documentNotPersisted
     case documentNotFound(Int64)
     case sourceMissing(String)
@@ -8,6 +8,8 @@ public enum IngestError: Error, LocalizedError {
     case invalidState(String)
     /// The Trash would not take the file at the path, for the reason given.
     case notTrashed(String, reason: String)
+    /// A document was given a name of nothing but spaces.
+    case blankFileName
 
     public var errorDescription: String? {
         switch self {
@@ -17,6 +19,7 @@ public enum IngestError: Error, LocalizedError {
         case let .contentUnavailable(id): "Extracted content for document \(id) is unavailable"
         case let .invalidState(why): why
         case let .notTrashed(path, reason): "Could not move \(path) to the Trash: \(reason)"
+        case .blankFileName: "A document needs a name; it cannot be blank"
         }
     }
 }

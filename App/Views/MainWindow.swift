@@ -51,14 +51,25 @@ struct Sidebar: View {
     @State private var rankedInFull = false
     /// Whether the labels are scrolled, so some are hidden under the filter.
     @State private var labelsScrolled = false
+    /// The label the arrow keys are on: Return or Space chooses it, as a click does. Moving onto one chooses nothing, as
+    /// choosing narrows the documents and lists other labels.
+    @State private var keyed: DocumentLabel?
 
     var body: some View {
         let shown = usage.matching(filter)
         VStack(spacing: 0) {
             SidebarLists(filter: $filter, showsFilter: !usage.isEmpty || !filter.isEmpty)
-            List { labelSections(shown) }
+            List(selection: $keyed) { labelSections(shown) }
                 .listStyle(.sidebar)
-                .onScrollGeometryChange(for: Bool.self) { $0.contentOffset.y + $0.contentInsets.top > 0 } action: { labelsScrolled = $1 }
+                .onKeyPress(keys: [.return, .space]) { _ in
+                    guard let keyed else { return .ignored }
+                    model.choose(keyed)
+                    return .handled
+                }
+                // Set once the list has laid out: a list changed while it lays out its rows is reentrant to AppKit.
+                .onScrollGeometryChange(for: Bool.self) { $0.contentOffset.y + $0.contentInsets.top > 0 } action: { _, scrolled in
+                    Task { @MainActor in if labelsScrolled != scrolled { labelsScrolled = scrolled } }
+                }
                 .overlay(alignment: .top) { if labelsScrolled { Divider() } }
             SidebarBar()
         }
@@ -106,7 +117,8 @@ struct Sidebar: View {
         let ordered = chosen + listed.filter { !model.labelSelection.contains($0.label) }
         let shown = filter.isEmpty ? Array(ordered.prefix(limit ?? ordered.count)) : ordered
         ForEach(shown, id: \.label) { item in
-            SidebarLabel(usage: item, chosen: model.labelSelection.contains(item.label))
+            SidebarLabel(usage: item, chosen: model.labelSelection.contains(item.label)) { keyed = nil }
+                .tag(item.label)
         }
         if shown.count < listed.count {
             Button(Wording.showMore, action: showAll)
@@ -150,10 +162,10 @@ private struct SidebarLists: View {
                         } icon: {
                             Image(systemName: destination.symbol).foregroundStyle(destination.tint)
                         }
-                        // Not a count: that a search request is being read is seen from any page.
-                        if destination == .tasks, let reading = model.taskQueue.reading {
+                        // Not a count: that a search request is being read, or a question answered, is seen from any page.
+                        if destination == .tasks, let work = model.tasksAtWork {
                             Spacer(minLength: 0)
-                            ProgressView().controlSize(.mini).help(Wording.readingRequest(with: reading.model))
+                            ProgressView().controlSize(.mini).help(work)
                         }
                     }
                     .badge(count(destination))
@@ -167,9 +179,15 @@ private struct SidebarLists: View {
         }
         .listStyle(.sidebar)
         .scrollDisabled(true)
-        .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height } action: { estimatedHeight = $1 }
+        // Each measure is kept once the list has laid out: its height changed while AppKit lays out its rows is a
+        // reentrant table delegate, which AppKit warns will become an assert.
+        .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height } action: { _, height in
+            Task { @MainActor in if estimatedHeight != height { estimatedHeight = height } }
+        }
         .frame(height: height)
-        .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { top = $0 }
+        .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { minY in
+            Task { @MainActor in if top != minY { top = minY } }
+        }
     }
 
     /// Down to where the last row ends, once it is measured for the rows in view; until then what the list estimates.
@@ -189,7 +207,8 @@ private struct SidebarLists: View {
         return Color.clear.onGeometryChange(for: ListsEnd?.self) { geometry in
             last ? ListsEnd(rowSize: rowSize, withFilter: withFilter, maxY: geometry.frame(in: .global).maxY) : nil
         } action: { measured in
-            if let measured { end = measured }
+            guard let measured else { return }
+            Task { @MainActor in if end != measured { end = measured } }
         }
     }
 
@@ -206,9 +225,10 @@ private struct SidebarLists: View {
         HStack(spacing: Style.filterFieldSpacing) {
             Image(systemName: "line.3.horizontal.decrease.circle").foregroundStyle(.secondary)
             TextField(Wording.filterLabels, text: $filter).textFieldStyle(.plain)
+                .accessibilityLabel(Wording.filterLabels)
             if !filter.isEmpty {
-                Button { filter = "" } label: { Image(systemName: "xmark.circle.fill") }
-                    .buttonStyle(.plain).foregroundStyle(.tertiary)
+                Button { filter = "" } label: { Image(systemName: "xmark.circle.fill").accessibilityLabel(Wording.clearFilter) }
+                    .buttonStyle(.plain).foregroundStyle(.tertiary).help(Wording.clearFilter)
             }
         }
         .padding(Style.filterFieldInsets)
@@ -304,10 +324,15 @@ private struct SidebarLabel: View {
     @Environment(AppModel.self) private var model
     let usage: LabelUsage
     let chosen: Bool
+    /// Told when the label is clicked, which leaves no row highlighted for the keyboard.
+    var clicked: () -> Void = {}
 
     var body: some View {
         let label = usage.label
-        Button { model.choose(label) } label: {
+        Button {
+            clicked()
+            model.choose(label)
+        } label: {
             Label {
                 Text(Wording.label(label)).lineLimit(1).truncationMode(.middle)
             } icon: {

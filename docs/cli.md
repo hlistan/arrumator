@@ -84,7 +84,9 @@ punctuated.
 Ask for documents in your own words; the model reads the request and the documents it asks for are found and arranged
 by their labels ([search tasks](how-it-works.md#search-tasks)). `<task>` is a task's number, as `tasks list` shows it.
 Each change is recorded in History and kept in the archive's `System/_tasks.md`. `new`, `update` and `retry` run the
-queue until it is empty, as the app does in the background, unless `--queue-only`.
+queue until it is empty, as the app does in the background, unless `--queue-only`. Questions about a task's documents
+join a queue of their own, kept with the task in `System/Conversations`, which `ask` and `ask-again` run the same way;
+`<question>` is a question's number, as `tasks conversation` shows it.
 
 | Command | What it does |
 |---|---|
@@ -98,6 +100,12 @@ queue until it is empty, as the app does in the background, unless `--queue-only
 | `arrumatorcli tasks remove <task> <document>…` | Take documents out of a task's set. Finding its documents again leaves them out. |
 | `arrumatorcli tasks export <task> --to <folder> [--zip]` | Copy the set into a new folder named after the task inside `--to`, made if it does not exist and outside the archive and Incoming, a folder per label it is arranged by; `--zip` packs that folder into a ZIP archive instead. Nothing is written over, and the export is recorded with the task. |
 | `arrumatorcli tasks delete <task>` | Remove a task, its set and the record of its exports. What it exported stays where it was put. |
+| `arrumatorcli tasks ask <task> <question>… [--queue-only]` | Ask about a task's documents in your own words, such as `tasks ask 3 what do these invoices come to?`, and show the answer ([talking with a task's documents](how-it-works.md#talking-with-a-tasks-documents)): drawn from the set as it is when it is answered, with the task's effort and profile, with the documents it draws on and, when you asked for more, those it found outside the set and how to add them (`tasks add`). A question without words, longer than `conversation.maxQuestionChars` or about a task there is not is refused. `--json` gives the question as `turn` and the documents it names by number and name. `--queue-only` only puts the question in the queue, for the app, `run` or `tasks answer` to answer. |
+| `arrumatorcli tasks answer` | Answer every question in the queue now, then say how many still wait, as for Ollama. |
+| `arrumatorcli tasks conversation <task> [--full]` | A task's conversation: each question with its number, state, the model that answered it, its answer, the documents it draws on and found, and, between questions, the changes made to the set. `--full` adds how each answer was made: what it was shown, the prompts and the model's raw answers. |
+| `arrumatorcli tasks ask-again <question> [--queue-only]` | Answer a question again in its place, answered or not, from the set as it is now. One still waiting is refused. |
+| `arrumatorcli tasks stop <question>` | Stop a question: one waiting is taken out of the queue, and so is one being answered, such as by the app, which then keeps nothing of its answer when it is done (**Stop** in the app keeps what came of it). Either can be asked again. |
+| `arrumatorcli tasks clear <task>` | Remove every question about a task's documents and its answer, recorded in History. The documents stay in the task. |
 
 ## Documents that wait for you
 

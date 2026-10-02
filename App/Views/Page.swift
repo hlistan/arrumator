@@ -103,7 +103,8 @@ struct ListRow: View {
                     if busy {
                         ProgressView().controlSize(.small)
                     } else {
-                        Image(systemName: symbol).foregroundStyle(tint)
+                        // The row's detail says the same in words; the symbol's own name ("Selected") would mislead.
+                        Image(systemName: symbol).foregroundStyle(tint).accessibilityHidden(true)
                     }
                 }
                 .frame(width: Style.rowSymbolWidth)
@@ -131,6 +132,37 @@ struct ListRow: View {
         .background(hovering ? Style.hover : .clear, in: .rect(cornerRadius: Style.rowCornerRadius))
         .contentShape(.rect)
         .onHover { hovering = $0 }
+    }
+}
+
+extension View {
+    /// What choosing a row does: a click, Return or Space once the keyboard has brought focus to it, or VoiceOver's
+    /// default action. Rows are views, not controls, and reach the keyboard only so.
+    func rowAction(_ action: @escaping () -> Void) -> some View {
+        onTapGesture(perform: action)
+            .focusable(interactions: .activate)
+            .onKeyPress(keys: [.return, .space]) { _ in
+                action()
+                return .handled
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction(.default, action)
+    }
+}
+
+/// A switch VoiceOver names by its title: in a grouped form, macOS shows the title as a text of its own beside it.
+struct NamedToggle: View {
+    let title: String
+    @Binding var isOn: Bool
+
+    init(_ title: String, isOn: Binding<Bool>) {
+        self.title = title
+        _isOn = isOn
+    }
+
+    var body: some View {
+        Toggle(title, isOn: $isOn).accessibilityLabel(title)
     }
 }
 
@@ -200,7 +232,7 @@ private struct LastError: ViewModifier {
                     .padding(Style.errorBannerInsets)
                     .background(.regularMaterial, in: .capsule)
                     .padding()
-                    .onTapGesture { model.lastError = nil }
+                    .rowAction { model.lastError = nil }
             }
         }
     }

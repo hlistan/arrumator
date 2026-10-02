@@ -32,7 +32,7 @@ struct HistoryPage: View {
                         ListRow(symbol: EventStyle.symbol(event.kind), tint: EventStyle.color(event.kind), title: event.summary,
                                 detail: event.at.formatted(date: .omitted, time: .shortened),
                                 tag: event.actor == .user ? Wording.byYou : nil, wraps: true)
-                            .onTapGesture {
+                            .rowAction {
                                 if Self.taskEvents.contains(event.kind), let task = JSON.decode(TaskEventPayload.self, from: event.payloadJson)?.task {
                                     model.open(task: task)
                                     return

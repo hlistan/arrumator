@@ -51,6 +51,12 @@ public final class ArrumatorRuntime: Sendable {
     public let taskQueue: SearchTaskQueue
     /// What the user does with search tasks: asks, changes, edits their sets, exports them, removes them.
     public let searchTasks: SearchTaskActions
+    /// Answers what is asked about a task's documents, from what it is shown of them.
+    public let answerer: TaskAnswerer
+    /// Answers questions about tasks' documents one at a time, as they are asked.
+    public let conversationQueue: TaskConversationQueue
+    /// What the user does with the conversations about tasks' documents: asks, asks again, stops, clears them.
+    public let conversations: TaskConversationActions
     public let reconciler: ArchiveReconciler
     public let incomingWatcher: IncomingWatcher
     public let archiveWatcher: ArchiveWatcher
@@ -218,6 +224,9 @@ public final class ArrumatorRuntime: Sendable {
         interpreter = SearchPromptInterpreter(gate: gate, models: models, library: prompts.library)
         taskQueue = SearchTaskQueue(services: services, interpreter: interpreter)
         searchTasks = SearchTaskActions(services: services, queue: taskQueue)
+        answerer = TaskAnswerer(gate: gate, models: models, library: prompts.library)
+        conversationQueue = TaskConversationQueue(services: services, answerer: answerer, interpreter: interpreter, search: search)
+        conversations = TaskConversationActions(services: services, queue: conversationQueue)
         reconciler = ArchiveReconciler(services: services, coordinator: coordinator)
         incomingWatcher = IncomingWatcher(config: config.watcher, skip: skip, time: time)
         archiveWatcher = ArchiveWatcher(config: config.watcher, records: config.records, skip: skip, registry: registry,
@@ -236,8 +245,8 @@ public final class ArrumatorRuntime: Sendable {
 
     // MARK: Lifecycle
 
-    /// Starts Ollama supervision, the ingest worker, the search task queue, both watchers and maintenance. Returns
-    /// immediately.
+    /// Starts Ollama supervision, the ingest worker, the search task queue, the conversation queue, both watchers and
+    /// maintenance. Returns immediately.
     public func start() async {
         // Subscribed before the settings in force are read, so a change made while the runtime starts, or as soon as
         // `start()` returns, is applied too, at worst twice. Whoever changes a setting records it (`SettingsActions`,
@@ -253,6 +262,7 @@ public final class ArrumatorRuntime: Sendable {
         }
         await coordinator.start()
         await taskQueue.start()
+        await conversationQueue.start()
         await tasks.run("incoming-pump") { [incomingWatcher, coordinator] in
             for await url in incomingWatcher.stableFiles { await coordinator.enqueue(url) }
         }
@@ -293,13 +303,14 @@ public final class ArrumatorRuntime: Sendable {
         }
     }
 
-    /// Stops everything `start()` started and waits until it has: the queues first, so the document in hand and the
-    /// request being read stop where they carry on at the next start, then the watchers; the record files are written
+    /// Stops everything `start()` started and waits until it has: the queues first, so the document in hand, the request
+    /// being read and the question being answered stop where they carry on at the next start, then the watchers; the record files are written
     /// after, so what the queues kept while stopping is in them too, and Ollama, when the app started it, is stopped last.
     public func stop() async {
         await tasks.cancelAll()
         await coordinator.stop()
         await taskQueue.stop()
+        await conversationQueue.stop()
         await incomingWatcher.stop()
         await archiveWatcher.stop()
         do { try await records.flush() } catch {

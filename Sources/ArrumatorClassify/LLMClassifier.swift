@@ -78,15 +78,19 @@ public struct LLMClassifier: Sendable {
         public var numCtx: Int
         /// How long the model stays loaded after the answer (`keep_alive`).
         public var keepAlive: String
+        /// Whether a server that is away is asked again here (`ingest.retryDelays`), or left at once to a queue that waits
+        /// for it and says so.
+        public var retriesWhenAway: Bool
 
         public init(options: AnalysisConfig.LLMOptions, think: OllamaThink, repairAttempts: Int, timeout: Double?, numCtx: Int,
-                    keepAlive: String) {
+                    keepAlive: String, retriesWhenAway: Bool = true) {
             self.options = options
             self.think = think
             self.repairAttempts = repairAttempts
             self.timeout = timeout
             self.numCtx = numCtx
             self.keepAlive = keepAlive
+            self.retriesWhenAway = retriesWhenAway
         }
 
         /// As documents are read (`analysis`), with the context and keep-alive images are described with too.
@@ -100,14 +104,29 @@ public struct LLMClassifier: Sendable {
             Effort(options: preset.options(over: config.analysis.llmOptions), think: preset.think, repairAttempts: preset.repairAttempts,
                    timeout: preset.timeout, numCtx: config.analysis.numCtx, keepAlive: config.ollama.keepAlive.chat)
         }
+
+        /// As a question about a task's documents is answered at `effort`, sampled as writing is, in the conversation's
+        /// context (`conversation`), and kept loaded as documents are. A server that is away is left to the conversation's
+        /// queue, which shows the question waiting for Ollama rather than being answered.
+        public static func conversation(_ effort: ConversationConfig.Effort, config: PipelineConfig) -> Effort {
+            Effort(options: config.conversation.options(effort), think: effort.think, repairAttempts: effort.repairAttempts,
+                   timeout: effort.timeout, numCtx: config.conversation.numCtx, keepAlive: config.ollama.keepAlive.chat,
+                   retriesWhenAway: false)
+        }
     }
 
     /// Asks `model`, and asks it again with what was wrong while its answer is invalid and the effort allows. A model
     /// Ollama does not have, and a server that is away (`OllamaError.isTransient(asking:)`), are thrown, so the document
     /// or task waits for them; any other failure, an answer that took longer than the effort's own `timeout`, which has
     /// nothing to send back, and an answer never valid, is `ModelAnswerError` with every call made.
+    ///
+    /// With `partial`, each answer is streamed to it as it is written, with the number of the attempt it belongs to. With
+    /// `cutOff`, an answer cut off at its length limit is neither checked nor sent back: `cutOff` makes the answer of what
+    /// came of it, as a long text is worth keeping in part where a list of labels is not.
     public func ask<Answer: Sendable & Hashable>(system: String, user: String, schema: JSONValue, model: String,
                                                  repairPrompt: @Sendable (String) throws -> String,
+                                                 partial: (@Sendable (_ attempt: Int, _ response: OllamaChatResponse) async -> Void)? = nil,
+                                                 cutOff: (@Sendable (String) throws -> Answer)? = nil,
                                                  validate: @Sendable (String) throws -> Answer) async throws -> ModelAnswer<Answer> {
         let llm = effort.options
         let options: [String: JSONValue] = [
@@ -123,9 +142,13 @@ public struct LLMClassifier: Sendable {
                                  system: system, user: messages.last?.content ?? user, schema: schema, options: options, think: think)
             let request = OllamaChatRequest(model: model, messages: messages, format: schema, options: options,
                                             keepAlive: effort.keepAlive, think: think, timeout: effort.timeout)
+            var streamed: (@Sendable (OllamaChatResponse) async -> Void)?
+            if let partial {
+                streamed = { @Sendable sofar in await partial(attempt, sofar) }
+            }
             let response: OllamaChatResponse
             do {
-                response = try await gate.chat(request)
+                response = try await gate.chat(request, retrying: effort.retriesWhenAway, partial: streamed)
             } catch let error as OllamaError where error.isTransient(asking: request) {
                 throw error
             } catch {
@@ -140,6 +163,11 @@ public struct LLMClassifier: Sendable {
             }
             call.response = response.message.content
             call.metrics = response.metrics
+            if response.reachedLengthLimit, let cutOff {
+                call.error = AnswerValidationError.cutOff(effort.options.numPredict).localizedDescription
+                calls.append(call)
+                return ModelAnswer(answer: try cutOff(response.message.content), model: model, calls: calls)
+            }
             do {
                 let answer = try validate(response.message.content)
                 calls.append(call)

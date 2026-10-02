@@ -18,7 +18,7 @@ import Testing
 
     @Test func theModelsNameIsUsedAndKeepsItsScript() {
         let name = builder.name(for: decision(named: "2026-07-31 Сбербанк - Выписка по счёту: июль"), source: source, transliterate: false)
-        #expect(name == "2026-07-31 Сбербанк - Выписка по счёту- июль.pdf", "the name stays in the document's own script, with no colon")
+        #expect(name == "2026-07-31 Сбербанк - Выписка по счёту - июль.pdf", "the name stays in the document's own script, with no colon")
     }
 
     @Test func withoutAModelNameTheDocumentKeepsItsOwn() {
@@ -33,8 +33,11 @@ import Testing
 
     @Test func modelNamesAreSanitisedAndBounded() throws {
         let config = try PipelineConfig.bundledDefaults().naming
-        #expect(builder.bounded("2026-07-05 EDP / Fatura: julho", fileExtension: "PDF") == "2026-07-05 EDP - Fatura- julho.pdf",
+        #expect(builder.bounded("2026-07-05 EDP / Fatura: julho", fileExtension: "PDF") == "2026-07-05 EDP - Fatura - julho.pdf",
                 "a slash or colon never reaches the file system, and the extension is lower case")
+        #expect(builder.sanitize("Fatura No: TCSD65342868") == "Fatura No - TCSD65342868",
+                "a colon between words becomes a dash between words, not one glued to the word before")
+        #expect(builder.sanitize("Consulta 10:30 a/b") == "Consulta 10-30 a-b", "inside a word or a number, a plain dash")
         #expect(builder.bounded("name.pdf", fileExtension: "pdf") == "name.pdf", "a name that already ends in its extension does not get it twice")
         let long = builder.bounded(String(repeating: "Выписка ", count: 60), fileExtension: "pdf")
         #expect(long.count <= config.maxChars && long.utf8.count <= config.maxBytes && long.hasSuffix(".pdf"),

@@ -11,6 +11,8 @@ public enum OllamaError: Error, LocalizedError, Equatable {
     case emptyResponse
     /// Ollama reported a failure while downloading a model, in the progress it streams.
     case pullFailed(model: String, message: String)
+    /// Ollama reported a failure part way through an answer it streams.
+    case answerFailed(model: String, message: String)
 
     public var errorDescription: String? {
         switch self {
@@ -23,6 +25,7 @@ public enum OllamaError: Error, LocalizedError, Equatable {
         case let .timeout(what): "Ollama timed out: \(what)"
         case .emptyResponse: "Ollama returned an empty response"
         case let .pullFailed(model, message): "Downloading \(model) failed: \(message)"
+        case let .answerFailed(model, message): "\(model) stopped answering: \(message)"
         }
     }
 
@@ -295,6 +298,25 @@ public struct OllamaChatResponse: Sendable, Codable, Hashable {
         self.evalDuration = evalDuration
     }
 
+    /// The answer so far with `chunk`, the next line Ollama streams of it, added: its words and thinking follow on, and
+    /// the line that ends the answer brings why it ended and the counters.
+    public func continued(by chunk: OllamaChatResponse) -> OllamaChatResponse {
+        var next = self
+        next.model = chunk.model
+        next.message.content += chunk.message.content
+        if let thinking = chunk.message.thinking { next.message.thinking = (message.thinking ?? "") + thinking }
+        guard chunk.done == true else { return next }
+        next.done = true
+        next.doneReason = chunk.doneReason
+        next.totalDuration = chunk.totalDuration
+        next.loadDuration = chunk.loadDuration
+        next.promptEvalCount = chunk.promptEvalCount
+        next.promptEvalDuration = chunk.promptEvalDuration
+        next.evalCount = chunk.evalCount
+        next.evalDuration = chunk.evalDuration
+        return next
+    }
+
     /// Whether the answer stopped at its length limit (`num_predict`) rather than because it was complete: thinking
     /// counts toward the limit, so a model that thinks long can stop before it has written any of the answer.
     public var reachedLengthLimit: Bool { doneReason == Self.lengthReason }
@@ -378,7 +400,14 @@ public protocol OllamaAPI: Sendable {
     func version() async throws -> String
     func tags() async throws -> [OllamaModelInfo]
     func show(model: String) async throws -> OllamaShowResponse
-    func chat(_ request: OllamaChatRequest) async throws -> OllamaChatResponse
+    /// The model's answer to `request`. With `partial`, Ollama streams it, and `partial` is given the answer so far each
+    /// time it grows, until it is complete (`OllamaChatResponse.continued(by:)`); without, it comes whole.
+    func chat(_ request: OllamaChatRequest, partial: (@Sendable (OllamaChatResponse) async -> Void)?) async throws -> OllamaChatResponse
     func embed(_ request: OllamaEmbedRequest) async throws -> OllamaEmbedResponse
     func pull(model: String) -> AsyncThrowingStream<OllamaPullProgress, any Error>
+}
+
+extension OllamaAPI {
+    /// The model's whole answer to `request`, not streamed.
+    public func chat(_ request: OllamaChatRequest) async throws -> OllamaChatResponse { try await chat(request, partial: nil) }
 }

@@ -81,9 +81,14 @@ gate quit "work at quit runs before AppKit lets the app end (applicationShouldTe
   App
 
 gate trash "a file the app has no more use for goes to the Trash through Trashing, which the tests and eval replace with a folder of their own: only SystemTrash and a move across volumes call trashItem, and only the app and arrumatorcli use SystemTrash" \
-  '^Sources/ArrumatorCore/FileOps/(Trash|FileOperations)\.swift:|^App/AppModel\.swift:[0-9]+: +trash: SystemTrash\(\)\)$|^Sources/ArrumatorCLI/Arrumator\.swift:[0-9]+: .*trash: SystemTrash\(\)\)$' \
+  '^Sources/ArrumatorCore/FileOps/(Trash|FileOperations)\.swift:|^App/AppModel\.swift:[0-9]+: +trash: environment\.trash\(orElse: SystemTrash\(\)\)\)$|^Sources/ArrumatorCLI/Arrumator\.swift:[0-9]+: .*trash: environment\.trash\(orElse: SystemTrash\(\)\)\)$' \
   'trashItem\(|SystemTrash\(\)' \
   Sources App Tests
+
+gate rows "what opens or acts on a click opens from the keyboard and VoiceOver too: rowAction (App/Views/Page.swift), never a single-tap gesture alone" \
+  '^App/Views/Page\.swift:[0-9]+: +onTapGesture\(perform: action\)$' \
+  'onTapGesture( \{|\(perform:)' \
+  App
 
 gate debt "no TODO, FIXME, HACK or XXX markers" \
   '^scripts/lint\.sh:' \

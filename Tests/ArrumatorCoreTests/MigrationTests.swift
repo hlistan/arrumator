@@ -11,7 +11,7 @@ import Testing
                           "v5_logicEvents", "v6_archiveRecords", "v7_oneLogicPerArchive",
                           "v8_undoForgets", "v9_foldersOfAnyDepth", "v10_folderKinds", "v11_labelsNotFolders",
                           "v12_labelRules", "v13_traceExchanges", "v14_searchTasks", "v15_taskEffort",
-                          "v16_taskProfile", "v17_tags"]
+                          "v16_taskProfile", "v17_tags", "v18_taskConversations"]
 
     @Test func shippedIdentifiersNeverChange() {
         let registered = AppDatabase.migrator.migrations
@@ -142,6 +142,41 @@ import Testing
             try db.execute(sql: "UPDATE documents SET tags_only = 1 WHERE id = 2")
             #expect(try String.fetchAll(db, sql: "SELECT key FROM record_dirty") == ["documents:/archive/"],
                     "whether a document's labels are only its tags reaches its record file, as its labels do")
+        }
+    }
+
+    @Test func aTasksConversationMarksItsOwnFileAndGoesWithItsTask() throws {
+        let queue = try DatabaseQueue()
+        try AppDatabase.migrator.migrate(queue, upTo: "v17_tags")
+        try queue.write { db in
+            try db.execute(sql: """
+                INSERT INTO search_tasks (id, prompt, state, effort, created_at, updated_at) VALUES (4, 'water bills', 'ready', 'medium', 0, 0),
+                    (5, 'phone bills', 'ready', 'medium', 0, 0);
+                DELETE FROM record_dirty;
+                """)
+        }
+        try AppDatabase.migrator.migrate(queue)
+        let marks = "SELECT key FROM record_dirty ORDER BY key"
+        try queue.write { db in
+            #expect(try String.fetchAll(db, sql: marks).isEmpty, "no task had a conversation before, so no file needs writing")
+            try db.execute(sql: "UPDATE search_tasks SET title = 'Water' WHERE id = 4")
+            #expect(try String.fetchAll(db, sql: marks) == ["tasks"], "renaming a task without a conversation marks only System/_tasks.md")
+            try db.execute(sql: "DELETE FROM record_dirty")
+            try db.execute(sql: "INSERT INTO search_task_turns (id, task_id, question, state, asked_at) VALUES (1, 4, 'How much?', 'queued', 0)")
+            #expect(try String.fetchAll(db, sql: marks) == ["conversation:4"], "a question marks its task's conversation, and only that")
+            try db.execute(sql: "DELETE FROM record_dirty")
+            try db.execute(sql: "UPDATE search_task_turns SET state = 'answered', answer = 'Little' WHERE id = 1")
+            #expect(try String.fetchAll(db, sql: marks) == ["conversation:4"], "and so does its answer")
+            try db.execute(sql: "DELETE FROM record_dirty")
+            try db.execute(sql: "UPDATE search_task_turns SET last_trace_id = 9, next_run_at = 1 WHERE id = 1")
+            #expect(try String.fetchAll(db, sql: marks).isEmpty, "what the index keeps of its own marks nothing")
+            try db.execute(sql: "UPDATE search_tasks SET title = 'Water bills' WHERE id = 4")
+            #expect(try String.fetchAll(db, sql: marks) == ["conversation:4", "tasks"],
+                    "renaming a task with a conversation marks its file too, which is headed with the task's name")
+            try db.execute(sql: "DELETE FROM record_dirty")
+            try db.execute(sql: "DELETE FROM search_tasks WHERE id = 4")
+            #expect(try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM search_task_turns") == 0, "a task's questions go with it")
+            #expect(try String.fetchAll(db, sql: marks) == ["conversation:4", "tasks"], "and its conversation's file is marked, to be removed")
         }
     }
 

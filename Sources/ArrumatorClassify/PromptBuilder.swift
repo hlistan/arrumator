@@ -57,7 +57,7 @@ public struct PromptBuilder: Sendable {
         lines.append(format)
         let dates = c.entities.dates.prefix(config.promptDatesLimit).map(\.date)
         if !dates.isEmpty { lines.append("DETECTED DATES: " + dates.joined(separator: ", ")) }
-        let ids = c.entities.stableKeys.prefix(config.promptIdentifiersLimit).map { "\($0.kind.rawValue) \($0.value)" }
+        let ids = c.entities.stableKeys.prefix(config.promptIdentifiersLimit).map { "\($0.kind.described) \($0.value)" }
         if !ids.isEmpty { lines.append("IDENTIFIERS: " + ids.joined(separator: "; ")) }
         if let from = c.metadata[MetadataKey.emailFrom] { lines.append("E-MAIL FROM: \(from)") }
         if let subject = c.metadata[MetadataKey.emailSubject] { lines.append("E-MAIL SUBJECT: \(subject)") }

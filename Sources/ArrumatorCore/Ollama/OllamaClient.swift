@@ -55,14 +55,17 @@ public struct OllamaClient: OllamaAPI {
         return shown
     }
 
-    public func chat(_ request: OllamaChatRequest) async throws -> OllamaChatResponse {
+    public func chat(_ request: OllamaChatRequest, partial: (@Sendable (OllamaChatResponse) async -> Void)?) async throws -> OllamaChatResponse {
+        var asked = request
+        asked.stream = partial != nil
         var urlRequest = URLRequest(url: baseURL.appendingPathComponent("api/chat"))
         urlRequest.httpMethod = "POST"
         let timeout = request.timeout ?? config.timeouts.chat
         if timeout > 0 { urlRequest.timeoutInterval = timeout }
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        urlRequest.httpBody = Data(request.body.serialized().utf8)
-        return try await send(urlRequest, model: request.model, timeout: timeout)
+        urlRequest.httpBody = Data(asked.body.serialized().utf8)
+        guard let partial else { return try await send(urlRequest, model: request.model, timeout: timeout) }
+        return try await stream(urlRequest, model: request.model, timeout: timeout, partial: partial)
     }
 
     public func embed(_ request: OllamaEmbedRequest) async throws -> OllamaEmbedResponse {
@@ -97,6 +100,47 @@ public struct OllamaClient: OllamaAPI {
     }
 
     // MARK: Transport
+
+    /// Reads an answer Ollama streams, a JSON object per line (https://github.com/ollama/ollama/blob/main/docs/api.md),
+    /// giving `partial` the answer so far after each line. `timeout` bounds the whole answer, as it bounds one that is
+    /// not streamed; an answer that ends before its last line is no answer.
+    private func stream(_ request: URLRequest, model: String, timeout: Double,
+                        partial: @escaping @Sendable (OllamaChatResponse) async -> Void) async throws -> OllamaChatResponse {
+        let started = time.now()
+        let path = request.url?.path() ?? ""
+        do {
+            let session = session
+            let answer = try await Deadline.run(timeout, time: time, expired: { OllamaError.timeout(path) }) {
+                let (bytes, response) = try await session.bytes(for: request)
+                if let http = response as? HTTPURLResponse, !Self.successStatuses.contains(http.statusCode) {
+                    var body = ""
+                    for try await line in bytes.lines { body += line }
+                    throw Self.failure(response, body: body, model: model) ?? OllamaError.http(status: http.statusCode, body: body)
+                }
+                var answer: OllamaChatResponse?
+                for try await line in bytes.lines where !line.isEmpty {
+                    let chunk = try Self.chatChunk(line, model: model)
+                    let sofar = answer.map { $0.continued(by: chunk) } ?? chunk
+                    answer = sofar
+                    await partial(sofar)
+                }
+                guard let answer, answer.done == true else { throw OllamaError.emptyResponse }
+                return answer
+            }
+            Log.debug(.ollama, "HTTP POST \(path) streamed", [
+                "model": model, "ms": String(format: "%.0f", started.milliseconds(until: time.now())),
+                "chars": String(answer.message.content.count),
+            ])
+            return answer
+        } catch {
+            let mapped = Self.map(error)
+            Log.warning(.ollama, "HTTP POST \(path) failed", [
+                "model": model, "ms": String(format: "%.0f", started.milliseconds(until: time.now())),
+                "error": mapped.localizedDescription,
+            ])
+            throw mapped
+        }
+    }
 
     private func makeRequest(_ path: String, method: String, body: (some Encodable)?, timeout: Double) throws -> URLRequest {
         var request = URLRequest(url: baseURL.appendingPathComponent(path))
@@ -162,6 +206,18 @@ public struct OllamaClient: OllamaAPI {
         guard let http = response as? HTTPURLResponse, !successStatuses.contains(http.statusCode) else { return nil }
         if http.statusCode == notFoundStatus, let model, body.contains(notFoundMessage) { return .modelNotFound(model) }
         return .http(status: http.statusCode, body: body)
+    }
+
+    /// One line of a streamed answer; a line that reports an error ends the answer with it.
+    static func chatChunk(_ line: String, model: String) throws -> OllamaChatResponse {
+        struct Failure: Decodable { var error: String }
+        let data = Data(line.utf8)
+        if let failure = try? decoder.decode(Failure.self, from: data) { throw OllamaError.answerFailed(model: model, message: failure.error) }
+        do {
+            return try decoder.decode(OllamaChatResponse.self, from: data)
+        } catch {
+            throw OllamaError.decoding("api/chat: \(error)")
+        }
     }
 
     /// One line of a download's progress; a line that reports an error ends the download with it.

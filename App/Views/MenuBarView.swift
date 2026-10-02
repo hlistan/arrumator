@@ -30,7 +30,7 @@ struct MenuBarView: View {
                         ListRow(symbol: document.status.symbol, tint: document.status.tint, title: document.filename,
                                 subtitle: Wording.outcome(of: document, archive: model.settings?.archiveURL,
                                                           incoming: model.settings?.incomingURL))
-                            .onTapGesture { model.open(document: document.id, on: .processed) }
+                            .rowAction { model.open(document: document.id, on: .processed) }
                     }
                 }
                 .font(.callout)
