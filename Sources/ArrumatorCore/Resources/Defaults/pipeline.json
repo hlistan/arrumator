@@ -131,7 +131,8 @@
       "sparseChars": 80,
       "sparseWords": 8,
       "lowConfidence": 0.35,
-      "vlmTimeout": 90
+      "vlmTimeout": 90,
+      "maxPixels": 200000000
     },
     "ocr": {
       "lowConfidenceLine": 0.5,
@@ -147,6 +148,7 @@
     "pptxMaxSlides": 100,
     "archiveMaxEntries": 200,
     "emailBodyCapBytes": 5242880,
+    "emailReadCapBytes": 33554432,
     "quickLookPixel": 2048,
     "tableSnippetChars": 2000,
     "maxTables": 3,
@@ -162,6 +164,7 @@
     "cyrillicBigramMinShare": 0.1,
     "toolKillGrace": 2,
     "zipEntryCapBytes": 20971520,
+    "zipMaxEntries": 65535,
     "emailMaxPartDepth": 12,
     "tracePreviewChars": 200
   },

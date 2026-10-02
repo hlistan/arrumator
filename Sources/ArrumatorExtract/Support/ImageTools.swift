@@ -4,15 +4,25 @@ import ImageIO
 import UniformTypeIdentifiers
 
 enum ImageTools {
-    /// First frame of `source`, orientation-corrected (EXIF) and scaled so the longest side is at most `maxPixel`.
-    static func orientedImage(_ source: CGImageSource, maxPixel: Int) -> CGImage? {
+    /// The frame at `index` of `source`, orientation-corrected (EXIF) and scaled so the longest side is at most
+    /// `maxPixel`. Decoding it takes time in proportion to the pixels it declares, so check `pixelSize(of:at:)` first.
+    static func orientedImage(_ source: CGImageSource, at index: Int, maxPixel: Int) -> CGImage? {
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
             kCGImageSourceShouldCacheImmediately: true,
             kCGImageSourceThumbnailMaxPixelSize: maxPixel,
         ]
-        return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+        return CGImageSourceCreateThumbnailAtIndex(source, index, options as CFDictionary)
+    }
+
+    /// The width and height the frame at `index` declares, read from its header without decoding it; `nil` when
+    /// ImageIO finds none.
+    static func pixelSize(of source: CGImageSource, at index: Int) -> (width: Int, height: Int)? {
+        let properties = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any]
+        guard let width = properties?[kCGImagePropertyPixelWidth] as? Int,
+              let height = properties?[kCGImagePropertyPixelHeight] as? Int else { return nil }
+        return (width, height)
     }
 
     /// JPEG encoding at `quality` (0…1).

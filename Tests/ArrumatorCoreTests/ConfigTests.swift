@@ -114,7 +114,12 @@ import Testing
                          #"{"conversation": {"efforts": {"medium": {"numPredict": 16384}}}}"#, #"{"conversation": {"contextChars": 0}}"#,
                          #"{"conversation": {"documentChars": 0}}"#, #"{"conversation": {"maxListed": -1}}"#,
                          #"{"conversation": {"historyChars": -1}}"#, #"{"conversation": {"maxQuestionChars": 0}}"#,
-                         #"{"conversation": {"maxSuggested": 0}}"#, #"{"conversation": {"efforts": {"extreme": {"think": false}}}}"#] {
+                         #"{"conversation": {"maxSuggested": 0}}"#, #"{"conversation": {"efforts": {"extreme": {"think": false}}}}"#,
+                         #"{"extraction": {"emailReadCapBytes": 0}}"#, #"{"extraction": {"emailBodyCapBytes": -1}}"#,
+                         #"{"extraction": {"image": {"maxPixels": 0}}}"#, #"{"extraction": {"pdf": {"ocrHeadPages": -1}}}"#,
+                         #"{"extraction": {"zipMaxEntries": 0}}"#,
+                         #"{"extraction": {"zipEntryCapBytes": -1}}"#, #"{"extraction": {"archiveMaxEntries": -1}}"#,
+                         #"{"extraction": {"xlsx": {"maxRows": -1}}}"#] {
             try Data(override.utf8).write(to: env.paths.pipelineOverrideURL)
             #expect(throws: ConfigError.self, "\(override) would crash or stall the pipeline, so it stops the app with the reason") {
                 try PipelineConfig.load(paths: env.paths, environment: TestEnvironment.isolated)
@@ -377,7 +382,10 @@ import Testing
                     && config.tasks.efforts[.high]?.promptLabels[.object] == 5,
                 "keys of a dictionary the user fills, from either override, load: a variable for Ollama, a kind, an effort's labels")
     }
+}
 
+/// The Ollama server the app talks to: where it may be, how its address is written, and the bounds on its answers.
+extension ConfigTests {
     @Test func ollamaAnswersOnThisMacOrTheLocalNetworkOnly() throws {
         for address in ["http://127.0.0.1:11434", "http://localhost:11434", "http://[::1]:11434", "http://192.168.1.239:11434",
                         "http://10.0.0.5:11434", "http://172.20.1.1:11434", "http://169.254.3.4:11434", "https://gpu-box.local:11434",

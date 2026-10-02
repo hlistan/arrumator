@@ -30,8 +30,7 @@ struct PDFExtractor: FileExtractor {
 
         let pdf = job.config.pdf
         let scans = try scanTextLayer(document, config: pdf)
-        let ocrCandidates = Set(pageCount <= pdf.ocrAllIfAtMost
-            ? Array(0..<pageCount) : Array(0..<min(pdf.ocrHeadPages, pageCount)) + [pageCount - 1])
+        let ocrCandidates = Set(pdf.ocrPages(of: pageCount))
         let imagePages = scans.filter { $0.reason != nil }.map(\.index)
         let languages = LanguageDetector(config: job.config)
         var hint = scans.filter { $0.reason == nil }.map(\.text).joined(separator: "\n")

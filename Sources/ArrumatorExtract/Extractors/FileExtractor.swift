@@ -27,6 +27,26 @@ struct ExtractionJob: Sendable {
     let time: any TimeSource
 
     var config: ExtractionConfig { context.config }
+
+    /// The first `cap` bytes of the file, and whether it goes on past them; a file that cannot be read fails the stage.
+    func head(upTo cap: Int) throws -> (data: Data, truncated: Bool) {
+        let data: Data
+        do {
+            let handle = try FileHandle(forReadingFrom: url)
+            defer { try? handle.close() }
+            data = try handle.read(upToCount: cap) ?? Data()
+        } catch {
+            throw ExtractionError.fileUnreadable(path: url.path, underlying: error.localizedDescription)
+        }
+        return (data, source.byteSize > Int64(data.count))
+    }
+}
+
+extension ExtractionWarning {
+    /// Only the first `read` bytes of a file of `size` were read.
+    static func headRead(_ read: Int, of size: Int64) -> ExtractionWarning {
+        ExtractionWarning(.textTruncated, "read the first \(read) of \(size) bytes")
+    }
 }
 
 /// What a per-type extractor found. The registry normalises and caps the text, then adds language and entities.

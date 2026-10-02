@@ -4,10 +4,14 @@ import UniformTypeIdentifiers
 
 /// RFC 5322 messages (.eml): From/To/Cc/Subject/Date with RFC 2047 decoding, the first text/plain part (else the
 /// first text/html part stripped to text) decoded from base64/quoted-printable and its charset, and attachment
-/// filenames. Outlook `.msg` (OLE compound files) is reported metadata-only.
+/// filenames. The file is read up to `emailReadCapBytes` and the body kept up to `emailBodyCapBytes`, each cut noted.
+/// Outlook `.msg` (OLE compound files) is reported metadata-only.
 struct EmailExtractor: FileExtractor {
+    /// The names an HTML body's character references may use.
+    let entities: HTMLEntities
+
     let name = "email"
-    let version = 1
+    let version = 2
     var supportedTypes: [UTType] {
         [.emailMessage, UTType(filenameExtension: "eml"), Self.outlookMessage].compactMap { $0 }
     }
@@ -18,23 +22,23 @@ struct EmailExtractor: FileExtractor {
         if let outlook = Self.outlookMessage, job.type == outlook {
             return .metadataOnly(kind: .email, warnings: [ExtractionWarning(.unsupportedFormat, "Outlook .msg")])
         }
-        let data: Data
-        do {
-            data = try Data(contentsOf: job.url, options: .mappedIfSafe)
-        } catch {
-            throw ExtractionError.fileUnreadable(path: job.url.path, underlying: error.localizedDescription)
-        }
         let config = job.config
+        let (data, truncatedRead) = try job.head(upTo: config.emailReadCapBytes)
         let message = MIMEPart.parse(data, maxDepth: config.emailMaxPartDepth)
         guard message.header("From") != nil || message.header("Subject") != nil || message.header("Date") != nil else {
             return .metadataOnly(kind: .email, warnings: [ExtractionWarning(.corrupted, "no RFC 5322 headers")])
         }
+        var warnings: [ExtractionWarning] = truncatedRead ? [.headRead(data.count, of: job.source.byteSize)] : []
 
         let leaves = message.leaves
         let bodyPart = leaves.first { $0.mediaType == "text/plain" && !$0.isAttachment }
             ?? leaves.first { $0.mediaType == "text/html" && !$0.isAttachment }
-        var body = bodyPart.map { $0.decodedText(cap: config.emailBodyCapBytes) } ?? ""
-        if bodyPart?.mediaType == "text/html" { body = HTMLText.strip(body) }
+        let decoded = bodyPart.map { $0.decodedText(cap: config.emailBodyCapBytes) }
+        var body = decoded?.text ?? ""
+        if decoded?.truncated == true {
+            warnings.append(ExtractionWarning(.textTruncated, "body: first \(config.emailBodyCapBytes) bytes"))
+        }
+        if bodyPart?.mediaType == "text/html" { body = HTMLText.strip(body, entities: entities) }
         let attachments = leaves.compactMap { $0.isAttachment ? $0.filename : nil }
 
         var metadata: [String: String] = [:]
@@ -62,6 +66,7 @@ struct EmailExtractor: FileExtractor {
         draft.metadata = metadata
         draft.attachments = attachments
         draft.structure = ContentStructure(paragraphCount: TextNormalizer.nonEmptyLineCount(body))
+        draft.warnings = warnings
         return draft
     }
 

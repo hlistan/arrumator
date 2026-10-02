@@ -152,6 +152,75 @@ struct ImageAndVisionTests {
         #expect(unconfigured.hasWarning(.vlmSkipped), "without a vision model, the trace says the description was skipped")
     }
 
+    @Test("An image that declares more pixels than extraction.image.maxPixels is read for its metadata alone, never decoded")
+    func pixelBudget() async throws {
+        let scratch = try Scratch()
+        // 360 KB on disk, 1.6 billion pixels declared.
+        let url = try scratch.writeTIFF("huge.tiff", declaring: 40_000, by: 40_000)
+        let recognizer = RecordingRecognizer()
+        let ollama = MockOllama(capabilities: MockOllama.visionCapabilities) { _ in throw OllamaError.unreachable("must not be called") }
+        let context = try TestConfig.context(vision: TestConfig.visionOptions())
+        let content = try await TestConfig.registry(ollama: ollama, recognizer: recognizer)
+            .extract(url, sha256: "x", context: context, trace: .disabled)
+        #expect(content.textOrigin == .metadataOnly, "an image over the budget is described by its metadata alone")
+        #expect(content.warnings.map(\.code) == [.tooLarge], "and says why (\(content.warningSummary))")
+        #expect(content.metadata["image:width"] == "40000", "its declared width is kept as metadata")
+        #expect(content.metadata["image:height"] == "40000", "and its declared height")
+        #expect(await recognizer.widths.isEmpty, "no image is decoded for OCR")
+        #expect(await ollama.chatRequests.isEmpty, "nor for the vision model")
+    }
+
+    @Test("An image of exactly extraction.image.maxPixels is read; one pixel fewer allowed, and it is not")
+    func pixelBudgetBoundary() async throws {
+        let scratch = try Scratch()
+        let url = try scratch.writeImage("page.png", try Scratch.textImage([], width: 800, height: 600))
+        for (maxPixels, read) in [(800 * 600, true), (800 * 600 - 1, false)] {
+            let recognizer = RecordingRecognizer()
+            let context = try TestConfig.context { extraction, _ in extraction.image.maxPixels = maxPixels }
+            let content = try await TestConfig.registry(recognizer: recognizer)
+                .extract(url, sha256: "x", context: context, trace: .disabled)
+            #expect(await recognizer.widths.count == (read ? 1 : 0), "with \(maxPixels) pixels allowed, an 800 × 600 image is read: \(read)")
+            #expect(content.hasWarning(.tooLarge) == !read, "and only a refused one is noted as too large")
+        }
+    }
+
+    /// A recognizer that reads, on each page, a sentence naming the page by its width, long enough not to be sparse.
+    private static func pageReader() -> RecordingRecognizer {
+        RecordingRecognizer { "Página de \($0.width) pontos: fatura de eletricidade de julho, a pagar até ao fim de agosto." }
+    }
+
+    @Test("Every page of a multi-page TIFF is read, in order, as a scanned PDF's pages are")
+    func multiPageTIFF() async throws {
+        let scratch = try Scratch()
+        let url = try scratch.writeTIFF("fax.tiff", pages: try [700, 800, 900].map { try Scratch.textImage([], width: $0, height: 500) })
+        let recognizer = Self.pageReader()
+        let content = try await TestConfig.registry(recognizer: recognizer)
+            .extract(url, sha256: "x", context: try TestConfig.context(), trace: .disabled)
+        #expect(await recognizer.widths == [700, 800, 900], "each page is read once, in the order of the file")
+        let pages = ["700", "800", "900"].map { "Página de \($0) pontos" }
+        let offsets = try pages.map { try #require(content.text.range(of: $0), "page \($0) is in the text").lowerBound }
+        #expect(offsets == offsets.sorted(), "the pages' text comes in the order of the pages")
+        #expect(content.pageCount == 3, "the image is counted as the three pages it has")
+        #expect(content.pagesOCRed == [1, 2, 3], "and each was read by OCR")
+        #expect(!content.hasWarning(.textTruncated), "nothing was left out (\(content.warningSummary))")
+    }
+
+    @Test("A TIFF longer than extraction.pdf.ocrAllIfAtMost has its first ocrHeadPages and its last page read, and says so")
+    func longTIFF() async throws {
+        let scratch = try Scratch()
+        let url = try scratch.writeTIFF("scan.tiff", pages: try [700, 800, 900].map { try Scratch.textImage([], width: $0, height: 500) })
+        let recognizer = Self.pageReader()
+        let context = try TestConfig.context { extraction, _ in
+            extraction.pdf.ocrAllIfAtMost = 2
+            extraction.pdf.ocrHeadPages = 1
+        }
+        let content = try await TestConfig.registry(recognizer: recognizer).extract(url, sha256: "x", context: context, trace: .disabled)
+        #expect(await recognizer.widths == [700, 900], "the first page and the last are read, as a long scanned PDF's are")
+        #expect(content.pagesOCRed == [1, 3], "and they are the pages OCR read")
+        #expect(content.warnings.filter { $0.code == .textTruncated }.map(\.detail) == ["read 2 of 3 pages"],
+                "the page left out is noted, so the model knows it saw part of the document")
+    }
+
     @Test("Organisation verification ignores case and diacritics")
     func verification() throws {
         let summary = try VisionDescriber.parse(

@@ -14,15 +14,7 @@ struct PlainTextExtractor: FileExtractor {
 
     func extract(_ job: ExtractionJob) async throws -> ExtractionDraft {
         let config = job.config
-        let data: Data
-        do {
-            let handle = try FileHandle(forReadingFrom: job.url)
-            defer { try? handle.close() }
-            data = try handle.read(upToCount: config.plainTextReadCapBytes) ?? Data()
-        } catch {
-            throw ExtractionError.fileUnreadable(path: job.url.path, underlying: error.localizedDescription)
-        }
-        let truncatedRead = job.source.byteSize > Int64(data.count)
+        let (data, truncatedRead) = try job.head(upTo: config.plainTextReadCapBytes)
         let detector = TextEncodingDetector(candidateNames: config.candidateEncodings,
                                             sampleChars: config.languageSampleChars,
                                             cyrillicMinShare: config.cyrillicBigramMinShare)
@@ -34,10 +26,7 @@ struct PlainTextExtractor: FileExtractor {
         if decoded.isGuess {
             draft.warnings.append(ExtractionWarning(.encodingGuessed, decoded.encodingName))
         }
-        if truncatedRead {
-            draft.warnings.append(ExtractionWarning(.textTruncated,
-                                                    "read the first \(data.count) of \(job.source.byteSize) bytes"))
-        }
+        if truncatedRead { draft.warnings.append(.headRead(data.count, of: job.source.byteSize)) }
 
         if job.type.conforms(to: .delimitedText) {
             let delimiter: Character = job.type.conforms(to: .tabSeparatedText) ? "\t"

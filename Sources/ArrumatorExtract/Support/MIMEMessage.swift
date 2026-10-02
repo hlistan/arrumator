@@ -44,8 +44,8 @@ struct MIMEPart {
         return HeaderDecoding.decode(name)
     }
 
-    /// Body bytes after undoing the transfer encoding, at most `cap` bytes.
-    func decodedBody(cap: Int) -> Data {
+    /// Body bytes after undoing the transfer encoding, at most `cap` of them, and whether there were more.
+    func decodedBody(cap: Int) -> (bytes: Data, truncated: Bool) {
         let encoding = (header("Content-Transfer-Encoding") ?? "").trimmingCharacters(in: .whitespaces).lowercased()
         let bytes: Data = switch encoding {
         case "base64":
@@ -55,17 +55,20 @@ struct MIMEPart {
         default:
             Data(body.unicodeScalars.map { UInt8(truncatingIfNeeded: $0.value) })
         }
-        return bytes.count > cap ? bytes.prefix(cap) : bytes
+        return bytes.count > cap ? (bytes.prefix(cap), true) : (bytes, false)
     }
 
-    /// Body as text in the declared charset (UTF-8, then Latin-1 when undeclared or unknown).
-    func decodedText(cap: Int) -> String {
-        let bytes = decodedBody(cap: cap)
+    /// Body as text in the declared charset (UTF-8, then Latin-1 when undeclared or unknown), from at most `cap` bytes,
+    /// and whether there were more. A character the cap cuts in two is left out, so a cut body stays in its own charset.
+    func decodedText(cap: Int) -> (text: String, truncated: Bool) {
+        let (bytes, truncated) = decodedBody(cap: cap)
         if let charset = contentTypeParameters["charset"], let encoding = HeaderDecoding.encoding(ianaName: charset),
-           let text = String(data: bytes, encoding: encoding) {
-            return text
+           let text = TextEncodingDetector.decode(bytes, as: encoding, allowCutTail: truncated) {
+            return (text, truncated)
         }
-        return String(validating: bytes, as: UTF8.self) ?? String(data: bytes, encoding: .isoLatin1) ?? ""
+        let text = TextEncodingDetector.strictUTF8(bytes, allowCutTail: truncated)
+            ?? String(data: bytes, encoding: .isoLatin1) ?? ""
+        return (text, truncated)
     }
 
     /// All leaf parts, depth first.

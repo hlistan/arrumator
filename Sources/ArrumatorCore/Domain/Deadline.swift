@@ -62,7 +62,7 @@ public struct DeadlineExceeded: Error, Sendable, Equatable {
 
 /// Bounds work by its total time. URLSession's request timeout counts only idle time, and a reply lost on the local
 /// network can leave a request waiting on a connection that stays open (seen with Ollama on another Mac over Wi-Fi),
-/// holding every request queued behind it; PDFKit, Vision and CoreXLSX do not notice cancellation at all. A reply that
+/// holding every request queued behind it; PDFKit, Vision and ZIPFoundation do not notice cancellation at all. A reply that
 /// is not streamed sends nothing before it is complete, so an exchange that would have succeeded is not cut short.
 public enum Deadline {
     /// Runs `operation` in a task of its own and returns its result, or throws `expired()` after `seconds` of `time`,

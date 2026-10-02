@@ -35,7 +35,7 @@ public struct ExtractorRegistry: ContentExtracting {
             TextutilExtractor(shell: shell),
             XLSXExtractor(),
             PPTXExtractor(),
-            EmailExtractor(),
+            EmailExtractor(entities: try HTMLEntities.bundled()),
             ArchiveExtractor(),
             MediaExtractor(),
             previewer,

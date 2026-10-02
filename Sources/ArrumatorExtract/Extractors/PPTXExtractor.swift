@@ -15,9 +15,9 @@ struct PPTXExtractor: FileExtractor {
         let config = job.config
         let zip: ZipReader
         do {
-            zip = try ZipReader(url: job.url, entryCap: config.zipEntryCapBytes)
+            zip = try ZipReader(url: job.url, config: config)
         } catch {
-            return .metadataOnly(kind: .presentation, warnings: [ExtractionWarning(.corrupted, error.description)])
+            return .metadataOnly(kind: .presentation, warnings: [error.warning])
         }
         let paths = zip.entries.map(\.path)
         let slides = Self.numbered(paths, prefix: "ppt/slides/slide")
@@ -26,7 +26,13 @@ struct PPTXExtractor: FileExtractor {
         var sections: [String] = []
         var noteSections: [String] = []
         var warnings: [ExtractionWarning] = []
-        for slide in slides.prefix(config.pptxMaxSlides) {
+        let read = slides.prefix(config.pptxMaxSlides)
+        do {
+            try zip.locate(read.map(\.path) + read.compactMap { notes[$0.number] })
+        } catch {
+            return .metadataOnly(kind: .presentation, warnings: [error.warning])
+        }
+        for slide in read {
             try Task.checkCancellation()
             do {
                 if let text = try Self.text(zip, slide.path), !text.isEmpty {
@@ -35,6 +41,8 @@ struct PPTXExtractor: FileExtractor {
                 if let notesPath = notes[slide.number], let text = try Self.text(zip, notesPath), !text.isEmpty {
                     noteSections.append("Notes \(slide.number)\n\(text)")
                 }
+            } catch let error as ZipReadError {
+                warnings.append(error.warning)
             } catch {
                 warnings.append(ExtractionWarning(.corrupted, "slide \(slide.number): \(error)"))
             }
@@ -45,8 +53,9 @@ struct PPTXExtractor: FileExtractor {
         let text = (sections + noteSections).joined(separator: "\n\n")
         var draft = ExtractionDraft(kind: .presentation, textOrigin: text.isEmpty ? .none : .textLayer, text: text)
         draft.structure = ContentStructure(paragraphCount: TextNormalizer.nonEmptyLineCount(text), slideCount: slides.count)
-        draft.metadata = OOXMLCoreProperties.metadata(of: job.url, entryCap: config.zipEntryCapBytes, prefix: "doc")
-        draft.warnings = warnings
+        let core = OOXMLCoreProperties.metadata(in: zip, prefix: "doc")
+        draft.metadata = core.metadata
+        draft.warnings = warnings + core.warnings
         return draft
     }
 

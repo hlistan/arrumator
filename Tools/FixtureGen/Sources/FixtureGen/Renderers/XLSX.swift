@@ -20,7 +20,7 @@ enum Cell: Sendable {
     case integer(Int)
     case money(Money, bold: Bool = false)
     case percent(Int)
-    /// A formula with its cached result, so readers that do not calculate (CoreXLSX) still see the value.
+    /// A formula with its cached result, so readers that do not calculate, such as the app, still see the value.
     case formula(String, cached: Money, bold: Bool = false)
 }
 

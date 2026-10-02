@@ -242,8 +242,15 @@ No tunable lives in code. Defaults are bundled in `Sources/ArrumatorCore/Resourc
   files and of its system and history folders, such as `records.labelRulesFileName`, `records.searchTasksFileName` and
   `records.conversationsFolderName`), `ingest` (attempts and retry delays, and how long quitting waits for the file in
   hand, the request being read and the question being answered to stop, `ingest.quitTimeout`, after which the
-  `ollama serve` the app started is stopped all the same), `extraction` (OCR and extraction limits), `entities` (dates
-  and identifiers), `analysis`
+  `ollama serve` the app started is stopped all the same), `extraction` (OCR and extraction limits, among them how
+  much of an e-mail is read, `extraction.emailReadCapBytes`, and of its body, `extraction.emailBodyCapBytes`, how many
+  pixels an image may declare, `extraction.image.maxPixels`, beyond which it is read for its metadata alone, how many
+  pages of a scanned PDF or a TIFF OCR reads: all when there are at most `extraction.pdf.ocrAllIfAtMost`, else the
+  first `extraction.pdf.ocrHeadPages` and the last, and what a ZIP file, an archive or an Office document, may hold: at
+  most `extraction.zipMaxEntries` entries, each read up to `extraction.zipEntryCapBytes`; an archive, workbook or
+  presentation that holds more, whose directory does not match the file or whose entries share bytes of it, is read
+  for its metadata alone, and a Word document is still converted by `textutil`, without its title and author),
+  `entities` (dates and identifiers), `analysis`
   (what the model is shown and how it is asked, such as `analysis.excerptChars`, of which the end of the document gets
   `1 / analysis.excerptTailDivisor`, `analysis.repairAttempts`, the context a document, a search request and an image
   are read with, `analysis.numCtx`, one so that a model that reads and describes images stays loaded once, what a model

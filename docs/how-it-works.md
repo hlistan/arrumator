@@ -9,7 +9,7 @@ covers the app and its settings. [Storage](storage.md) covers where everything i
 ```text
 new file in Incoming ──► wait until it stops changing ──► tagged by the folder in Incoming it is in, if any
    ──► hash (an exact copy of a document in the archive has that document read again instead: below)
-   ──► extract: PDFKit text, Apple Vision OCR, textutil (doc/docx/rtf/odt/html), CoreXLSX, PPTX, e-mail,
+   ──► extract: PDFKit text, Apple Vision OCR, textutil (doc/docx/rtf/odt/html), XLSX, PPTX, e-mail,
        archives, media metadata, Quick Look previews, local vision model for photos; language, dates, identifiers
    ──► analyse: the local model reads it once, with the app's own prompt and the archive's labels, picks out its
        signals, which become its labels, and names the file; your rules and the archive's vocabulary tidy the labels

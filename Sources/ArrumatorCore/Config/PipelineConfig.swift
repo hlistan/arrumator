@@ -39,6 +39,7 @@ public struct PipelineConfig: Sendable, Codable, Hashable, ValidatedConfiguratio
             problems.append("labels.vocabulary.kinds.\(kind.rawValue): the user's own labels are never kept one vocabulary; remove it")
         }
         problems += ollama.problems
+        problems += extraction.problems
         if database.observationRetry <= 0 { problems.append("database.observationRetry must be more than 0") }
         problems += tasks.problems
         problems += conversation.problems
@@ -178,6 +179,8 @@ public struct ExtractionConfig: Sendable, Codable, Hashable {
         public var sparseWords: Int
         public var lowConfidence: Double
         public var vlmTimeout: Double
+        /// Most pixels (width × height) an image may declare to be decoded; a larger one gives its metadata alone.
+        public var maxPixels: Int
     }
     public struct OCR: Sendable, Codable, Hashable {
         public var lowConfidenceLine: Double
@@ -210,6 +213,8 @@ public struct ExtractionConfig: Sendable, Codable, Hashable {
     public var pptxMaxSlides: Int
     public var archiveMaxEntries: Int
     public var emailBodyCapBytes: Int
+    /// Maximum bytes of an e-mail file read, its parts and their names among them; the rest is left, with a warning.
+    public var emailReadCapBytes: Int
     public var quickLookPixel: Int
     public var tableSnippetChars: Int
     public var maxTables: Int
@@ -221,6 +226,8 @@ public struct ExtractionConfig: Sendable, Codable, Hashable {
     public var toolKillGrace: Double
     /// Maximum decompressed bytes read from one ZIP entry (OOXML parts).
     public var zipEntryCapBytes: Int
+    /// Most entries a ZIP file (an archive or an Office document) may list; one with more is not opened.
+    public var zipMaxEntries: Int
     /// Maximum MIME multipart nesting depth parsed in e-mails.
     public var emailMaxPartDepth: Int
     /// Maximum characters of text previews and metadata values written to trace steps.

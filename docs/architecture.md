@@ -152,7 +152,7 @@ flowchart TD
     classify["ArrumatorClassify<br/>prompts, answers"]
     core["ArrumatorCore<br/>contracts, storage, pipeline"]
     deps["GRDB, Yams"]
-    xdeps["CoreXLSX, ZIPFoundation"]
+    xdeps["ZIPFoundation"]
     ap["swift-argument-parser"]
 
     app -- imports --> runtime
@@ -392,6 +392,8 @@ change that replaces it; the earlier one stays in Git's history, as superseded c
 | 14 | WAL mode with `synchronous = NORMAL`. | Faster commits, at the cost that the last commits before a power cut may be lost from the index, which can be brought in line with the archive again. | `Storage/AppDatabase.swift`; [SQLite](https://www.sqlite.org/pragma.html) |
 | 15 | No sandbox, hardened runtime. | The app watches folders the user chooses and starts Ollama. | [Using Arrumator](using-arrumator.md#where-everything-is-kept) |
 | 16 | An AppKit shell with an explicit status item hosts the SwiftUI views. | A SwiftUI status item proved unreliable, and a full menu bar can hide it. | `App/ArrumatorApp.swift` |
+| 17 | A ZIP file's directory is read by the app's own code and checked against the file, every offset and size inside it, no two entries sharing a byte (the overlapping-file ZIP bomb) and its entries within limits, before ZIPFoundation opens it; an archive, workbook or presentation that fails is read for its metadata alone, and a Word document, which `textutil` converts, loses only its core properties. ZIPFoundation's entries are found for the parts about to be read in one pass, each paired with its checked entry, and only those are kept; an encrypted entry is never read. | ZIPFoundation traps on offsets and sizes it takes from the file, and a trap in a parser ends the process, which has no sandbox and no helper process to lose instead. | `ArrumatorExtract/Support/ZipDirectory.swift`; [APPNOTE](https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT) |
+| 18 | Excel workbooks are read with Foundation's `XMLParser`, as PowerPoint decks are, not with CoreXLSX: each part through the checked ZIP reader up to its cap, the main workbook read once with the sheets past the limit only counted, a sheet's rows collected as it is parsed and the parse stopped at the row limit. | CoreXLSX 0.14.2, unchanged since February 2023 and pinning XMLCoder 0.14, trapped on hostile workbooks in code the project cannot change (`Dictionary(uniqueKeysWithValues:)` on two sheets of one relationship, an overflow on a column of 14 letters, an `Array.insert` out of range on an empty relationship target), opened files with ZIPFoundation itself, and decoded whole parts into trees before any limit applied. SpreadsheetML needs only its relationships, workbook, shared strings and sheets read (ECMA-376 Part 1 §18), which a SAX parser does in a few hundred lines. | `ArrumatorExtract/Extractors/XLSXExtractor.swift`, `Support/SpreadsheetML.swift` |
 
 Record a decision here when it changes the module graph, a contract in `Contracts/`, what is stored and where, the
 concurrency model, a trust boundary or a durability setting: decisions "that affect the structure, non-functional

@@ -147,7 +147,11 @@ These are rules you can check, not aspirations. Each row says how it is checked;
    in its configuration). Decode its answer into the typed schema, validate it with `AnswerValidator`, and send a
    document without a valid answer to Needs You. Names from the model go through `FilenameBuilder` before they reach
    the disk. The app builds every path itself: the model supplies a file name, never a directory. Nothing the model
-   writes becomes active where it is shown: a link or an image in its Markdown is plain text (`AnswerMarkdown`).
+   writes becomes active where it is shown: a link or an image in its Markdown is plain text (`AnswerMarkdown`). A file
+   put into Incoming is untrusted input too. It is parsed within budgets checked on the sizes and counts it declares
+   before anything is decoded, with overflow-checked arithmetic, in passes linear in its size, and each limit has a
+   hostile-input test bounded by `.timeLimit` (`ZipDirectory`, `SpreadsheetML`, `HTMLText`). A library that cannot be
+   held to those bounds does not parse it.
 6. **Logic stays below the UI.** Views and CLI commands call Runtime and Core, and they only present and parse. Views
    learn of a change only from Core, through History (`AppDatabase.activity()`) or a stream of live state (the queues'
    `statusUpdates()`, `OllamaLifecycle.states()`, `SettingsStore.changes()`): a state the user watches is recorded in
@@ -222,7 +226,7 @@ is inside each module is in [docs/architecture.md](docs/architecture.md#building
 | Path | Owns | May import |
 |---|---|---|
 | `Sources/ArrumatorCore` | Contracts, configuration, SQLite storage, the archive's record files and layout, watchers, file operations, the ingest state machine, the Ollama client, lifecycle and network guard, search, observability. | GRDB, Yams, Apple frameworks. Never Extract, Classify or Runtime. |
-| `Sources/ArrumatorExtract` | Turning any file into `ExtractedContent`: format extractors, OCR, vision description, language, dates, identifiers. | Core, CoreXLSX, ZIPFoundation, Apple frameworks. |
+| `Sources/ArrumatorExtract` | Turning any file into `ExtractedContent`: format extractors, OCR, vision description, language, dates, identifiers. | Core, ZIPFoundation, Apple frameworks. |
 | `Sources/ArrumatorClassify` | Reading documents: the prompt, model calls, the answer schema and its validation into labels and a file name. | Core |
 | `Sources/ArrumatorRuntime` | The composition root: builds and wires the concrete services and starts the background tasks. | Core, Extract, Classify |
 | `Sources/ArrumatorCLI` | `arrumatorcli` commands: argument parsing and output only. | Runtime, Core, swift-argument-parser |
