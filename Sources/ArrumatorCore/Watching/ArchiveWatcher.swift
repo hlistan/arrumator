@@ -45,7 +45,6 @@ public actor ArchiveWatcher {
     private let registry: SelfChangeRegistry
     private let database: AppDatabase
     private var root: URL?
-    private var excluded: [String] = []
     private var stream: FSEventStream?
     private var pumpTask: Task<Void, Never>?
     /// Who is sent the changes, each by a stream of its own (`changes()`).
@@ -75,12 +74,11 @@ public actor ArchiveWatcher {
 
     private func unsubscribe(_ id: UUID) { subscribers[id] = nil }
 
-    /// - Parameter excluding: subtrees handled elsewhere (the Incoming folder when it lives inside the archive).
-    public func start(root: URL, excluding: [URL]) async throws {
+    /// Watches the archive at `root`, all of it: Incoming is never inside it (`AppSettings.problems`).
+    public func start(root: URL) async throws {
         stop()
         let root = root.standardizedFileURL
         self.root = root
-        excluded = excluding.map { $0.standardizedFileURL.path + "/" }
         let device = FSEventStream.deviceUUID(for: root.path)
         let storedDevice = try await database.meta(Self.deviceKey)
         let storedID = try await database.meta(Self.lastEventKey).flatMap(UInt64.init)
@@ -119,7 +117,7 @@ public actor ArchiveWatcher {
             }
             if event.isHistoryDone { continue }
             let path = URL(fileURLWithPath: event.path).standardizedFileURL.path
-            guard path.hasPrefix(root.path + "/"), !excluded.contains(where: { path.hasPrefix($0) }) else { continue }
+            guard path.hasPrefix(root.path + "/") else { continue }
             guard seenPaths.insert(path).inserted else { continue }
             if await registry.isExpected(path) { continue }
             let url = URL(fileURLWithPath: path)

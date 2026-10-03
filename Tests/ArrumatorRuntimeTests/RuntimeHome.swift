@@ -32,7 +32,7 @@ struct RuntimeHome {
                                              logLevelName: LogLevel.error.rawValue, pipelineOverridePath: nil, trashPath: nil)
         let home = RuntimeHome(root: root, environment: environment)
         try home.paths.ensureDirectories()
-        try await SettingsStore(paths: home.paths).update {
+        try await SettingsStore.opened(paths: home.paths).update {
             $0.archivePath = home.folder("First").path
             $0.incomingPath = home.folder("Incoming").path
         }
@@ -44,7 +44,7 @@ struct RuntimeHome {
     /// Settings under which a started runtime finds no Ollama and starts none: what a test that runs the app's
     /// background machinery (`ArrumatorRuntime.start()`) needs, as no model may be reached from `swift test`.
     func withoutOllama() async throws {
-        try await SettingsStore(paths: paths).update {
+        try await SettingsStore.opened(paths: paths).update {
             $0.ollamaURL = Self.nowhere
             $0.ollamaManagement = .external
         }

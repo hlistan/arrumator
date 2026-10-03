@@ -205,7 +205,7 @@ import Testing
         let saved = try JSON.decoder.decode(JSONValue.self, from: Data(contentsOf: env.paths.settingsURL))
         #expect(saved["renameFiles"] == .bool(false), "the changed setting is written")
         #expect(saved["transliterate"] == nil, "an unchanged setting is not, so a new default still reaches the user")
-        let reloaded = try SettingsStore(paths: env.paths)
+        let reloaded = try SettingsStore.opened(paths: env.paths)
         #expect(await reloaded.current.renameFiles == false, "the change survives a restart")
     }
 
@@ -282,7 +282,7 @@ import Testing
         let changed = try JSON.decoder.decode(JSONValue.self, from: Data(contentsOf: env.paths.settingsURL))
         #expect(changed["modelProfiles"] == ["smart": ["chatModel": "gpt-oss:20b"]] && changed["profile"] == nil,
                 "the user's file holds the one field changed, so the profile's other models still follow the bundled ones")
-        #expect(try await SettingsStore(paths: env.paths).current.modelProfile("smart").chatModel == "gpt-oss:20b",
+        #expect(try await SettingsStore.opened(paths: env.paths).current.modelProfile("smart").chatModel == "gpt-oss:20b",
                 "and the change survives a restart")
         try await env.settings.update { $0.modelProfiles["smart"] = bundled }
         let reset = try JSON.decoder.decode(JSONValue.self, from: Data(contentsOf: env.paths.settingsURL))
@@ -307,7 +307,7 @@ import Testing
             await #expect("settings with \(key) the app cannot use are refused, with the reason that names the key") {
                 try await env.settings.update(change)
             } throws: { error in
-                guard case let ConfigError.invalid(name, underlying) = error else { return false }
+                guard let (name, underlying) = ConfigRefusal(error).map({ ($0.name, $0.underlying) }) else { return false }
                 return name == "settings" && underlying.hasPrefix(key + " ")
             }
             #expect(try Data(contentsOf: env.paths.settingsURL) == file, "\(key): nothing is written, so the next launch still starts")
@@ -315,7 +315,7 @@ import Testing
         }
         try Data(#"{"profile": "lowMemory"}"#.utf8).write(to: env.paths.settingsURL)
         #expect("a file naming a profile it does not list stops the load, naming the profile") {
-            try SettingsStore(paths: env.paths)
+            try SettingsStore.opened(paths: env.paths)
         } throws: { error in
             (error as? ConfigError)?.localizedDescription.contains("lowMemory") == true
         }
@@ -323,7 +323,7 @@ import Testing
 
     /// Whether `error` refuses the configuration `name` for each key of `paths`, which the app does not know.
     private func refuses(_ error: any Error, _ name: String, unknown paths: [String]) -> Bool {
-        guard case let ConfigError.invalid(refused, underlying) = error else { return false }
+        guard let (refused, underlying) = ConfigRefusal(error).map({ ($0.name, $0.underlying) }) else { return false }
         return refused == name && underlying == paths.map(ConfigLoader.unknownKey).joined(separator: "; ")
     }
 
@@ -343,11 +343,12 @@ import Testing
         defer { env.cleanup() }
         try Data(#"{"models": {"profile": "lowMemory"}, "renameFiles": false}"#.utf8).write(to: env.paths.settingsURL)
         #expect("a choice of profile an earlier version saved stops the app naming the key, rather than being read as another") {
-            try SettingsStore(paths: env.paths)
+            try SettingsStore.opened(paths: env.paths)
         } throws: { refuses($0, "settings", unknown: ["models"]) }
         let extra = env.root.appendingPathComponent("extra.json")
         let environment = RuntimeEnvironment(home: nil, ollamaURL: nil, logLevelName: nil, pipelineOverridePath: extra.path, trashPath: nil)
         for (override, unknown) in [(#"{"modelProfiles": {"standard": {"numCtx": 8192}}}"#, ["modelProfiles"]),
+                                    (#"{"search": {"debounceMilliseconds": 150}}"#, ["search.debounceMilliseconds"]),
                                     (#"{"tasks": {"efforts": {"low": {"model": "fast", "fallback": false, "repairAttempts": 1}}}}"#,
                                      ["tasks.efforts.low.fallback", "tasks.efforts.low.model"])] {
             try Data(override.utf8).write(to: env.paths.pipelineOverrideURL)
@@ -367,7 +368,7 @@ import Testing
                                         "embedModel": "bge-m3"},
                                "smart": {"chatModel": "gpt-oss:20b"}}}
             """#.utf8).write(to: env.paths.settingsURL)
-        let settings = try await SettingsStore(paths: env.paths).current
+        let settings = try await SettingsStore.opened(paths: env.paths).current
         #expect(settings.ollamaBinaryPath == "/opt/homebrew/bin/ollama" && settings.renameFiles,
                 "an optional setting loads, and a null one sets nothing")
         #expect(try settings.modelProfile().name == "Mine" && settings.modelProfiles["smart"]?.chatModel == "gpt-oss:20b",

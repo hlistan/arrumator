@@ -3,12 +3,22 @@ import Foundation
 public enum ConfigError: Error, LocalizedError {
     case missingResource(String)
     case invalid(name: String, underlying: String)
+    /// The configuration `name` the files at `paths` give cannot be used, for `underlying`; `mend` says how to mend it.
+    case invalidFile(name: String, paths: [String], underlying: String, mend: String)
 
     public var errorDescription: String? {
         switch self {
         case let .missingResource(name): "Bundled configuration \(name) is missing"
         case let .invalid(name, underlying): "Configuration \(name) is invalid: \(underlying)"
+        case let .invalidFile(name, paths, underlying, mend):
+            "Configuration \(name) in \(paths.joined(separator: " and ")) is invalid: \(underlying). \(mend)"
         }
+    }
+
+    /// The same refusal, saying which files give the configuration and how to mend it; a refusal of another kind, as it is.
+    func naming(_ paths: [URL], mend: String) -> ConfigError {
+        guard case let .invalid(name, underlying) = self, !paths.isEmpty else { return self }
+        return .invalidFile(name: name, paths: paths.map(\.path), underlying: underlying, mend: mend)
     }
 }
 
@@ -24,7 +34,9 @@ public enum ConfigLoader {
         return try JSON.decoder.decode(JSONValue.self, from: Data(contentsOf: url))
     }
 
-    public static func load<T: Codable>(_ type: T.Type, defaults name: String, overrides: [JSONValue] = []) throws -> T {
+    /// - Parameter validating: whether what the configuration's `problems` say refuses it too; a key the app does not know
+    ///   always does. Only what mends the configuration loads it without, and refuses what it leaves (`SettingsStore`).
+    public static func load<T: Codable>(_ type: T.Type, defaults name: String, overrides: [JSONValue] = [], validating: Bool = true) throws -> T {
         let bundled = try bundledValue(name)
         var merged = bundled
         for o in overrides { merged = deepMerge(merged, o) }
@@ -38,13 +50,21 @@ public enum ConfigLoader {
             throw ConfigError.invalid(name: name, underlying: String(describing: error))
         }
         let unknown = Set(([bundled] + overrides).flatMap { unknownKeys(in: $0, read: read) }).sorted()
-        try refuse(unknown.map(unknownKey) + ((value as? any ValidatedConfiguration)?.problems ?? []), name: name)
+        let problems = validating ? (value as? any ValidatedConfiguration)?.problems ?? [] : []
+        try refuse(unknown.map(unknownKey) + problems, name: name)
         return value
     }
 
     /// Stops with `problems`, the reasons the configuration `name` cannot be used, when there are any.
     static func refuse(_ problems: [String], name: String) throws {
         guard problems.isEmpty else { throw ConfigError.invalid(name: name, underlying: problems.joined(separator: "; ")) }
+    }
+
+    /// Stops as `refuse(_:name:)` does, naming the settings file at `file` and how to mend it.
+    static func refuse(_ problems: [String], name: String, file: URL, mend: String = SettingsStore.mend) throws {
+        do { try refuse(problems, name: name) } catch let refused as ConfigError {
+            throw refused.naming([file], mend: mend)
+        }
     }
 
     /// Why a configuration with the key at `path` is refused.

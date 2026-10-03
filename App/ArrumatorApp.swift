@@ -53,7 +53,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Wind
             await model.start()
             applyDockPolicy()
             reportStatusItem()
-            if model.settings?.onboardingCompleted != true {
+            if case .failed = model.phase {
+                // Why the app could not start, such as settings it cannot run with, with the file and what mends it, is
+                // on the main window's first page: never onboarding, which would ask again for what is set.
+                show(.main)
+            } else if model.settings?.onboardingCompleted != true {
                 show(.onboarding)
             } else if !launchedAsLoginItem {
                 show(.main)

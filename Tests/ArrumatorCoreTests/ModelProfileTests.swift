@@ -93,7 +93,7 @@ import Testing
         #expect(worded.id == "für-den-alltag-2" && worded.profile.name == "Für den Alltag 2",
                 "the id is the name's letters and digits, in lowercase, its words joined by hyphens: \(worded.id)")
         #expect(await w.profiles.list().map(\.id) == w.bundledIDs + ["mine", "mine-2", "für-den-alltag-2"], "each new one comes last")
-        let reloaded = try await SettingsStore(paths: w.h.env.paths).current
+        let reloaded = try await SettingsStore.opened(paths: w.h.env.paths).current
         #expect(reloaded.modelProfiles["mine"] == mine.profile, "and the profiles are there at the next launch")
     }
 
@@ -233,7 +233,7 @@ import Testing
                                     embedModel: Self.embedder)
         #expect(try await w.h.env.settings.current.modelProfile(mine.id) == expected,
                 "each change is made to the profile as the change before it left it, so none is lost")
-        #expect(try await SettingsStore(paths: w.h.env.paths).current.modelProfile(mine.id) == expected, "and so it is saved")
+        #expect(try await SettingsStore.opened(paths: w.h.env.paths).current.modelProfile(mine.id) == expected, "and so it is saved")
         #expect(try await w.events().count == 1 + changes.count, "each is in History once")
 
         try await withThrowingTaskGroup(of: Void.self) { group in

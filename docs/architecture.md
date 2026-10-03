@@ -235,8 +235,9 @@ started Ollama, stops it. A start after a stop, or a second one, starts nothing.
 `ingest.quitTimeout` seconds ([AGENTS.md §3](../AGENTS.md#3-core-principles), "Stopping is awaited"); when the stop
 takes longer, the Ollama server the app started is stopped all the same before the app ends. Switching archives opens
 the next archive's index on the same `SettingsStore` and the same `OllamaConnection`, so a change made while it
-switches, a pause or another server, is kept by both runtimes, and shows the settings can be saved before anything
-stops. It then stops this runtime (not for good), records the switch
+switches, a pause or another server, is kept by both runtimes, and shows the settings naming the next archive can be saved
+before anything stops (`SettingsStore.checkSaving`, refused as `AppSettings.problems` refuses an archive inside
+Incoming or around it). It then stops this runtime (not for good), records the switch
 and writes its record files, and only then saves the settings naming the next archive and takes the files waiting in
 Incoming off this runtime's queue; a step that fails starts this runtime again as it was, its queue untouched. Each
 runtime acts on the archive it was made with (`archive`: its record files, where it files, what it watches), never on
@@ -347,7 +348,7 @@ Views never poll. `AppModel` holds one task per stream and mirrors the value:
 | `SearchTaskQueue.statusUpdates()`, `TaskConversationQueue.statusUpdates()` | Which request is read or question answered, by which model, and the answer so far. |
 | `OllamaLifecycle.states()` | Whether Ollama is ready. |
 | `ArrumatorRuntime.workUpdates()` | Whether the runtime's work runs, or was refused as the index is not rebuilt from its archive or the archive is away. |
-| `SettingsStore.changes()` | Each change to the settings. The settings in force are read once, beside it. |
+| `SettingsStore.changes()` | Each change to the settings: one made through the store, and one another process made, found when the file is read again before a change. The settings in force are read once, beside it. |
 
 A decision the user can audit is recorded in History; a state the user only watches is published on a stream
 ([§4.6](../AGENTS.md#4-hard-rules-non-negotiable)). What is happening now is decided in Core from the stream

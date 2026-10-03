@@ -33,7 +33,7 @@ import Testing
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }
         let archive = home.folder("New")
-        try await SettingsStore(paths: home.paths).update { $0.archivePath = archive.path }
+        try await SettingsStore.opened(paths: home.paths).update { $0.archivePath = archive.path }
         let runtime = try await home.bootstrap()
         #expect(!FileManager.default.fileExists(atPath: archive.path), "the app makes no folder when it starts")
         try await runtime.finishOnboarding()
@@ -168,7 +168,7 @@ import Testing
         try home.setWritable(false, volumes, withFoldersInIt: false)
         defer { try? home.setWritable(true, volumes, withFoldersInIt: false) }
         let archive = volumes.appendingPathComponent("Disk/Archive", isDirectory: true).standardizedFileURL
-        try await SettingsStore(paths: home.paths).update { $0.archivePath = archive.path }
+        try await SettingsStore.opened(paths: home.paths).update { $0.archivePath = archive.path }
         let runtime = try await home.bootstrap()
         // Onboarding cannot make its folder there: no permission error is the user's to read for it.
         try await runtime.finishOnboarding()

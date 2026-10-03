@@ -236,10 +236,11 @@ public struct SearchPromptInterpreter: SearchPromptInterpreting {
     }
 
     /// The labels the archive uses of each kind `limits` names, the most used first, by the answer's name for their
-    /// kind, one kind per line; empty for an archive without any.
+    /// kind, one kind per line; empty for an archive without any. A kind `limits` does not name is shown none.
     func archiveBlock(_ vocabulary: [LabelKind: [LabelUsage]], limits: [LabelKind: Int]) throws -> String {
         let used = ClassificationSchema.answerOrder.compactMap { kind -> String? in
-            let values = (vocabulary[kind] ?? []).prefix(limits[kind] ?? 0).map(\.label.value)
+            guard let limit = limits[kind] else { return nil }
+            let values = (vocabulary[kind] ?? []).prefix(limit).map(\.label.value)
             return values.isEmpty ? nil : "- \(ClassificationSchema.labelsKey(kind)): " + values.joined(separator: "; ")
         }
         guard !used.isEmpty else { return "" }

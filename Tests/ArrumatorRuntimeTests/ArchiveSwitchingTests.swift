@@ -79,7 +79,7 @@ import Testing
         defer { home.cleanup() }
         // The temporary folder lives under /private/var, reached as /var; the archive does not exist yet.
         let aliased = "/private" + home.folder("Aliased").path
-        try await SettingsStore(paths: home.paths).update { $0.archivePath = aliased }
+        try await SettingsStore.opened(paths: home.paths).update { $0.archivePath = aliased }
         // Set up as onboarding sets it up, which makes its folder.
         let first = try await home.bootstrap()
         try await first.finishOnboarding()
@@ -122,7 +122,7 @@ import Testing
         try home.setWritable(true, home.paths.supportDirectory, withFoldersInIt: false)
         #expect(refused?.code == .fileWriteNoPermission, "as the settings could not be saved")
 
-        #expect(try await SettingsStore(paths: home.paths).current.archiveURL == home.folder("First"), "the app stays on its archive")
+        #expect(try await SettingsStore.opened(paths: home.paths).current.archiveURL == home.folder("First"), "the app stays on its archive")
         let switched = try await runtime.services.history.events(limit: 20, kinds: [.settingsChanged]).map(\.summary)
         #expect(!switched.contains { $0.hasPrefix("Switched") }, "and History records no switch that did not happen: \(switched)")
         try Data(Self.waiting.utf8).write(to: home.folder("Incoming").appendingPathComponent(Self.after))
@@ -160,7 +160,7 @@ import Testing
         let switched = try await first.switchArchive(to: home.folder("Second").path)
         let second = switched.runtime
         try await second.openArchive()
-        #expect(try await SettingsStore(paths: home.paths).current.archiveURL == home.folder("Second"),
+        #expect(try await SettingsStore.opened(paths: home.paths).current.archiveURL == home.folder("Second"),
                 "an archive whose disk cannot be written to does not keep the user from switching away from it")
         #expect(switched.unwritten?.archive == home.folder("First").path,
                 "and the user is told whose record files wait to be written: \(switched.unwritten?.note ?? "nothing")")
@@ -232,7 +232,7 @@ import Testing
         try await first.setPaused(true)
         letGo.fire(())
         let second = try await switching.value.runtime
-        let saved = await (try SettingsStore(paths: home.paths)).current
+        let saved = await (try SettingsStore.opened(paths: home.paths)).current
         let inUse = await second.settings.current
         #expect(saved.archiveURL == home.folder("Second"), "the settings on disk name the archive the app now runs on")
         #expect(saved.paused && inUse.paused,
@@ -253,7 +253,7 @@ import Testing
         try await first.useOllama(at: Self.anotherServer)
         letGo.fire(())
         let second = try await switching.value.runtime
-        let saved = await (try SettingsStore(paths: home.paths)).current.ollamaURL
+        let saved = await (try SettingsStore.opened(paths: home.paths)).current.ollamaURL
         #expect(saved == Self.anotherServer, "the server chosen is saved")
         #expect(second.ollama.baseURL.absoluteString == Self.anotherServer, "and is the one the runtime switched to talks to")
     }
@@ -292,7 +292,7 @@ import Testing
         try home.setWritable(true, home.paths.supportDirectory, withFoldersInIt: false)
         #expect(refused?.code == .fileWriteNoPermission, "as the settings could not be saved")
 
-        #expect(try await SettingsStore(paths: home.paths).current.archiveURL == home.folder("First"), "the app stays on its archive")
+        #expect(try await SettingsStore.opened(paths: home.paths).current.archiveURL == home.folder("First"), "the app stays on its archive")
         let recorded = try await first.services.history.events(limit: 20, kinds: [.settingsChanged]).map(\.summary)
         #expect(recorded.contains("Switched to the archive at \(home.folder("Second").path)")
                     && recorded.contains { $0.hasPrefix("Stayed on the archive at \(home.folder("First").path): ") },
@@ -317,9 +317,18 @@ import Testing
             _ = try await runtime.switchArchive(to: home.folder("First").path)
         }
         await #expect(throws: ArchiveSwitchError.self, "a file is no archive") { _ = try await runtime.switchArchive(to: file.path) }
-        await #expect(throws: ArchiveSwitchError.self, "its files would be filed again") {
-            _ = try await runtime.switchArchive(to: home.folder("Incoming").appendingPathComponent("Archive").path)
+        let incoming = await runtime.settings.current.incomingPath
+        // Inside Incoming, its files would be filed again; around it, what waits there would be taken for its documents.
+        for archive in [home.folder("Incoming").appendingPathComponent("Archive"), home.root] {
+            await #expect("\(archive.path): refused as settings naming it would be, naming both folders") {
+                _ = try await runtime.switchArchive(to: archive.path)
+            } throws: { error in
+                guard let underlying = ConfigRefusal(error)?.underlying else { return false }
+                return underlying.contains("archivePath “\(archive.path)”") && underlying.contains("incomingPath “\(incoming)”")
+            }
         }
+        #expect(!FileManager.default.fileExists(atPath: home.folder("Incoming").appendingPathComponent("Archive").path),
+                "before it makes the folder")
         #expect(await runtime.settings.current.archiveURL == home.folder("First"), "a refused switch changes nothing")
     }
 }

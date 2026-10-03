@@ -42,7 +42,7 @@ import Testing
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }
         let saved = "http://ollama:s3cret@127.0.0.1:11434"
-        try await SettingsStore(paths: home.paths).update { $0.ollamaURL = saved }
+        try await SettingsStore.opened(paths: home.paths).update { $0.ollamaURL = saved }
         let fromSettings = OllamaError.unusableAddress(.settings(home.paths.settingsURL), reason: OllamaError.invalidAddress(.userInfo).localizedDescription)
         await #expect(throws: fromSettings, "the saved address is refused, naming the file it is saved in") { try await home.open() }
         let said = fromSettings.localizedDescription

@@ -21,6 +21,7 @@ public struct PipelineConfig: Sendable, Codable, Hashable, ValidatedConfiguratio
     public var interface: InterfaceConfig
     public var maintenance: MaintenanceConfig
     public var database: DatabaseConfig
+    public var settingsLock: SettingsLockConfig
 
     public var problems: [String] {
         var problems: [String] = []
@@ -46,16 +47,31 @@ public struct PipelineConfig: Sendable, Codable, Hashable, ValidatedConfiguratio
         if watcher.maxPackageItems < 1 { problems.append("watcher.maxPackageItems must be at least 1") }
         problems += tasks.problems
         problems += conversation.problems
+        problems += limitProblems
         return problems
     }
 
     public static func load(paths: AppPaths, environment: RuntimeEnvironment) throws -> PipelineConfig {
         var overrides: [JSONValue] = []
-        if let user = try ConfigLoader.overrideValue(at: paths.pipelineOverrideURL) { overrides.append(user) }
-        if let path = environment.pipelineOverridePath,
-           let extra = try ConfigLoader.overrideValue(at: URL(fileURLWithPath: path)) { overrides.append(extra) }
-        return try ConfigLoader.load(PipelineConfig.self, defaults: "pipeline", overrides: overrides)
+        var files: [URL] = []
+        for url in [paths.pipelineOverrideURL] + (environment.pipelineOverridePath.map { [URL(fileURLWithPath: $0)] } ?? []) {
+            let value: JSONValue?
+            do { value = try ConfigLoader.overrideValue(at: url) } catch {
+                throw ConfigError.invalidFile(name: "pipeline", paths: [url.path], underlying: error.localizedDescription, mend: Self.mend)
+            }
+            guard let value else { continue }
+            files.append(url)
+            overrides.append(value)
+        }
+        do {
+            return try ConfigLoader.load(PipelineConfig.self, defaults: "pipeline", overrides: overrides)
+        } catch let refused as ConfigError {
+            throw refused.naming(files, mend: Self.mend)
+        }
     }
+
+    /// How a refused `pipeline.json` is mended, as its refusal says.
+    static let mend = "Correct the key in that file, or take it out to use the value the app comes with"
 
     public static func bundledDefaults() throws -> PipelineConfig {
         try ConfigLoader.load(PipelineConfig.self, defaults: "pipeline")
@@ -333,7 +349,6 @@ public struct SearchConfig: Sendable, Codable, Hashable {
     /// `LabelKind`, the user's tags last.
     public var bm25Weights: [Double]
     public var snippetTokens: Int
-    public var debounceMilliseconds: Int
     public var vectorSnippetChars: Int
 }
 
@@ -375,32 +390,6 @@ public struct TasksConfig: Sendable, Codable, Hashable {
             throw ConfigError.invalid(name: "pipeline", underlying: "tasks.efforts.\(effort.rawValue) is missing")
         }
         return preset
-    }
-
-    var problems: [String] {
-        var problems: [String] = []
-        for effort in TaskEffort.allCases {
-            guard let preset = efforts[effort] else {
-                problems.append("tasks.efforts.\(effort.rawValue) is missing")
-                continue
-            }
-            if preset.repairAttempts < 0 { problems.append("tasks.efforts.\(effort.rawValue).repairAttempts cannot be negative") }
-            if preset.numPredict < 1 { problems.append("tasks.efforts.\(effort.rawValue).numPredict must be at least 1") }
-            if preset.timeout <= 0 { problems.append("tasks.efforts.\(effort.rawValue).timeout must be more than 0") }
-            for kind in preset.promptLabels.keys where kind.isUsersOwn {
-                problems.append("tasks.efforts.\(effort.rawValue).promptLabels.\(kind.rawValue): the model is never shown the user's own labels; remove it")
-            }
-        }
-        if maxValuesPerKind < 1 { problems.append("tasks.maxValuesPerKind must be at least 1") }
-        if maxWords < 0 { problems.append("tasks.maxWords cannot be negative") }
-        if maxGroupingDepth < 1 { problems.append("tasks.maxGroupingDepth must be at least 1") }
-        if defaultGrouping.count > maxGroupingDepth { problems.append("tasks.defaultGrouping is deeper than tasks.maxGroupingDepth") }
-        if maxTitleChars < 1 { problems.append("tasks.maxTitleChars must be at least 1") }
-        if maxDocuments < 1 { problems.append("tasks.maxDocuments must be at least 1") }
-        do { _ = try withoutLabelFolder(.sender) } catch {
-            problems.append("tasks.withoutLabelFolder: \(error.localizedDescription)")
-        }
-        return problems
     }
 }
 
@@ -601,6 +590,14 @@ public struct DatabaseConfig: Sendable, Codable, Hashable {
     /// Seconds before the app watches the index again after watching it failed (`AppDatabase.activity()`,
     /// `pendingRecords()`): its lists, and the writer of the record files, hear of changes again after that.
     public var observationRetry: Double
+}
+
+/// How a change of `settings.json` waits for one another process is making (`SettingsLock`).
+public struct SettingsLockConfig: Sendable, Codable, Hashable {
+    /// Seconds a change waits for another process changing the settings before it fails, saying so.
+    public var timeout: Double
+    /// Seconds between asking again whether the other process is done.
+    public var pollInterval: Double
 }
 
 /// One step of the processing funnel: the trace stages it covers, and how it is described to the user.

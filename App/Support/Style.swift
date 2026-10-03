@@ -241,9 +241,8 @@ enum Style {
 
     /// The Settings window.
     static let settingsWindow = CGSize(width: 900, height: 620)
-    /// What the stepper for how long model prompts are kept offers.
-    static let retentionDays = 1...3_650
-    /// The step of the stepper for how long model prompts are kept.
+    /// The step of the stepper for how long model prompts are kept, over the days Core allows
+    /// (`AppSettings.traceRawRetentionDaysRange`).
     static let retentionDaysStep = 30
     /// Between a model profile's name and the words after it, in its row and opened.
     static let profileNameSpacing: CGFloat = 8

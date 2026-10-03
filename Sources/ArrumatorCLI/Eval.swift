@@ -38,15 +38,17 @@ struct Eval: AsyncParsableCommand {
         // The throw-away folders are chosen before the runtime opens, as the runtime is open on one archive; a profile the
         // settings do not list is refused before anything is read. The archive is new, so its folder is made here, as
         // setting an archive up makes it: the runtime never makes one by itself.
-        let store = try SettingsStore(paths: AppPaths.resolve(environment))
-        var chosen = await store.current
+        let (profile, model) = (profile, model)
         let archive = home.appendingPathComponent("Archive", isDirectory: true)
         try FileManager.default.createDirectory(at: archive, withIntermediateDirectories: true)
-        chosen.archivePath = archive.path
-        chosen.incomingPath = home.appendingPathComponent("Incoming").path
-        if let profile { chosen.profile = profile }
-        if let model { chosen = try chosen.reading(withChatModel: model) }
-        try await store.save(chosen)
+        let paths = AppPaths.resolve(environment)
+        let config = try PipelineConfig.load(paths: paths, environment: environment)
+        try await SettingsStore(paths: paths, config: config.settingsLock, time: SystemTime()).update { chosen in
+            chosen.archivePath = archive.path
+            chosen.incomingPath = home.appendingPathComponent("Incoming").path
+            if let profile { chosen.profile = profile }
+            if let model { chosen = try chosen.reading(withChatModel: model) }
+        }
         // A copy goes into a Trash of the throw-away home, never the user's.
         let runtime = try await ArrumatorRuntime.bootstrap(appVersion: Arrumator.version, environment: environment,
                                                            echoLogsToStderr: options.verbose,

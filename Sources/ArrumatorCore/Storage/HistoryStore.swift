@@ -22,6 +22,22 @@ public struct HistoryStore: Sendable {
         }
     }
 
+    /// Records an event in the transaction that also makes `change`, the change it describes outside the index, such as
+    /// a file saved, as its last step: when `change` throws, nothing is recorded. An event held until the index holds its
+    /// archive (`insert`) is held in that transaction, and its number is nil. Whoever made the change undoes it when the
+    /// transaction, after it, cannot be committed (`SettingsStore.change(_:recording:)`).
+    @discardableResult
+    public func record(_ kind: EventKind, actor: EventActor, summary: String, payload: (any Encodable)?,
+                       alongside change: @escaping @Sendable () throws -> Void) async throws -> Int64? {
+        let payloadJSON = payload.map { JSON.string($0) }
+        let at = time.now()
+        return try await database.writer.write { db in
+            let id = try Self.insert(db, kind, at: at, actor: actor, doc: nil, job: nil, trace: nil, summary: summary, payloadJSON: payloadJSON)
+            try change()
+            return id
+        }
+    }
+
     /// Inserts inside an existing transaction so events commit atomically with the change they describe. An index that
     /// holds nothing of its archive yet (`AppDatabase.PendingRebuild.unread`), whose history its rebuild replaces with
     /// the archive's, holds an event that concerns no document, job or trace, such as a setting changed during

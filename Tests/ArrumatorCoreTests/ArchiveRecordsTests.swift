@@ -212,9 +212,7 @@ import Testing
     @Test func aLostIndexFindsDocumentsWhereverTheyAreAndTakesInFilesPutThereByHand() async throws {
         let w = try await RecordsWorld.make()
         defer { w.h.env.cleanup() }
-        try await w.h.env.settings.update { $0.incomingPath = w.h.env.archive.appendingPathComponent("Inbox").path }
         let byHand = [try w.h.env.put("loose.txt", text: "put there by hand"), try w.h.env.put("Old/2025/statement.txt", text: "by hand")]
-        _ = try w.h.env.put("Inbox/waiting.txt", text: "not yet filed")
         _ = try w.h.env.put("\(w.h.env.config.records.systemFolderName)/stray.txt", text: "no document")
         // While the index was lost, one document was moved in Finder, keeping the identifier on it, and the other deleted.
         let moved = try #require(try await w.h.services.documents.document(id: w.documents[0]))
@@ -233,7 +231,7 @@ import Testing
         #expect(try await store.document(id: w.documents[1])?.status == .missing, "the deleted one is marked missing")
         let adoptions = try await JobStore(database: database, time: TestTime(.advances)).active(kinds: [.adopt])
         #expect(Set(adoptions.map(\.sourcePath)) == Set(byHand.map(\.path)),
-                "files put in the archive by hand are taken in where they are, but not from Incoming or the system folder, nor a document moved")
+                "files put in the archive by hand are taken in where they are, but not from the system folder, nor a document moved")
     }
 
     @Test func aRebuildTakesBackADocumentMarkedMissingWhoseFileIsFound() async throws {

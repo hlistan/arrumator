@@ -1,9 +1,13 @@
 import Foundation
 
-/// The one writer of the user's changes to the settings: each change is saved through the store and recorded once in
-/// History as `.settingsChanged`, in the words its caller gives and with the settings it changed, from the app and the
-/// command line alike (AGENTS.md §4.4). A change that changes nothing is neither saved nor recorded. Pausing
-/// (`.paused`, `.resumed`) and switching archives record events of their own.
+/// The one writer of the user's changes to the settings: each change is recorded once in History as `.settingsChanged`,
+/// in the words its caller gives and with the settings it changed, and saved, from the app and the command line alike
+/// (AGENTS.md §4.4). The record and the save are one: the event is written in the transaction that saves the settings,
+/// which saves them as its last step, so a save that fails records nothing, a record that fails saves nothing, and a
+/// change is never in force without its record (`SettingsStore.change(_:recording:)`), but for a crash between the file
+/// being saved and the transaction being committed, which leaves the change without its record. A change that changes nothing is
+/// neither saved nor recorded. Pausing is recorded as `.paused` or `.resumed` (`setPaused(_:)`); switching archives
+/// records an event of its own.
 public struct SettingsActions: Sendable {
     public let store: SettingsStore
     public let history: HistoryStore
@@ -19,14 +23,15 @@ public struct SettingsActions: Sendable {
     /// recorded. Returns the settings in force.
     @discardableResult
     public func change(summary: String, _ mutate: @Sendable (inout AppSettings) throws -> Void) async throws -> AppSettings {
-        try await save(mutate) { _, _ in summary }.settings
+        try await save(mutate) { _, _, _ in summary }.settings
     }
 
     /// Applies `mutate` as `change(summary:_:)` does, recorded in History in words made of what changed
-    /// (`summary(_:)`): how Settings in the app and `arrumatorcli settings` change any setting without an action of its own.
+    /// (`summary(_:in:)`): how Settings in the app and `arrumatorcli settings` change any setting without an action of
+    /// its own, several at once as one change.
     @discardableResult
     public func change(_ mutate: @Sendable (inout AppSettings) throws -> Void) async throws -> AppSettings {
-        try await save(mutate) { _, changed in Self.summary(changed) }.settings
+        try await save(mutate) { _, changed, settings in try Self.summary(changed, in: settings) }.settings
     }
 
     /// Applies a change that depends on the settings in force as one step, as `change(summary:_:)` does: `mutate` checks
@@ -36,27 +41,51 @@ public struct SettingsActions: Sendable {
     @discardableResult
     public func change<Outcome: Sendable>(checking mutate: @Sendable (inout AppSettings) throws -> (summary: String, outcome: Outcome))
         async throws -> (settings: AppSettings, outcome: Outcome) {
-        let saved = try await save(mutate) { described, _ in described.summary }
+        let saved = try await save(mutate) { described, _, _ in described.summary }
         return (saved.settings, saved.outcome.outcome)
     }
 
-    /// What a change did, as History says it: “Changed logLevel to debug, renameFiles to false”, each setting by its
-    /// name in `settings.json`, in the order of their names, with what it became.
-    static func summary(_ changed: [String: JSONValue]) -> String {
-        "Changed " + changed.sorted { $0.key < $1.key }.map { "\($0.key) to \($0.value.stringValue ?? $0.value.serialized())" }
-            .joined(separator: ", ")
+    /// Pauses or resumes filing, saved and recorded as `.paused` or `.resumed` as one change, as `change(summary:_:)` is:
+    /// from the app and the command line alike (`ArrumatorRuntime.setPaused`). When filing already is as asked, nothing
+    /// is saved or recorded. Returns the settings in force.
+    @discardableResult
+    public func setPaused(_ paused: Bool) async throws -> AppSettings {
+        try await save({ $0.paused = paused }, as: paused ? .paused : .resumed) { _, _, _ in
+            paused ? Self.pausedSummary : Self.resumedSummary
+        }.settings
     }
 
-    /// Saves the change and records it, in the words `summary` gives for what `mutate` gave back and the settings that
-    /// changed.
-    private func save<Outcome: Sendable>(_ mutate: @Sendable (inout AppSettings) throws -> Outcome,
-                                         summarized summary: (Outcome, [String: JSONValue]) -> String) async throws
-        -> (settings: AppSettings, outcome: Outcome) {
-        let (before, after, outcome) = try await store.change(mutate)
-        let changed = try Self.changes(from: before, to: after)
-        guard !changed.isEmpty else { return (after, outcome) }
-        try await history.record(.settingsChanged, actor: .user, summary: summary(outcome, changed), payload: changed)
-        return (after, outcome)
+    /// How History says filing was paused, and resumed.
+    static let pausedSummary = "Processing paused"
+    static let resumedSummary = "Processing resumed"
+
+    /// What a change did, as History says it: the profile chosen, in the words choosing it has (`reading(with:)`), then
+    /// every other setting by its name in `settings.json`, in the order of their names, with what it became, as in
+    /// “Changed logLevel to debug, renameFiles to false” or “Reading with the profile “Smart”; changed renameFiles to
+    /// false”. `settings` are the settings after the change.
+    static func summary(_ changed: [String: JSONValue], in settings: AppSettings) throws -> String {
+        let profile = AppSettings.CodingKeys.profile.stringValue
+        let chosen = try changed[profile].map { _ in reading(with: try settings.modelProfile()) }
+        let others = changed.filter { $0.key != profile }.sorted { $0.key < $1.key }
+            .map { "\($0.key) to \($0.value.stringValue ?? $0.value.serialized())" }.joined(separator: ", ")
+        guard !others.isEmpty else { return chosen ?? "" }
+        return chosen.map { "\($0); changed \(others)" } ?? "Changed \(others)"
+    }
+
+    /// How History says the settings read with `profile` from now on.
+    static func reading(with profile: ModelProfile) -> String { "Reading with the profile “\(profile.name)”" }
+
+    /// Records the change, in the words `summary` gives for what `mutate` gave back, the settings that changed and the
+    /// settings after it, and saves it, in one transaction.
+    private func save<Outcome: Sendable>(_ mutate: @Sendable (inout AppSettings) throws -> Outcome, as kind: EventKind = .settingsChanged,
+                                         summarized summary: @escaping @Sendable (Outcome, [String: JSONValue], AppSettings) throws -> String)
+        async throws -> (settings: AppSettings, outcome: Outcome) {
+        let change = try await store.change(mutate) { [history] change, save in
+            let changed = try Self.changes(from: change.before, to: change.after)
+            try await history.record(kind, actor: .user, summary: try summary(change.outcome, changed, change.after),
+                                     payload: changed, alongside: save)
+        }
+        return (change.after, change.outcome)
     }
 
     /// The top-level settings that differ between `before` and `after`, with their values in `after`: null for one taken

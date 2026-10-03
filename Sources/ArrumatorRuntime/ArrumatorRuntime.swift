@@ -72,16 +72,18 @@ public final class ArrumatorRuntime: Sendable {
     /// - Parameter trash: where an exact copy of a document in the archive goes once its original is read again in its
     ///   place: the Mac's Trash for the app and the command line, a folder of its own for a run that must leave nothing
     ///   behind, as `eval`.
+    /// - Parameter mendingSettings: whether settings the app could not run with are taken all the same, for a command that
+    ///   mends them before it opens the archive (`SettingsStore.init(paths:config:time:mending:)`).
     /// - Parameter resolver: what a `.local` name of the Ollama server is looked up with: `SystemHostResolver` for the app
     ///   and the command line, a stub for a test, which may look nothing up on the network.
     public static func bootstrap(appVersion: String, environment: RuntimeEnvironment, echoLogsToStderr: Bool,
-                                 resolver: any HostResolving, trash: any Trashing) async throws -> ArrumatorRuntime {
+                                 mendingSettings: Bool = false, resolver: any HostResolving, trash: any Trashing) async throws -> ArrumatorRuntime {
         let time = SystemTime()
         let paths = AppPaths.resolve(environment)
         try paths.ensureDirectories()
         let logLevelOverride = try environment.logLevel()
         let config = try PipelineConfig.load(paths: paths, environment: environment)
-        let settings = try SettingsStore(paths: paths)
+        let settings = try SettingsStore(paths: paths, config: config.settingsLock, time: time, mending: mendingSettings)
         let current = await settings.current
         Log.shared.configure(directory: paths.logsDirectory, minLevel: logLevelOverride ?? current.logLevel,
                              config: config.logging, echoToStderr: echoLogsToStderr)
@@ -146,16 +148,13 @@ public final class ArrumatorRuntime: Sendable {
         if FileManager.default.fileExists(atPath: chosen.path, isDirectory: &isDirectory), !isDirectory.boolValue {
             throw ArchiveSwitchError.notAFolder(chosen.path)
         }
-        let incoming = await settings.current.incomingURL
-        func isInsideIncoming(_ folder: String) -> Bool {
-            (folder + "/").hasPrefix((incoming.canonicalFolderPath ?? incoming.path) + "/") || (folder + "/").hasPrefix(incoming.path + "/")
-        }
-        guard !isInsideIncoming(chosen.path) else { throw ArchiveSwitchError.insideIncoming(archive: chosen.path, incoming: incoming.path) }
+        // Settings naming it, refused as the next launch would refuse them (`AppSettings.problems`: an archive inside
+        // Incoming or around it, for one), and a file that cannot be written, are found before anything is made or stops.
+        try await settings.checkSaving { $0.archivePath = chosen.path }
         // Spelled as the file system spells it (links resolved, letters in their case on disk), so every path under
         // the archive is written one way, and another spelling of this archive's folder is this archive.
         let target = chosen.canonicalPlace
         guard paths.indexURL(for: target) != index else { throw ArchiveSwitchError.alreadyOpen(target.path) }
-        guard !isInsideIncoming(target.path) else { throw ArchiveSwitchError.insideIncoming(archive: target.path, incoming: incoming.path) }
 
         let next = try ArrumatorRuntime(appVersion: appVersion, environment: environment, logLevelOverride: logLevelOverride,
                                         time: time, paths: paths, config: config, settings: settings, current: await settings.current,
@@ -166,8 +165,6 @@ public final class ArrumatorRuntime: Sendable {
             guard try await !next.database.heldAnArchive() else { throw RecordsError.archiveNotThere(target.path) }
             try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
         }
-        // The settings in force, saved as they are: the file the switch saves can be written, or nothing stops.
-        try await settings.save(await settings.current)
         let halted = await halt(forGood: false)
         do {
             // The files waiting in Incoming leave the queue only once the switch is made, below, so one that fails keeps it.
@@ -215,10 +212,8 @@ public final class ArrumatorRuntime: Sendable {
     /// Pauses or resumes filing, from the app or the command line alike: the setting, the worker woken to notice, and
     /// the decision in History.
     public func setPaused(_ paused: Bool) async throws {
-        try await settings.update { $0.paused = paused }
+        try await settingsActions.setPaused(paused)
         await coordinator.wake()
-        try await services.history.record(paused ? .paused : .resumed, actor: .user,
-                                          summary: paused ? "Processing paused" : "Processing resumed")
     }
 
     /// Writes a zip with logs, recent traces, the doctor's report and the settings; document text only when
@@ -261,7 +256,7 @@ public final class ArrumatorRuntime: Sendable {
             ArchiveRecords.mayHoldRecords(archive: archive, config: config)
         }
         registry = SelfChangeRegistry(ttl: config.watcher.selfChangeTTLSeconds, time: time)
-        records = ArchiveRecords(database: database, archive: archive, settings: settings, config: config, registry: registry, time: time,
+        records = ArchiveRecords(database: database, archive: archive, config: config, registry: registry, time: time,
                                  timeZone: .autoupdatingCurrent)
         self.ollama = ollama
         gate = InferenceGate(api: ollama, retryDelays: config.ollama.retryDelays, time: time)
@@ -604,7 +599,7 @@ extension ArrumatorRuntime {
             do {
                 switch step {
                 case .incoming: try await incomingWatcher.start(root: current.incomingURL, excluding: [archive])
-                case .archive: try await archiveWatcher.start(root: archive, excluding: [current.incomingURL])
+                case .archive: try await archiveWatcher.start(root: archive)
                 }
                 applyFailures.withLock { $0[step] = nil }
             } catch {

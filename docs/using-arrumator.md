@@ -201,9 +201,10 @@ documents embedded by another model are found by meaning only once they are read
   and one made with `arrumatorcli settings` are recorded alike, once, in words made of what changed (`Changed logLevel
   to debug, renameFiles to false`, with the settings and their new values), and each change to the profiles in its own
   words: `Added the profile “Mine”, reading with qwen3.5:9b`, `The profile “Smart” reads with gpt-oss:20b instead of
-  qwen3.5:9b`, `Reset the profile “Smart”`, `Removed the profile “Mine”`, `Reading with the profile “Smart”`. Pausing,
-  the Ollama server and switching archives have their own (`Processing paused`, `Ollama at …`, `Switched to the archive
-  at …`).
+  qwen3.5:9b`, `Reset the profile “Smart”`, `Removed the profile “Mine”`, `Reading with the profile “Smart”`, which
+  comes first when other settings change with it (`Reading with the profile “Smart”; changed renameFiles to false`).
+  Pausing, the Ollama server and switching archives have their own (`Processing paused`, `Ollama at …`, `Switched to
+  the archive at …`).
 - **Traces**: for every document, each stage's inputs, outputs and timing, including the tags it was given and the
   folder in Incoming or command that gave each (the `tag` step), the exact prompts (with what the model was shown of the
   archive's labels), raw model responses and the labels the `consolidate` step changed ("How was
@@ -236,13 +237,19 @@ documents embedded by another model are found by meaning only once they are read
 No tunable lives in code. Defaults are bundled in `Sources/ArrumatorCore/Resources/Defaults/`:
 
 - `settings.json`: your preferences (folders, Ollama server, file renaming and transliteration, notifications, how long
-  model prompts are kept in traces, whether the sidebar groups labels by kind, the effort new search tasks are read
-  with, `taskEffort`, …), and the model profiles: the one documents are read with, `profile`, by its id, and every
+  model prompts are kept in traces, `traceRawRetentionDays`, from 1 to 3650 days, whether the sidebar groups labels by
+  kind, the effort new search tasks are read with, `taskEffort`, …), whether an image is described by the model of the
+  profile in use that describes images, `enableVLM` (on; off reads an image by its text alone), the `ollama` program
+  the app starts when it is not where Ollama installs it, `ollamaBinaryPath` (unset: it is looked for in
+  `ollama.binarySearchPaths`), and the model profiles: the one documents are read with, `profile`, by its id, and every
   profile, `modelProfiles`, by its id (`fast`, `standard`, `smart` and yours), each with its `name`, its `position` in
-  the list and its three models, `chatModel`, `visionModel` and `embedModel`. The app stores only your changes, in
-  `~/Library/Application Support/Arrumator/settings.json`: of a predefined profile only what you changed of it, which
-  Reset takes out again, and a profile of your own whole. Change them in Settings, with `arrumatorcli settings`, which
-  has an option for every one of them, and with `arrumatorcli profiles`.
+  the list and its three models, `chatModel`, `visionModel` and `embedModel`. Incoming and the archive,
+  `incomingPath` and `archivePath`, are named by full paths, from `/` or `~`, and are two folders, neither inside the
+  other, compared as the file system spells them, so a link to a folder or another case of its name is that folder:
+  an archive inside Incoming, or Incoming itself, would have every document filed taken in and filed again. The app
+  stores only your changes, in `~/Library/Application Support/Arrumator/settings.json`: of a predefined profile only
+  what you changed of it, which Reset takes out again, and a profile of your own whole. Change them in Settings, with
+  `arrumatorcli settings`, which has an option for every one of them, and with `arrumatorcli profiles`.
 - `pipeline.json`: every pipeline tunable, in sections: `ollama` (timeouts, retries, how it is started; `ollama serve`,
   when the app starts it, listens on the address the app talks to, with `ollama.serveEnvironment` besides; how long a
   model stays loaded after its last request, `ollama.keepAlive.chat` for the one that reads and describes images and
@@ -309,20 +316,39 @@ No tunable lives in code. Defaults are bundled in `Sources/ArrumatorCore/Resourc
   prints, `interface.extractPreviewChars`), `maintenance` (how often the app prunes logs, trims traces and looks for
   files `arrumatorcli` queued, `maintenance.interval`) and `database` (how long a write waits for another process using
   the index, `database.busyTimeout`, and how long the app waits before it watches the index again after watching it
-  failed, `database.observationRetry`, more than 0). Override any subset in `~/Library/Application Support/Arrumator/pipeline.json`.
+  failed, `database.observationRetry`, more than 0) and `settings` (how long a change of `settings.json` waits for
+  another process changing it, `settingsLock.timeout`, after which it fails saying so, asking again every
+  `settingsLock.pollInterval`). Override any subset in `~/Library/Application Support/Arrumator/pipeline.json`.
 
 A configuration the app cannot run with stops it with the key and the reason: an empty `ingest.retryDelays`, a negative
-`analysis.repairAttempts` or an effort that is not low, medium or high in `pipeline.json`; a `profile` that
-`modelProfiles` does not list, two profiles of one name, whatever its case, or a blank name or model in
-`settings.json`. So does a key the app does not know, in `settings.json`, `pipeline.json` or the file
-`ARRUMATOR_PIPELINE_CONFIG` names (`… is not a key the app knows; remove it`), rather than being ignored: a key an
-earlier version wrote, such as `models` in `settings.json`, or `modelProfiles`, or an effort's `model` and `fallback`,
-in `pipeline.json`, is never read as something else. Settings the app could not start with are refused before they are
+`analysis.repairAttempts` or an effort that is not low, medium or high in `pipeline.json`, and any value the code that
+reads it would crash on, spin on or turn off without a word: an interval of 0 between rounds, such as
+`maintenance.interval` or `watcher.stabilityPollInterval`, a negative count of what is shown or kept, such as
+`interface.pageSize` or `tasks.efforts.low.promptLabels.sender`, a list of 0 rows, such as `search.resultLimit`, or a
+name of a record file that is a path, the same as another or not begun with `watcher.managedFilePrefix`; a `profile`
+that `modelProfiles` does not list, two profiles of one name, whatever its case, a blank name or model, Incoming and
+the archive one folder or one inside the other, naming both, a folder or `ollamaBinaryPath` given by a partial path,
+or a `traceRawRetentionDays` outside 1 to 3650, in `settings.json`. The refusal names the file and how to mend it,
+and the app shows it on its main window. Settings an earlier version saved that way, such as Incoming kept inside the
+archive or a retention of 5000 days, are mended with `arrumatorcli settings`, which runs whatever the file holds and
+refuses only what the values it is given leave unusable, naming it, or in the file itself. An archive named by a
+partial path is mended only in the file, and is refused before anything uses it. So does a key the app does
+not know, in `settings.json`, `pipeline.json` or the file `ARRUMATOR_PIPELINE_CONFIG` names (`… is not a key the app
+knows; remove it`), rather than being ignored: a key an earlier version wrote, such as `models` in `settings.json`, or
+`modelProfiles`, or an effort's `model` and `fallback`, in `pipeline.json`, is never read as something else. A refusal
+of `pipeline.json` names that file too. Settings the app could not start with are refused before they are
 saved, in the app and with `arrumatorcli` alike, and nothing changes.
 
-The app reads both files once, when it starts, and `arrumatorcli` each time it runs. A running app does not see
-settings or profiles changed with `arrumatorcli`, or files edited by hand, until it is restarted, and a setting changed
-in the app before then writes its own settings over `settings.json`.
+The app reads `pipeline.json` once, when it starts, and `arrumatorcli` each time it runs. `settings.json` is read again
+before every change to it, in the app and by `arrumatorcli` alike, and the change is saved over the file as it is
+then, one change at a time across processes (a lock on `settings.json.lock` beside it): a setting or profile changed
+with `arrumatorcli` or by hand while the app runs is kept, and the app goes on with it from its next change of the
+settings, or from when it starts again. A file it cannot read, as one with a key it does not know, is never saved over:
+a change is refused, naming why, until the file is corrected. A change is saved with its event in History or not at
+all: one History cannot record is not saved, and one saved whose record then cannot be committed is put back. Only a
+crash in the moment between the file being saved and the record being committed leaves a change without its event.
+Before the archive is read, as during onboarding, the event is held and recorded once the index holds the archive
+([Storage](storage.md)).
 
 Environment variables:
 

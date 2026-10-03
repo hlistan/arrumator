@@ -192,7 +192,17 @@ struct GlobalOptions: ParsableArguments {
     /// is away. Why is said on standard error, and the command goes on: its change is made, and recorded in the archive's
     /// History, held until the index is rebuilt or kept in it until the folder is back (docs/storage.md).
     func runtimeEvenIfUnread(ollamaURL: URL? = nil) async throws -> ArrumatorRuntime {
-        let runtime = try await bootstrapped(ollamaURL: ollamaURL)
+        try await openEvenIfUnread(try await bootstrapped(ollamaURL: ollamaURL))
+    }
+
+    /// A runtime whose settings may be ones the app could not run with, which `settings` mends before its archive is
+    /// opened (`openEvenIfUnread`): nothing is read in the archive by settings that would take Incoming for part of it.
+    func runtimeMendingSettings(ollamaURL: URL?) async throws -> ArrumatorRuntime {
+        try await bootstrapped(ollamaURL: ollamaURL, mendingSettings: true)
+    }
+
+    /// Opens `runtime`'s archive as `runtimeEvenIfUnread` does.
+    func openEvenIfUnread(_ runtime: ArrumatorRuntime) async throws -> ArrumatorRuntime {
         do {
             try await runtime.openArchive()
         } catch let unread as RecordsError {
@@ -204,11 +214,12 @@ struct GlobalOptions: ParsableArguments {
         return runtime
     }
 
-    private func bootstrapped(ollamaURL: URL?) async throws -> ArrumatorRuntime {
+    private func bootstrapped(ollamaURL: URL?, mendingSettings: Bool = false) async throws -> ArrumatorRuntime {
         var environment = RuntimeEnvironment.current
         if let ollamaURL { environment.ollamaURL = ollamaURL.absoluteString }
         let runtime = try await ArrumatorRuntime.bootstrap(appVersion: Arrumator.version, environment: environment,
-                                                           echoLogsToStderr: verbose, resolver: SystemHostResolver(), trash: environment.trash(orElse: SystemTrash()))
+                                                           echoLogsToStderr: verbose, mendingSettings: mendingSettings,
+                                                           resolver: SystemHostResolver(), trash: environment.trash(orElse: SystemTrash()))
         OpenedArchives.current?.add(runtime)
         return runtime
     }
@@ -324,59 +335,80 @@ struct Settings: AsyncParsableCommand {
         abstract: "Show or change settings, as Settings in the app does, each change recorded in History. "
             + "Switch archives with `arrumatorcli archive switch`; add and change model profiles with `arrumatorcli profiles`.")
     @OptionGroup var options: GlobalOptions
-    @Option(help: "Folder to watch for new files.") var incoming: String?
+    @Option(help: "Folder to watch for new files: neither the archive nor a folder inside it or around it.") var incoming: String?
     @Option(help: "The model profile documents and requests are read with, by its id as `arrumatorcli profiles` lists it.")
     var profile: String?
     @Option(help: "Ollama management: launchApp, spawnServe, external.") var ollama: OllamaManagement?
     @Option(help: "Ollama server: this Mac or a machine on the local network, such as http://192.168.1.20:11434.") var ollamaURL: String?
+    @Option(help: "The `ollama` program to start when it is not where Ollama installs it; \"\" looks for it there again.")
+    var ollamaBinary: String?
     @Option(help: "Pause processing (true/false).") var paused: Bool?
     @Option(help: "Show the app's icon in the Dock (true/false).") var showInDock: Bool?
     @Option(help: "Give filed documents the name the model chose (true/false).") var renameFiles: Bool?
     @Option(help: "Write file names in Latin letters (true/false).") var transliterate: Bool?
+    @Option(help: "Describe images with the profile's model that describes images, so a picture is read by what it shows (true/false).")
+    var describeImages: Bool?
     @Option(help: "Notify when a document is filed (true/false).") var notifyOnFiled: Bool?
     @Option(help: "Notify when a document waits for you (true/false).") var notifyOnReview: Bool?
     @Option(help: "Pause on battery when it runs low (true/false).") var pauseOnBattery: Bool?
     @Option(help: "Lowest level logged: error, warning, info, debug, trace.") var logLevel: LogLevel?
-    @Option(help: "Days the prompts and raw model answers of a reading are kept in its trace.") var traceRetentionDays: Int?
+    @Option(help: "Days the prompts and raw model answers of a reading are kept in its trace, \(Self.retentionDays).")
+    var traceRetentionDays: Int?
     @Option(help: "List the sidebar's labels under their kinds, rather than in one list, the most used first (true/false).")
     var groupLabelsByKind: Bool?
     @Option(help: "How much the model thinks before it answers a new search task's request: low (not at all), medium or high (the most).")
     var taskEffort: TaskEffort?
 
     func validate() throws {
-        if let traceRetentionDays, traceRetentionDays < 1 { throw ValidationError("--trace-retention-days must be at least 1") }
+        // An empty folder would be taken for the one the command runs in.
+        if incoming?.isEmpty == true { throw ValidationError("--incoming needs a folder") }
     }
 
     func run() async throws {
         // A new server is checked before anything opens, and the runtime talks to it rather than to the saved one, which
         // may be an address this version refuses: so the command that gives another can always run.
         let server = try ollamaURL.map { try OllamaEndpoint.validated($0) }
-        let runtime = try await options.runtimeEvenIfUnread(ollamaURL: server)
-        // The profile first: one the settings do not list is refused before anything else is saved.
-        if let profile { try await runtime.profiles.use(profile) }
+        // Settings the app could not run with, as an earlier version let them be saved, are taken to be mended: the
+        // command always runs, and refuses only what the settings given leave unusable, naming the file.
+        let runtime = try await options.runtimeMendingSettings(ollamaURL: server)
+        // Every other setting given is one change, checked whole before anything is saved: a profile the settings do not
+        // list, or settings the app could not start with, refuse all of it. Pausing and the server, which have actions of
+        // their own, come after it, so nothing is saved once anything given is refused.
         try await runtime.settingsActions.change(given)
+        try await runtime.settings.refuseUnusable()
+        // The settings are saved and their change recorded by now. An archive that cannot be opened for another reason
+        // stops the command, as pausing and the server act on it, saying what was saved, so the user does not give it
+        // again.
+        do { _ = try await options.openEvenIfUnread(runtime) } catch {
+            FileHandle.standardError.write(Data("The settings given were saved and recorded; then the archive could not be opened.\n".utf8))
+            throw error
+        }
         if let paused { try await runtime.setPaused(paused) }
-        if let ollamaURL {
-            try await runtime.useOllama(at: ollamaURL)
+        if let server {
+            try await runtime.useOllama(at: server.absoluteString)
             _ = await runtime.lifecycle.ensureRunning()
         }
         let settings = await runtime.settings.current
         options.emit(settings) { JSON.string(settings, pretty: true) }
     }
 
-    /// The settings given, other than the profile, pausing and the Ollama server, which have actions of their own, as one
-    /// change to the settings in force.
-    private var given: @Sendable (inout AppSettings) -> Void {
-        let (incoming, ollama) = (incoming, ollama)
-        let (showInDock, renameFiles, transliterate) = (showInDock, renameFiles, transliterate)
+    /// The settings given, other than pausing and the Ollama server, which have actions of their own, as one change to
+    /// the settings in force. A folder or program given by a partial path is taken from the folder the command runs in.
+    private var given: @Sendable (inout AppSettings) throws -> Void {
+        let (profile, incoming, ollama) = (profile, incoming.map(Self.fullPath), ollama)
+        let ollamaBinary = ollamaBinary.map { $0.isEmpty ? nil : Self.fullPath($0) }
+        let (showInDock, renameFiles, transliterate, describeImages) = (showInDock, renameFiles, transliterate, describeImages)
         let (notifyOnFiled, notifyOnReview, pauseOnBattery, logLevel) = (notifyOnFiled, notifyOnReview, pauseOnBattery, logLevel)
         let (traceRetentionDays, groupLabelsByKind, taskEffort) = (traceRetentionDays, groupLabelsByKind, taskEffort)
         return { s in
+            if let profile { try s.use(profile: profile) }
             if let incoming { s.incomingPath = incoming }
             if let ollama { s.ollamaManagement = ollama }
+            if let ollamaBinary { s.ollamaBinaryPath = ollamaBinary }
             if let showInDock { s.showInDock = showInDock }
             if let renameFiles { s.renameFiles = renameFiles }
             if let transliterate { s.transliterate = transliterate }
+            if let describeImages { s.enableVLM = describeImages }
             if let notifyOnFiled { s.notifyOnFiled = notifyOnFiled }
             if let notifyOnReview { s.notifyOnReview = notifyOnReview }
             if let pauseOnBattery { s.pauseOnBattery = pauseOnBattery }
@@ -385,6 +417,15 @@ struct Settings: AsyncParsableCommand {
             if let groupLabelsByKind { s.groupLabelsByKind = groupLabelsByKind }
             if let taskEffort { s.taskEffort = taskEffort }
         }
+    }
+
+    /// How many days the prompts of a reading may be kept, as its option says.
+    private static let retentionDays = "from \(AppSettings.traceRawRetentionDaysRange.lowerBound) to \(AppSettings.traceRawRetentionDaysRange.upperBound)"
+
+    /// `path` from the top of the disk: as given when it starts at `/` or `~`, otherwise inside the folder the command runs
+    /// in, as a shell takes it.
+    private static func fullPath(_ path: String) -> String {
+        path.hasPrefix("~") ? path : URL(fileURLWithPath: path).standardizedFileURL.path
     }
 }
 

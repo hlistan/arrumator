@@ -109,9 +109,8 @@ public struct ModelProfileActions: Sendable {
     public func use(_ id: String) async throws -> ModelProfileListing {
         let id = DocumentLabel.oneLine(id)
         let (saved, chosen) = try await settings.change(checking: { settings in
-            let chosen = try settings.modelProfile(id)
-            settings.profile = id
-            return (summary: "Reading with the profile “\(chosen.name)”", outcome: chosen)
+            let chosen = try settings.use(profile: id)
+            return (summary: SettingsActions.reading(with: chosen), outcome: chosen)
         })
         return listing(id, chosen, in: saved)
     }

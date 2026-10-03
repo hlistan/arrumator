@@ -2,6 +2,7 @@
 import ArrumatorTesting
 import CoreGraphics
 import Foundation
+import GRDB
 import ImageIO
 import Testing
 import UniformTypeIdentifiers
@@ -534,14 +535,18 @@ extension CommandLineTests {
             // Each event once, in the data the app reads back; the list below it says it again.
             return try months.map { try String(contentsOf: $0, encoding: .utf8) }.joined().components(separatedBy: "summary: Processing paused").count - 1
         }
-        #expect(try run(home, ["settings", "--paused", "true"]).status == 0 && (try paused()) == 1, "filing is paused")
-        // Pausing again saves no settings and is recorded; then the new server is refused, as the folder that keeps the
-        // settings can no longer be written.
-        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: home.support.path)
-        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: home.support.path) }
+        #expect(try run(home, ["history", "--json"]).status == 0, "the archive's index is made")
+        // The index then refuses the new server's event, so the command pauses, records it, and fails at the server.
+        let index = try #require(try FileManager.default.contentsOfDirectory(at: home.support.appendingPathComponent("Indexes"),
+                                                                           includingPropertiesForKeys: nil).first { $0.pathExtension == "sqlite" })
+        let queue = try DatabaseQueue(path: index.path)
+        try queue.write { db in
+            try db.execute(sql: "CREATE TRIGGER refuse_server BEFORE INSERT ON events WHEN NEW.summary LIKE 'Ollama at %' BEGIN SELECT RAISE(ABORT, 'refused'); END")
+        }
+        try queue.close()
         let result = try run(home, ["settings", "--paused", "true", "--ollama-url", "http://127.0.0.1:10"])
-        #expect(result.status == 1, "the command fails with the reason: \(result.stderr)")
-        #expect(try paused() == 2, "what it changed before it failed is in the archive's history when it exits")
+        #expect(result.status == 1 && result.stderr.contains("refused"), "the command fails with the reason: \(result.stderr)")
+        #expect(try paused() == 1, "what it changed before it failed is in the archive's history when it exits")
     }
 }
 

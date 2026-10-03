@@ -20,7 +20,7 @@ public struct TestEnvironment: Sendable {
         let archive = root.appendingPathComponent("Archive", isDirectory: true)
         let incoming = root.appendingPathComponent("Incoming", isDirectory: true)
         let config = try PipelineConfig.bundledDefaults()
-        let settings = try SettingsStore(paths: paths)
+        let settings = try SettingsStore.opened(paths: paths)
         try await settings.update {
             $0.archivePath = archive.path
             $0.incomingPath = incoming.path
@@ -64,7 +64,7 @@ public struct TestEnvironment: Sendable {
     /// The archive's record files, kept with `index`: the environment's own database unless another is given, such as an
     /// index made anew over the same archive. The archive is one the test made, not the app.
     public func records(index: AppDatabase? = nil) -> ArchiveRecords {
-        ArchiveRecords(database: index ?? database, archive: archive, settings: settings, config: config, registry: nil,
+        ArchiveRecords(database: index ?? database, archive: archive, config: config, registry: nil,
                        time: time, timeZone: .current)
     }
 

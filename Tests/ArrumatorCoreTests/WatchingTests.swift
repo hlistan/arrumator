@@ -341,7 +341,7 @@ import Testing
                                      database: env.database)
         let first = await watcher.changes()
         let reading = Task { for await _ in first {} }
-        try await watcher.start(root: env.archive, excluding: [env.incoming])
+        try await watcher.start(root: env.archive)
         await watcher.stop()
         reading.cancel()
         await reading.value
@@ -350,7 +350,7 @@ import Testing
         let again = await watcher.changes()
         let collecting = Task { for await changes in again { await reported.add(changes) } }
         defer { collecting.cancel() }
-        try await watcher.start(root: env.archive, excluding: [env.incoming])
+        try await watcher.start(root: env.archive)
         defer { await watcher.stop() }
         let note = try env.put("note.txt", text: "put there by the user")
         await watcher.handle([FSEvent(path: note.path, flags: UInt32(kFSEventStreamEventFlagItemIsFile | kFSEventStreamEventFlagItemCreated), id: 1)])

@@ -136,25 +136,21 @@ import Testing
 
     static let meanwhile = "Paused meanwhile"
 
-    @Test func foldersOfIncomingAndOnesTheWatcherIgnoresAreNotLookedIntoByARebuild() async throws {
+    @Test func aFolderTheWatcherIgnoresIsNotLookedIntoByARebuild() async throws {
         let w = try await RecordsWorld.make()
-        let inbox = w.h.env.archive.appendingPathComponent("Inbox", isDirectory: true).standardizedFileURL
-        let scanner = inbox.appendingPathComponent("Scanner", isDirectory: true)
         let ignored = w.h.env.archive.appendingPathComponent("~$Locked", isDirectory: true).standardizedFileURL
         defer {
-            for folder in [scanner, ignored] { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path) }
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: ignored.path)
             w.h.env.cleanup()
         }
-        // Incoming kept inside the archive, with a scanner's folder in it nobody may list, and a folder the watcher ignores.
-        try await w.h.env.settings.update { $0.incomingPath = inbox.path }
-        try w.h.env.put("Inbox/Scanner/scan.pdf", text: "scan")
+        // A folder the watcher ignores, which nobody may list. Incoming is never kept in the archive (`AppSettings.problems`).
         try w.h.env.put("~$Locked/lock.txt", text: "lock")
-        for folder in [scanner, ignored] { try FileManager.default.setAttributes([.posixPermissions: 0o300], ofItemAtPath: folder.path) }
+        try FileManager.default.setAttributes([.posixPermissions: 0o300], ofItemAtPath: ignored.path)
         let (_, records) = try w.newIndex()
-        let summary = try #require(try await records.rebuildIfPending(), "neither holds a record file, so neither stops the rebuild")
-        #expect(summary.documents == w.documents.count && summary.adopted == 0, "nor is anything in them taken in")
+        let summary = try #require(try await records.rebuildIfPending(), "it holds no record file, so it does not stop the rebuild")
+        #expect(summary.documents == w.documents.count && summary.adopted == 0, "nor is anything in it taken in")
         try await w.records.reconcile()
-        #expect(await w.records.unreadableFiles().isEmpty, "and neither is reported as a record file that cannot be read")
+        #expect(await w.records.unreadableFiles().isEmpty, "and it is not reported as a record file that cannot be read")
     }
 
     @Test func aFolderOfTheUsersThatCannotBeListedStopsTheRebuildNamingIt() async throws {

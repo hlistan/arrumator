@@ -507,7 +507,6 @@
       4
     ],
     "snippetTokens": 24,
-    "debounceMilliseconds": 150,
     "vectorSnippetChars": 200
   },
   "tasks": {
@@ -734,5 +733,9 @@
   "database": {
     "busyTimeout": 5,
     "observationRetry": 5
+  },
+  "settingsLock": {
+    "timeout": 10,
+    "pollInterval": 0.05
   }
 }

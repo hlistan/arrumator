@@ -169,10 +169,11 @@ task's set keeps only the documents the archive still has entries for, and a con
 have is left where it is, unread, and read again until its task is back; no new task is given its number. Documents
 whose file is not where their entry says are looked up by the identifier on the file, and one marked missing whose file
 is found again is filed again where it is. Files that have no entry, at the top of the archive or in a
-folder of yours at any depth, are taken in where they are and read by the model; the `System` folder and an Incoming
-folder kept inside the archive are left out. Then, in the background and giving way to new arrivals, each document's
-text is extracted again and its embedding recomputed. The model is not asked again: labels come back from the entries.
-Search by words and by meaning fills in as that proceeds; filing works from the start.
+folder of yours at any depth, are taken in where they are and read by the model; the `System` folder and the folders
+the watcher ignores, such as a hidden one, are left out, and Incoming is never inside the archive
+([Configuration](using-arrumator.md#configuration)). Then, in the background and giving way to new arrivals, each
+document's text is extracted again and its embedding recomputed. The model is not asked again: labels come back from
+the entries. Search by words and by meaning fills in as that proceeds; filing works from the start.
 
 ## Archives from earlier versions
 

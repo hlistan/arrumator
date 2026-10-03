@@ -56,8 +56,6 @@ public struct Doctor: Sendable {
         let archiveExists = fm.fileExists(atPath: archive.path, isDirectory: &isDir) && isDir.boolValue
         add("Archive folder", archiveExists && fm.isWritableFile(atPath: archive.path), archive.path)
         add("Incoming folder", fm.fileExists(atPath: settings.incomingURL.path), settings.incomingURL.path, warnOnly: true)
-        let nested = archive.path.hasPrefix(settings.incomingURL.path + "/")
-        add("Incoming is not above the archive", !nested, nested ? "The archive is inside Incoming" : "ok")
         do {
             let fts = try await database.reader.read { db in try Bool.fetchOne(db, sql: "SELECT sqlite_compileoption_used('ENABLE_FTS5')") }
             add("SQLite FTS5", fts ?? false, fts == true ? "available" : "missing")

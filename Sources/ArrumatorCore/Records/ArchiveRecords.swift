@@ -12,8 +12,6 @@ public actor ArchiveRecords {
     /// The archive whose record files these are, as it was given when they were opened. The settings may name another
     /// archive meanwhile, as at the end of a switch, and this one's record files never go into it.
     let archive: URL
-    /// Where Incoming is, which a walk of the archive leaves out when it is kept inside it.
-    let settings: SettingsStore
     let config: PipelineConfig
     private let registry: SelfChangeRegistry?
     let time: any TimeSource
@@ -31,12 +29,11 @@ public actor ArchiveRecords {
     private var beforeApplying: (@Sendable (URL) async -> Void)?
 
     /// - Parameter timeZone: the Mac's, which the moments and days written for people browsing the archive are in.
-    public init(database: AppDatabase, archive: URL, settings: SettingsStore, config: PipelineConfig, registry: SelfChangeRegistry?,
+    public init(database: AppDatabase, archive: URL, config: PipelineConfig, registry: SelfChangeRegistry?,
                 time: any TimeSource, timeZone: TimeZone) {
         self.timeZone = timeZone
         self.database = database
         self.archive = archive.standardizedFileURL
-        self.settings = settings
         self.config = config
         self.registry = registry
         self.time = time
@@ -442,8 +439,8 @@ extension ArchiveRecords {
         var records: [(RecordKind, URL)] = []
         /// The folders that are there but cannot be listed, each with why: what they hold is not known to be absent.
         var unlisted: [UnreadableRecordFile] = []
-        /// The folders not looked into: an Incoming kept in the archive, which holds no record files, and those the
-        /// watcher ignores.
+        /// The folders not looked into: those the watcher ignores. Incoming is never inside the archive
+        /// (`AppSettings.problems`).
         var skipped: [String] = []
 
         /// Whether `path` is in a folder that was not, or could not be, looked into.
@@ -452,9 +449,9 @@ extension ArchiveRecords {
         }
     }
 
-    /// Walks the archive at `root`, leaving out `incoming` when it is kept inside it and the folders `skip` ignores, as
-    /// nothing in them is a document of the archive or a record file.
-    static func walk(_ root: URL, skip: SkipRules, incoming: URL) -> ArchiveWalk {
+    /// Walks the archive at `root`, leaving out the folders `skip` ignores, as nothing in them is a document of the archive
+    /// or a record file.
+    static func walk(_ root: URL, skip: SkipRules) -> ArchiveWalk {
         var walk = ArchiveWalk()
         // The archive itself not there is no archive without record files, unlike a folder gone while it is walked.
         guard isFolder(root) else {
@@ -473,12 +470,11 @@ extension ArchiveRecords {
             walk.unlisted = [UnreadableRecordFile(path: root.standardizedFileURL.path, reason: notListed)]
             return walk
         }
-        let incoming = incoming.standardizedFileURL.path
         for case let url as URL in walker {
             // Listings resolve /var to /private/var; standardizing gives the paths the index stores.
             let url = url.standardizedFileURL
             let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isDirectoryKey])
-            if values?.isDirectory == true, url.path == incoming || skip.isIgnoredDirectory(named: url.lastPathComponent) {
+            if values?.isDirectory == true, skip.isIgnoredDirectory(named: url.lastPathComponent) {
                 walker.skipDescendants()
                 walk.skipped.append(url.path)
             } else if values?.isRegularFile == true {
@@ -500,7 +496,7 @@ extension ArchiveRecords {
     /// The archive walked, with every record file in it and the kind it holds: the lists of documents first, and the
     /// search tasks before the conversations about them, as each refers to those before it.
     func recordFiles() async -> ArchiveWalk {
-        var walk = Self.walk(archive, skip: SkipRules(watcher: config.watcher), incoming: await settings.current.incomingURL)
+        var walk = Self.walk(archive, skip: SkipRules(watcher: config.watcher))
         walk.records = walk.files.compactMap { url in kind(of: url).map { ($0, url) } }
             .sorted { Self.readingOrder($0.0) < Self.readingOrder($1.0) }
         return walk

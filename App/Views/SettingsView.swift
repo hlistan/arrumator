@@ -244,7 +244,7 @@ struct AdvancedSettings: View {
                     ForEach(LogLevel.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                 }
                 Stepper(Wording.keepPrompts(days: (model.settings ?? loaded).traceRawRetentionDays),
-                        value: setting(model, loaded, \.traceRawRetentionDays), in: Style.retentionDays, step: Style.retentionDaysStep)
+                        value: setting(model, loaded, \.traceRawRetentionDays), in: AppSettings.traceRawRetentionDaysRange, step: Style.retentionDaysStep)
                 NamedToggle(Wording.includeText, isOn: $includeText)
                 Text(Wording.includeTextNote).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 Button(Wording.exportDiagnostics) { Task { await export() } }
