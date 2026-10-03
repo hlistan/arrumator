@@ -15,7 +15,7 @@ import Testing
         let labels = [DocumentLabel(kind: .sender, value: sender)]
         var record = DocumentRecord.arrived(path: "/tmp/\(title).pdf", sha256: title, size: 1,
                                             uttype: "com.adobe.pdf", inode: nil, modified: nil, now: TestTime.start)
-        record.labelsJson = JSON.string(labels)
+        record.labelsJson = try JSON.string(labels)
         record.status = .filed
         let doc = try await DocumentStore(database: db, time: TestTime(.advances)).save(record)
         let id = try #require(doc.id)

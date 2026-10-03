@@ -30,7 +30,7 @@ import Testing
                                             now: TestTime.start)
         record.originalFilename = dropped
         record.status = status
-        record.labelsJson = JSON.string(labels)
+        record.labelsJson = try JSON.string(labels)
         return record
     }
 

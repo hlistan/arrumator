@@ -315,7 +315,7 @@ struct PickyTrash: Trashing {
         var payload = JobPayload()
         (payload.size, payload.mtime, payload.inode) = (fingerprint.size, fingerprint.modified, fingerprint.inode)
         // Kept as a job's row keeps its payload (`JobRecord.setPayload`), and read back.
-        let stored = try #require(JSON.decode(JobPayload.self, from: JSON.string(payload)))
+        let stored = try #require(JSON.decode(JobPayload.self, from: try JSON.string(payload)))
         let kept = try #require(stored.fingerprint, "a job that hashed its file keeps what the file was")
         #expect(kept.modified != fingerprint.modified, "its time is kept to the second, as JSON keeps dates")
         #expect(try FileFingerprint.of(source).matches(kept), "and still matches the file it was taken of")

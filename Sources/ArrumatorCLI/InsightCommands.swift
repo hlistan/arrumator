@@ -9,7 +9,7 @@ struct Stats: AsyncParsableCommand {
 
     func run() async throws {
         let insights = try await options.runtime().stats.insights()
-        options.emit(insights) {
+        try options.emit(insights) {
             var out = ["Documents: \(insights.documents) · " + insights.statuses.sorted { $0.key < $1.key }.map { "\($0.key) \($0.value)" }
                 .joined(separator: ", ")]
             out.append("Labelled: \(insights.labelled) · not labelled yet: \(insights.unlabelled)")
@@ -40,7 +40,7 @@ struct Funnel: AsyncParsableCommand {
     func run() async throws {
         let runtime = try await options.runtime()
         let funnel = try await runtime.stats.funnel(days: days ?? runtime.config.stats.defaultWindowDays)
-        options.emit(funnel) {
+        try options.emit(funnel) {
             var out = ["\(funnel.documents) documents in the last \(funnel.windowDays) days"
                 + (funnel.waiting > 0 ? ", \(funnel.waiting) more waiting in Incoming" : "")]
             for step in funnel.steps {
@@ -125,7 +125,7 @@ struct Models: AsyncParsableCommand {
             let runtime = try await options.runtime()
             _ = await runtime.lifecycle.ensureRunning()
             let models = try await runtime.models.installed()
-            options.emit(models) {
+            try options.emit(models) {
                 models.isEmpty ? "No model is installed." : Terminal.table(models.map { [$0.name, Terminal.size($0.sizeBytes), Terminal.abilities($0)] })
             }
         }
@@ -149,7 +149,7 @@ struct Models: AsyncParsableCommand {
             _ = await runtime.lifecycle.ensureRunning()
             let profile = try settings.modelProfile()
             let status = ProfileStatus(profile: settings.profile, name: profile.name, models: try await runtime.models.status(for: profile))
-            options.emit(status) {
+            try options.emit(status) {
                 (["Profile \(profile.name)"] + status.models.map {
                     "\($0.installed && $0.remoteHost == nil ? "✓" : "✗") \($0.role.rawValue.padding(toLength: 10, withPad: " ", startingAt: 0)) \($0.name)"
                         + ($0.sizeBytes.map { "  " + Terminal.size($0) } ?? "")
@@ -188,7 +188,7 @@ struct Diagnostics: AsyncParsableCommand {
         let runtime = try await options.runtime()
         let contents = try await runtime.exportDiagnostics(to: URL(fileURLWithPath: output.expandingTilde),
                                                            includeDocumentText: includeDocumentText)
-        options.emit(contents) { "Wrote \(output): \(contents.logFiles.count) log files, \(contents.traces) traces" }
+        try options.emit(contents) { "Wrote \(output): \(contents.logFiles.count) log files, \(contents.traces) traces" }
     }
 }
 

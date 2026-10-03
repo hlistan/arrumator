@@ -74,17 +74,22 @@ public enum TurnProgress: Sendable, Hashable {
 /// request is, and the documents it finds outside the set are kept with the answer, to be added by the user.
 ///
 /// A question survives a stop: one being answered goes back into the queue, in its place, and is answered first at the
-/// next start. While Ollama cannot be reached a question waits in the queue, as a document does
-/// (`ingest.retryDelays`); a profile the settings no longer list, a model that is missing, an answer that took longer
-/// than the task's effort allows, or one the model never got right, fails the question with the reason, keeping what
-/// came of the answer, and the user can ask it again. The user can stop an answer as it is written (`stop(_:)`).
-public actor TaskConversationQueue {
-    private let services: PipelineServices
+/// next start; so does one a process that ended was answering (`ModelQueue`). While Ollama cannot be reached a question
+/// waits in the queue, as a document does (`ingest.retryDelays`), its trace taken up again by each attempt; a profile
+/// the settings no longer list, a model that is missing, a server that answers with a failure, an answer that took
+/// longer than the task's effort allows, or one the model never got right, fails the question with the reason, keeping
+/// what came of the answer, and the user can ask it again. The user can stop an answer as it is written (`stop(_:)`);
+/// clearing the conversation, or removing its task, stops it too, keeping nothing (`forget(task:)`).
+public actor TaskConversationQueue: ModelQueue {
+    let services: PipelineServices
+    let processes: any ProcessWatching
     private let answerer: any TaskQuestionAnswering
     private let interpreter: any SearchPromptInterpreting
     private let search: SearchService
-    private var worker: Task<Void, Never>?
-    private let doorbell = Doorbell()
+    var worker: Task<Void, Never>?
+    let doorbell = Doorbell()
+    var inHand: InHand?
+    nonisolated let name = "questions"
     private var statusContinuations: [UUID: AsyncStream<ConversationQueueStatus>.Continuation] = [:]
     public private(set) var status = ConversationQueueStatus.idle {
         didSet { if status != oldValue { for c in statusContinuations.values { c.yield(status) } } }
@@ -92,20 +97,17 @@ public actor TaskConversationQueue {
     /// The counts of the questions waiting asked for so far, and the latest of them the status has (`publish`).
     private var countsAsked = 0
     private var countPublished = 0
-    /// The question being answered and the work answering it, which stopping that question cancels.
-    private var current: (turn: Int64, task: Int64, work: Task<String, any Error>)?
-    /// The question the user stopped while it was answered.
-    private var stopped: Int64?
 
     /// What a question the user stopped says.
     public static let stoppedProblem = "Stopped"
 
     public init(services: PipelineServices, answerer: any TaskQuestionAnswering, interpreter: any SearchPromptInterpreting,
-                search: SearchService) {
+                search: SearchService, processes: any ProcessWatching) {
         self.services = services
         self.answerer = answerer
         self.interpreter = interpreter
         self.search = search
+        self.processes = processes
     }
 
     /// What the queue is doing, the current status first, then each change: a subscriber that joins while a question is
@@ -146,41 +148,22 @@ public actor TaskConversationQueue {
         status = next
     }
 
+    func recount() async { await publish() }
+
     private var store: TaskConversationStore { TaskConversationStore(database: services.database, time: services.time) }
 
     // MARK: Control
 
-    /// Starts the worker, unless it runs: the worker is claimed before anything is awaited, so a second start neither
-    /// makes a second worker nor puts back in the queue what the first has in hand. The worker first puts back in the
-    /// queue, in its place, the question being answered when the queue last stopped.
+    /// Starts the worker, unless it runs (`ModelQueue.startWorker`), and counts the questions waiting.
     public func start() async {
-        guard worker == nil else { return }
-        worker = Task { [weak self] in
-            await self?.recoverInterrupted()
-            await self?.runLoop()
-        }
-        doorbell.ring()
-    }
-
-    private func recoverInterrupted() async {
-        do {
-            let recovered = try await store.recoverInterrupted()
-            if recovered > 0 { Log.info(.search, "Questions back in the queue", ["questions": String(recovered)]) }
-        } catch {
-            // Stopped before it began: nothing was put back, and the next start does it.
-            guard !Task.isCancelled else { return }
-            Log.error(.search, "Could not recover questions", ["error": error.localizedDescription])
-        }
+        startWorker()
         await publish()
     }
 
-    /// Stops the worker and waits until it has. A question being answered goes back into the queue at the next start;
-    /// until then the queue answers nothing and waits for nothing.
+    /// Stops the worker and waits until it has. A question being answered goes back into the queue, in its place, once
+    /// it has; until the next start the queue answers nothing and waits for nothing.
     public func stop() async {
-        guard let worker else { return }
-        worker.cancel()
-        await worker.value
-        self.worker = nil
+        guard await stopWorker() else { return }
         await publish {
             $0.answering = nil
             $0.waitingForOllama = false
@@ -194,69 +177,44 @@ public actor TaskConversationQueue {
         await publish()
     }
 
-    /// Answers every question that is due until none is left (the command line and tests), until one cannot be taken
-    /// from the queue, which is logged, or until the task that drains it is cancelled, as Ctrl-C cancels a command.
+    /// Answers every question that is due until none is left (the command line and tests), or until one cannot be taken
+    /// from the queue, which is logged, or until the draining task is cancelled; first the questions no running process answers go back into the queue.
     public func drain() async {
-        while !Task.isCancelled, let turn = await nextDue(), await run(turn) {}
+        await drainQueue()
     }
 
-    /// Stops answering `turn` if it is being answered: what came of the answer is kept, saying it was stopped. Whether
-    /// it was being answered.
+    /// Stops answering `turn` if it is in hand, being taken from the queue or answered: what came of the answer is kept,
+    /// saying it was stopped. Whether it was in hand.
     @discardableResult
     func stop(_ turn: Int64) -> Bool {
-        guard let current, current.turn == turn else { return false }
-        stopped = turn
-        current.work.cancel()
-        return true
+        end(because: .stopped) { $0.item == turn }
     }
 
-    /// Stops answering a question of `task`, as when its conversation is cleared: nothing of the answer is kept, as the
-    /// question is gone.
+    /// Stops answering a question of `task`, as when its conversation is cleared or the task removed: nothing of the
+    /// answer is kept, as the question is gone.
     func forget(task: Int64) {
-        guard let current, current.task == task else { return }
-        stopped = current.turn
-        current.work.cancel()
+        _ = end(because: .superseded) { $0.task == task }
     }
 
-    // MARK: Loop
+    // MARK: The queue
 
-    private func runLoop() async {
-        while !Task.isCancelled {
-            if let turn = await nextDue() {
-                if await run(turn) { continue }
-                // The queue could not be written; it is tried again after a while rather than at once.
-                await doorbell.wait(timeout: services.config.ingest.retryDelays.last, time: services.time)
-                continue
-            }
-            let wait = await earliestDue().map { max(IngestCoordinator.minimumWait, $0.timeIntervalSince(services.time.now())) }
-            await doorbell.wait(timeout: wait, time: services.time)
-        }
-    }
-
-    private func nextDue() async -> TaskTurnRecord? {
-        do { return try await store.nextDue() } catch {
-            Log.error(.search, "Could not read the conversation queue", ["error": error.localizedDescription])
-            return nil
-        }
-    }
-
-    private func earliestDue() async -> Date? {
-        do { return try await store.earliestDue() } catch {
-            Log.error(.search, "Could not read the conversation queue", ["error": error.localizedDescription])
-            return nil
-        }
-    }
+    func recoverLeft() async throws -> Int { try await store.recoverLeft(processes) }
+    func nextDue() async throws -> TaskTurnRecord? { try await store.nextDue() }
+    func earliestDue() async throws -> Date? { try await store.earliestDue() }
 
     // MARK: A question
 
-    /// Answers a queued question; false when it could not be taken from the queue. Once it has run, the status says
-    /// nothing is answered, and whether the queue waits for Ollama.
-    private func run(_ queued: TaskTurnRecord) async -> Bool {
+    /// Answers a queued question; false when it could not be taken from the queue. It is in hand from before it is
+    /// taken, so the user stopping it meanwhile is never missed. Once it has run, the status says nothing is answered,
+    /// and whether the queue waits for Ollama.
+    func run(_ queued: TaskTurnRecord) async -> Bool {
         guard let id = queued.id else { return false }
+        inHand = InHand(item: id, task: queued.taskId)
+        defer { inHand = nil }
         let begun: (turn: TaskTurnRecord, task: SearchTaskRecord)
         do {
             // A question no longer queued, such as one whose conversation was cleared meanwhile, is simply not answered.
-            guard let taken = try await store.begin(id) else { return true }
+            guard let taken = try await store.begin(id, by: tag) else { return true }
             begun = taken
         } catch {
             Log.error(.search, "Could not start answering a question", ["turn": String(id), "error": error.localizedDescription])
@@ -278,6 +236,7 @@ public actor TaskConversationQueue {
     /// when that was not learnt, as for a profile that is gone, which no model reads, or on stopping.
     private func answer(_ record: TaskTurnRecord, task: SearchTaskRecord, id: Int64) async -> Bool? {
         let store = store
+        let tag = tag
         let settings = await services.settings.current
         // The profile that answers, the task's own or Settings'; one that is gone names no models, and fails the question.
         let profile = Result { try settings.modelProfile(task.profile) }
@@ -289,61 +248,67 @@ public actor TaskConversationQueue {
                                                                  progress: .notBegun)
             }
         }
-        let trace: TraceContext
-        do {
-            trace = try await services.traces.start(TraceHeader(docID: nil, jobID: nil, attempt: 0, source: .conversation,
-                                                                promptVersion: services.config.conversation.promptVersion,
-                                                                models: try? profile.get(), settings: settings))
-        } catch {
-            Log.error(.db, "Could not start trace", ["error": error.localizedDescription])
-            trace = .disabled
-        }
-        let work = Task { try await self.respond(record, task: task, id: id, profile: try profile.get(), trace: trace) }
-        current = (id, task.id ?? 0, work)
-        defer {
-            current = nil
-            if stopped == id { stopped = nil }
-        }
+        let trace = await startTrace(TraceHeader(docID: nil, jobID: nil, attempt: 0, source: .conversation,
+                                                 promptVersion: services.config.conversation.promptVersion,
+                                                 models: try? profile.get(), settings: settings), resuming: record.lastTraceId)
         let outcome: String
         let reached: Bool?
-        do {
-            outcome = try await withTaskCancellationHandler { try await work.value } onCancel: { work.cancel() }
+        switch await attempt({ try await self.respond(record, task: task, id: id, profile: try profile.get(), trace: trace) }) {
+        case let .done(concluded):
+            outcome = concluded
             reached = true
-        } catch let error as OllamaError where error.isTransient && stopped != id {
+        case .ended(.stopped):
+            outcome = Self.stopped
+            reached = nil
+            await keepFailed(id, by: tag, problem: Self.stoppedProblem, partial: written(id), model: model, trace: trace)
+        case .ended(.superseded):
+            // Its conversation was cleared, or its task removed: nothing is left to keep it with.
+            outcome = SearchTaskQueue.superseded
+            reached = nil
+        case .interrupted:
             // Stopping the app interrupts the question; that is no failure, and the next start takes it up again.
-            guard !Task.isCancelled else { return nil }
-            outcome = "waiting"
+            outcome = SearchTaskQueue.interrupted
+            reached = nil
+        case let .away(error):
+            outcome = TraceRecorder.waitingOutcome
             reached = false
-            let until = services.time.now().addingTimeInterval(services.config.ingest.retryDelays.last)
-            do { try await store.postpone(id, until: until) } catch {
+            let until = retryAt
+            do { try await store.postpone(id, by: tag, until: until, trace: trace.traceID) } catch {
                 Log.error(.search, "Could not put a question back in the queue", ["turn": String(id), "error": error.localizedDescription])
             }
             await publish { $0.retryAt = until }
             Log.warning(.search, "Ollama unavailable; the question waits", ["turn": String(id), "error": error.localizedDescription])
-        } catch {
-            let byUser = stopped == id
-            guard byUser || !Task.isCancelled else { return nil }
-            outcome = byUser ? "stopped" : TurnState.failed.rawValue
+        case let .failed(error):
+            outcome = TurnState.failed.rawValue
             // Ollama that answers with an error of its own, such as a model it does not have, can be reached.
-            reached = byUser ? nil : (error is OllamaError ? true : nil)
-            let partial = status.answering?.turn == id ? status.answering?.progress.text : nil
-            do {
-                try await store.fail(id, problem: byUser ? Self.stoppedProblem : error.localizedDescription, partial: partial, model: model,
-                                     trace: trace.traceID)
-            } catch {
-                Log.error(.search, "Could not record a question that was not answered", ["turn": String(id), "error": error.localizedDescription])
-            }
-            if !byUser { Log.error(.search, "Question not answered", ["turn": String(id), "error": error.localizedDescription]) }
+            reached = error is OllamaError ? true : nil
+            await keepFailed(id, by: tag, problem: error.localizedDescription, partial: written(id), model: model, trace: trace)
+            Log.error(.search, "Question not answered", ["turn": String(id), "error": error.localizedDescription])
         }
         await services.traces.finish(trace, outcome: outcome, docID: nil)
         return reached
+    }
+
+    /// How the trace of an answer the user stopped ends.
+    static let stopped = "stopped"
+
+    /// What has come of the answer to `turn`, as the status brings it.
+    private func written(_ turn: Int64) -> String? {
+        status.answering?.turn == turn ? status.answering?.progress.text : nil
+    }
+
+    /// Records that the question was not answered, with what came of the answer.
+    private func keepFailed(_ id: Int64, by tag: String, problem: String, partial: String?, model: String?, trace: TraceContext) async {
+        do { try await store.fail(id, by: tag, problem: problem, partial: partial, model: model, trace: trace.traceID) } catch {
+            Log.error(.search, "Could not record a question that was not answered", ["turn": String(id), "error": error.localizedDescription])
+        }
     }
 
     /// Answers the question from the set as it is now, finds what it asks for outside the set if it asks, and keeps the
     /// answer; the outcome the trace ends with.
     private func respond(_ record: TaskTurnRecord, task: SearchTaskRecord, id: Int64, profile: ModelProfile,
                          trace: TraceContext) async throws -> String {
-        guard let taskID = task.id else { return "superseded" }
+        guard let taskID = task.id else { return SearchTaskQueue.superseded }
         let members = try await services.database.reader.read { db in try SearchTaskStore.members(db, task: taskID) }
         let set = members.filter { $0.inclusion != .removed }.map(\.document)
         let earlier = try await store.turns(task: taskID).filter { $0.id < id }
@@ -361,9 +326,9 @@ public actor TaskConversationQueue {
         if let request = answer.find {
             finding = try await find(request, task: task, members: Set(members.map(\.document)), profile: profile, today: today, trace: trace)
         }
-        guard try await store.finish(id, answer: answer, finding: finding, trace: trace.traceID) else {
+        guard try await store.finish(id, by: tag, answer: answer, finding: finding, trace: trace.traceID) else {
             Log.info(.search, "A question was taken out of the queue while it was answered", ["turn": String(id)])
-            return "superseded"
+            return SearchTaskQueue.superseded
         }
         Log.info(.search, "Question answered", ["turn": String(id), "sources": String(answer.sources.count)])
         return TurnState.answered.rawValue
@@ -395,7 +360,7 @@ public actor TaskConversationQueue {
             let new = found.filter { !members.contains($0) }.prefix(services.config.conversation.maxSuggested)
             return TurnFinding(request: request, plan: plan, documents: Array(new), problem: nil)
         } catch {
-            if error is CancellationError || Task.isCancelled { throw error }
+            try Cancellation.rethrow(error)
             return TurnFinding(request: request, plan: nil, documents: [], problem: error.localizedDescription)
         }
     }

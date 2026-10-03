@@ -91,7 +91,7 @@ public struct ReviewActions: Sendable {
         var analysis = doc.analysis ?? DocumentAnalysis()
         analysis.problems = []
         doc.status = .filed
-        doc.analysisJson = JSON.string(analysis)
+        doc.analysisJson = try JSON.string(analysis)
         doc = try await services.documents.save(doc)
         try await services.history.record(.markedCorrect, actor: .user, doc: docID, summary: "Confirmed \(doc.filename)")
     }
@@ -164,7 +164,7 @@ public struct ReviewActions: Sendable {
                 doc.path = url.path
                 var analysis = doc.analysis ?? DocumentAnalysis()
                 analysis.fileName = (url.lastPathComponent as NSString).deletingPathExtension
-                doc.analysisJson = JSON.string(analysis)
+                doc.analysisJson = try JSON.string(analysis)
                 doc = try await services.documents.save(doc)
                 try await services.index.updateFilename(docID: docID, filename: doc.filename)
                 edited["fileName"] = url.lastPathComponent

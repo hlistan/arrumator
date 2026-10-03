@@ -232,9 +232,9 @@ extension DocumentStore {
     }
 
     /// Content JSON stored on the document row; the text lives in `document_text`.
-    public static func storedContentJSON(_ content: ExtractedContent) -> String {
+    public static func storedContentJSON(_ content: ExtractedContent) throws -> String {
         var c = content
         c.text = ""
-        return JSON.string(c)
+        return try JSON.string(c)
     }
 }

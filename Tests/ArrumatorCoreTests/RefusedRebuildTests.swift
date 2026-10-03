@@ -97,7 +97,8 @@ import Testing
         var services = w.h.services
         services.database = database
         try await TaskConversationActions(services: services, queue: TaskConversationQueue(services: services, answerer: StubAnswerer(),
-                                                                                             interpreter: interpreter, search: w.h.search))
+                                                                                             interpreter: interpreter, search: w.h.search,
+                                                                                             processes: w.h.processes))
             .ask(task.id, question: "Since when?")
         try await records.flush()
         let written = try String(contentsOf: conversation, encoding: .utf8)

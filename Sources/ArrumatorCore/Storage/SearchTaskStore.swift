@@ -24,6 +24,8 @@ public struct SearchTaskRecord: ArrumatorRecord, Identifiable, Hashable {
     public var nextRunAt: Date?
     public var createdAt: Date
     public var updatedAt: Date
+    /// The process reading its request (a `ProcessTag`), while it is `interpreting`; nil otherwise. The index's own.
+    public var worker: String?
 
     public mutating func didInsert(_ inserted: InsertionSuccess) { id = inserted.rowID }
 
@@ -186,49 +188,74 @@ public struct SearchTaskStore: Sendable {
         }
     }
 
-    /// Takes a queued task to have its prompt read; nil when it is no longer queued. No History event says so, as History
-    /// keeps what a reading concluded: the queue's status says which task it reads (`SearchTaskQueue.statusUpdates()`).
-    func begin(_ id: Int64) async throws -> SearchTaskRecord? {
+    /// Takes a queued task to have its prompt read by the process `worker` names (a `ProcessTag`); nil when it is no
+    /// longer queued. No History event says so, as History keeps what a reading concluded: the queue's status says which
+    /// task it reads (`SearchTaskQueue.statusUpdates()`).
+    func begin(_ id: Int64, by worker: String) async throws -> SearchTaskRecord? {
         let now = time.now()
         return try await database.writer.write { db in
             guard var record = try SearchTaskRecord.fetchOne(db, key: id), record.state == .queued else { return nil }
             record.state = .interpreting
+            record.worker = worker
             record.updatedAt = now
             try record.update(db)
             return record
         }
     }
 
-    /// Tasks whose prompt was being read when the app stopped go back into the queue, in their place: they were due when
-    /// they were taken, so they are due still.
-    func recoverInterrupted() async throws -> Int {
-        try await database.writer.write { db in
-            try SearchTaskRecord.filter(Column("state") == SearchTaskState.interpreting.rawValue)
-                .updateAll(db, Column("state").set(to: SearchTaskState.queued.rawValue))
+    /// Tasks whose prompt was being read by no process that still reads them (`ProcessWatching.hasLeft`), as when the
+    /// app stopped or a command was killed, go back into the queue, in their place: they were due when they were taken,
+    /// so they are due still. How many.
+    func recoverLeft(_ processes: any ProcessWatching) async throws -> Int {
+        // Looked for first, so the worker's every look writes nothing when nothing was left, as is usual.
+        let found = try await database.reader.read { db in
+            try SearchTaskRecord.filter(Column("state") == SearchTaskState.interpreting.rawValue).fetchAll(db)
+        }
+        guard found.contains(where: { processes.hasLeft($0.worker) }) else { return 0 }
+        return try await database.writer.write { db in
+            let left = try SearchTaskRecord.filter(Column("state") == SearchTaskState.interpreting.rawValue).fetchAll(db)
+                .filter { processes.hasLeft($0.worker) }.compactMap(\.id)
+            guard !left.isEmpty else { return 0 }
+            return try SearchTaskRecord.filter(keys: left)
+                .updateAll(db, Column("state").set(to: SearchTaskState.queued.rawValue), Column("worker").set(to: nil))
         }
     }
 
-    /// Puts a task back in the queue until `date`, as while Ollama cannot be reached.
-    func postpone(_ id: Int64, prompt: String, until date: Date) async throws {
+    /// Whether `record` is still being read by `worker`: not changed, put back in the queue, or taken by another process
+    /// since. What a reading keeps depends on it, as any change the user makes that asks for another reading puts the
+    /// task back in the queue.
+    static func held(_ record: SearchTaskRecord, by worker: String) -> Bool {
+        record.state == .interpreting && record.worker == worker
+    }
+
+    /// Puts a task `worker` reads back in the queue until `date`, as while Ollama cannot be reached, keeping `trace`, which
+    /// the next attempt takes up.
+    func postpone(_ id: Int64, by worker: String, until date: Date, trace: Int64?) async throws {
+        let now = time.now()
         try await database.writer.write { db in
-            try db.execute(sql: "UPDATE search_tasks SET state = ?, next_run_at = ? WHERE id = ? AND prompt = ? AND state = ?",
-                           arguments: [SearchTaskState.queued.rawValue, date.unixSeconds, id, prompt, SearchTaskState.interpreting.rawValue])
+            guard var record = try SearchTaskRecord.fetchOne(db, key: id), Self.held(record, by: worker) else { return }
+            record.state = .queued
+            record.worker = nil
+            record.nextRunAt = date
+            record.lastTraceId = trace ?? record.lastTraceId
+            record.updatedAt = now
+            try record.update(db)
         }
     }
 
     /// Keeps what the model read a task's prompt as and the documents that plan found: those it found before and not
     /// now leave the set, those the user took out stay out, and those the user added stay in. Nothing is kept, and
-    /// false returned, when the task was removed or its prompt changed while it was being read: it is in the queue again.
-    func prepare(_ id: Int64, prompt: String, interpretation: SearchInterpretation, plan: SearchPlan, found: [Int64],
+    /// false returned, when `worker` reads the task no more: it was removed, or changed in what decides its reading (its
+    /// prompt, effort or profile), and is in the queue again.
+    func prepare(_ id: Int64, by worker: String, interpretation: SearchInterpretation, plan: SearchPlan, found: [Int64],
                  trace: Int64?) async throws -> Bool {
         let now = time.now()
         let config = config
         return try await database.writer.write { db in
-            guard var record = try SearchTaskRecord.fetchOne(db, key: id), record.prompt == prompt, record.state == .interpreting else {
-                return false
-            }
+            guard var record = try SearchTaskRecord.fetchOne(db, key: id), Self.held(record, by: worker) else { return false }
             record.state = .ready
-            record.planJson = JSON.string(plan)
+            record.worker = nil
+            record.planJson = try JSON.string(plan)
             record.model = interpretation.model
             record.problem = nil
             record.lastTraceId = trace
@@ -253,13 +280,14 @@ public struct SearchTaskStore: Sendable {
         }
     }
 
-    /// Records that the model could not read a task's prompt, unless the task was removed or its prompt changed.
-    func fail(_ id: Int64, prompt: String, interpretation: SearchInterpretation, trace: Int64?) async throws {
+    /// Records that the model could not read a task's prompt, unless `worker` reads it no more (`prepare`).
+    func fail(_ id: Int64, by worker: String, interpretation: SearchInterpretation, trace: Int64?) async throws {
         let now = time.now()
         let config = config
         try await database.writer.write { db in
-            guard var record = try SearchTaskRecord.fetchOne(db, key: id), record.prompt == prompt, record.state == .interpreting else { return }
+            guard var record = try SearchTaskRecord.fetchOne(db, key: id), Self.held(record, by: worker) else { return }
             record.state = .failed
+            record.worker = nil
             record.model = interpretation.model
             record.problem = interpretation.problem
             record.lastTraceId = trace
@@ -299,7 +327,7 @@ extension SearchTaskStore {
     /// trace, and when a waiting task is next tried). A document the index does not have is left out of the set: its
     /// number points nowhere.
     static func restore(_ entry: SearchTaskEntry, db: Database) throws {
-        var record = entry.record
+        var record = try entry.record
         if let existing = try SearchTaskRecord.fetchOne(db, key: entry.id) {
             record.lastTraceId = existing.lastTraceId
             record.nextRunAt = existing.state == record.state ? existing.nextRunAt : record.nextRunAt
@@ -311,7 +339,7 @@ extension SearchTaskStore {
         }
         try db.execute(sql: "DELETE FROM search_task_exports WHERE task_id = ? AND id NOT IN (\(ArchiveRecords.ids(entry.exports.map(\.id))))",
                        arguments: [entry.id])
-        for var export in entry.exportRecords { try export.save(db) }
+        for var export in try entry.exportRecords { try export.save(db) }
     }
 }
 

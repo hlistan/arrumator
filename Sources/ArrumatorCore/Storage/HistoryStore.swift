@@ -15,7 +15,7 @@ public struct HistoryStore: Sendable {
     @discardableResult
     public func record(_ kind: EventKind, actor: EventActor = .system, doc: Int64? = nil, job: Int64? = nil,
                        trace: Int64? = nil, summary: String, payload: (any Encodable)? = nil) async throws -> Int64? {
-        let payloadJSON = payload.map { JSON.string($0) }
+        let payloadJSON = try payload.map { try JSON.string($0) }
         let at = time.now()
         return try await database.writer.write { db in
             try Self.insert(db, kind, at: at, actor: actor, doc: doc, job: job, trace: trace, summary: summary, payloadJSON: payloadJSON)
@@ -29,7 +29,7 @@ public struct HistoryStore: Sendable {
     @discardableResult
     public func record(_ kind: EventKind, actor: EventActor, summary: String, payload: (any Encodable)?,
                        alongside change: @escaping @Sendable () throws -> Void) async throws -> Int64? {
-        let payloadJSON = payload.map { JSON.string($0) }
+        let payloadJSON = try payload.map { try JSON.string($0) }
         let at = time.now()
         return try await database.writer.write { db in
             let id = try Self.insert(db, kind, at: at, actor: actor, doc: nil, job: nil, trace: nil, summary: summary, payloadJSON: payloadJSON)
@@ -49,7 +49,7 @@ public struct HistoryStore: Sendable {
                               job: Int64? = nil, trace: Int64? = nil, summary: String,
                               payload: (any Encodable)? = nil) throws -> Int64? {
         try insert(db, kind, at: at, actor: actor, doc: doc, job: job, trace: trace, summary: summary,
-                   payloadJSON: payload.map { JSON.string($0) })
+                   payloadJSON: try payload.map { try JSON.string($0) })
     }
 
     /// An event with nothing to record beyond its kind and summary.
@@ -119,6 +119,6 @@ struct HeldEvent: Codable {
     /// Keeps the event in `meta`, in the transaction of `db`, after those held before it.
     func hold(in db: Database) throws {
         let place = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM meta WHERE key GLOB ?", arguments: [Self.keys]) ?? 0
-        try db.execute(sql: "INSERT INTO meta(key, value) VALUES(?, ?)", arguments: [Self.keyPrefix + String(place + 1), JSON.string(self)])
+        try db.execute(sql: "INSERT INTO meta(key, value) VALUES(?, ?)", arguments: [Self.keyPrefix + String(place + 1), try JSON.string(self)])
     }
 }

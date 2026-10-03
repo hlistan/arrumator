@@ -192,7 +192,7 @@ table in [AGENTS.md §5](../AGENTS.md#5-boundaries).
 | `FileOps/` | Names, moves, identity on disk (a package is one document), the Trash. | `FilenameBuilder`, `Placer`, `FileOperations`, `HashService`, `Packages`, `Xattr`, `SystemTrash`, `FolderTrash` |
 | `Watching/` | FSEvents on Incoming and on the archive. | `IncomingWatcher`, `ArchiveWatcher`, `SelfChangeRegistry`, `FSEventStream`, `SkipRules` |
 | `Ollama/` | The only network client, its guard, the server's lifecycle, one model call at a time. | `OllamaClient`, `OllamaConnection`, `OllamaEndpoint`, `SystemHostResolver`, `NetworkGuardProtocol`, `OllamaLifecycle`, `ModelManager`, `InferenceGate` |
-| `Tasks/` | Search tasks and conversations: two queues, their actions, what an answer is shown, exports. | `SearchTaskQueue`, `SearchTaskActions`, `TaskConversationQueue`, `TaskConversationActions`, `TaskContextBuilder`, `SearchTaskExporter` |
+| `Tasks/` | Search tasks and conversations: two queues and the machinery they share, their actions, what an answer is shown, exports. | `ModelQueue`, `SearchTaskQueue`, `SearchTaskActions`, `TaskConversationQueue`, `TaskConversationActions`, `TaskContextBuilder`, `SearchTaskExporter` |
 | `Search/` | Full-text search fused with search by meaning. | `SearchService`, `VectorIndex`, `SearchPlanMatcher` |
 | `Vocabulary/` | Keeping labels one vocabulary. | `LabelConsolidator`, `LabelSimilarity` |
 | `Observability/` | What the pipeline did, in numbers; how an eval run read its corpus; the doctor; the diagnostics export. | `StatsService`, `ProcessingFunnel`, `Evaluation`, `Doctor`, `DiagnosticsExporter` |
@@ -326,11 +326,23 @@ The four steps and their guarantees are in [Storage](storage.md#keeping-files-an
 
 ### A search task and a conversation
 
-Both follow the ingest queue's shape with a queue of their own in SQLite and one worker actor each.
+Both follow the ingest queue's shape with a queue of their own in SQLite and one worker actor each, which share their
+machinery (`ModelQueue`). The app and each `arrumatorcli` command share the index and work through the same queues, so
+an item taken from one keeps the process that took it (`worker`, a `ProcessTag`: its id and when it started). Before it
+looks for an item, and once it has stopped, a queue puts back in their place those its own process left in hand and
+those of a process that has ended, such as a command killed part way; the app's maintenance wakes its queues for that
+too. What the work keeps depends on its process still holding the item, so a change the user made meanwhile is never
+written over. The item in hand is known from before it is taken: changing or removing a task stops its reading at once,
+removing it or clearing its conversation stops the answer to its question, and stopping a question stops its answer.
+Ollama away, as ingest decides it (`PipelineServices.ollamaIsAway`: not reached, or not in time and not answering a
+probe), makes the item wait, spending nothing, under one trace each attempt takes up
+(`TraceRecorder.start(_:resuming:)`); any other failure, a server that answers with one among them, fails it with the
+reason.
 
 - **Search task.** `SearchTaskActions.create` inserts the task and its History event in one write. `SearchTaskQueue`
   takes the oldest, has `SearchPromptInterpreting` read the request into a `SearchPlan`, finds the documents with
-  `SearchPlanMatcher`, and stores both, but only if the request has not changed meanwhile.
+  `SearchPlanMatcher`, and stores both, but only while its process still holds the task: a change to its request,
+  effort or profile puts it back in the queue.
 - **Conversation.** `TaskConversationActions.ask` queues a question. `TaskConversationQueue` reads the task's set as it
   is then, `TaskContextBuilder` chooses what the answer is shown, `TaskQuestionAnswering` streams the answer, and the
   validator keeps as sources only documents the answer was shown.

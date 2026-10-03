@@ -193,7 +193,7 @@ struct RefusingUntil: Trashing {
         await h.coordinator.enqueue(bill)
         await drain(h)
         var left = try #require(try await documents(h).first)
-        left.analysisJson = JSON.string(DocumentAnalysis(problems: ["Worded otherwise"]))
+        left.analysisJson = try JSON.string(DocumentAnalysis(problems: ["Worded otherwise"]))
         _ = try await h.services.documents.save(left)
         #expect(await h.coordinator.enqueue(bill) == nil, "however its problem is worded, a rescan leaves the file it is alone")
         #expect(await h.review.choices(for: left).notFiled, "and its card still says it was not filed")

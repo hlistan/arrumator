@@ -55,7 +55,7 @@ public struct DiagnosticsExporter: Sendable {
             let traces = try TraceRecord.order(Column("started_at").desc).limit(limit).fetchAll(db)
             return try traces.map { t in
                 let steps = try TraceStepRecord.filter(Column("trace_id") == t.id).order(Column("seq")).fetchAll(db)
-                return JSON.string(TraceExport(trace: Self.shareable(t), steps: Self.shareable(steps, includeDocumentText: includeDocumentText)))
+                return try JSON.string(TraceExport(trace: Self.shareable(t), steps: Self.shareable(steps, includeDocumentText: includeDocumentText)))
             }
         }
         try Data(traces.joined(separator: "\n").utf8).write(to: staging.appendingPathComponent("traces.jsonl"))

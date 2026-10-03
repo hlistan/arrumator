@@ -71,7 +71,7 @@ public struct JobStore: Sendable {
                 try active.update(db)
             }
             var job = JobRecord(id: nil, kind: kind, docId: docID, sourcePath: path, state: .pending, attempt: 0, nextRunAt: now,
-                                lastError: nil, payloadJson: JSON.string(payload), createdAt: now, updatedAt: now)
+                                lastError: nil, payloadJson: try JSON.string(payload), createdAt: now, updatedAt: now)
             try job.insert(db)
             return job.id
         }
@@ -137,7 +137,7 @@ public struct JobStore: Sendable {
 
 extension JobRecord {
     public var payload: JobPayload { JSON.decode(JobPayload.self, from: payloadJson) ?? JobPayload() }
-    public mutating func setPayload(_ p: JobPayload) { payloadJson = JSON.string(p) }
+    public mutating func setPayload(_ p: JobPayload) throws { payloadJson = try JSON.string(p) }
 
     /// The tags the file is given when it is filed, or keeps when it is read again: the user's own labels, beside those
     /// the model will give it. What its row in the queue shows beneath its name, from when it is queued.

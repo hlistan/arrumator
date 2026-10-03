@@ -75,13 +75,17 @@ public struct ConversationAnswerValidator: Sendable {
         return ValidatedAnswer(text: answer, sources: sources, find: find.isEmpty ? nil : find, notes: notes, incomplete: nil)
     }
 
-    /// The answer with each shown document's number, as the documents are shown to the model (`[42]`), given as its name,
-    /// which is all the person sees of it: a number before the name goes, one alone becomes the name. The prompt asks for
-    /// names; a model that writes numbers all the same is not left to show them.
+    /// The answer with each shown document's number, written as the documents are shown to the model (`[42]`), given as
+    /// its name, which is all the person sees of it: a number before the name goes, one alone becomes the name. The prompt
+    /// asks for names; a model that writes numbers all the same is not left to show them. A number in brackets that is
+    /// Markdown of its own stays as written: a link's words (`[42](…)`), a reference (`[42]: …`, `[42][…]`), and anything
+    /// in code, inline or fenced, which shows text as it is.
     func named(_ answer: String) -> String {
-        guard let pattern = try? NSRegularExpression(pattern: #"\[\s*(\d+)\s*\]\s*"#) else { return answer }
+        let whole = NSRange(answer.startIndex..., in: answer)
+        let code = Self.codePattern.matches(in: answer, range: whole).map(\.range)
         var out = answer
-        for match in pattern.matches(in: answer, range: NSRange(answer.startIndex..., in: answer)).reversed() {
+        for match in Self.numberPattern.matches(in: answer, range: whole).reversed()
+        where !code.contains(where: { NSIntersectionRange($0, match.range).length > 0 }) {
             guard let whole = Range(match.range, in: answer), let digits = Range(match.range(at: 1), in: answer),
                   let id = Int64(answer[digits]), let name = names[id], !name.isEmpty else { continue }
             let following = answer[whole.upperBound...]
@@ -89,6 +93,18 @@ public struct ConversationAnswerValidator: Sendable {
             out.replaceSubrange(whole, with: following.lowercased().hasPrefix(Self.namePrefix(name)) ? "" : name + spaced)
         }
         return out
+    }
+
+    /// A shown document's number as the model writes it, `[42]`, and the space after it; not when Markdown makes it a
+    /// link's words or a reference, followed by `(`, `:` or `[`.
+    static let numberPattern = regex(#"\[\s*(\d+)\s*\](?![(:\[])\s*"#)
+    /// Code in Markdown: a fenced block, to its end or the answer's, and an inline span.
+    static let codePattern = regex(#"(?s)```.*?(?:```|\z)|`[^`\n]*`"#)
+
+    private static func regex(_ pattern: String) -> NSRegularExpression {
+        do { return try NSRegularExpression(pattern: pattern) } catch {
+            preconditionFailure("A pattern literal that does not compile: \(pattern)")
+        }
     }
 
     /// How much of a name, after a number, shows the model wrote the name too.
@@ -204,15 +220,25 @@ public struct TaskAnswerer: TaskQuestionAnswering {
                        progress: @escaping @Sendable (AnswerProgress) async -> Void) async throws -> TaskAnswer {
         let preset = try config.conversation.effort(effort)
         let model = profile.chatModel
-        let validator = ConversationAnswerValidator(names: Dictionary(context.documents.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first }))
         let system = try library.render("conversation-system", [:])
-        let user = try library.render("conversation-user", ["today": today, "documents": try documentsBlock(context),
-                                                            "conversation": try conversationBlock(context.conversation),
-                                                            "question": question])
+        let budget = PromptBudget(numCtx: config.conversation.numCtx, numPredict: preset.numPredict, charsPerToken: config.ollama.charsPerToken)
+        var shown = context
+        var trim = ContextTrim()
+        var user = try userPrompt(question, context: shown, today: today)
+        // What the answer is shown is cut, the least it needs first, until the prompt fits the model's context.
+        while !budget.fits(system, user), let less = trim.less(of: shown) {
+            shown = less
+            user = try userPrompt(question, context: shown, today: today)
+        }
+        guard budget.fits(system, user) else {
+            throw PromptError.tooLong(template: "conversation-user", chars: system.count + user.count, room: budget.room)
+        }
+        let validator = ConversationAnswerValidator(names: Dictionary(shown.documents.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first }))
         let library = library
         let numPredict = preset.numPredict
-        let input = AnswerInput(effort: effort, model: model, think: preset.think, today: today, read: context.read.count,
-                                listed: context.listed.count, unlisted: context.unlisted, exchanges: context.conversation.count)
+        let input = AnswerInput(effort: effort, model: model, think: preset.think, today: today, read: shown.read.count,
+                                listed: shown.listed.count, unlisted: shown.unlisted, exchanges: shown.conversation.count,
+                                trimmed: trim.isEmpty ? nil : trim)
         let started = Date()
         do {
             let answer = try await LLMClassifier(gate: gate, models: models, effort: .conversation(preset, config: config)).ask(
@@ -223,22 +249,33 @@ public struct TaskAnswerer: TaskQuestionAnswering {
                     await progress(AnswerProgress(text: text, thinking: text.isEmpty && !(sofar.message.thinking ?? "").isEmpty))
                 },
                 cutOff: { content in
-                    ValidatedAnswer(text: StreamedAnswer.text(in: content).trimmingCharacters(in: .whitespacesAndNewlines), sources: [],
-                                    find: nil, notes: [], incomplete: AnswerValidationError.cutOff(numPredict).localizedDescription)
+                    ValidatedAnswer(text: validator.named(StreamedAnswer.text(in: content)).trimmingCharacters(in: .whitespacesAndNewlines),
+                                    sources: [], find: nil, notes: [], incomplete: AnswerValidationError.cutOff(numPredict).localizedDescription)
                 },
                 validate: { try validator.validate($0) })
             // A model that thought until it ran out wrote nothing of its answer, which is no answer.
             guard !answer.answer.text.isEmpty else { throw ModelAnswerError.exhausted(answer.calls) }
-            await trace.record(.answer, status: answer.calls.count > 1 || answer.answer.incomplete != nil ? .warn : .ok, startedAt: started,
-                               input: input, output: AnswerTrace(answer: answer.answer, exchange: answer.calls))
+            let full = budget.full(answer.calls)
+            await trace.record(.answer, status: answer.calls.count > 1 || answer.answer.incomplete != nil || full != nil ? .warn : .ok,
+                               startedAt: started, input: input,
+                               output: AnswerTrace(answer: answer.answer, promptTokens: PromptBudget.promptTokens(answer.calls),
+                                                   exchange: answer.calls), error: full)
             return TaskAnswer(text: answer.answer.text, sources: answer.answer.sources, find: answer.answer.find, model: answer.model,
                               problem: answer.answer.incomplete)
         } catch let error as ModelAnswerError {
-            await trace.record(.answer, status: .error, startedAt: started, input: input,
-                               output: AnswerTrace(answer: nil, exchange: error.calls), error: error.localizedDescription)
+            await trace.record(.answer, status: error.status, startedAt: started, input: input,
+                               output: AnswerTrace(answer: nil, promptTokens: PromptBudget.promptTokens(error.calls), exchange: error.calls),
+                               error: ([error.localizedDescription] + [budget.full(error.calls)].compactMap { $0 }).joined(separator: "; "))
+            if let cause = error.cause { throw cause }
             Log.warning(.classify, "The model gave no valid answer to a question", ["error": error.localizedDescription])
             throw error
         }
+    }
+
+    /// What the model is asked: today's date, what it is shown of the set and the conversation, and the question.
+    func userPrompt(_ question: String, context: TaskContext, today: String) throws -> String {
+        try library.render("conversation-user", ["today": today, "documents": try documentsBlock(context),
+                                                 "conversation": try conversationBlock(context.conversation), "question": question])
     }
 
     /// The documents shown with their text, each under its number, then those listed by name alone, then how many more
@@ -276,7 +313,8 @@ public struct TaskAnswerer: TaskQuestionAnswering {
 
 /// What answering a question records it was answered with: the effort, the model, what the effort wanted the model told
 /// about thinking, the day, and how much it was shown: documents with their text, listed by name, not shown, and
-/// earlier exchanges. What was sent is each `ModelCall` of the exchange, which retention clears.
+/// earlier exchanges, and what was left out of that so the prompt fit the model's context, when anything was. What was
+/// sent is each `ModelCall` of the exchange, which retention clears.
 struct AnswerInput: Encodable {
     var effort: TaskEffort
     var model: String
@@ -286,11 +324,14 @@ struct AnswerInput: Encodable {
     var listed: Int
     var unlisted: Int
     var exchanges: Int
+    var trimmed: ContextTrim?
 }
 
-/// What answering a question records: the checked answer, and every model call under `TraceStep.exchangeKey`, which
+/// What answering a question records: the checked answer, the tokens each prompt took, and every model call under `TraceStep.exchangeKey`, which
 /// retention clears.
 struct AnswerTrace: Codable {
     var answer: ValidatedAnswer?
+    /// The tokens each call's prompt took, as Ollama counted them (`PromptBudget.promptTokens`), which retention keeps.
+    var promptTokens: [Int]
     var exchange: [ModelCall]
 }

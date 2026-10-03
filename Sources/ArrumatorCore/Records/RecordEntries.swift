@@ -86,11 +86,12 @@ public struct DocumentEntry: Codable, Sendable, Hashable {
     /// extraction) starts empty and is filled in again when the document is read. Labels are kept as the index keeps
     /// them (`DocumentLabel.stored`), so an entry edited by hand to give a document a label of another kind than a tag
     /// labels it, as a correction in the app does.
-    public func record(directory: URL, now: Date) -> DocumentRecord {
+    public func record(directory: URL, now: Date) throws -> DocumentRecord {
         let stored = labels.map { DocumentLabel.stored($0, labelled: tagsOnly != true) } ?? (labels: nil, tagsOnly: false)
         return DocumentRecord(id: id, uid: uid, path: directory.appendingPathComponent(file).path, originalFilename: originalName,
                               sha256: sha256, size: size, uttype: contentType, inode: nil, pageCount: pages, status: status,
-                              analysisJson: analysis.map { JSON.string($0) }, contentJson: nil, labelsJson: stored.labels.map { JSON.string($0) },
+                              analysisJson: try analysis.map { try JSON.string($0) }, contentJson: nil,
+                              labelsJson: try stored.labels.map { try JSON.string($0) },
                               tagsOnly: stored.tagsOnly, duplicateOf: duplicateOf, lastTraceId: nil, addedAt: added, filedAt: filed,
                               extractedAt: nil, embeddedAt: nil, fileMtime: nil, createdAt: added, updatedAt: now)
     }
@@ -242,15 +243,20 @@ public struct SearchTaskEntry: Codable, Sendable, Hashable {
     static let effortBeforeEfforts = TaskEffort.medium
 
     var record: SearchTaskRecord {
-        SearchTaskRecord(id: id, prompt: prompt, title: title, groupingJson: grouping.map { JSON.string($0) },
-                         effort: effort ?? Self.effortBeforeEfforts,
-                         profile: profile, state: state == .interpreting ? .queued : state, planJson: plan.map { JSON.string($0) }, model: model,
-                         problem: problem, lastTraceId: nil, nextRunAt: state.isActive ? created : nil, createdAt: created, updatedAt: updated)
+        get throws {
+            SearchTaskRecord(id: id, prompt: prompt, title: title, groupingJson: try grouping.map { try JSON.string($0) },
+                             effort: effort ?? Self.effortBeforeEfforts, profile: profile,
+                             state: state == .interpreting ? .queued : state, planJson: try plan.map { try JSON.string($0) }, model: model,
+                             problem: problem, lastTraceId: nil, nextRunAt: state.isActive ? created : nil, createdAt: created,
+                             updatedAt: updated)
+        }
     }
 
     var exportRecords: [SearchTaskExportRecord] {
-        exports.map { SearchTaskExportRecord(id: $0.id, taskId: id, at: $0.at, format: $0.format, path: $0.path,
-                                             manifestJson: JSON.string(ExportManifest(files: $0.files, skipped: $0.skipped))) }
+        get throws {
+            try exports.map { SearchTaskExportRecord(id: $0.id, taskId: id, at: $0.at, format: $0.format, path: $0.path,
+                                                     manifestJson: try JSON.string(ExportManifest(files: $0.files, skipped: $0.skipped))) }
+        }
     }
 }
 
@@ -288,10 +294,10 @@ public struct ConversationTurnEntry: Codable, Sendable, Hashable {
         answered = record.answeredAt
     }
 
-    func record(task: Int64) -> TaskTurnRecord {
+    func record(task: Int64) throws -> TaskTurnRecord {
         TaskTurnRecord(id: id, taskId: task, question: question, state: state == .answering ? .queued : state, answer: answer,
-                       sourcesJson: sources.map { JSON.string($0) }, findingJson: finding.map { JSON.string($0) }, model: model,
-                       problem: problem, lastTraceId: nil, nextRunAt: state.isActive ? asked : nil, askedAt: asked, answeredAt: answered)
+                       sourcesJson: try sources.map { try JSON.string($0) }, findingJson: try finding.map { try JSON.string($0) },
+                       model: model, problem: problem, lastTraceId: nil, nextRunAt: state.isActive ? asked : nil, askedAt: asked, answeredAt: answered)
     }
 }
 

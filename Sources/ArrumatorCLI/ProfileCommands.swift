@@ -27,7 +27,7 @@ struct Profiles: AsyncParsableCommand {
 
         func run() async throws {
             let listings = try await options.runtime().profiles.list()
-            options.emit(listings) { Terminal.profiles(listings) }
+            try options.emit(listings) { Terminal.profiles(listings) }
         }
     }
 
@@ -42,7 +42,7 @@ struct Profiles: AsyncParsableCommand {
 
         func run() async throws {
             let added = try await options.runtime().profiles.add(name: name, copying: from, change: ModelProfileChange(models: models.given))
-            options.emit(added) { Terminal.profiles([added]) }
+            try options.emit(added) { Terminal.profiles([added]) }
         }
     }
 
@@ -62,7 +62,7 @@ struct Profiles: AsyncParsableCommand {
 
         func run() async throws {
             let updated = try await options.runtime().profiles.update(profile, ModelProfileChange(name: name, models: models.given))
-            options.emit(updated) { Terminal.profiles([updated]) }
+            try options.emit(updated) { Terminal.profiles([updated]) }
         }
     }
 
@@ -73,7 +73,7 @@ struct Profiles: AsyncParsableCommand {
 
         func run() async throws {
             let reset = try await options.runtime().profiles.reset(profile)
-            options.emit(reset) { Terminal.profiles([reset]) }
+            try options.emit(reset) { Terminal.profiles([reset]) }
         }
     }
 
@@ -86,7 +86,7 @@ struct Profiles: AsyncParsableCommand {
 
         func run() async throws {
             let removed = try await options.runtime().profiles.remove(profile)
-            options.emit(removed) { "Removed the profile “\(removed.profile.name)” (\(removed.id))" }
+            try options.emit(removed) { "Removed the profile “\(removed.profile.name)” (\(removed.id))" }
         }
     }
 }

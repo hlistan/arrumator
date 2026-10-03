@@ -152,6 +152,93 @@ import Testing
         #expect(!FileManager.default.fileExists(atPath: w.h.env.root.appendingPathComponent("etc").path), "nothing was written outside it")
     }
 
+    @Test func groupsWhoseFoldersWouldBeNamedAlikeEachGetAFolderOfTheirOwn() async throws {
+        let byKind = SearchPlan(title: "Invoices", labels: [SearchTaskTests.label(.type, "invoice")], words: [], grouping: [.sender])
+        let (w, tasks, id) = try await prepared(byKind)
+        defer { w.h.env.cleanup() }
+        let without = try w.h.env.config.tasks.withoutLabelFolder(.sender)
+        let meo = try w.id("meo_2025_01.txt"), edp = try w.id("edp_2024_11.txt")
+        // A sender named as the folder of the documents without one, and a document without a sender.
+        try await w.h.review.edit(meo, fileName: nil, labels: LabelEdit(adding: [SearchTaskTests.label(.sender, without.uppercased()), SearchTaskTests.label(.type, "invoice")],
+                                                                    removing: try await w.h.services.documents.document(id: meo)?.labels ?? []))
+        try await w.h.review.edit(edp, fileName: nil, labels: LabelEdit(adding: [SearchTaskTests.label(.type, "invoice")], removing: try await w.h.services.documents.document(id: edp)?.labels ?? []))
+        try await findAgain(tasks, id)
+        let export = try await tasks.export(id, to: out(w), format: .folder)
+        let paths = files(under: URL(fileURLWithPath: export.path))
+        let second = without + String(format: w.h.env.config.naming.collisionFormat, 2)
+        #expect(paths.contains("\(without.uppercased())/meo_2025_01.txt") && paths.contains("\(second)/edp_2024_11.txt"),
+                "a group whose folder another group's has, however it is cased, gets the collision suffix, rather than the two merging: \(paths)")
+        #expect(Set(export.files.map(\.path)) == paths, "and the export records where each document went")
+    }
+
+    /// A folder inside `w`'s output whose path leaves `room` bytes before the longest path a folder can be made at, so
+    /// what is made inside it fails once its path is longer. The longest is found by making one, as the file system
+    /// counts the path its own way (through `/private`, with its terminator).
+    private func deep(_ w: SearchTaskTests.World, leaving room: Int) throws -> URL {
+        var base = out(w)
+        for _ in 0..<Self.components { base.appendPathComponent(String(repeating: "d", count: Self.componentLength), isDirectory: true) }
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        let longest = try #require((1...Self.componentLength).reversed().first { length in
+            (try? FileManager.default.createDirectory(at: base.appendingPathComponent("p" + String(repeating: "e", count: length - 1)),
+                                                      withIntermediateDirectories: false)) != nil
+        }, "a folder can be made in the deep one")
+        let folder = base.appendingPathComponent("f" + String(repeating: "e", count: longest - room - 1), isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+        return folder
+    }
+
+    /// How deep the folders are made before the last, and how long each name: a path of about 1,000 bytes, near the
+    /// longest the file system takes (`PATH_MAX`), with names well within its 255.
+    static let components = 4
+    /// A name a file system takes in one path component, well within its limit of 255 bytes.
+    static let componentLength = 200
+
+    private func recorded(_ tasks: SearchTaskActions, _ id: Int64) async throws -> [SearchTaskExport] {
+        try #require(try await tasks.store.task(id: id)).exports
+    }
+
+    @Test func aGroupWhoseFolderCannotBeMadeIsSkippedWithItsDocumentsAndTheExportIsRecorded() async throws {
+        let (w, tasks, id) = try await prepared()
+        defer { w.h.env.cleanup() }
+        // Room for the export's own folder, named after the task, but not for a sender's folder inside it.
+        let task = try #require(try await tasks.store.task(id: id))
+        let folder = try deep(w, leaving: task.name.utf8.count + 3)
+        let export = try await tasks.export(id, to: folder, format: .folder)
+        let documents = try w.ids("edp_2025_03.txt", "aguas_2025_05.txt")
+        #expect(export.files.isEmpty && Set(export.skipped.map(\.document)) == documents && export.skipped.allSatisfy { !$0.reason.isEmpty },
+                "the documents of a group whose folder cannot be made are skipped, each with the reason")
+        let kept = try await recorded(tasks, id)
+        #expect(FileManager.default.fileExists(atPath: export.path) && kept == [export],
+                "and the folder that was made is the export the task records, never one left unrecorded")
+    }
+
+    @Test func aGroupWhoseFolderCannotBeNamedIsSkippedWithItsDocumentsAndTheRestExported() async throws {
+        let (w, _, id) = try await prepared(SearchTaskTests.invoices)
+        defer { w.h.env.cleanup() }
+        // A name for the folder of the documents without a sender that cannot be filled.
+        let h = w.h.with { $0.tasks.withoutLabelFolder = "No {{kind}} of {{whom}}" }
+        let (_, tasks) = h.searchTasks(StubInterpreter(plans: [:]))
+        let edp = try w.id("edp_2024_11.txt")
+        try await w.h.review.edit(edp, fileName: nil, labels: LabelEdit(adding: [SearchTaskTests.label(.type, "invoice")], removing: try await w.h.services.documents.document(id: edp)?.labels ?? []))
+        _ = try await tasks.update(id, SearchTaskChange(grouping: .by([.sender])))
+        let export = try await tasks.export(id, to: out(w), format: .folder)
+        #expect(export.skipped.map(\.document) == [edp] && export.skipped.first?.reason.contains("whom") == true,
+                "the documents of a group whose folder's name cannot be made are skipped, saying why")
+        let kept = try await recorded(tasks, id)
+        #expect(export.files.count == 3 && kept == [export], "the rest are exported, and the export is recorded")
+    }
+
+    @Test func anExportWhoseOwnFolderCannotBeMadeFailsAndRecordsNothing() async throws {
+        let (w, tasks, id) = try await prepared()
+        defer { w.h.env.cleanup() }
+        let folder = try deep(w, leaving: 2)
+        await #expect(throws: SearchTaskError.self, "an export of which nothing could be made fails, saying where") {
+            try await tasks.export(id, to: folder, format: .folder)
+        }
+        #expect(try await recorded(tasks, id).isEmpty, "and nothing is recorded")
+        #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path).isEmpty, "as nothing was left there")
+    }
+
     @Test func anExportIntoTheArchiveOrIncomingOrOntoAFileIsRefused() async throws {
         let (w, tasks, id) = try await prepared()
         defer { w.h.env.cleanup() }

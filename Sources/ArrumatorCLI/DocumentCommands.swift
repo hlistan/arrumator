@@ -59,7 +59,7 @@ struct Ingest: AsyncParsableCommand {
                 failed.append((url, job?.lastError ?? "it became no document"))
             }
         }
-        options.emit(docs) {
+        try options.emit(docs) {
             docs.map { document in
                 "\(document.status.rawValue.padding(toLength: 11, withPad: " ", startingAt: 0)) \(document.path)"
                     + (document.labels(.tag).isEmpty ? "" : "\n            tags: " + document.labels(.tag).joined(separator: " · "))
@@ -93,7 +93,7 @@ struct Ingest: AsyncParsableCommand {
                 failed.append((url, error.localizedDescription))
             }
         }
-        options.emit(runs) { texts.joined(separator: "\n") }
+        try options.emit(runs) { texts.joined(separator: "\n") }
         return failed
     }
 
@@ -139,7 +139,7 @@ struct Extract: AsyncParsableCommand {
         let content = try await runtime.services.extractor.extract(url, sha256: try HashService.sha256(of: url), context: context,
                                                                    trace: .disabled)
         let preview = runtime.config.interface.extractPreviewChars
-        options.emit(content) {
+        try options.emit(content) {
             """
             \(content.source.originalFilename) — \(content.source.utType), \(content.source.byteSize) bytes
             kind \(content.kind.rawValue), text \(content.textOrigin.rawValue), \(content.text.count) chars, pages \(content.pageCount.map(String.init) ?? "—")
@@ -163,7 +163,7 @@ struct Search: AsyncParsableCommand {
     func run() async throws {
         let runtime = try await options.runtime()
         let results = try await runtime.search.search(SearchQuery(text: query.joined(separator: " "), semantic: !noSemantic))
-        options.emit(results.hits.map { SearchRow(id: $0.id, path: $0.document.path, score: $0.score, snippet: SearchHighlight.plain($0.snippet),
+        try options.emit(results.hits.map { SearchRow(id: $0.id, path: $0.document.path, score: $0.score, snippet: SearchHighlight.plain($0.snippet),
                                                    sources: $0.sources.map(\.rawValue).sorted(), labels: $0.document.labels,
                                                    labelled: $0.document.isLabelled) }) {
             var lines = results.hits.map { hit in
@@ -197,7 +197,7 @@ struct History: AsyncParsableCommand {
     func run() async throws {
         let runtime = try await options.runtime()
         let events = try await runtime.services.history.events(limit: limit ?? runtime.config.interface.pageSize, docID: doc)
-        options.emit(events) {
+        try options.emit(events) {
             Terminal.table(events.reversed().map { [Format.date($0.at), $0.kind.rawValue, $0.actor.rawValue,
                                                   $0.docId.map { "#\($0)" } ?? "", $0.summary] })
         }
@@ -220,7 +220,7 @@ struct Trace: AsyncParsableCommand {
         }
         // Without --full nothing of the document is shown, so the output can go into a bug report.
         let shown = DiagnosticsExporter.shareable(steps, includeDocumentText: full)
-        options.emit(TraceExport(trace: full ? trace : DiagnosticsExporter.shareable(trace), steps: shown)) {
+        try options.emit(TraceExport(trace: full ? trace : DiagnosticsExporter.shareable(trace), steps: shown)) {
             "Trace #\(id) · \(trace.source) · \(trace.outcome ?? "running") · \(Int(trace.totalMs ?? 0)) ms · "
                 + "models \(trace.modelChat ?? "—") / \(trace.modelEmbed ?? "—")\n" + Terminal.steps(shown, full: full)
                 + (full ? "" : "\n" + Self.fullHint)
@@ -255,7 +255,7 @@ struct Replay: AsyncParsableCommand {
         await runtime.traces.finish(trace, outcome: "replay", docID: docID)
         let original = Reading(analysis: stored.analysis, labels: stored.labels)
         let replay = Reading(analysis: outcome.analysis, labels: outcome.labels)
-        options.emit(["original": original, "replay": replay]) {
+        try options.emit(["original": original, "replay": replay]) {
             """
             original: \(original.analysis?.fileName ?? "—") · \(Terminal.labels(original.labels, labelled: stored.isLabelled))
             replay:   \(replay.analysis?.fileName ?? "—") · \(Terminal.labels(replay.labels)) (\(replay.analysis?.model ?? "no answer"))

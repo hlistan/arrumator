@@ -217,7 +217,10 @@ documents embedded by another model are found by meaning only once they are read
   that read. `arrumatorcli replay` reads a document again with another reading model without touching files. A search
   task's request is traced too: what the model was shown and answered (the `interpret` step, with the effort, the model
   that read and what the effort wanted it told about thinking, and with each call what it was sent, `think`) and what
-  it found (`match`), with the same retention (`arrumatorcli tasks show <task> --full`).
+  it found (`match`), with the same retention (`arrumatorcli tasks show <task> --full`). Every call to the model is in
+  the step, one that failed included, such as the call that found Ollama away. A task or question that waits for Ollama
+  keeps one trace, which each attempt takes up again, counting the attempts, rather than one more trace every time it
+  is tried; a reading or an answer stopped part way keeps the step that says how far it came.
 - **Funnel**: counts, drop-off reasons and timings per step (`arrumatorcli funnel --days 30`).
 - **Processing log**: structured JSONL per day in `~/Library/Logs/Arrumator`, readable per funnel step under
   Settings › Processing log, so you can see which step is producing the errors and warnings
@@ -260,11 +263,13 @@ No tunable lives in code. Defaults are bundled in `Sources/ArrumatorCore/Resourc
   `ollama.timeouts.resolve`, how long a `.local` name of the server may take to be looked up, more than 0; the
   most bytes one answer may hold, a reply or all the lines of an answer streamed, and one line of a download's
   progress, `ollama.maxResponseBytes`; how long what the server said of where a model runs is trusted,
-  `ollama.modelLocationMaxAge`, 0 to ask before every request), `watcher` (when a file in Incoming has stopped changing,
-  what is never taken in, how long one that has stopped changing but cannot be opened is waited for before History says
-  so, `watcher.unopenableWaitSeconds`, 0 or more, and the most items a package may hold to be one document, in Incoming
-  or named to `arrumatorcli ingest`, `watcher.maxPackageItems`, at least 1), `records` (the names of the archive's
-  record files and of its system and history folders, such as `records.labelRulesFileName`,
+  `ollama.modelLocationMaxAge`, 0 to ask before every request; how many characters of a prompt a token of the model's
+  context is reckoned to hold, `ollama.charsPerToken`, by which a search task's request and a question, with what they
+  are shown, are fit to the context they are read in before they are sent), `watcher` (when a file in Incoming has
+  stopped changing, what is never taken in, how long one that has stopped changing but cannot be opened is waited for
+  before History says so, `watcher.unopenableWaitSeconds`, 0 or more, and the most items a package may hold to be one
+  document, in Incoming or named to `arrumatorcli ingest`, `watcher.maxPackageItems`, at least 1), `records` (the names
+  of the archive's record files and of its system and history folders, such as `records.labelRulesFileName`,
   `records.searchTasksFileName` and `records.conversationsFolderName`), `ingest` (attempts and retry delays, and how
   long quitting waits for the file in hand, the request being read and the question being answered to stop,
   `ingest.quitTimeout`, after which the `ollama serve` the app started is stopped all the same), `extraction` (OCR and
@@ -285,12 +290,12 @@ No tunable lives in code. Defaults are bundled in `Sources/ArrumatorCore/Resourc
   `entities.policyLabels`, with a number sign between as `entities.numberSigns` writes it; each is a phrase matched
   whatever its case, in which a space matches any white space, and none at all beside a dot or a sign (`n. º. de
   cliente` matches `nºcliente`), a dot may be left out, and `*` is any one word, at most three of them (`договор * №`);
-  a phrase of `*` alone, or a number sign that holds one, is refused by name), `analysis`
-  (what the model is shown and how it is asked, such as `analysis.excerptChars`, of which the end of the document gets
-  `1 / analysis.excerptTailDivisor`, `analysis.repairAttempts`, the context a document, a search request and an image
-  are read with, `analysis.numCtx`, one so that a model that reads and describes images stays loaded once, what a model
-  that can think is told before it reads a document or describes an image, `analysis.think`, `false`, and the
-  identifiers a document's embedding lists, `analysis.embeddingIdentifiersLimit`), `labels` (`labels.maxPerKind`,
+  a phrase of `*` alone, or a number sign that holds one, is refused by name), `analysis` (what the model is shown and
+  how it is asked, such as `analysis.excerptChars`, of which the end of the document gets `1 /
+  analysis.excerptTailDivisor`, `analysis.repairAttempts`, the context a document, a search request and an image are
+  read with, `analysis.numCtx`, one so that a model that reads and describes images stays loaded once, what a model that
+  can think is told before it reads a document or describes an image, `analysis.think`, `false`, and the identifiers a
+  document's embedding lists, `analysis.embeddingIdentifiersLimit`), `labels` (`labels.maxPerKind`,
   `labels.maxValueChars`, and `labels.vocabulary`: for each kind kept one vocabulary, never your tags, how alike labels
   must be written to be merged without asking or offered to merge and how many in use the model is shown, and how many
   of your merges and unwanted labels it is shown), `naming`, `search`, `tasks` (search tasks: how much the model thinks
@@ -316,11 +321,12 @@ No tunable lives in code. Defaults are bundled in `Sources/ArrumatorCore/Resourc
   in one list, `interface.sidebarLabels`, and of each kind when grouped, `interface.sidebarLabelsPerKind`, how many
   recent events notifications are drawn from, `interface.notificationEvents`, and how much text `arrumatorcli extract`
   prints, `interface.extractPreviewChars`), `maintenance` (how often the app prunes logs, trims traces and looks for
-  files `arrumatorcli` queued, `maintenance.interval`) and `database` (how long a write waits for another process using
-  the index, `database.busyTimeout`, and how long the app waits before it watches the index again after watching it
-  failed, `database.observationRetry`, more than 0) and `settings` (how long a change of `settings.json` waits for
-  another process changing it, `settingsLock.timeout`, after which it fails saying so, asking again every
-  `settingsLock.pollInterval`). Override any subset in `~/Library/Application Support/Arrumator/pipeline.json`.
+  files, tasks and questions `arrumatorcli` queued or left in hand when it was killed, `maintenance.interval`) and
+  `database` (how long a write waits for another process using the index, `database.busyTimeout`, and how long the app
+  waits before it watches the index again after watching it failed, `database.observationRetry`, more than 0) and
+  `settings` (how long a change of `settings.json` waits for another process changing it, `settingsLock.timeout`, after
+  which it fails saying so, asking again every `settingsLock.pollInterval`). Override any subset in
+  `~/Library/Application Support/Arrumator/pipeline.json`.
 
 A configuration the app cannot run with stops it with the key and the reason: an empty `ingest.retryDelays`, a negative
 `analysis.repairAttempts` or an effort that is not low, medium or high in `pipeline.json`, and any value the code that

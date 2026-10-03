@@ -7,6 +7,8 @@ public struct Harness: Sendable {
     public let env: TestEnvironment
     public let services: PipelineServices
     public let coordinator: IngestCoordinator
+    /// The processes sharing the index, which the queues of tasks and questions tell apart.
+    public let processes: TestProcesses
 
     /// `ollama` is the server the pipeline probes when a request to it timed out: one that answers, unless a test says.
     public static func make(analyzer: any DocumentAnalyzing = StubAnalyzer(), extractor: any ContentExtracting = PlainTestExtractor(),
@@ -15,9 +17,10 @@ public struct Harness: Sendable {
         return Harness(env: env, services: services(env, analyzer: analyzer, extractor: extractor, ollama: ollama, config: env.config))
     }
 
-    public init(env: TestEnvironment, services: PipelineServices) {
+    public init(env: TestEnvironment, services: PipelineServices, processes: TestProcesses = TestProcesses()) {
         self.env = env
         self.services = services
+        self.processes = processes
         coordinator = IngestCoordinator(services: services)
     }
 
@@ -46,7 +49,7 @@ public struct Harness: Sendable {
         var config = services.config
         change(&config)
         return Harness(env: env, services: Self.services(env, analyzer: services.analyzer, extractor: services.extractor, ollama: services.ollama,
-                                                       config: config))
+                                                       config: config), processes: processes)
     }
 
     /// Whether the worker takes files on this Mac now, with pausing on battery turned off as `readyToWork()` turns it
@@ -65,16 +68,20 @@ public struct Harness: Sendable {
 
     public var review: ReviewActions { ReviewActions(services: services, coordinator: coordinator) }
 
-    /// Search tasks over this pipeline, their prompts read by `interpreter`: the queue and what the user does with them.
-    public func searchTasks(_ interpreter: any SearchPromptInterpreting) -> (queue: SearchTaskQueue, actions: SearchTaskActions) {
-        let queue = SearchTaskQueue(services: services, interpreter: interpreter)
-        return (queue, SearchTaskActions(services: services, queue: queue))
+    /// Search tasks over this pipeline, their prompts read by `interpreter`: the queue and what the user does with them,
+    /// which tells `conversations` when a task is removed, else a queue of questions of its own.
+    public func searchTasks(_ interpreter: any SearchPromptInterpreting,
+                            conversations: TaskConversationQueue? = nil) -> (queue: SearchTaskQueue, actions: SearchTaskActions) {
+        let queue = SearchTaskQueue(services: services, interpreter: interpreter, processes: processes)
+        let answering = conversations ?? self.conversations(StubAnswerer(), interpreter: interpreter).queue
+        return (queue, SearchTaskActions(services: services, queue: queue, conversations: answering))
     }
     /// Conversations about tasks' documents over this pipeline, answered by `answerer`, and requests for more documents
     /// read by `interpreter`: the queue and what the user does with them.
     public func conversations(_ answerer: any TaskQuestionAnswering,
                               interpreter: any SearchPromptInterpreting) -> (queue: TaskConversationQueue, actions: TaskConversationActions) {
-        let queue = TaskConversationQueue(services: services, answerer: answerer, interpreter: interpreter, search: search)
+        let queue = TaskConversationQueue(services: services, answerer: answerer, interpreter: interpreter, search: search,
+                                          processes: processes)
         return (queue, TaskConversationActions(services: services, queue: queue))
     }
 

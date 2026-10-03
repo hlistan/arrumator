@@ -71,7 +71,7 @@ let package = Package(
                     resources: [.copy("Resources")], swiftSettings: strict),
         .testTarget(name: "ArrumatorClassifyTests", dependencies: ["ArrumatorClassify", "ArrumatorCore", "ArrumatorTesting"],
                     swiftSettings: strict),
-        .testTarget(name: "ArrumatorRuntimeTests", dependencies: ["ArrumatorRuntime", "ArrumatorCore", "ArrumatorTesting"],
+        .testTarget(name: "ArrumatorRuntimeTests", dependencies: ["ArrumatorRuntime", "ArrumatorCore", "ArrumatorTesting", .product(name: "GRDB", package: "GRDB.swift")],
                     swiftSettings: strict),
         // Runs the built command itself, so it depends on it to have it built beside the tests.
         .testTarget(name: "ArrumatorCLITests", dependencies: ["ArrumatorCLI", "ArrumatorCore", "ArrumatorTesting", .product(name: "GRDB", package: "GRDB.swift")], swiftSettings: strict),

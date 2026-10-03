@@ -285,10 +285,12 @@ public final class ArrumatorRuntime: Sendable {
         review = ReviewActions(services: services, coordinator: coordinator)
         labels = LabelActions(database: database, time: time)
         interpreter = SearchPromptInterpreter(gate: gate, models: models, library: prompts.library)
-        taskQueue = SearchTaskQueue(services: services, interpreter: interpreter)
-        searchTasks = SearchTaskActions(services: services, queue: taskQueue)
+        let processes = try SystemProcesses()
+        taskQueue = SearchTaskQueue(services: services, interpreter: interpreter, processes: processes)
         answerer = TaskAnswerer(gate: gate, models: models, library: prompts.library)
-        conversationQueue = TaskConversationQueue(services: services, answerer: answerer, interpreter: interpreter, search: search)
+        conversationQueue = TaskConversationQueue(services: services, answerer: answerer, interpreter: interpreter, search: search,
+                                                  processes: processes)
+        searchTasks = SearchTaskActions(services: services, queue: taskQueue, conversations: conversationQueue)
         conversations = TaskConversationActions(services: services, queue: conversationQueue)
         reconciler = ArchiveReconciler(services: services, coordinator: coordinator)
         incomingWatcher = IncomingWatcher(config: config.watcher, skip: skip, time: time)
@@ -535,22 +537,6 @@ public final class ArrumatorRuntime: Sendable {
             await lifecycle.shutdown()
         }
         return stopped
-    }
-
-    private func maintain() async {
-        let current = await settings.current
-        Log.shared.prune(config.logging, now: time.now())
-        do {
-            let trimmed = try await traces.trimRawPayloads(olderThanDays: current.traceRawRetentionDays)
-            if trimmed > 0 { Log.info(.app, "Trimmed raw model payloads", ["steps": String(trimmed)]) }
-        } catch {
-            Log.error(.app, "Maintenance failed", ["error": error.localizedDescription])
-        }
-        do { try await records.flush() } catch {
-            Log.error(.db, "Could not write record files", ["error": error.localizedDescription])
-        }
-        // Jobs another process queued, such as `arrumatorcli review retry`, wake no worker here; this does.
-        await coordinator.wake()
     }
 
     /// Where this archive is kept and where its index is.

@@ -197,9 +197,7 @@ public struct ExtractorRegistry: ContentExtracting {
                                            fileModified: inspected.source.modifiedAt)
             let output = EntitiesTraceOutput(dateCandidates: resolution.scored, chosen: resolution.chosen,
                                              stableKeys: entities.stableKeys.map(\.token))
-            await trace.record(TraceStep(stage: .entities, startedAt: entitiesStarted,
-                                         durationMs: timings["entities"] ?? 0,
-                                         input: JSON.string(input), output: JSON.string(output)))
+            await trace.record(.entities, startedAt: entitiesStarted, durationMs: timings["entities"] ?? 0, input: input, output: output)
         }
 
         Log.info(.extract, "Extracted", [

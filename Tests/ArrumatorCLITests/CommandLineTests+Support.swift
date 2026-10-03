@@ -75,7 +75,7 @@ extension CommandLineTests {
             record.id = Int64(offset + 1)
             record.status = .filed
             record.filedAt = record.addedAt.addingTimeInterval(Double(offset) * 60)
-            record.labelsJson = JSON.string(document.labels)
+            record.labelsJson = try JSON.string(document.labels)
             try Xattr.set(Xattr.documentID, record.uid, on: url)
             entries.append(try #require(DocumentEntry(record)))
         }

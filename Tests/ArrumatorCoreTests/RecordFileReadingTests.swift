@@ -256,12 +256,12 @@ import Testing
         _ = try await records.rebuildIfPending()
         var services = w.h.services
         services.database = database
-        let queue = SearchTaskQueue(services: services, interpreter: interpreter)
-        let next = try await SearchTaskActions(services: services, queue: queue).create(prompt: "phone bills")
+        let answering = TaskConversationQueue(services: services, answerer: StubAnswerer(), interpreter: interpreter, search: w.h.search,
+                                              processes: w.h.processes)
+        let queue = SearchTaskQueue(services: services, interpreter: interpreter, processes: w.h.processes)
+        let next = try await SearchTaskActions(services: services, queue: queue, conversations: answering).create(prompt: "phone bills")
         #expect(next.id != gone.id, "a new task is not given the number of the conversation left without its task")
-        try await TaskConversationActions(services: services, queue: TaskConversationQueue(services: services, answerer: StubAnswerer(),
-                                                                                             interpreter: interpreter, search: w.h.search))
-            .ask(next.id, question: "Since when?")
+        try await TaskConversationActions(services: services, queue: answering).ask(next.id, question: "Since when?")
         try await records.flush()
         #expect(try String(contentsOf: conversation, encoding: .utf8) == held, "so the conversation's file is never written over")
         #expect(try await records.reconcile() >= 1, "and it is read again, waiting for its task to come back")

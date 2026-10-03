@@ -199,7 +199,7 @@ struct ParsedRecords: Sendable {
     /// A document is the one its identity names: an entry whose number the index gives another document, as in a folder
     /// copied in from another archive whose numbers also start at 1, is taken in under a number of its own.
     private static func upsert(_ entry: DocumentEntry, directory: URL, db: Database, at now: Date) throws -> Int64 {
-        var record = entry.record(directory: directory, now: now)
+        var record = try entry.record(directory: directory, now: now)
         if let existing = try DocumentRecord.filter(Column("uid") == entry.uid).fetchOne(db) {
             record.id = existing.id
             record.inode = existing.inode

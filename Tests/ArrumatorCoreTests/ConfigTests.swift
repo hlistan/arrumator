@@ -457,6 +457,18 @@ extension ConfigTests {
                     && config.problems.contains("ollama.modelLocationMaxAge cannot be negative: 0 asks before every request"),
                 "\(config.problems)")
     }
+
+    @Test func aPromptsRoomInItsContextIsRefusedWhereItHoldsNoRequestOrQuestion() throws {
+        var config = try PipelineConfig.bundledDefaults()
+        #expect(config.problems.isEmpty, "the bundled efforts leave room for a request and a question")
+        config.tasks.efforts[.high]?.numPredict = config.analysis.numCtx
+        config.conversation.maxQuestionChars = Int(Double(config.conversation.numCtx) * config.ollama.charsPerToken)
+        #expect(config.problems.contains("tasks.efforts.high.numPredict leaves no room in analysis.numCtx, which a request is read with")
+                    && config.problems.contains("conversation.efforts.low leaves less room in conversation.numCtx than a question of "
+                        + "conversation.maxQuestionChars takes at ollama.charsPerToken"), "\(config.problems)")
+        config.ollama.charsPerToken = 0
+        #expect(config.problems.contains("ollama.charsPerToken must be more than 0"), "\(config.problems)")
+    }
 }
 
 @Suite struct JSONTests {

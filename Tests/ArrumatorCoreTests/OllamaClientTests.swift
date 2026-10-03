@@ -21,8 +21,8 @@ import Testing
     }
 
     /// A line of a streamed answer, as Ollama writes it.
-    private static func line(_ content: String, done: Bool = false) -> String {
-        let text = JSON.string(["model": JSONValue.string("qwen3.5:9b"), "message": ["role": "assistant", "content": .string(content)],
+    private static func line(_ content: String, done: Bool = false) throws -> String {
+        let text = try JSON.string(["model": JSONValue.string("qwen3.5:9b"), "message": ["role": "assistant", "content": .string(content)],
                                 "done": .bool(done)])
         return done ? String(text.dropLast()) + #","done_reason":"stop","eval_count":3}"# : text
     }
@@ -39,7 +39,7 @@ import Testing
         server.reply(to: "/api/version", with: .json(#"{"version":"0.18.2"}"#))
         server.reply(to: "/api/tags", with: .json(#"{"models":[{"name":"bge-m3:latest","model":"bge-m3:latest","size":1157672605}]}"#))
         server.reply(to: "/api/embed", with: .json(#"{"model":"bge-m3","embeddings":[[0.5,-0.25]]}"#))
-        server.reply(to: "/api/chat", with: .json(Self.line(#"{"types":[]}"#, done: true)))
+        server.reply(to: "/api/chat", with: .json(try Self.line(#"{"types":[]}"#, done: true)))
         server.reply(to: "/api/pull", with: .lines([#"{"status":"pulling","total":4,"completed":1}"#, #"{"status":"success"}"#], piecesOf: 7))
         let client = try client(server)
 
@@ -82,7 +82,7 @@ import Testing
     /// platform's line sequence also ends a line at: an answer is framed on the line feed alone, so no object is cut.
     @Test func linesAreFramedOnTheLineFeedAlone() async throws {
         let words = "a\u{85}b\u{2028}c\u{2029}d\re"
-        let text = Self.line(words) + "\n" + Self.line("!", done: true) + "\n"
+        let text = try Self.line(words) + "\n" + Self.line("!", done: true) + "\n"
         let bytes = AsyncThrowingStream<UInt8, any Error> { continuation in
             for byte in text.utf8 { continuation.yield(byte) }
             continuation.finish()
@@ -97,7 +97,7 @@ import Testing
         let server = try StubOllamaServer()
         // Pieces of 3 bytes end inside lines and inside the two bytes of "é" and the three of U+2028.
         let pieces = ["Fatura ", "de é", "nergia\u{2028}", "e água\u{85}"]
-        server.reply(to: "/api/chat", with: .lines(pieces.map { Self.line($0) } + [Self.line("", done: true)], piecesOf: 3))
+        server.reply(to: "/api/chat", with: .lines(try pieces.map { try Self.line($0) } + [try Self.line("", done: true)], piecesOf: 3))
         let client = try client(server)
         let seen = Mutex<[String]>([])
         let answer = try await client.chat(Self.chatRequest) { sofar in seen.withLock { $0.append(sofar.message.content) } }
@@ -110,13 +110,13 @@ import Testing
 
     @Test func aStreamThatReportsAnErrorOrStopsShortIsNoAnswer() async throws {
         let server = try StubOllamaServer()
-        server.reply(to: "/api/chat", with: .lines([Self.line("Fat"), #"{"error":"model runner has unexpectedly stopped"}"#], piecesOf: 16))
+        server.reply(to: "/api/chat", with: .lines([try Self.line("Fat"), #"{"error":"model runner has unexpectedly stopped"}"#], piecesOf: 16))
         let client = try client(server)
         await #expect(throws: OllamaError.answerFailed(model: "qwen3.5:9b", message: "model runner has unexpectedly stopped"),
                       "an error line ends the answer with it") {
             try await client.chat(Self.chatRequest) { _ in }
         }
-        server.reply(to: "/api/chat", with: .lines([Self.line("Fat"), Self.line("ura")], piecesOf: 16))
+        server.reply(to: "/api/chat", with: .lines([try Self.line("Fat"), try Self.line("ura")], piecesOf: 16))
         await #expect(throws: OllamaError.emptyResponse, "an answer that ends before its last line is no answer") {
             try await client.chat(Self.chatRequest) { _ in }
         }
@@ -182,7 +182,7 @@ import Testing
         let client = try client(server) { $0.maxResponseBytes = limit }
         server.reply(to: "/api/tags", with: .json(#"{"models":[{"name":"\#(String(repeating: "m", count: limit))"}]}"#))
         await #expect(throws: OllamaError.responseTooLarge(endpoint: "api/tags", limit: limit), "a reply") { try await client.tags() }
-        let lines = (0..<4).map { _ in Self.line("ok") }
+        let lines = try (0..<4).map { _ in try Self.line("ok") }
         try #require(lines.allSatisfy { $0.utf8.count < limit } && lines.joined().utf8.count > limit, "short lines, long together")
         server.reply(to: "/api/chat", with: .lines(lines, piecesOf: 10))
         await #expect(throws: OllamaError.responseTooLarge(endpoint: "api/chat", limit: limit), "every line of a streamed answer together") {
@@ -203,7 +203,7 @@ import Testing
     @Test func aTimeoutOfZeroIsNoTimeout() async throws {
         let server = try StubOllamaServer()
         server.reply(to: "/api/version", with: .json(#"{"version":"0.18.2"}"#))
-        server.reply(to: "/api/chat", with: .json(Self.line("ok", done: true)))
+        server.reply(to: "/api/chat", with: .json(try Self.line("ok", done: true)))
         // Every sleep on this clock ends at once: a deadline armed for any of these would expire before the answer came.
         let unbounded = try client(server, time: TestTime(.advances)) { $0.timeouts = .init(meta: 0, version: 0, chat: 0, embed: 0, pull: 0, resolve: 1) }
         let version = try await unbounded.version()

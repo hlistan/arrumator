@@ -120,7 +120,7 @@ import Testing
             var bill = DocumentRecord.arrived(path: home.folder("First").appendingPathComponent("bill \(place).pdf").path, sha256: "bill \(place)",
                                               size: 1, uttype: "com.adobe.pdf", inode: nil, modified: nil, now: runtime.time.now())
             bill.status = .filed
-            bill.labelsJson = JSON.string([DocumentLabel(kind: .sender, value: sender)])
+            bill.labelsJson = try JSON.string([DocumentLabel(kind: .sender, value: sender)])
             _ = try await runtime.services.documents.save(bill)
         }
         await runtime.start()
@@ -139,7 +139,7 @@ import Testing
             var bill = DocumentRecord.arrived(path: home.folder("First").appendingPathComponent("bill \(place).pdf").path, sha256: "bill \(place)",
                                               size: 1, uttype: "com.adobe.pdf", inode: nil, modified: nil, now: runtime.time.now())
             bill.status = .filed
-            bill.labelsJson = JSON.string([DocumentLabel(kind: .sender, value: sender)])
+            bill.labelsJson = try JSON.string([DocumentLabel(kind: .sender, value: sender)])
             ids.append(try #require(try await runtime.services.documents.save(bill).id))
         }
         let counts = SuggestionCounts()

@@ -12,7 +12,8 @@ import ArrumatorTesting
                           "v5_logicEvents", "v6_archiveRecords", "v7_oneLogicPerArchive",
                           "v8_undoForgets", "v9_foldersOfAnyDepth", "v10_folderKinds", "v11_labelsNotFolders",
                           "v12_labelRules", "v13_traceExchanges", "v14_searchTasks", "v15_taskEffort",
-                          "v16_taskProfile", "v17_tags", "v18_taskConversations", "v19_unreadIndexRefusesRecords"]
+                          "v16_taskProfile", "v17_tags", "v18_taskConversations", "v19_unreadIndexRefusesRecords",
+                          "v20_queueWorkers"]
 
     /// An index as a release before this one made it, migrated up to `identifier`: its first migration ran before that
     /// one marked a new index as still to be rebuilt from its archive, so it is not.
@@ -246,6 +247,26 @@ import ArrumatorTesting
             #expect(try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM search_task_turns") == 0, "a task's questions go with it")
             #expect(try String.fetchAll(db, sql: marks) == ["conversation:4", "tasks"], "and its conversation's file is marked, to be removed")
         }
+    }
+
+    @Test func anItemInHandWhenTheQueuesLearntTheirWorkersHasNoneAndGoesBackIntoTheQueue() throws {
+        let queue = try Self.installed(upTo: "v19_unreadIndexRefusesRecords")
+        try queue.write { db in
+            try db.execute(sql: """
+                INSERT INTO search_tasks (id, prompt, state, effort, created_at, updated_at) VALUES (1, 'water bills', 'interpreting', 'medium', 0, 0);
+                INSERT INTO search_task_turns (id, task_id, question, state, asked_at) VALUES (1, 1, 'How much?', 'answering', 0);
+                DELETE FROM record_dirty;
+                """)
+        }
+        try AppDatabase.migrator.migrate(queue)
+        try queue.write { db in
+            #expect(try String.fetchAll(db, sql: "SELECT worker FROM search_tasks WHERE worker IS NOT NULL").isEmpty
+                        && (try String.fetchAll(db, sql: "SELECT worker FROM search_task_turns WHERE worker IS NOT NULL")).isEmpty,
+                    "what an earlier release had in hand names no process, so no process still works on it (ProcessWatching.hasLeft)")
+            try db.execute(sql: "UPDATE search_tasks SET worker = '1:2'; UPDATE search_task_turns SET worker = '1:2'")
+            #expect(try String.fetchAll(db, sql: "SELECT key FROM record_dirty").isEmpty, "the worker is the index's own, and marks no record file")
+        }
+        #expect(TestProcesses().hasLeft(nil), "an item in hand without a worker goes back into the queue")
     }
 
     @Test func theFullTextIndexHasTheColumnsSearchNames() throws {

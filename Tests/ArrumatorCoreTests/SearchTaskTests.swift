@@ -226,16 +226,17 @@ import Testing
         let interpreter = StubInterpreter(plans: SearchTaskQueueStatusTests.plans)
         let (queue, tasks) = w.h.searchTasks(interpreter)
         let asked = try await tasks.create(prompt: Self.prompt)
-        try await w.h.env.database.writer.write { db in
-            try db.execute(sql: "UPDATE search_tasks SET state = ? WHERE id = ?", arguments: [SearchTaskState.interpreting.rawValue, asked.id])
-        }
+        // The app reads it.
+        let app = w.h.processes.start(pid: TestProcesses.otherPID)
+        _ = try await tasks.store.begin(asked.id, by: app.description)
         await queue.drain()
-        #expect(try await task(tasks, asked.id).state == .interpreting, "a task being read is not taken up twice")
-        // Another task is asked while the first is read, and the app quits; it starts again a minute later.
+        #expect(try await task(tasks, asked.id).state == .interpreting, "a task another process reads is not taken up twice")
+        // Another task is asked while the first is read, and the app quits; a command runs a minute later.
         w.h.env.time.advance(by: 60)
         _ = try await tasks.create(prompt: phones)
         w.h.env.time.advance(by: 60)
-        #expect(try await tasks.store.recoverInterrupted() == 1, "at the next start it goes back into the queue")
+        w.h.processes.end(app)
+        #expect(try await tasks.store.recoverLeft(w.h.processes) == 1, "once that process has ended it goes back into the queue")
         await queue.drain()
         let read = await interpreter.calls.prompts
         #expect(read == [Self.prompt, phones], "and is read first, keeping its place before the task asked after it")
@@ -249,9 +250,9 @@ import Testing
         let phonePlan = SearchPlan(title: "Phone bills", labels: [Self.label(.topic, "telecommunications")], words: [], grouping: [])
         let holder = TaskHolder()
         let interpreter = StubInterpreter(plans: [Self.prompt: Self.invoices2025, phones: phonePlan]) { prompt in
-            // The user changes the prompt while the first one is being read.
+            // The user changes the prompt from the app, in a task of its own, while the first one is being read.
             if prompt == Self.prompt, let tasks = await holder.tasks, let id = await holder.id {
-                try await tasks.update(id, SearchTaskChange(prompt: phones))
+                _ = try await Task { try await tasks.update(id, SearchTaskChange(prompt: phones)) }.value
             }
         }
         let (queue, tasks) = w.h.searchTasks(interpreter)
@@ -363,21 +364,21 @@ import Testing
     // MARK: Arranging
 
     /// A document with these labels, numbered `id`.
-    static func document(_ id: Int64, _ name: String, _ labels: [DocumentLabel]) -> DocumentRecord {
+    static func document(_ id: Int64, _ name: String, _ labels: [DocumentLabel]) throws -> DocumentRecord {
         var d = DocumentRecord.arrived(path: "/archive/\(name)", sha256: name, size: 1, uttype: "public.data", inode: nil, modified: nil,
                                        now: TestTime.start)
         d.id = id
-        d.labelsJson = JSON.string(labels)
+        d.labelsJson = try JSON.string(labels)
         return d
     }
 
-    @Test func theSetIsArrangedALevelPerKindYearsNewestFirstAndTheUnlabelledLast() {
+    @Test func theSetIsArrangedALevelPerKindYearsNewestFirstAndTheUnlabelledLast() throws {
         let docs = [
-            Self.document(1, "b.pdf", [Self.label(.sender, "EDP Comercial"), Self.label(.date, "2025-03-05")]),
-            Self.document(2, "a.pdf", [Self.label(.sender, "edp comercial"), Self.label(.date, "2025-01-10")]),
-            Self.document(3, "c.pdf", [Self.label(.sender, "Águas do Porto"), Self.label(.period, "2024-07/2025-06")]),
-            Self.document(4, "d.pdf", [Self.label(.date, "2024-02-01")]),
-            Self.document(5, "e.pdf", [Self.label(.sender, "EDP Comercial"), Self.label(.date, "2024-12-01")]),
+            try Self.document(1, "b.pdf", [Self.label(.sender, "EDP Comercial"), Self.label(.date, "2025-03-05")]),
+            try Self.document(2, "a.pdf", [Self.label(.sender, "edp comercial"), Self.label(.date, "2025-01-10")]),
+            try Self.document(3, "c.pdf", [Self.label(.sender, "Águas do Porto"), Self.label(.period, "2024-07/2025-06")]),
+            try Self.document(4, "d.pdf", [Self.label(.date, "2024-02-01")]),
+            try Self.document(5, "e.pdf", [Self.label(.sender, "EDP Comercial"), Self.label(.date, "2024-12-01")]),
         ]
         let tree = DocumentGrouping.tree(docs, by: [.sender, .date])
         #expect(tree.groups.map(\.value) == ["Águas do Porto", "EDP Comercial", nil],
@@ -392,10 +393,10 @@ import Testing
         #expect(DocumentGrouping.value(of: docs[2], kind: .period) == "2024", "a span is arranged by the year it starts in")
     }
 
-    @Test func documentsOfOneDateFollowTheirNameThenTheirNumber() {
+    @Test func documentsOfOneDateFollowTheirNameThenTheirNumber() throws {
         let day = Self.label(.date, "2025-03-05")
-        let docs = [Self.document(13, "b/same.pdf", [day]), Self.document(12, "a/same.pdf", [day]), Self.document(11, "bill 10.pdf", [day]),
-                    Self.document(10, "bill 9.pdf", [day]), Self.document(9, "undated.pdf", [])]
+        let docs = [try Self.document(13, "b/same.pdf", [day]), try Self.document(12, "a/same.pdf", [day]), try Self.document(11, "bill 10.pdf", [day]),
+                    try Self.document(10, "bill 9.pdf", [day]), try Self.document(9, "undated.pdf", [])]
         #expect(DocumentGrouping.tree(docs, by: [.type]).groups.first?.documents.compactMap(\.id) == [10, 11, 12, 13, 9],
                 "one date by name as Finder sorts it, numbers by their value; one name by number, so the order is the same however they came")
     }

@@ -82,7 +82,7 @@ public struct DocumentFiler: Sendable {
             d.path = finalPath
             d.status = status
             d.inode = FileFingerprint.inode(of: URL(fileURLWithPath: finalPath))
-            d.analysisJson = JSON.string(analysis)
+            d.analysisJson = try JSON.string(analysis)
             d.filedAt = now
             d.updatedAt = now
             try d.update(db)

@@ -75,7 +75,8 @@ struct TraceView: View {
     }
 
     private func pretty(_ json: String) -> String {
-        guard let value = JSON.decode(JSONValue.self, from: json) else { return json }
-        return JSON.string(value, pretty: true)
+        // Shown as stored when it cannot be laid out again.
+        guard let value = JSON.decode(JSONValue.self, from: json), let laidOut = try? JSON.string(value, pretty: true) else { return json }
+        return laidOut
     }
 }

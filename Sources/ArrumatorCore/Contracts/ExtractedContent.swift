@@ -280,7 +280,8 @@ public struct ExtractedContent: Sendable, Codable {
     public func hasWarning(_ code: WarningCode) -> Bool { warnings.contains { $0.code == code } }
 
     /// Excerpt for the prompt: the head and the tail of the text, at most `maxChars`, of which the tail gets
-    /// `1 / tailDivisor`. The configuration gives only a `maxChars` that holds a head (`excerptHasHead`).
+    /// `1 / tailDivisor`; the head alone when `maxChars` leaves no room for it beside the tail and the separator. The
+    /// configuration gives only a `maxChars` that holds a head (`excerptHasHead`).
     public func classificationExcerpt(maxChars: Int, tailDivisor: Int) -> String {
         var body = text
         if let visual {
@@ -290,6 +291,7 @@ public struct ExtractedContent: Sendable, Codable {
         // Head carries titles, parties and dates; the tail carries totals and signatures.
         let tailCount = maxChars / tailDivisor
         let headCount = maxChars - tailCount - Self.excerptSeparator.count
+        guard headCount > 0 else { return String(body.prefix(max(0, maxChars))) }
         return String(body.prefix(headCount)) + Self.excerptSeparator + String(body.suffix(tailCount))
     }
 

@@ -128,7 +128,7 @@ struct ImageAndVisionTests {
                                                                       trace: TraceContext(traceID: 5, sink: sink))
             #expect(await ollama.chatRequests.map(\.think) == [sent], "the model is told \(why)")
             let input = try #require(await sink.steps.first { $0.stage == .vlm }?.input)
-            #expect(input.contains(#""think":\#(JSON.string(sent))"#), "and the trace says what it was told: \(input)")
+            #expect(input.contains(#""think":\#(try JSON.string(sent))"#), "and the trace says what it was told: \(input)")
         }
     }
 
@@ -162,7 +162,7 @@ struct ImageAndVisionTests {
                 "where only what is read now is shown, the image is read without its description, noted (\(shown.warningSummary))")
 
         let unshown = MockOllama(capabilities: MockOllama.visionCapabilities) { _ in "{}" }
-        await unshown.failShowing(try TestConfig.visionOptions().model, with: .unreachable("connection refused"))
+        await unshown.failShowing(try TestConfig.visionOptions().model, with: OllamaError.unreachable("connection refused"))
         await #expect(throws: OllamaError.unreachable("connection refused"), "so is Ollama away when the model's capabilities are asked") {
             _ = try await TestConfig.registry(ollama: unshown).extract(url, sha256: "x", context: context, trace: .disabled)
         }
@@ -288,5 +288,23 @@ struct ImageAndVisionTests {
         #expect(summary.unverifiedOrganisations == ["Банк"], "a name missing from the OCR text is unverified")
         #expect(summary.imageKind == .idCard, "the snake_case kind in the reply maps to its case")
         #expect(throws: VisionDescriber.ParseError.self, "a reply without JSON is a parse error, not an empty summary") { try VisionDescriber.parse("no json here", ocrText: "") }
+    }
+
+    @Test("A stop while the vision model describes an image stops the reading rather than failing the description")
+    func stoppedDescription() async throws {
+        let prompts = try VisionPrompts.bundled()
+        // `OllamaClient` throws `CancellationError` for a request a stop cut off.
+        let describing = VisionDescriber(ollama: MockOllama(capabilities: MockOllama.visionCapabilities) { _ in throw CancellationError() },
+                                         prompts: prompts, time: TestTime(.advances))
+        await #expect(throws: CancellationError.self, "a stop is not a description that failed, which the document would keep as a warning") {
+            try await describing.describe(jpeg: Data([0xFF]), ocrText: "", options: try TestConfig.visionOptions(), timeout: 60)
+        }
+        let showing = MockOllama(capabilities: MockOllama.visionCapabilities) { _ in "{}" }
+        await showing.failShowing(try TestConfig.visionOptions().model, with: CancellationError())
+        await #expect(throws: CancellationError.self, "nor is a stop while the model's capabilities are read a model that says nothing of them") {
+            try await VisionDescriber(ollama: showing, prompts: prompts, time: TestTime(.advances))
+                .describe(jpeg: Data([0xFF]), ocrText: "", options: try TestConfig.visionOptions(), timeout: 60)
+        }
+        #expect(await showing.chatCount == 0, "and the model is not asked")
     }
 }

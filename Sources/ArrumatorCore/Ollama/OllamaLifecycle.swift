@@ -129,16 +129,17 @@ public actor OllamaLifecycle {
 
     /// Checks the server once and updates `state`. A server that cannot be reached (`OllamaError.isAway`), or does not
     /// answer this probe in time (`timedOut`: it answers nothing else either), is not running; one that answers with a
-    /// failure runs, unhealthy, and is never started again beside itself.
+    /// failure runs, unhealthy, and is never started again beside itself. Stopped meanwhile, it learns nothing, whatever
+    /// failure the stop brought, and `state` stays as it was.
     @discardableResult
     public func check() async -> OllamaState {
         do {
             let v = try await api.version()
             state = .ready(version: v)
+        } catch where Cancellation.stops(error) {
+            // Stopped while it asked: nothing was learnt of the server, not even that it failed.
         } catch let failure as OllamaError where !failure.isAway && !failure.timedOut {
             state = .unhealthy(failure.localizedDescription)
-        } catch where error is CancellationError || Task.isCancelled {
-            // Stopped while it asked: nothing was learnt of the server.
         } catch {
             if !OllamaEndpoint.isThisMac(address) {
                 // What is installed on this Mac says nothing of a server on another machine.
@@ -304,7 +305,7 @@ public actor OllamaLifecycle {
     /// Restarts a server that stopped, after a backoff, at most `maxRestartsPerHour` times an hour. A restart counts
     /// only when one was made: not when the server answered again meanwhile, or none could be started.
     private func supervise() async {
-        if await check().isReady || management == .external { return }
+        if await check().isReady || management == .external || Task.isCancelled { return }
         let hourAgo = time.now().addingTimeInterval(-Units.secondsPerHour)
         restarts = restarts.filter { $0 > hourAgo }
         guard restarts.count < config.maxRestartsPerHour else {

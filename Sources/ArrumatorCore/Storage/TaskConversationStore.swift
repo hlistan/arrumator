@@ -18,6 +18,8 @@ public struct TaskTurnRecord: ArrumatorRecord, Identifiable, Hashable {
     public var nextRunAt: Date?
     public var askedAt: Date
     public var answeredAt: Date?
+    /// The process answering it (a `ProcessTag`), while it is `answering`; nil otherwise. The index's own.
+    public var worker: String?
 
     public mutating func didInsert(_ inserted: InsertionSuccess) { id = inserted.rowID }
 
@@ -32,6 +34,7 @@ public struct TaskTurnRecord: ArrumatorRecord, Identifiable, Hashable {
     /// Sent back into the queue to be answered from the start, as it was asked.
     mutating func requeue(at now: Date) {
         state = .queued
+        worker = nil
         answer = nil
         sourcesJson = nil
         findingJson = nil
@@ -133,44 +136,67 @@ public struct TaskConversationStore: Sendable {
         }
     }
 
-    /// Takes a queued question to answer, with its task; nil when it is no longer queued.
-    func begin(_ id: Int64) async throws -> (turn: TaskTurnRecord, task: SearchTaskRecord)? {
+    /// Takes a queued question to answer by the process `worker` names (a `ProcessTag`), with its task; nil when it is no
+    /// longer queued.
+    func begin(_ id: Int64, by worker: String) async throws -> (turn: TaskTurnRecord, task: SearchTaskRecord)? {
         try await database.writer.write { db in
             guard var record = try TaskTurnRecord.fetchOne(db, key: id), record.state == .queued,
                   let task = try SearchTaskRecord.fetchOne(db, key: record.taskId) else { return nil }
             record.state = .answering
+            record.worker = worker
             try record.update(db)
             return (record, task)
         }
     }
 
-    /// Questions being answered when the app stopped go back into the queue, in their place: they were due when they
-    /// were taken, so they are due still.
-    func recoverInterrupted() async throws -> Int {
-        try await database.writer.write { db in
-            try TaskTurnRecord.filter(Column("state") == TurnState.answering.rawValue)
-                .updateAll(db, Column("state").set(to: TurnState.queued.rawValue))
+    /// Questions being answered by no process that still answers them (`ProcessWatching.hasLeft`), as when the app
+    /// stopped or a command was killed, go back into the queue, in their place: they were due when they were taken, so
+    /// they are due still. How many.
+    func recoverLeft(_ processes: any ProcessWatching) async throws -> Int {
+        // Looked for first, so the worker's every look writes nothing when nothing was left, as is usual.
+        let found = try await database.reader.read { db in
+            try TaskTurnRecord.filter(Column("state") == TurnState.answering.rawValue).fetchAll(db)
+        }
+        guard found.contains(where: { processes.hasLeft($0.worker) }) else { return 0 }
+        return try await database.writer.write { db in
+            let left = try TaskTurnRecord.filter(Column("state") == TurnState.answering.rawValue).fetchAll(db)
+                .filter { processes.hasLeft($0.worker) }.compactMap(\.id)
+            guard !left.isEmpty else { return 0 }
+            return try TaskTurnRecord.filter(keys: left)
+                .updateAll(db, Column("state").set(to: TurnState.queued.rawValue), Column("worker").set(to: nil))
         }
     }
 
-    /// Puts a question back in the queue until `date`, as while Ollama cannot be reached.
-    func postpone(_ id: Int64, until date: Date) async throws {
+    /// Whether `record` is still being answered by `worker`: not stopped, removed, asked again or taken by another
+    /// process since. What an answer keeps depends on it.
+    static func held(_ record: TaskTurnRecord, by worker: String) -> Bool {
+        record.state == .answering && record.worker == worker
+    }
+
+    /// Puts a question `worker` answers back in the queue until `date`, as while Ollama cannot be reached, keeping
+    /// `trace`, which the next attempt takes up.
+    func postpone(_ id: Int64, by worker: String, until date: Date, trace: Int64?) async throws {
         try await database.writer.write { db in
-            try db.execute(sql: "UPDATE search_task_turns SET state = ?, next_run_at = ? WHERE id = ? AND state = ?",
-                           arguments: [TurnState.queued.rawValue, date.unixSeconds, id, TurnState.answering.rawValue])
+            guard var record = try TaskTurnRecord.fetchOne(db, key: id), Self.held(record, by: worker) else { return }
+            record.state = .queued
+            record.worker = nil
+            record.nextRunAt = date
+            record.lastTraceId = trace ?? record.lastTraceId
+            try record.update(db)
         }
     }
 
     /// Keeps the answer to a question, with what it found outside the set if it was asked to find more. Nothing is kept,
-    /// and false returned, when the question was removed or asked again while it was answered.
-    func finish(_ id: Int64, answer: TaskAnswer, finding: TurnFinding?, trace: Int64?) async throws -> Bool {
+    /// and false returned, when `worker` answers it no more: it was stopped, removed or asked again meanwhile.
+    func finish(_ id: Int64, by worker: String, answer: TaskAnswer, finding: TurnFinding?, trace: Int64?) async throws -> Bool {
         let now = time.now()
         return try await database.writer.write { db in
-            guard var record = try TaskTurnRecord.fetchOne(db, key: id), record.state == .answering else { return false }
+            guard var record = try TaskTurnRecord.fetchOne(db, key: id), Self.held(record, by: worker) else { return false }
             record.state = .answered
+            record.worker = nil
             record.answer = answer.text
-            record.sourcesJson = answer.sources.isEmpty ? nil : JSON.string(answer.sources)
-            record.findingJson = finding.map { JSON.string($0) }
+            record.sourcesJson = answer.sources.isEmpty ? nil : try JSON.string(answer.sources)
+            record.findingJson = try finding.map { try JSON.string($0) }
             record.model = answer.model
             record.problem = answer.problem
             record.lastTraceId = trace
@@ -188,6 +214,7 @@ public struct TaskConversationStore: Sendable {
         return try await database.writer.write { db in
             guard var record = try TaskTurnRecord.fetchOne(db, key: id), record.state.isActive else { return false }
             record.state = .failed
+            record.worker = nil
             record.problem = problem
             record.nextRunAt = nil
             record.answeredAt = now
@@ -197,12 +224,13 @@ public struct TaskConversationStore: Sendable {
     }
 
     /// Records that a question was not answered, with what came of the answer before it ended, if anything did, unless
-    /// the question was removed or asked again meanwhile.
-    func fail(_ id: Int64, problem: String, partial: String?, model: String?, trace: Int64?) async throws {
+    /// `worker` answers it no more (`finish`).
+    func fail(_ id: Int64, by worker: String, problem: String, partial: String?, model: String?, trace: Int64?) async throws {
         let now = time.now()
         try await database.writer.write { db in
-            guard var record = try TaskTurnRecord.fetchOne(db, key: id), record.state == .answering else { return }
+            guard var record = try TaskTurnRecord.fetchOne(db, key: id), Self.held(record, by: worker) else { return }
             record.state = .failed
+            record.worker = nil
             record.answer = partial.flatMap { $0.isEmpty ? nil : $0 }
             record.sourcesJson = nil
             record.findingJson = nil
@@ -234,7 +262,7 @@ extension TaskConversationStore {
                            arguments: [task])
         }
         for entry in entries {
-            var record = entry.record(task: task)
+            var record = try entry.record(task: task)
             if let kept = existing[entry.id] {
                 record.lastTraceId = kept.lastTraceId
                 record.nextRunAt = kept.state == record.state ? kept.nextRunAt : record.nextRunAt

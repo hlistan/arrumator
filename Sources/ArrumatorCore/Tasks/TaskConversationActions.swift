@@ -53,9 +53,10 @@ public struct TaskConversationActions: Sendable {
     /// answered by another process, keeps none; each says it was stopped, and can be asked again. A question no longer in
     /// the queue is left as it is.
     public func stop(_ turn: Int64) async throws {
-        guard try await store.turn(id: turn) != nil else { throw ConversationError.turnNotFound(turn) }
-        // The queue answering it records it stopped, with what came of the answer, once its work has ended.
+        // The queue answering it records it stopped, with what came of the answer, once its work has ended: told first,
+        // so nothing that can fail comes before it.
         if await queue.stop(turn) { return }
+        guard try await store.turn(id: turn) != nil else { throw ConversationError.turnNotFound(turn) }
         if try await store.withdraw(turn, problem: TaskConversationQueue.stoppedProblem) { await queue.wake() }
     }
 

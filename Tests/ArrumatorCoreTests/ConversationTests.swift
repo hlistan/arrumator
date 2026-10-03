@@ -216,7 +216,7 @@ import Testing
         let (queue, talk) = w.h.conversations(StubAnswerer(fallback: Self.reply), interpreter: StubInterpreter(plans: [:]))
         let first = try await talk.ask(w.task.id, question: Self.question)
         let second = try await talk.ask(w.task.id, question: "And the second?")
-        _ = try await talk.store.begin(first.id)
+        _ = try await talk.store.begin(first.id, by: w.h.processes.current.description)
         #expect(try await turn(talk, first.id).state == .answering, "as the app left it")
         await queue.start()
         let answered = await Patience.until { (try? await talk.store.turn(id: second.id))?.state == .answered }
@@ -258,9 +258,10 @@ import Testing
         defer { w.h.env.cleanup() }
         let (_, talk) = w.h.conversations(StubAnswerer(), interpreter: StubInterpreter(plans: [:]))
         let asked = try await talk.ask(w.task.id, question: Self.question)
-        _ = try await talk.store.begin(asked.id)
+        let other = w.h.processes.start(pid: TestProcesses.otherPID).description
+        _ = try await talk.store.begin(asked.id, by: other)
         try await talk.stop(asked.id)
-        let kept = try await talk.store.finish(asked.id, answer: TaskAnswer(text: "late", sources: [], find: nil, model: "m", problem: nil),
+        let kept = try await talk.store.finish(asked.id, by: other, answer: TaskAnswer(text: "late", sources: [], find: nil, model: "m", problem: nil),
                                                finding: nil, trace: nil)
         let after = try await turn(talk, asked.id)
         #expect(!kept && after.answer == nil && after.state == .failed,
@@ -394,7 +395,7 @@ import Testing
         let answered = try await talk.ask(w.task.id, question: Self.question)
         await queue.drain()
         let waiting = try await talk.ask(w.task.id, question: "Still waiting?")
-        _ = try await talk.store.begin(waiting.id)
+        _ = try await talk.store.begin(waiting.id, by: w.h.processes.current.description)
 
         let records = w.h.env.records()
         try await records.flush()

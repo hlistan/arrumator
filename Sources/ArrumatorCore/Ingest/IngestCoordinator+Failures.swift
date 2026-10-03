@@ -15,10 +15,13 @@ extension IngestCoordinator {
         let config = services.config.ingest
         // Ollama away costs no attempt, however long it is away; a server that answers, but with a failure or not in time,
         // as it may for one image or one document alone, does, so the job ends rather than coming back for ever.
-        let ollamaDown = await ollamaIsAway(error)
+        let ollamaDown = await services.ollamaIsAway(error)
         let lastError = job.lastError
         job.lastError = message
-        job.setPayload(payload)
+        // The failure path throws nothing: a payload that cannot be written keeps the one the job had, which is logged.
+        do { try job.setPayload(payload) } catch {
+            Log.error(.ingest, "Could not keep what a failed job had done", ["job": String(job.id ?? 0), "error": error.localizedDescription])
+        }
         if case OllamaError.modelNotFound = error {
             job.state = .held
             await keep(job, event: .error, summary: "Model missing: \(message)", trace: trace)
@@ -71,16 +74,6 @@ extension IngestCoordinator {
         Log.error(.ingest, "Job failed", ["job": String(job.id ?? 0), "error": message])
     }
 
-    /// Whether `error` says Ollama is away: it could not be reached, or it did not answer in time and does not answer a
-    /// probe for its version either, which a server busy with one request it cannot finish does.
-    private func ollamaIsAway(_ error: any Error) async -> Bool {
-        guard let error = error as? OllamaError else { return false }
-        if error.isAway { return true }
-        guard error.timedOut else { return false }
-        // A probe: its failure is the answer, whatever it is.
-        return (try? await services.ollama.version()) == nil
-    }
-
     /// Saves what a failure did to a job and records it in the history. Both are already the failure path, so neither
     /// throws: what cannot be saved is logged, and the job, unchanged in the queue, is taken again in its turn.
     private func keep(_ job: JobRecord, event: EventKind?, summary: String, trace: TraceContext) async {
@@ -104,7 +97,9 @@ extension IngestCoordinator {
     private func readFromTheStart(_ job: inout JobRecord, payload: JobPayload, trace: TraceContext) async {
         var fresh = JobPayload()
         fresh.tags = payload.tags
-        job.setPayload(fresh)
+        do { try job.setPayload(fresh) } catch {
+            Log.error(.ingest, "Could not keep what a failed job had done", ["job": String(job.id ?? 0), "error": error.localizedDescription])
+        }
         job.state = .pending
         job.nextRunAt = services.time.now()
         // The document is an arrival again: nothing read of what the file was stays with it, its tags aside.
@@ -168,7 +163,7 @@ extension IngestCoordinator {
             var analysis = payload.outcome?.analysis ?? document.analysis ?? DocumentAnalysis()
             analysis.problems = (payload.outcome?.analysis.problems ?? []) + [Self.notFiled + message]
             document.status = .failed
-            document.analysisJson = JSON.string(analysis)
+            document.analysisJson = try JSON.string(analysis)
             _ = try await services.documents.save(document)
             try await services.history.record(.failed, doc: docID, job: job.id, trace: trace.traceID,
                                               summary: "\(document.originalFilename) stays in Incoming: \(message)")
@@ -218,7 +213,7 @@ extension IngestCoordinator {
             } else {
                 var failed = document
                 failed.status = .failed
-                failed.analysisJson = JSON.string(analysis)
+                failed.analysisJson = try JSON.string(analysis)
                 _ = try await services.documents.save(failed)
                 try await services.history.record(.failed, doc: docID, job: job.id, trace: trace.traceID,
                                                   summary: "\(document.originalFilename): \(message)")

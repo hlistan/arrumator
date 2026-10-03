@@ -73,6 +73,18 @@ public struct PipelineServices: Sendable {
                                            models: try? settings.modelProfile(), settings: settings))
     }
 
+    /// Whether `error` says Ollama is away, which work waits out spending nothing, as every queue decides it: it could not
+    /// be reached, or it did not answer in time and does not answer a probe for its version either, which a server busy
+    /// with one request it cannot finish does. A server that answers the probe is there, and the work fails or spends an
+    /// attempt.
+    public func ollamaIsAway(_ error: any Error) async -> Bool {
+        guard let error = error as? OllamaError else { return false }
+        if error.isAway { return true }
+        guard error.timedOut else { return false }
+        // A probe: its failure is the answer, whatever it is.
+        return (try? await ollama.version()) == nil
+    }
+
     public var labels: LabelStore { LabelStore(database: database, config: config.labels, lookAlikes: lookAlikes) }
 
     /// The tags a file at `url` is given when it is queued (`GivenTag`): the name of the folder at the top of Incoming it is

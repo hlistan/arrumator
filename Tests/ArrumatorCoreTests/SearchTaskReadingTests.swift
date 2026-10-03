@@ -163,8 +163,9 @@ import Testing
         defer { w.h.env.cleanup() }
         let holder = TaskHolder()
         let interpreter = StubInterpreter(plans: [SearchTaskTests.prompt: SearchTaskTests.invoices2025]) { _ in
+            // The user changes the effort from the app, in a task of its own, while the prompt is read.
             if let tasks = await holder.tasks, let id = await holder.id, try await tasks.store.task(id: id)?.effort == .low {
-                try await tasks.update(id, SearchTaskChange(effort: .high))
+                _ = try await Task { try await tasks.update(id, SearchTaskChange(effort: .high)) }.value
             }
         }
         let (queue, tasks) = w.h.searchTasks(interpreter)

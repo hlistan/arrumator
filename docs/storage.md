@@ -88,7 +88,9 @@ Some working state is deliberately not kept in files, so a lost index loses it:
   history file back after an edit does; a search task and a question lose the link to theirs until they are next read.
 - **When a waiting search task, or question about its documents, is next tried.** A task that was waiting in the
   queue, or whose request was being read, is waiting again after a rebuild, and so is a question waiting or being
-  answered. Each answer's trace is the index's own too.
+  answered. Each answer's trace is the index's own too, and so is which process is reading a task's request or
+  answering a question (`worker`), by which another process tells one it still works on from one a process that ended
+  left behind.
 
 ## Keeping files and index together
 

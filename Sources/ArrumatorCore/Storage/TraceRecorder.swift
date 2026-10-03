@@ -35,23 +35,52 @@ public struct TraceRecorder: TraceSink {
         self.time = time
     }
 
+    /// How a trace of work that waits for Ollama to come back ends: the next attempt at the same work takes it up
+    /// (`start(_:resuming:)`).
+    public static let waitingOutcome = "waiting"
+
     public func start(_ header: TraceHeader) async throws -> TraceContext {
+        try await start(header, resuming: nil)
+    }
+
+    /// Starts a trace of `header`, or takes up `previous` when it ended waiting for Ollama (`waitingOutcome`), as an item of
+    /// a queue that waits is tried again every `ingest.retryDelays.last` seconds for as long as Ollama is away: the trace
+    /// starts over as the next attempt, `attempt` counting those made, rather than one more trace for every attempt. What
+    /// the attempt before recorded goes, as the next says the same and more: it found Ollama away, which the log keeps.
+    public func start(_ header: TraceHeader, resuming previous: Int64?) async throws -> TraceContext {
         let now = time.now()
         let id = try await database.writer.write { db in
+            if let previous, var waiting = try TraceRecord.fetchOne(db, key: previous), waiting.outcome == Self.waitingOutcome {
+                try TraceStepRecord.filter(Column("trace_id") == previous).deleteAll(db)
+                waiting.attempt += 1
+                waiting.startedAt = now
+                waiting.finishedAt = nil
+                waiting.outcome = nil
+                waiting.totalMs = nil
+                waiting.appVersion = appVersion
+                waiting.promptVersion = header.promptVersion
+                waiting.modelChat = header.models?.chatModel
+                waiting.modelVision = header.models?.visionModel
+                waiting.modelEmbed = header.models?.embedModel
+                waiting.settingsJson = try JSON.string(header.settings)
+                try waiting.update(db)
+                return previous
+            }
             var t = TraceRecord(id: nil, docId: header.docID, jobId: header.jobID, attempt: header.attempt,
                                 source: header.source.rawValue, startedAt: now, finishedAt: nil, outcome: nil,
                                 appVersion: appVersion, promptVersion: header.promptVersion, modelChat: header.models?.chatModel,
                                 modelVision: header.models?.visionModel, modelEmbed: header.models?.embedModel,
-                                settingsJson: JSON.string(header.settings), totalMs: nil)
+                                settingsJson: try JSON.string(header.settings), totalMs: nil)
             try t.insert(db)
             return t.id ?? 0
         }
         return TraceContext(traceID: id, sink: self)
     }
 
+    /// Records `step`, whatever the work that records it is asked meanwhile (`recorded`).
     public func append(traceID: Int64, step: TraceStep) async {
         do {
-            try await database.writer.write { db in
+            try await recorded { db in
                 let seq = try Int.fetchOne(db, sql: "SELECT COALESCE(MAX(seq), 0) + 1 FROM trace_steps WHERE trace_id = ?",
                                            arguments: [traceID]) ?? 1
                 var r = TraceStepRecord(id: nil, traceId: traceID, seq: seq, stage: step.stage.rawValue, status: step.status,
@@ -65,11 +94,12 @@ public struct TraceRecorder: TraceSink {
         }
     }
 
+    /// Ends the trace with `outcome`, whatever the work it traces is asked meanwhile (`recorded`).
     public func finish(_ context: TraceContext, outcome: String, docID: Int64?) async {
         guard let id = context.traceID else { return }
         let now = time.now()
         do {
-            try await database.writer.write { db in
+            try await recorded { db in
                 guard var t = try TraceRecord.fetchOne(db, key: id) else { return }
                 t.finishedAt = now
                 t.outcome = outcome
@@ -80,6 +110,17 @@ public struct TraceRecorder: TraceSink {
         } catch {
             Log.error(.db, "Failed to finish trace", ["trace": String(id), "error": error.localizedDescription])
         }
+    }
+
+    /// Writes `change` whatever the work that records it is asked meanwhile. A stop cancels the database accesses the
+    /// stopped task makes ("`CancellationError` if the task is cancelled", GRDB's `DatabaseWriter.write`), so the trace of
+    /// work that was stopped would lose the step that says how far it came, such as the answer a question had when the
+    /// user stopped it, and how it ended. The write runs as a task of its own, which "doesn't have a parent task" (The
+    /// Swift Programming Language › Concurrency › Unstructured Concurrency), as filing does (`DocumentFiler.file`): one
+    /// short write, which the stop then waits for.
+    private func recorded(_ change: @escaping @Sendable (Database) throws -> Void) async throws {
+        let database = database
+        try await Task { try await database.writer.write(change) }.value
     }
 
     public func trace(id: Int64) async throws -> (TraceRecord, [TraceStepRecord])? {

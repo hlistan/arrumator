@@ -106,7 +106,7 @@ public struct AppDatabase: Sendable {
     /// Records, in the transaction of `db`, the record files that kept the index from being rebuilt.
     static func setRebuildRefused(_ db: Database, _ files: [UnreadableRecordFile]) throws {
         try db.execute(sql: "INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                       arguments: [rebuildRefusedKey, JSON.string(files)])
+                       arguments: [rebuildRefusedKey, try JSON.string(files)])
     }
 
     /// Why nothing the record files hold can be changed in the index yet: the record files its last rebuild could not

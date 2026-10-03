@@ -27,8 +27,8 @@ import Testing
         unlisted: 2,
         conversation: [Exchange(question: "Quantas faturas há?", answer: "Duas.")])
 
-    static func answer(_ text: String = "Somam **72,61 EUR**.", sources: [String] = ["42", "[7]"], find: String = "") -> String {
-        JSON.string(JSONValue.orderedObject([JSONEntry("answer", .string(text)), JSONEntry("sources", .array(sources.map(JSONValue.string))),
+    static func answer(_ text: String = "Somam **72,61 EUR**.", sources: [String] = ["42", "[7]"], find: String = "") throws -> String {
+        try JSON.string(JSONValue.orderedObject([JSONEntry("answer", .string(text)), JSONEntry("sources", .array(sources.map(JSONValue.string))),
                                              JSONEntry("find", .string(find))]))
     }
 
@@ -41,15 +41,31 @@ import Testing
         /// Answers `question` from `context` by `profile`, else by the one Settings uses; what the answer was as it was
         /// written, too.
         func answer(_ question: String = TaskAnswererTests.question, context: TaskContext = TaskAnswererTests.context,
-                    effort: TaskEffort = .medium, profile: ModelProfile? = nil) async throws -> (TaskAnswer, [AnswerProgress]) {
+                    effort: TaskEffort = .medium, profile: ModelProfile? = nil,
+                    config: PipelineConfig? = nil) async throws -> (TaskAnswer, [AnswerProgress]) {
             let profile = if let profile { profile } else { try await env.settings.current.modelProfile() }
             let written = Written()
-            let answer = try await answerer.answer(question, context: context, effort: effort, profile: profile, today: "2026-07-05",
-                                                   config: env.config, trace: TraceContext(traceID: 1, sink: sink)) { await written.add($0) }
+            let answer = try await answerer.answer(question, context: context, effort: effort, profile: profile, today: Self.today,
+                                                   config: config ?? env.config, trace: TraceContext(traceID: 1, sink: sink)) { await written.add($0) }
             return (answer, await written.all)
         }
 
         func step() async throws -> TraceStep { try #require(await sink.steps.first { $0.stage == .answer }) }
+
+        static let today = "2026-07-05"
+
+        /// The configuration with a context that holds `chars` characters of a prompt at medium effort, a character a token.
+        func holding(_ chars: Int) throws -> PipelineConfig {
+            var config = env.config
+            config.ollama.charsPerToken = 1
+            config.conversation.numCtx = try config.conversation.effort(.medium).numPredict + chars
+            return config
+        }
+
+        /// How many characters the prompt of `question` about `context` holds, system and user together.
+        func promptSize(_ question: String = TaskAnswererTests.question, context: TaskContext = TaskAnswererTests.context) throws -> Int {
+            try answerer.library.render("conversation-system", [:]).count + answerer.userPrompt(question, context: context, today: Self.today).count
+        }
     }
 
     actor Written {
@@ -64,6 +80,69 @@ import Testing
         let answerer = TaskAnswerer(gate: InferenceGate(api: mock, retryDelays: retryDelays, time: env.time),
                                     models: ModelManager(api: mock, config: env.config.ollama), library: try PromptLibrary.bundled())
         return World(env: env, mock: mock, answerer: answerer)
+    }
+
+    // MARK: The model's context
+
+    @Test func whatAnAnswerIsShownIsCutToFitTheContextTheLeastNeededFirstAndTheTraceSaysSo() async throws {
+        let w = try await world { _ in try Self.answer() }
+        defer { w.env.cleanup() }
+        let full = try w.promptSize()
+        _ = try await w.answer(config: try w.holding(full - 1))
+        let request = try #require(await w.mock.chatRequests.first)
+        #expect(request.messages[0].content == (try w.answerer.library.render("conversation-system", [:])),
+                "the app's own instructions are sent whole, never the start Ollama would drop from a prompt too long")
+        let user = request.messages[1].content
+        #expect(user.count + request.messages[0].content.count <= full - 1, "the prompt fits the context beside the answer")
+        #expect(!user.contains("Fatura da água") && user.contains("[7] Águas 2025-05.pdf") && user.contains("Fatura EDP"),
+                "the last document shown with its text is listed by name instead, the one the question concerns most keeping its text")
+        let input = try JSON.decoder.decode(JSONValue.self, from: Data(try #require(try await w.step().input).utf8))
+        #expect(input["trimmed"]?["textsLeftOut"] == .number(1) && input["read"] == .number(1),
+                "the trace says what was left out so it fit: \(input)")
+
+        await #expect(throws: PromptError.tooLong(template: "conversation-user", chars: try w.promptSize(context: TaskContext(documents: [], unlisted: 0, conversation: [])),
+                                                  room: 10),
+                      "a question that does not fit even alone fails, saying so, rather than losing the start of its prompt") {
+            _ = try await w.answer(config: try w.holding(10))
+        }
+    }
+
+    @Test func theTraceKeepsTheTokensEachPromptTookAndSaysWhenTheContextWasFull() async throws {
+        let w = try await world { _ in try Self.answer() }
+        defer { w.env.cleanup() }
+        _ = try await w.answer()
+        var step = try await w.step()
+        var output = try JSON.decoder.decode(JSONValue.self, from: Data(try #require(step.output).utf8))
+        #expect(output["promptTokens"] == .array([.number(10)]) && step.status == .ok && step.error == nil,
+                "how many tokens Ollama counted the prompt took is kept, which retention does not clear")
+        var config = w.env.config
+        // Ollama counts 10 tokens of a context that holds 10 beside the answer, though the estimate let the prompt in.
+        config.ollama.charsPerToken = 100_000
+        config.conversation.numCtx = try config.conversation.effort(.medium).numPredict + 10
+        let full = try await world { _ in try Self.answer() }
+        defer { full.env.cleanup() }
+        _ = try await full.answer(config: config)
+        step = try await full.step()
+        output = try JSON.decoder.decode(JSONValue.self, from: Data(try #require(step.output).utf8))
+        #expect(step.status == .warn && step.error?.contains("the model's context was full") == true && output["promptTokens"] == .array([.number(10)]),
+                "a prompt that took all the room says so, as the estimate of characters a token was wrong for it")
+    }
+
+    @Test func whatIsLeftOutFirstIsTheEarlierConversationThenTextsThenTheLatestExchangeThenNames() throws {
+        var context = Self.context
+        context.conversation = [Exchange(question: "First?", answer: "One."), Exchange(question: "Then?", answer: "Two.")]
+        var trim = ContextTrim()
+        var shown: [TaskContext] = []
+        var current = context
+        while let less = trim.less(of: current) {
+            shown.append(less)
+            current = less
+        }
+        #expect(shown.map(\.conversation.count) == [1, 1, 1, 0, 0, 0, 0], "the exchanges before the latest go first, the latest after the texts")
+        #expect(shown.map(\.read.count) == [2, 1, 0, 0, 0, 0, 0], "the texts from the last shown, the one the question concerns most last")
+        #expect(shown.map(\.documents.count) == [3, 3, 3, 3, 2, 1, 0] && current.unlisted == Self.context.unlisted + 3,
+                "and the names last, each counted among those not shown")
+        #expect(trim == ContextTrim(textsLeftOut: 2, exchangesLeftOut: 2, namesLeftOut: 3), "the trace says how much of each")
     }
 
     // MARK: Ollama away
@@ -82,7 +161,7 @@ import Testing
     }
 
     @Test func whatIsWrittenSaysTheModelHasBegun() async throws {
-        let w = try await world { _ in Self.answer() }
+        let w = try await world { _ in try Self.answer() }
         defer { w.env.cleanup() }
         let (_, written) = try await w.answer()
         #expect(!written.isEmpty && written.allSatisfy(\.begun), "every word streamed is the model at work, not still waiting for it")
@@ -96,6 +175,14 @@ import Testing
         let checked = try validator.validate(Self.answer(written, sources: ["42"]))
         #expect(checked.text == "Somam **EDP 2025-03.pdf** e Águas 2025-05.pdf, segundo EDP 2025-03.pdf; o [99] não foi mostrado.",
                 "the person never sees the numbers: one before its document's name goes, one alone becomes the name, one never shown stays")
+    }
+
+    @Test func aNumberInBracketsThatIsMarkdownOfItsOwnIsLeftAsWritten() throws {
+        let validator = ConversationAnswerValidator(names: [42: "EDP 2025-03.pdf", 7: "Águas 2025-05.pdf"])
+        let written = "Ver [42](https://x.example/42), a nota [7]: total, `lista[7]` e\n\n```\nitens[42]\n```\n\nmas [42] sim."
+        let checked = try validator.validate(try Self.answer(written, sources: ["42"]))
+        #expect(checked.text == "Ver [42](https://x.example/42), a nota [7]: total, `lista[7]` e\n\n```\nitens[42]\n```\n\nmas EDP 2025-03.pdf sim.",
+                "a link's words, a reference and code keep their numbers; a number standing for a document is its name")
     }
 
     @Test func anAnswerKeepsOnlyTheSourcesItWasShownAndItsRequestForMoreOnOneLine() throws {
@@ -134,7 +221,7 @@ import Testing
     // MARK: Asking the model
 
     @Test func theModelIsShownTheDocumentsTheConversationTodayAndTheQuestionAndAnswersInTheSchema() async throws {
-        let w = try await world { _ in Self.answer(find: "o contrato da EDP") }
+        let w = try await world { _ in try Self.answer(find: "o contrato da EDP") }
         defer { w.env.cleanup() }
         let (answer, written) = try await w.answer()
         #expect(answer == TaskAnswer(text: "Somam **72,61 EUR**.", sources: [42, 7], find: "o contrato da EDP", model: Self.chat, problem: nil),
@@ -168,7 +255,7 @@ import Testing
     }
 
     @Test func anEmptySetIsSaidToBeEmpty() async throws {
-        let w = try await world { _ in Self.answer(sources: []) }
+        let w = try await world { _ in try Self.answer(sources: []) }
         defer { w.env.cleanup() }
         _ = try await w.answer(context: TaskContext(documents: [], unlisted: 0, conversation: []))
         let user = try #require(await w.mock.chatRequests.first?.messages.last?.content)
@@ -177,7 +264,7 @@ import Testing
     }
 
     @Test func eachEffortTellsAModelThatThinksHowMuchToAndOneThatCannotNothing() async throws {
-        let w = try await world { _ in Self.answer() }
+        let w = try await world { _ in try Self.answer() }
         defer { w.env.cleanup() }
         let mine = ModelProfile(name: "Mine", position: 4, chatModel: Self.thinker, visionModel: Self.chat, embedModel: "bge-m3")
         for effort in TaskEffort.allCases { _ = try await w.answer(effort: effort, profile: mine) }
@@ -189,12 +276,12 @@ import Testing
     }
 
     @Test func anAnswerCutOffIsKeptAsFarAsItCameSayingSoAndNoneIsNoAnswer() async throws {
-        let w = try await world { _ in MockOllama.cutOff(after: #"{"answer": "Tradução: a fatura da EDP so"#) }
+        let w = try await world { _ in MockOllama.cutOff(after: #"{"answer": "Tradução: a fatura [42] da EDP so"#) }
         defer { w.env.cleanup() }
         let (answer, _) = try await w.answer()
         let preset = try w.env.config.conversation.effort(.medium)
-        #expect(answer.text == "Tradução: a fatura da EDP so" && answer.sources.isEmpty && answer.find == nil,
-                "what came of the answer is kept")
+        #expect(answer.text == "Tradução: a fatura EDP 2025-03.pdf da EDP so" && answer.sources.isEmpty && answer.find == nil,
+                "what came of the answer is kept, a document it names by number named as a whole answer's is")
         #expect(answer.problem == AnswerValidationError.cutOff(preset.numPredict).localizedDescription, "saying it was cut off")
         #expect(await w.mock.chatCount == 1, "and it is not asked for again, as the same would be cut off again")
         #expect(try await w.step().status == .warn, "the trace marks it")
@@ -205,7 +292,7 @@ import Testing
     }
 
     @Test func anAnswerThatCannotBeReadGoesBackOnceAndAModelThatIsMissingThrows() async throws {
-        let w = try await world { request in request.messages.count > 2 ? Self.answer() : "Somam 72,61 EUR." }
+        let w = try await world { request in request.messages.count > 2 ? try Self.answer() : "Somam 72,61 EUR." }
         defer { w.env.cleanup() }
         let (answer, written) = try await w.answer()
         let requests = await w.mock.chatRequests

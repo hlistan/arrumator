@@ -109,7 +109,7 @@ public struct SearchPlanValidator: Sendable {
         let asked = Self.words(request)
         var notes: [String] = []
         var quoted = Set<String>()
-        let criteria = LabelKind.modelKinds.flatMap { labels(of: $0, in: raw, asked: asked, quoted: &quoted, notes: &notes) }
+        let criteria = ClassificationSchema.answerOrder.flatMap { labels(of: $0, in: raw, asked: asked, quoted: &quoted, notes: &notes) }
         let words = distinct(raw.words.map(DocumentLabel.oneLine).filter { word in
             let key = Self.words(word)
             guard !key.isEmpty else { return false }
@@ -215,24 +215,50 @@ public struct SearchPromptInterpreter: SearchPromptInterpreting {
         let system = try library.render("search-system", [
             "max_per_kind": String(config.tasks.maxValuesPerKind), "max_words": String(config.tasks.maxWords),
             "max_depth": String(config.tasks.maxGroupingDepth), "max_title_chars": String(config.tasks.maxTitleChars)])
-        let user = try library.render("search-user", ["archive": try archiveBlock(vocabulary, limits: preset.promptLabels),
-                                                      "today": today, "request": prompt])
+        // The archive's labels are shown fewer, the least used first, until the prompt fits the model's context.
+        let budget = PromptBudget(numCtx: config.analysis.numCtx, numPredict: preset.numPredict, charsPerToken: config.ollama.charsPerToken)
+        var limits = preset.promptLabels
+        var leftOut = 0
+        var user = try userPrompt(prompt, vocabulary: vocabulary, limits: limits, today: today)
+        while !budget.fits(system, user), let kind = Self.mostShown(vocabulary, limits: limits) {
+            limits[kind] = min(limits[kind] ?? 0, vocabulary[kind]?.count ?? 0) - 1
+            leftOut += 1
+            user = try userPrompt(prompt, vocabulary: vocabulary, limits: limits, today: today)
+        }
+        guard budget.fits(system, user) else {
+            throw PromptError.tooLong(template: "search-user", chars: system.count + user.count, room: budget.room)
+        }
         let library = library
-        let input = InterpretInput(effort: effort, model: model, think: preset.think, today: today)
+        let input = InterpretInput(effort: effort, model: model, think: preset.think, today: today, labelsLeftOut: leftOut == 0 ? nil : leftOut)
         let started = Date()
         do {
             let answer = try await LLMClassifier(gate: gate, models: models, effort: .task(preset, config: config)).ask(
                 system: system, user: user, schema: SearchSchema.plan(config.tasks), model: model,
                 repairPrompt: { try library.render("repair-user", ["errors": $0]) }, validate: { try validator.validate($0, request: prompt) })
-            await trace.record(.interpret, status: answer.calls.count > 1 ? .warn : .ok, startedAt: started, input: input,
-                               output: InterpretTrace(answer: answer.answer, exchange: answer.calls))
+            let full = budget.full(answer.calls)
+            await trace.record(.interpret, status: answer.calls.count > 1 || full != nil ? .warn : .ok, startedAt: started, input: input,
+                               output: InterpretTrace(answer: answer.answer, promptTokens: PromptBudget.promptTokens(answer.calls),
+                                                      exchange: answer.calls), error: full)
             return SearchInterpretation(plan: answer.answer.plan, model: answer.model, problem: nil)
         } catch let error as ModelAnswerError {
-            await trace.record(.interpret, status: .error, startedAt: started, input: input,
-                               output: InterpretTrace(answer: nil, exchange: error.calls), error: error.localizedDescription)
+            await trace.record(.interpret, status: error.status, startedAt: started, input: input,
+                               output: InterpretTrace(answer: nil, promptTokens: PromptBudget.promptTokens(error.calls), exchange: error.calls),
+                               error: ([error.localizedDescription] + [budget.full(error.calls)].compactMap { $0 }).joined(separator: "; "))
+            if let cause = error.cause { throw cause }
             Log.warning(.classify, "The model gave no valid answer to a search request", ["error": error.localizedDescription])
             return SearchInterpretation(plan: nil, model: nil, problem: "the model gave no valid answer (\(error.localizedDescription))")
         }
+    }
+
+    /// What the model is asked: the archive's labels as `limits` shows them, today's date and the request.
+    func userPrompt(_ prompt: String, vocabulary: [LabelKind: [LabelUsage]], limits: [LabelKind: Int], today: String) throws -> String {
+        try library.render("search-user", ["archive": try archiveBlock(vocabulary, limits: limits), "today": today, "request": prompt])
+    }
+
+    /// The kind of which `limits` shows the most labels, the one to show one fewer of; nil when none is shown.
+    static func mostShown(_ vocabulary: [LabelKind: [LabelUsage]], limits: [LabelKind: Int]) -> LabelKind? {
+        let shown = ClassificationSchema.answerOrder.map { ($0, min(limits[$0] ?? 0, vocabulary[$0]?.count ?? 0)) }.filter { $0.1 > 0 }
+        return shown.max { $0.1 < $1.1 }?.0
     }
 
     /// The labels the archive uses of each kind `limits` names, the most used first, by the answer's name for their
@@ -249,18 +275,22 @@ public struct SearchPromptInterpreter: SearchPromptInterpreting {
 }
 
 /// What reading a search request records it was read with: the effort, the model, what the effort wanted the model told
-/// about thinking, and the day. What was sent, as the model allows, is each `ModelCall.think` of the exchange, which
+/// about thinking, the day, and how many of the archive's labels the effort would show were left out so the prompt fit
+/// the model's context, when any were. What was sent, as the model allows, is each `ModelCall.think` of the exchange, which
 /// retention clears; this stays, so the trace still says how much the model was asked to think once the exchange is gone.
 struct InterpretInput: Encodable {
     var effort: TaskEffort
     var model: String
     var think: OllamaThink
     var today: String
+    var labelsLeftOut: Int?
 }
 
 /// What reading a search request records: the validated plan, and every model call under `TraceStep.exchangeKey`, which
 /// retention clears.
 struct InterpretTrace: Codable {
     var answer: ValidatedSearchPlan?
+    /// The tokens each call's prompt took, as Ollama counted them (`PromptBudget.promptTokens`), which retention keeps.
+    var promptTokens: [Int]
     var exchange: [ModelCall]
 }

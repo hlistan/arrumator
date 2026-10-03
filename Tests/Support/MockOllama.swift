@@ -22,7 +22,8 @@ public actor MockOllama: OllamaAPI {
     private let capabilities: [String: [String]]
     private let thinking: [String: OllamaShowResponse.Thinking]
     private let remoteHosts: [String: String]
-    private var showFailures: [String: OllamaError] = [:]
+    private var showFailures: [String: any Error & Sendable] = [:]
+    private var embedFailure: (any Error & Sendable)?
     private var versionFailure: OllamaError?
     private var listingFailure: OllamaError?
     public nonisolated let baseURL: URL
@@ -62,8 +63,12 @@ public actor MockOllama: OllamaAPI {
 
     public var chatCount: Int { chatRequests.count }
 
-    /// Makes `show` fail with `error` for `model` from now on, as a server that cannot say what the model can do.
-    public func failShowing(_ model: String, with error: OllamaError) { showFailures[model] = error }
+    /// Makes `show` fail with `error` for `model` from now on, as a server that cannot say what the model can do, or as a
+    /// request a stop cut off (`CancellationError`, as `OllamaClient` throws for it).
+    public func failShowing(_ model: String, with error: any Error & Sendable) { showFailures[model] = error }
+
+    /// Makes `embed` fail with `error` from now on.
+    public func failEmbedding(with error: any Error & Sendable) { embedFailure = error }
 
     /// Makes `version` fail with `error` from now on, as a server that answers nothing.
     public func failVersion(with error: OllamaError) { versionFailure = error }
@@ -130,6 +135,7 @@ public actor MockOllama: OllamaAPI {
 
     public func embed(_ request: OllamaEmbedRequest) async throws -> OllamaEmbedResponse {
         embedRequests.append(request)
+        if let embedFailure { throw embedFailure }
         return OllamaEmbedResponse(model: request.model, embeddings: request.input.map { Self.hashEmbedding($0, dimension: dimension) },
                                    totalDuration: nil, loadDuration: nil, promptEvalCount: nil)
     }

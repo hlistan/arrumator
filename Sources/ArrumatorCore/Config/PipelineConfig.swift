@@ -48,6 +48,7 @@ public struct PipelineConfig: Sendable, Codable, Hashable, ValidatedConfiguratio
         problems += tasks.problems
         problems += conversation.problems
         problems += limitProblems
+        problems += promptRoomProblems
         return problems
     }
 
@@ -111,6 +112,11 @@ public struct OllamaConfig: Sendable, Codable, Hashable {
     /// Seconds what the server said of where a model runs (`ModelLocation`) is trusted before it is asked again; 0 asks
     /// before every request. A model the server is told to run elsewhere meanwhile is sent nothing once this has passed.
     public var modelLocationMaxAge: Double
+    /// How many characters of a prompt a token of a model's context is reckoned to hold, which ties a search task's and
+    /// a question's prompt, written in characters, to the context it is read in (`num_ctx`, in tokens), so one that would
+    /// not fit is cut to fit first (`PromptBudget`). An estimate, not a measurement: it fits text in Latin script and may
+    /// not others, and the trace keeps how many tokens Ollama counted and says when the context was full.
+    public var charsPerToken: Double
 
     /// How long Ollama keeps a model loaded after its last request (`keep_alive`), so the next document does not wait
     /// for it to load again.

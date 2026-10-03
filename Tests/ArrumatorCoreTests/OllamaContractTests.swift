@@ -92,13 +92,13 @@ import Testing
         }
     }
 
-    @Test func thinkIsSentAsASwitchOrALevelAndLeftOutWhenUnset() {
+    @Test func thinkIsSentAsASwitchOrALevelAndLeftOutWhenUnset() throws {
         func body(_ think: OllamaThink?) -> String { OllamaChatRequest.sample(think: think).body.serialized() }
         #expect(body(false).contains(#""think":false"#), "a model is switched off as Ollama takes it, with false")
         #expect(body(true).contains(#""think":true"#), "and on with true")
         #expect(body("high").contains(#""think":"high""#), "a level goes by its name")
         #expect(!body(nil).contains(#""think""#), "nothing to send leaves the key out, so the model thinks as it does by default")
-        #expect(JSON.string([false, true, "high"] as [OllamaThink]) == #"[false,true,"high"]"#,
+        #expect(try JSON.string([false, true, "high"] as [OllamaThink]) == #"[false,true,"high"]"#,
                 "a trace records what was sent as the request carried it")
     }
 
@@ -204,6 +204,29 @@ import Testing
         let state = await lifecycle.check()
         #expect(state == .unreachable("192.168.1.254"), "nothing is known of whether it runs there, only that it cannot be reached")
         #expect(state.summary == "Ollama at 192.168.1.254 cannot be reached", "and that is what the app says")
+    }
+
+    /// A server whose every request a stop cuts off, as `OllamaClient` throws for it.
+    struct CutOffServer: OllamaAPI {
+        var baseURL: URL { MockOllama.server }
+        func version() async throws -> String { throw CancellationError() }
+        func tags() async throws -> [OllamaModelInfo] { throw CancellationError() }
+        func show(model: String) async throws -> OllamaShowResponse { throw CancellationError() }
+        func chat(_ request: OllamaChatRequest, partial: (@Sendable (OllamaChatResponse) async -> Void)?) async throws -> OllamaChatResponse {
+            throw CancellationError()
+        }
+        func embed(_ request: OllamaEmbedRequest) async throws -> OllamaEmbedResponse { throw CancellationError() }
+        func pull(model: String) -> AsyncThrowingStream<OllamaPullProgress, any Error> { AsyncThrowingStream { $0.finish() } }
+    }
+
+    @Test func aCheckAStopCutsOffLearnsNothingOfTheServer() async throws {
+        let config = try PipelineConfig.bundledDefaults().ollama
+        let address = try #require(URL(string: "http://127.0.0.1:11434"))
+        let lifecycle = OllamaLifecycle(api: CutOffServer(), config: config, management: .external, binaryOverride: nil, address: address,
+                                        time: TestTime(.advances))
+        let before = await lifecycle.state
+        #expect(await lifecycle.check() == before && before == .unknown,
+                "a request the stop cut off says nothing of whether Ollama runs, so it is not said to be stopped, which would start it")
     }
 
     @Test func aDownloadReportsProgressAndEndsOnTheErrorItStreams() throws {

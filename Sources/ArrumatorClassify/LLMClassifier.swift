@@ -15,6 +15,9 @@ public struct ModelCall: Sendable, Codable, Hashable {
     public var response: String?
     public var metrics: OllamaMetrics?
     public var error: String?
+    /// How many characters of this call's answer were left out when it was sent back to the model to be repaired, so
+    /// the repair fit the model's context (`LLMClassifier.Effort.promptRoom`); nil when it was sent back whole or not at all.
+    public var cutWhenSentBack: Int?
 
     /// Why the model was asked.
     public enum Reason: String, Sendable, Codable, Hashable {
@@ -32,19 +35,38 @@ public struct ModelAnswer<Answer: Sendable & Hashable>: Sendable, Hashable {
 }
 
 public enum ModelAnswerError: Error, LocalizedError {
+    /// The model gave no valid answer as often as it was asked.
     case exhausted([ModelCall])
+    /// Asking ended before the model gave a valid answer, for `cause`, which the caller acts on as it would without the
+    /// calls: a stop, a server that is away, or a model Ollama does not have. The last call failed with it.
+    case interrupted(cause: any Error, calls: [ModelCall])
 
     /// Every call made before giving up, for the trace.
     public var calls: [ModelCall] {
         switch self {
-        case let .exhausted(calls): calls
+        case let .exhausted(calls), let .interrupted(_, calls): calls
         }
+    }
+
+    /// What ended the asking, when it was not the model's answers: what the caller throws on once the calls are traced.
+    public var cause: (any Error)? {
+        switch self {
+        case .exhausted: nil
+        case let .interrupted(cause, _): cause
+        }
+    }
+
+    /// How the step that asked is traced: a stop is no failure of the model's, anything else that ended it is.
+    public var status: TraceStatus {
+        guard let cause else { return .error }
+        return cause is CancellationError ? .warn : .error
     }
 
     public var errorDescription: String? {
         switch self {
         case let .exhausted(calls):
             "No valid answer after \(Format.count(calls.count, "model call"))" + (calls.last?.error.map { ": \($0)" } ?? "")
+        case let .interrupted(cause, _): cause.localizedDescription
         }
     }
 }
@@ -81,28 +103,35 @@ public struct LLMClassifier: Sendable {
         /// Whether a server that is away is asked again here (`ingest.retryDelays`), or left at once to a queue that waits
         /// for it and says so.
         public var retriesWhenAway: Bool
+        /// The characters every call's messages may hold together, so they fit `numCtx` beside the answer
+        /// (`PromptBudget.room`): what a repair sends back of an invalid answer is cut to it. Nil for no bound, as a
+        /// document's reading has, whose prompt `analysis.excerptChars` bounds.
+        public var promptRoom: Int?
 
         public init(options: AnalysisConfig.LLMOptions, think: OllamaThink, repairAttempts: Int, timeout: Double?, numCtx: Int,
-                    keepAlive: String, retriesWhenAway: Bool = true) {
+                    keepAlive: String, promptRoom: Int?, retriesWhenAway: Bool = true) {
             self.options = options
             self.think = think
             self.repairAttempts = repairAttempts
             self.timeout = timeout
             self.numCtx = numCtx
             self.keepAlive = keepAlive
+            self.promptRoom = promptRoom
             self.retriesWhenAway = retriesWhenAway
         }
 
         /// As documents are read (`analysis`), with the context and keep-alive images are described with too.
         public static func documents(_ config: PipelineConfig) -> Effort {
             Effort(options: config.analysis.llmOptions, think: config.analysis.think, repairAttempts: config.analysis.repairAttempts,
-                   timeout: nil, numCtx: config.analysis.numCtx, keepAlive: config.ollama.keepAlive.chat)
+                   timeout: nil, numCtx: config.analysis.numCtx, keepAlive: config.ollama.keepAlive.chat, promptRoom: nil)
         }
 
         /// As a search task's request is read at `preset`, sampled, and loaded, as documents are.
         public static func task(_ preset: EffortPreset, config: PipelineConfig) -> Effort {
             Effort(options: preset.options(over: config.analysis.llmOptions), think: preset.think, repairAttempts: preset.repairAttempts,
-                   timeout: preset.timeout, numCtx: config.analysis.numCtx, keepAlive: config.ollama.keepAlive.chat)
+                   timeout: preset.timeout, numCtx: config.analysis.numCtx, keepAlive: config.ollama.keepAlive.chat,
+                   promptRoom: PromptBudget(numCtx: config.analysis.numCtx, numPredict: preset.numPredict,
+                                            charsPerToken: config.ollama.charsPerToken).room)
         }
 
         /// As a question about a task's documents is answered at `effort`, sampled as writing is, in the conversation's
@@ -111,14 +140,18 @@ public struct LLMClassifier: Sendable {
         public static func conversation(_ effort: ConversationConfig.Effort, config: PipelineConfig) -> Effort {
             Effort(options: config.conversation.options(effort), think: effort.think, repairAttempts: effort.repairAttempts,
                    timeout: effort.timeout, numCtx: config.conversation.numCtx, keepAlive: config.ollama.keepAlive.chat,
+                   promptRoom: PromptBudget(numCtx: config.conversation.numCtx, numPredict: effort.numPredict,
+                                            charsPerToken: config.ollama.charsPerToken).room,
                    retriesWhenAway: false)
         }
     }
 
-    /// Asks `model`, and asks it again with what was wrong while its answer is invalid and the effort allows. A model
-    /// Ollama does not have, and a server that is away (`OllamaError.isTransient(asking:)`), are thrown, so the document
-    /// or task waits for them; any other failure, an answer that took longer than the effort's own `timeout`, which has
-    /// nothing to send back, and an answer never valid, is `ModelAnswerError` with every call made.
+    /// Asks `model`, and asks it again with what was wrong while its answer is invalid and the effort allows. Every call
+    /// made is in what it throws, so a caller traces each, those that failed too. A stop, a model Ollama does not have,
+    /// and a server that is away (`OllamaError.isTransient(asking:)`) end the asking as
+    /// `ModelAnswerError.interrupted`, whose `cause` the caller throws on, so the work stops or the document or task
+    /// waits; any other failure, an answer that took longer than the effort's own `timeout`, which has nothing to send
+    /// back, and an answer never valid, is `ModelAnswerError.exhausted`. A stop before any call is thrown as it is.
     ///
     /// With `partial`, each answer is streamed to it as it is written, with the number of the attempt it belongs to. With
     /// `cutOff`, an answer cut off at its length limit is neither checked nor sent back: `cutOff` makes the answer of what
@@ -149,8 +182,6 @@ public struct LLMClassifier: Sendable {
             let response: OllamaChatResponse
             do {
                 response = try await gate.chat(request, retrying: effort.retriesWhenAway, partial: streamed)
-            } catch let error as OllamaError where error.isTransient(asking: request) {
-                throw error
             } catch {
                 if case OllamaError.timeout = error, let seconds = request.timeout {
                     call.error = AnswerValidationError.timedOut(seconds).localizedDescription
@@ -158,7 +189,7 @@ public struct LLMClassifier: Sendable {
                     call.error = error.localizedDescription
                 }
                 calls.append(call)
-                if case OllamaError.modelNotFound = error { throw error }
+                if let cause = Self.ending(error, asking: request) { throw ModelAnswerError.interrupted(cause: cause, calls: calls) }
                 break
             }
             call.response = response.message.content
@@ -176,23 +207,46 @@ public struct LLMClassifier: Sendable {
                 // An answer cut off at its length limit is invalid for that reason, whatever is wrong with what came.
                 let error = response.reachedLengthLimit ? AnswerValidationError.cutOff(effort.options.numPredict) : error
                 call.error = error.localizedDescription
+                let repair = try repairPrompt(error.localizedDescription)
+                let sentBack = Self.sentBack(response.message.content, after: messages, repair: repair, room: effort.promptRoom)
+                call.cutWhenSentBack = sentBack.cut
                 calls.append(call)
                 Log.warning(.classify, "Invalid model answer", ["model": model, "attempt": String(attempt),
                                                                 "error": error.localizedDescription])
-                messages.append(.assistant(response.message.content))
-                messages.append(.user(try repairPrompt(error.localizedDescription)))
+                messages.append(.assistant(sentBack.text))
+                messages.append(.user(repair))
             }
         }
         throw ModelAnswerError.exhausted(calls)
     }
 
-    /// What `model` is told about thinking, as its `/api/show` allows (`OllamaShowResponse.think(sending:)`). A model
-    /// Ollama does not have, and a server that is away, are thrown before it is asked anything; a model whose
+    /// What of an invalid `answer` a repair sends back, so the messages so far, the answer and `repair` fit `room`
+    /// characters: its start, as far as fits, and how many characters were left out; the whole answer without a room.
+    static func sentBack(_ answer: String, after messages: [OllamaMessage], repair: String, room: Int?) -> (text: String, cut: Int?) {
+        guard let room else { return (answer, nil) }
+        let left = max(0, room - messages.reduce(repair.count) { $0 + $1.content.count })
+        guard answer.count > left else { return (answer, nil) }
+        return (String(answer.prefix(left)), answer.count - left)
+    }
+
+    /// What ends the asking when a call to the model fails with `error`, rather than the call counting as one more answer
+    /// that was not valid: a stop, as cancellation; a server that is away; a model Ollama does not have. Nil otherwise.
+    static func ending(_ error: any Error, asking request: OllamaChatRequest) -> (any Error)? {
+        if Cancellation.stops(error) { return CancellationError() }
+        guard let error = error as? OllamaError else { return nil }
+        if error.isTransient(asking: request) { return error }
+        if case .modelNotFound = error { return error }
+        return nil
+    }
+
+    /// What `model` is told about thinking, as its `/api/show` allows (`OllamaShowResponse.think(sending:)`). A stop, a
+    /// model Ollama does not have, and a server that is away, are thrown before it is asked anything; a model whose
     /// capabilities cannot be read otherwise is told nothing, and thinks as it does by default.
     private func think(_ model: String) async throws -> OllamaThink? {
         do {
             return try await models.capabilities(of: model).think(sending: effort.think)
         } catch {
+            try Cancellation.rethrow(error)
             if let error = error as? OllamaError {
                 if error.isTransient { throw error }
                 if case .modelNotFound = error { throw error }

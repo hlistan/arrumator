@@ -145,7 +145,7 @@ import Testing
                                                   sha256: "bill \(place)", size: 1, uttype: "com.adobe.pdf", inode: nil, modified: nil,
                                                   now: first.time.now())
                 bill.status = .filed
-                bill.labelsJson = JSON.string([DocumentLabel(kind: .sender, value: sender)])
+                bill.labelsJson = try JSON.string([DocumentLabel(kind: .sender, value: sender)])
                 _ = try await first.services.documents.save(bill)
             }
             try await first.records.flush()

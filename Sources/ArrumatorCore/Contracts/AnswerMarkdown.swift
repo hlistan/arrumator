@@ -4,7 +4,8 @@ import Foundation
 /// the characters that mark them. Each block keeps its inline emphasis and code. The answer is untrusted, as a document
 /// it read can tell the model what to write (OWASP, LLM05 Improper Output Handling), so nothing in it becomes active
 /// where it is shown: a link becomes its words, followed by its address as plain text when the two differ, so a click
-/// opens nothing and nothing is hidden; an image becomes its words (`inert`).
+/// opens nothing and nothing is hidden; an image becomes its words (`inert`). A table is shown as its rows of plain text,
+/// each column as wide as its widest cell, as code is (`table`): its cells are not paragraphs of their own.
 public enum AnswerMarkdown {
     /// One block: its text, what it is, and how many lists it sits within beyond the first.
     public struct Block: Sendable, Hashable, Identifiable {
@@ -34,11 +35,24 @@ public enum AnswerMarkdown {
         var blocks: [Block] = []
         var lastBlock: Int?
         var lastItem: Int?
+        var table: Table?
+        func endTable() {
+            if let table { blocks.append(Block(id: blocks.count, text: AttributedString(table.text), kind: .code, depth: 0)) }
+            table = nil
+        }
         for run in parsed.runs {
             let components = run.presentationIntent?.components ?? []
+            let piece = AttributedString(parsed[run.range])
+            if let cell = Table.Cell(components) {
+                if table?.id != cell.table { endTable() }
+                table = table ?? Table(id: cell.table)
+                table?.add(String(piece.characters), at: cell)
+                lastBlock = nil
+                continue
+            }
+            endTable()
             // The innermost component is the block the run belongs to.
             let identity = components.first?.identity
-            let piece = AttributedString(parsed[run.range])
             if let identity, identity == lastBlock, !blocks.isEmpty {
                 blocks[blocks.count - 1].text += piece
                 continue
@@ -51,6 +65,7 @@ public enum AnswerMarkdown {
             let lists = components.filter { [.orderedList, .unorderedList].contains($0.kind) }.count
             blocks.append(Block(id: blocks.count, text: piece, kind: kind, depth: max(0, lists - 1)))
         }
+        endTable()
         // Code ends with the line break that closes its last line, which would show as an empty line.
         for index in blocks.indices where blocks[index].kind == .code {
             while blocks[index].text.characters.last?.isNewline == true {
@@ -77,6 +92,66 @@ public enum AnswerMarkdown {
             }
         }
         return shown
+    }
+
+    /// A table as it is read, row by row, its cells' words in plain text.
+    struct Table {
+        let id: Int
+        private var rows: [(id: Int, header: Bool, cells: [Int: String])] = []
+
+        init(id: Int) { self.id = id }
+
+        /// Where a run sits in a table: which table, which row, which column, and whether the row heads it; nil for a run
+        /// outside any table.
+        struct Cell {
+            let table: Int
+            let row: Int
+            let header: Bool
+            let column: Int
+
+            init?(_ components: [PresentationIntent.IntentType]) {
+                var table: Int?, row: (Int, Bool)?, column: Int?
+                for component in components {
+                    switch component.kind {
+                    case .table: table = component.identity
+                    case .tableHeaderRow: row = (component.identity, true)
+                    case .tableRow: row = (component.identity, false)
+                    case let .tableCell(index): column = index
+                    default: continue
+                    }
+                }
+                guard let table, let row, let column else { return nil }
+                (self.table, self.row, header, self.column) = (table, row.0, row.1, column)
+            }
+        }
+
+        mutating func add(_ words: String, at cell: Cell) {
+            if rows.last?.id != cell.row { rows.append((cell.row, cell.header, [:])) }
+            rows[rows.count - 1].cells[cell.column, default: ""] += words
+        }
+
+        /// The rows, each column as wide as its widest cell and the columns `gap` apart, a line of dashes under the
+        /// heading row; a cell's line breaks become spaces.
+        var text: String {
+            let lines = rows.map { row in
+                (header: row.header, cells: (0..<((row.cells.keys.max() ?? -1) + 1)).map { column in
+                    (row.cells[column] ?? "").split(whereSeparator: \.isNewline).joined(separator: " ").trimmingCharacters(in: .whitespaces)
+                })
+            }
+            let columns = lines.map(\.cells.count).max() ?? 0
+            let widths = (0..<columns).map { column in lines.map { $0.cells.indices.contains(column) ? $0.cells[column].count : 0 }.max() ?? 0 }
+            func line(_ cells: [String]) -> String {
+                cells.enumerated().map { column, words in
+                    column == cells.count - 1 ? words : words.padding(toLength: widths[column], withPad: " ", startingAt: 0)
+                }.joined(separator: Self.gap)
+            }
+            return lines.flatMap { row in
+                row.header ? [line(row.cells), line(widths.map { String(repeating: Self.rule, count: $0) })] : [line(row.cells)]
+            }.joined(separator: "\n")
+        }
+
+        static let gap = "  "
+        static let rule = "-"
     }
 
     /// What a block is, from the components of its intent, innermost first.

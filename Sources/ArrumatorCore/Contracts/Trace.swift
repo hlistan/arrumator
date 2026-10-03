@@ -87,13 +87,32 @@ public struct TraceContext: Sendable {
         await sink.append(traceID: traceID, step: step)
     }
 
-    public func record(_ stage: TraceStage, status: TraceStatus = .ok, startedAt: Date, input: (any Encodable)? = nil,
-                       output: (any Encodable)? = nil, error: String? = nil) async {
+    /// Records a step that began at `startedAt` and took `durationMs`, else until now.
+    public func record(_ stage: TraceStage, status: TraceStatus = .ok, startedAt: Date, durationMs: Double? = nil,
+                       input: (any Encodable)? = nil, output: (any Encodable)? = nil, error: String? = nil) async {
         guard isEnabled else { return }
-        let step = TraceStep(stage: stage, status: status, startedAt: startedAt,
-                             durationMs: startedAt.milliseconds(until: Date()),
-                             input: input.map { JSON.string($0) }, output: output.map { JSON.string($0) }, error: error)
-        await record(step)
+        var problems = error.map { [$0] } ?? []
+        let step = TraceStep(stage: stage, status: status, startedAt: startedAt, durationMs: durationMs ?? startedAt.milliseconds(until: Date()),
+                             input: Self.encoded(input, noting: &problems), output: Self.encoded(output, noting: &problems), error: nil)
+        await record(Self.noting(problems, in: step))
+    }
+
+    /// `value` as the trace keeps it; one JSON cannot hold is left out, and why noted in `problems`.
+    private static func encoded(_ value: (any Encodable)?, noting problems: inout [String]) -> String? {
+        guard let value else { return nil }
+        do { return try JSON.string(value) } catch {
+            problems.append(error.localizedDescription)
+            return nil
+        }
+    }
+
+    /// `step` with `problems` as its error, at least a warning when it was not already worse.
+    private static func noting(_ problems: [String], in step: TraceStep) -> TraceStep {
+        guard !problems.isEmpty else { return step }
+        var noted = step
+        noted.error = ([step.error].compactMap { $0 } + problems).joined(separator: "; ")
+        noted.status = max(step.status, .warn)
+        return noted
     }
 
     // periphery:ignore:parameters isolation - read by the compiler, which runs the body on that actor
@@ -105,21 +124,22 @@ public struct TraceContext: Sendable {
                            isolation: isolated (any Actor)? = #isolation,
                            _ body: () async throws -> T) async rethrows -> T {
         let start = Date()
-        let inputJSON = isEnabled ? input.map { JSON.string($0) } : nil
+        var problems: [String] = []
+        let inputJSON = isEnabled ? Self.encoded(input, noting: &problems) : nil
         do {
             let value = try await body()
             if isEnabled {
-                let step = TraceStep(stage: stage, status: status(value), startedAt: start,
-                                     durationMs: start.milliseconds(until: Date()), input: inputJSON,
-                                     output: output(value).map { JSON.string($0) })
-                await record(step)
+                let outputJSON = Self.encoded(output(value), noting: &problems)
+                await record(Self.noting(problems, in: TraceStep(stage: stage, status: status(value), startedAt: start,
+                                                                 durationMs: start.milliseconds(until: Date()), input: inputJSON,
+                                                                 output: outputJSON)))
             }
             return value
         } catch {
             if isEnabled {
-                await record(TraceStep(stage: stage, status: .error, startedAt: start,
-                                       durationMs: start.milliseconds(until: Date()), input: inputJSON,
-                                       error: String(describing: error)))
+                await record(Self.noting(problems, in: TraceStep(stage: stage, status: .error, startedAt: start,
+                                                                 durationMs: start.milliseconds(until: Date()), input: inputJSON,
+                                                                 error: String(describing: error))))
             }
             throw error
         }

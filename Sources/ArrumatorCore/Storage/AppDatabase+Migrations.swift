@@ -417,7 +417,7 @@ extension AppDatabase {
                 try db.execute(sql: "INSERT INTO events (at, kind, actor, summary, payload_json) VALUES (?, ?, ?, ?, ?)",
                                arguments: [now, "logicChanged", EventActor.system.rawValue,
                                            "Logic “\(name)” set aside, as an archive now has one logic; its text is kept here",
-                                           JSON.string(["name": name, "body": body])])
+                                           try JSON.string(["name": name, "body": body])])
             }
             let active = try Row.fetchOne(db, sql: "SELECT body, builtin_key IS NOT NULL AND edited = 0 AS follows FROM logic WHERE active = 1")
             try db.execute(sql: """
@@ -631,7 +631,8 @@ extension AppDatabase {
             """)
         }
 
-        for register in [registerSearchTaskMigrations, registerTagMigrations, registerConversationMigrations, registerRecordMigrations] { register(&m) }
+        for register in [registerSearchTaskMigrations, registerTagMigrations, registerConversationMigrations, registerRecordMigrations,
+                         registerQueueMigrations] { register(&m) }
 
         return m
     }

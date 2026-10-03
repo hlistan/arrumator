@@ -14,7 +14,7 @@ struct Review: AsyncParsableCommand {
         func run() async throws {
             let runtime = try await options.runtime()
             let docs = try await runtime.services.documents.reviewQueue()
-            options.emit(docs) {
+            try options.emit(docs) {
                 docs.isEmpty ? "Nothing to review." : Terminal.table(docs.map { d in
                     ["#\(d.id ?? 0)", d.status.rawValue, d.filename, d.analysis?.problems.joined(separator: "; ") ?? ""]
                 })
@@ -91,7 +91,7 @@ struct Review: AsyncParsableCommand {
 /// What a command that changed a document prints: the document as it is now.
 func report(_ id: Int64, runtime: ArrumatorRuntime, options: GlobalOptions) async throws {
     guard let document = try await runtime.services.documents.document(id: id) else { throw ValidationError("No document \(id)") }
-    options.emit(document) { "#\(id) \(document.status.rawValue): \(document.path)" }
+    try options.emit(document) { "#\(id) \(document.status.rawValue): \(document.path)" }
 }
 
 struct Rebuild: AsyncParsableCommand {
@@ -103,7 +103,7 @@ struct Rebuild: AsyncParsableCommand {
 
     func run() async throws {
         let summary = try await options.runtime().records.rebuild()
-        options.emit(summary) { summary.summary + ". \(summary.queued) documents queued to be read again." }
+        try options.emit(summary) { summary.summary + ". \(summary.queued) documents queued to be read again." }
     }
 }
 
@@ -116,7 +116,7 @@ struct Archive: AsyncParsableCommand {
         @OptionGroup var options: GlobalOptions
         func run() async throws {
             let summary = try await options.runtime().summary()
-            options.emit(summary) { Archive.describe(summary) }
+            try options.emit(summary) { Archive.describe(summary) }
         }
     }
 
@@ -132,7 +132,7 @@ struct Archive: AsyncParsableCommand {
             let next = switched.runtime
             try await next.openArchive()
             let summary = next.summary()
-            options.emit(summary) { "Switched archives. A running app keeps its archive until it is restarted.\n" + Archive.describe(summary) }
+            try options.emit(summary) { "Switched archives. A running app keeps its archive until it is restarted.\n" + Archive.describe(summary) }
         }
     }
 

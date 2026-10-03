@@ -224,8 +224,8 @@ struct GlobalOptions: ParsableArguments {
         return runtime
     }
 
-    func emit(_ value: some Encodable, text: () -> String) {
-        print(json ? JSON.string(value, pretty: true) : text())
+    func emit(_ value: some Encodable, text: () throws -> String) throws {
+        print(json ? try JSON.string(value, pretty: true) : try text())
     }
 }
 
@@ -292,7 +292,7 @@ struct Doctor: AsyncParsableCommand {
     func run() async throws {
         let runtime = try await options.runtime()
         let report = await runtime.runDoctor()
-        options.emit(report) {
+        try options.emit(report) {
             var lines = ["Arrumator \(report.appVersion) on \(report.macOS)", "Ollama: \(report.ollama)", ""]
             lines += report.checks.map { c in
                 let mark = switch c.status {
@@ -389,7 +389,7 @@ struct Settings: AsyncParsableCommand {
             _ = await runtime.lifecycle.ensureRunning()
         }
         let settings = await runtime.settings.current
-        options.emit(settings) { JSON.string(settings, pretty: true) }
+        try options.emit(settings) { try JSON.string(settings, pretty: true) }
     }
 
     /// The settings given, other than pausing and the Ollama server, which have actions of their own, as one change to

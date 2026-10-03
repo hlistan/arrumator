@@ -17,7 +17,7 @@ public struct IndexStore: Sendable {
                            extractorVersion: String, labels: [DocumentLabel]) async throws {
         let kinds = LabelKind.allCases.map(\.rawValue)
         let columns = ["doc_id", "filename", "body", "summary", "metadata_json", "extractor_version"] + kinds
-        let values: [(any DatabaseValueConvertible)?] = [docID, filename, body, summary, JSON.string(metadata), extractorVersion]
+        let values: [(any DatabaseValueConvertible)?] = [docID, filename, body, summary, try JSON.string(metadata), extractorVersion]
             + LabelKind.allCases.map { DocumentLabel.searchText(labels, kind: $0) }
         let arguments = StatementArguments(values)
         try await database.writer.write { db in
@@ -42,7 +42,7 @@ public struct IndexStore: Sendable {
         let assignments = LabelKind.allCases.map { "\($0.rawValue) = ?" }.joined(separator: ", ")
         let values: [(any DatabaseValueConvertible)?] = LabelKind.allCases.map { DocumentLabel.searchText(labels, kind: $0) } + [docID]
         try db.execute(sql: "UPDATE documents SET labels_json = ?, tags_only = ?, updated_at = ? WHERE id = ?",
-                       arguments: [stored.labels.map { JSON.string($0) }, stored.tagsOnly, now.unixSeconds, docID])
+                       arguments: [try stored.labels.map { try JSON.string($0) }, stored.tagsOnly, now.unixSeconds, docID])
         try db.execute(sql: "UPDATE document_text SET \(assignments) WHERE doc_id = ?", arguments: StatementArguments(values))
     }
 

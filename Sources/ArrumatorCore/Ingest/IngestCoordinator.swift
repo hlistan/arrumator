@@ -229,7 +229,7 @@ public actor IngestCoordinator {
 
     private func save(_ job: inout JobRecord, _ payload: JobPayload, state: JobState) async throws {
         job.state = state
-        job.setPayload(payload)
+        try job.setPayload(payload)
         try await services.jobs.update(job)
         status.current?.stage = state
         status.current?.tags = job.tags
@@ -359,7 +359,7 @@ public actor IngestCoordinator {
         guard var doc = try await services.documents.document(id: docID) else { throw IngestError.documentNotFound(docID) }
         doc.pageCount = content.pageCount
         doc.extractedAt = services.time.now()
-        doc.contentJson = DocumentStore.storedContentJSON(content)
+        doc.contentJson = try DocumentStore.storedContentJSON(content)
         _ = try await services.documents.save(doc)
         try await services.index.upsertText(docID: docID, filename: doc.filename, body: content.text, summary: content.visual?.description,
                                             metadata: content.metadata,
@@ -393,7 +393,7 @@ public actor IngestCoordinator {
                     var filedPayload = unfiledPayload
                     filedPayload.targetPath = filed.path
                     var filedJob = unfiledJob
-                    filedJob.setPayload(filedPayload)
+                    try filedJob.setPayload(filedPayload)
                     filedJob.updatedAt = now
                     try filedJob.update(db)
                 })

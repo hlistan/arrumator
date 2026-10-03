@@ -64,6 +64,28 @@ import Testing
         #expect(bold.joined() == "a fatura (https://x.example/f)", "a link keeps the emphasis it had, its address with it")
     }
 
+    @Test func aTableIsShownAsItsRowsAlignedNotACellPerParagraph() throws {
+        let answer = """
+            As faturas:
+
+            | Emissor | Total |
+            |---|---:|
+            | EDP | **54,21 EUR** |
+            | [Águas](https://x.example/a) | 8,40 EUR |
+
+            Fim.
+            """
+        let blocks = try #require(AnswerMarkdown.blocks(answer))
+        #expect(blocks.map(\.kind) == [.paragraph, .code, .paragraph], "the table is one block between the paragraphs, shown as code is")
+        #expect(String(blocks[1].text.characters) == """
+            Emissor                      Total
+            ---------------------------  ---------
+            EDP                          54,21 EUR
+            Águas (https://x.example/a)  8,40 EUR
+            """, "each row on a line, its columns aligned, the heading ruled off, a link its words and address")
+        #expect(blocks[1].text.runs.allSatisfy { $0.link == nil && $0.imageURL == nil }, "and nothing in it opens anything")
+    }
+
     @Test func plainTextIsOneParagraphAndUnfinishedMarkdownStillShows() throws {
         #expect(try #require(AnswerMarkdown.blocks("Duas faturas.")).map(\.kind) == [.paragraph])
         let partial = try #require(AnswerMarkdown.blocks("- EDP: **54,2"), "an answer still being written is shown as far as it came")

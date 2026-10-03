@@ -366,27 +366,32 @@ again, it is filed at the top of the archive.
 Rather than choosing labels one at a time, you can ask for the documents you need in your own words, in any language:
 "electricity and water bills from 2025, by sender", "everything the tax authority sent about last year's return". The
 request becomes a **task**, which joins a queue of its own; the tasks in it are read one at a time, the oldest first (a
-task whose request was being read when you quit is read first at the next start), by the reading model of the task's
-profile, with a prompt of the app's own (`search-system.md`) and the task's effort
-([below](#profile-and-effort)). The model is shown the labels the archive already uses of the kinds the effort's
-`promptLabels` names, the most used first, so it asks for them as the archive writes them, and today's date, so "last
-year" and "this month" mean something. It answers in a fixed schema:
-the labels of each kind to look for, each with the words of the request that ask for it, words the text must contain
-for what no label says, the kinds to arrange what is found by, and a name for the task. The answer is untrusted input,
-checked as a document's answer is: each label must be a label of its kind (a date, period or deadline may be a year, a
-month, a day or a span of them), at most `tasks.maxValuesPerKind` of a kind and `tasks.maxWords` words. Every kind a
-task asks for leaves documents out, so a label nobody asked for, such as the country all your documents are from,
-would silently hide what you wanted: a label is kept only when every word the model quotes for it is a word of your
-request, but not when every one of them is already quoted by a label of another kind, as "Portugal" in "invoices from
-Portugal" asks for a country, not for documents written in Portuguese; and a word only when it is in your request and
-no label already asks for it. What is dropped, and why, is in
-the task's trace. An answer that cannot be read, or is left asking for nothing at all, goes back to the model with what
-was wrong, as often as the effort's `repairAttempts` says; no other model is asked in its place. A request the model
-never answers validly fails the task, with the reason, and so does an answer that takes longer than the effort's
-`timeout` ([below](#profile-and-effort)). While Ollama cannot be reached a task waits in the queue, as a
-document does. A task whose reading model is not installed fails, naming the model, until it is downloaded and the
-task's documents are found again (**Find Again**), and one given a profile the settings no longer list fails saying so
-until it is given another.
+task whose request was being read when you quit, or when a command reading it was killed, is read first at the next
+start, or once the app next looks), by the reading model of the task's profile, with a prompt of the app's own
+(`search-system.md`) and the task's effort ([below](#profile-and-effort)). The model is shown the labels the archive
+already uses of the kinds the effort's `promptLabels` names, the most used first, so it asks for them as the archive
+writes them, and today's date, so "last year" and "this month" mean something. The prompt must fit the model's context
+(`analysis.numCtx`) beside the answer's length, the effort's `numPredict`, as a longer one is not read whole: its length
+in tokens is estimated at `ollama.charsPerToken` characters a token, an estimate that fits text in Latin script and may
+not others. When it would not fit, the least used labels are left out first, and the trace says how many; it also keeps
+how many tokens Ollama counted the prompt took, and says when the context was full, as when the estimate was wrong. It
+answers in a fixed schema: the labels of each kind to look for, each with the words of the request that ask for it,
+words the text must contain for what no label says, the kinds to arrange what is found by, and a name for the task. The
+answer is untrusted input, checked as a document's answer is: each label must be a label of its kind (a date, period or
+deadline may be a year, a month, a day or a span of them), at most `tasks.maxValuesPerKind` of a kind and
+`tasks.maxWords` words. Every kind a task asks for leaves documents out, so a label nobody asked for, such as the
+country all your documents are from, would silently hide what you wanted: a label is kept only when every word the model
+quotes for it is a word of your request, but not when every one of them is already quoted by a label of another kind, as
+"Portugal" in "invoices from Portugal" asks for a country, not for documents written in Portuguese; and a word only when
+it is in your request and no label already asks for it. What is dropped, and why, is in the task's trace. An answer that
+cannot be read, or is left asking for nothing at all, goes back to the model with what was wrong, as often as the
+effort's `repairAttempts` says; no other model is asked in its place. A request the model never answers validly fails
+the task, with the reason, and so does an answer that takes longer than the effort's `timeout`
+([below](#profile-and-effort)). While Ollama cannot be reached, or does not answer in time and answers no probe either,
+a task waits in the queue, as a document does, spending nothing, its one trace taken up again by each attempt; a server
+that answers with a failure, or answers a probe but not the request in time, fails the task with the reason. A task
+whose reading model is not installed fails, naming the model, until it is downloaded and the task's documents are found
+again (**Find Again**), and one given a profile the settings no longer list fails saying so until it is given another.
 
 **What a task finds.** The documents in the archive (filed, waiting for you, parked after failing, or left for later;
 not the copies earlier versions filed beside other documents, nor those undone or missing) that have, for every kind of
@@ -409,7 +414,9 @@ an export copies them in that order.
 narrows documents down, every document that has all the labels chosen, at most `tasks.maxDocuments` of them, the newest
 by their own date, as a task finds them. Rename the task, arrange its set otherwise, or list it without arranging it.
 Give it another request and it finds its documents again; so does **Find Again**, such as after new documents were
-filed. Finding them again keeps the documents you added and leaves out those you took out.
+filed. Finding them again keeps the documents you added and leaves out those you took out. A change to its request,
+effort or profile while it is read, and removing it, stop that reading at once, and removing it stops the answer to its
+question too.
 
 **Exporting.** A task's set is copied into a new folder named after the task, in a folder you choose outside the
 archive and Incoming, with a folder for each group of the first kind it is arranged by, a folder inside it for each
@@ -418,8 +425,10 @@ names are written with composed accents ("João", not "Joa" and an accent), as o
 Documents are copied, never moved, and nothing already there is written over: a name that is taken gets the collision
 suffix (`naming.collisionFormat`). A folder is named after its label as a file name is cleaned, so a label can never
 place a file anywhere else, and the documents without a label of the level's kind go into `tasks.withoutLabelFolder`
-(`No sender`). Each export is kept with its task: when, as what, where, and where each document went inside it; a
-document whose file is not where the archive has it is left out, with the reason.
+(`No sender`); two groups whose folders would be named alike, however cased, each get a folder of their own, the second
+with the collision suffix. Each export is kept with its task: when, as what, where, and where each document went inside
+it; a document whose file is not where the archive has it, or that could not be copied or given its folder, is left
+out, with the reason, and the rest of the export is still kept.
 
 Every task, its set as you left it and its exports are kept in the archive (`System/_tasks.md`, [Storage](storage.md)),
 so a rebuild brings them back. Asking, what was found, each change, each export and removing a task are recorded in
@@ -454,27 +463,34 @@ how many more there are. The text of no more documents is read than are shown or
 the set: which have a text is told without reading it. A set the context holds is shown whole. The
 answer is also shown the conversation so far, the latest questions and answers up to `conversation.historyChars`, the
 latest cut to fit when it alone is longer, and today's date. It is never shown your tags. A question is at most
-`conversation.maxQuestionChars` long.
+`conversation.maxQuestionChars` long. The whole prompt must fit the model's context (`conversation.numCtx`) beside the
+answer's length, the effort's `numPredict`, estimated as a request's is (above): when it would not, the exchanges
+before the latest are left out, then the last documents shown with their text are listed by name instead, then the
+latest exchange is left out, then the last names, and the trace says what was, with how many tokens the prompt took and
+whether the context was full; a question that would not fit even then fails, saying so. A repair, which sends back the
+answer that was not valid, sends back as much of it as fits, and the trace says how much was left out.
 
 **The answer** comes in a fixed schema: the answer, in Markdown, in the language of the question unless it asks for
 another, naming documents by their names, working out a total or a comparison the question asks for, and saying when
 documents disagree; the documents it draws on, by their numbers, which it is shown only for this; and, when you asked
-for more documents, a request for them, which it says it is looking for. It is
-untrusted input: a document it says it draws on is kept only when it is one it was shown, as a citation is checked
-against its sources, a number it writes in the answer for a document it was shown is given as that document's name, and
-an answer without words, or that cannot be read, goes back to the model with what was wrong, as often as the effort's
-`repairAttempts` says. It is shown as it is written: the card shows the answer as the model writes it, its paragraphs,
-headings, lists, quotes and code as such, **Thinking…** while a model that thinks has written nothing yet, that it waits
-for the model to begin while the model loads or reads documents first, and how long it has taken once that is more than
-a moment. Nothing in an answer can act: a link shows as its words followed by its address, and an image as its words,
-so a document that asks the model to end its answer with a link that would carry the document's data elsewhere gets
-nothing clickable. An answer cut off at its length limit, the effort's `numPredict`, is kept as far as it came, saying
-it was cut off: ask for less, or ask again at a lower effort, which thinks less and so leaves more of the limit to the
-answer. An answer that takes longer than the effort's `timeout` fails the question, keeping what came of it. While
-Ollama cannot be
-reached a question waits in the queue, as a document does, saying so and when it is tried again, the last of
-`ingest.retryDelays` later, rather than being asked again meanwhile; a reading model that is not installed, or a profile
-the settings no longer list, fails it with the reason.
+for more documents, a request for them, which it says it is looking for. It is untrusted input: a document it says it
+draws on is kept only when it is one it was shown, as a citation is checked against its sources, a number it writes in
+the answer for a document it was shown is given as that document's name, in an answer cut off too, unless Markdown makes
+it a link, a reference or code of its own, and an answer without words, or that cannot be read, goes back to the model
+with what was wrong, as often as the effort's `repairAttempts` says. It is shown as it is written: the card shows the
+answer as the model writes it, its paragraphs, headings, lists, quotes and code as such, a table as its rows of plain
+text with the columns aligned, **Thinking…** while a model that thinks has written nothing yet, that it waits for the
+model to begin while the model loads or reads documents first, and how long it has taken once that is more than a
+moment. Nothing in an answer can act: a link shows as its words followed by its address, and an image as its words, so a
+document that asks the model to end its answer with a link that would carry the document's data elsewhere gets nothing
+clickable. An answer cut off at its length limit, the effort's `numPredict`, is kept as far as it came, saying it was
+cut off: ask for less, or ask again at a lower effort, which thinks less and so leaves more of the limit to the answer.
+An answer that takes longer than the effort's `timeout` fails the question, keeping what came of it. While Ollama cannot
+be reached, or does not answer in time and answers no probe either, a question waits in the queue, as a document does,
+saying so and when it is tried again, the last of `ingest.retryDelays` later, rather than being asked again meanwhile,
+its one trace taken up again by each attempt; a server that answers with a failure or answers a probe but not the
+request in time, a reading model that is not installed, or a profile the settings no longer list, fails it with the
+reason. A question being answered when a command answering it was killed is answered again in its place.
 
 **Finding more.** Ask for documents beyond the set, such as "find the contract these invoices are billed under", and the
 answer writes a request for them in your words, with what the documents told it: a sender, a reference, a period. That

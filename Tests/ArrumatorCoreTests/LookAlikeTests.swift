@@ -152,7 +152,7 @@ import Testing
             var bill = DocumentRecord.arrived(path: h.env.archive.appendingPathComponent("bill \(place).pdf").path, sha256: "bill \(place)",
                                               size: 1, uttype: "com.adobe.pdf", inode: nil, modified: nil, now: h.env.time.now())
             bill.status = .filed
-            bill.labelsJson = JSON.string([DocumentLabel(kind: .sender, value: sender)])
+            bill.labelsJson = try JSON.string([DocumentLabel(kind: .sender, value: sender)])
             _ = try await h.services.documents.save(bill)
         }
         let early = Counts()

@@ -40,7 +40,8 @@
       "embed": "30m"
     },
     "maxResponseBytes": 67108864,
-    "modelLocationMaxAge": 60
+    "modelLocationMaxAge": 60,
+    "charsPerToken": 3
   },
   "watcher": {
     "fsEventsLatency": 1.0,

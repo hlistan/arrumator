@@ -48,7 +48,7 @@ extension Tasks {
             let turn = try await runtime.conversations.ask(task, question: question.joined(separator: " "))
             if !queueOnly { await Tasks.runConversation(runtime) }
             let answered = try await Tasks.answered(turn.id, runtime: runtime)
-            options.emit(answered) { Terminal.turn(answered.turn, documents: answered.documents) }
+            try options.emit(answered) { Terminal.turn(answered.turn, documents: answered.documents) }
         }
     }
 
@@ -60,7 +60,7 @@ extension Tasks {
             let runtime = try await options.runtime()
             await Tasks.runConversation(runtime)
             let waiting = try await runtime.conversations.store.queuedCount()
-            options.emit(Waiting(waiting: waiting)) { waiting == 0 ? "No question waits." : "\(Format.count(waiting, "question")) still wait." }
+            try options.emit(Waiting(waiting: waiting)) { waiting == 0 ? "No question waits." : "\(Format.count(waiting, "question")) still wait." }
         }
     }
 
@@ -95,7 +95,7 @@ extension Tasks {
                     }
                 }
             }
-            options.emit(Full(items: items, documents: documents, traces: full ? traces : nil)) {
+            try options.emit(Full(items: items, documents: documents, traces: full ? traces : nil)) {
                 guard !items.isEmpty else { return "No questions yet; `arrumatorcli tasks ask \(task) <question>` asks one." }
                 return items.map { item in
                     guard let turn = item.turn else { return "— \(Format.date(item.at)) · \(item.change ?? "")" }
@@ -130,7 +130,7 @@ extension Tasks {
             _ = try await runtime.conversations.askAgain(question)
             if !queueOnly { await Tasks.runConversation(runtime) }
             let answered = try await Tasks.answered(question, runtime: runtime)
-            options.emit(answered) { Terminal.turn(answered.turn, documents: answered.documents) }
+            try options.emit(answered) { Terminal.turn(answered.turn, documents: answered.documents) }
         }
     }
 
@@ -144,7 +144,7 @@ extension Tasks {
             let runtime = try await options.runtime()
             try await runtime.conversations.stop(question)
             let answered = try await Tasks.answered(question, runtime: runtime)
-            options.emit(answered) { Terminal.turn(answered.turn, documents: answered.documents) }
+            try options.emit(answered) { Terminal.turn(answered.turn, documents: answered.documents) }
         }
     }
 
@@ -156,7 +156,7 @@ extension Tasks {
         func run() async throws {
             let runtime = try await options.runtime()
             let removed = try await runtime.conversations.clear(task)
-            options.emit(Removed(removed: removed)) { "Removed \(Format.count(removed, "question")) about task #\(task)" }
+            try options.emit(Removed(removed: removed)) { "Removed \(Format.count(removed, "question")) about task #\(task)" }
         }
     }
 }

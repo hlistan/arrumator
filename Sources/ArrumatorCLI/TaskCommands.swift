@@ -30,7 +30,7 @@ struct Tasks: AsyncParsableCommand {
             let runtime = try await options.runtime()
             let tasks = try await runtime.searchTasks.store.tasks()
             let settings = await runtime.settings.current
-            options.emit(tasks) {
+            try options.emit(tasks) {
                 tasks.isEmpty ? "No search tasks yet; `arrumatorcli tasks new <what you need>` asks for documents."
                     : Terminal.table(tasks.map { Terminal.taskRow($0, settings: settings) })
             }
@@ -54,7 +54,7 @@ struct Tasks: AsyncParsableCommand {
             if !queueOnly { await Tasks.runQueue(runtime) }
             let detail = try await Tasks.detail(task.id, runtime: runtime)
             let settings = await runtime.settings.current
-            options.emit(detail) { Terminal.detail(detail, settings: settings) }
+            try options.emit(detail) { Terminal.detail(detail, settings: settings) }
         }
     }
 
@@ -70,12 +70,12 @@ struct Tasks: AsyncParsableCommand {
             let detail = try await Tasks.detail(task, runtime: runtime)
             let settings = await runtime.settings.current
             guard full else {
-                options.emit(detail) { Terminal.detail(detail, settings: settings) }
+                try options.emit(detail) { Terminal.detail(detail, settings: settings) }
                 return
             }
             var trace: (TraceRecord, [TraceStepRecord])?
             if let id = detail.task.lastTrace { trace = try await runtime.traces.trace(id: id) }
-            options.emit(Full(detail: detail, trace: trace.map { TraceExport(trace: $0.0, steps: $0.1) })) {
+            try options.emit(Full(detail: detail, trace: trace.map { TraceExport(trace: $0.0, steps: $0.1) })) {
                 Terminal.detail(detail, settings: settings) + "\n\n"
                     + (trace.map { Terminal.steps($0.1, full: true) } ?? "The request has not been read yet.")
             }
@@ -96,7 +96,7 @@ struct Tasks: AsyncParsableCommand {
             await Tasks.runQueue(runtime)
             let tasks = try await runtime.searchTasks.store.tasks()
             let settings = await runtime.settings.current
-            options.emit(tasks) { tasks.isEmpty ? "No search tasks yet." : Terminal.table(tasks.map { Terminal.taskRow($0, settings: settings) }) }
+            try options.emit(tasks) { tasks.isEmpty ? "No search tasks yet." : Terminal.table(tasks.map { Terminal.taskRow($0, settings: settings) }) }
         }
     }
 
@@ -129,7 +129,7 @@ struct Tasks: AsyncParsableCommand {
             if updated.state.isActive && !queueOnly { await Tasks.runQueue(runtime) }
             let detail = try await Tasks.detail(task, runtime: runtime)
             let settings = await runtime.settings.current
-            options.emit(detail) { Terminal.detail(detail, settings: settings) }
+            try options.emit(detail) { Terminal.detail(detail, settings: settings) }
         }
     }
 
@@ -162,7 +162,7 @@ struct Tasks: AsyncParsableCommand {
             if !queueOnly { await Tasks.runQueue(runtime) }
             let detail = try await Tasks.detail(task, runtime: runtime)
             let settings = await runtime.settings.current
-            options.emit(detail) { Terminal.detail(detail, settings: settings) }
+            try options.emit(detail) { Terminal.detail(detail, settings: settings) }
         }
     }
 
@@ -188,7 +188,7 @@ struct Tasks: AsyncParsableCommand {
             if !label.isEmpty { added += try await runtime.searchTasks.add(task, labelled: try label.map(Labels.label)) }
             let detail = try await Tasks.detail(task, runtime: runtime)
             let settings = await runtime.settings.current
-            options.emit(detail) { "Added \(Format.count(added.count, "document"))\n\n" + Terminal.detail(detail, settings: settings) }
+            try options.emit(detail) { "Added \(Format.count(added.count, "document"))\n\n" + Terminal.detail(detail, settings: settings) }
         }
     }
 
@@ -206,7 +206,7 @@ struct Tasks: AsyncParsableCommand {
             let removed = try await runtime.searchTasks.remove(task, documents: ids)
             let detail = try await Tasks.detail(task, runtime: runtime)
             let settings = await runtime.settings.current
-            options.emit(detail) { "Took out \(Format.count(removed.count, "document"))\n\n" + Terminal.detail(detail, settings: settings) }
+            try options.emit(detail) { "Took out \(Format.count(removed.count, "document"))\n\n" + Terminal.detail(detail, settings: settings) }
         }
     }
 
@@ -222,7 +222,7 @@ struct Tasks: AsyncParsableCommand {
             let runtime = try await options.runtime()
             let folder = URL(fileURLWithPath: to.expandingTilde, isDirectory: true).standardizedFileURL
             let export = try await runtime.searchTasks.export(task, to: folder, format: zip ? .zip : .folder)
-            options.emit(export) { Terminal.export(export) }
+            try options.emit(export) { Terminal.export(export) }
         }
     }
 
@@ -236,7 +236,7 @@ struct Tasks: AsyncParsableCommand {
             let runtime = try await options.runtime()
             guard let removed = try await runtime.searchTasks.store.task(id: task) else { throw SearchTaskError.taskNotFound(task) }
             try await runtime.searchTasks.delete(task)
-            options.emit(removed) { "Removed task #\(removed.id) “\(removed.name)”" }
+            try options.emit(removed) { "Removed task #\(removed.id) “\(removed.name)”" }
         }
     }
 }
