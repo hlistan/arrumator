@@ -104,7 +104,7 @@ flowchart LR
 |---|---|---|
 | Incoming folder | FSEvents, then a poll until a file stops changing (`IncomingWatcher`). | **Untrusted.** Anything a user downloads can land here: hostile PDFs, ZIP archives, e-mail, HTML. |
 | Ollama server | HTTP: `api/version`, `api/tags`, `api/show`, `api/chat`, `api/embed`, `api/pull`, through the one guarded `URLSession` (`OllamaClient`, `NetworkGuardProtocol`). | Trusted with document text. **Its answers are untrusted input**, decoded and validated before use (§4.5). |
-| Archive folder | Files moved in under the name the pipeline built; record files written from the index; FSEvents for what the user changes (`ArchiveWatcher`). | The documents and what the user writes into record files are the user's data. A record file edited by hand is read back, and may be malformed. |
+| Archive folder | Files moved in under the name the pipeline built; record files written from the index; FSEvents for what the user changes, then a poll until a file stops changing (`ArchiveWatcher`). | The documents and what the user writes into record files are the user's data. A record file edited by hand is read back, and may be malformed. |
 | Index | GRDB `DatabasePool` over SQLite, at `~/Library/Application Support/Arrumator/Indexes`. | The app's own. Rebuilt from the archive when lost. |
 | Settings and overrides | `settings.json` and an optional `pipeline.json` beside the indexes; five `ARRUMATOR_*` variables read by `RuntimeEnvironment`. | Written by the user: decoded strictly, unknown keys refused by name. |
 | Apple frameworks and tools | PDFKit, Vision, NaturalLanguage, ImageIO, AVFoundation, Quick Look thumbnails; `/usr/bin/textutil` and `/usr/bin/ditto` as child processes (`ShellRunner`, `DiagnosticsExporter`). | Trusted code, fed untrusted files. |
@@ -190,7 +190,7 @@ table in [AGENTS.md §5](../AGENTS.md#5-boundaries).
 | `Records/` | The archive's record files: rendering, reading back, rebuilding the index. | `ArchiveRecords`, `ArchiveLayout`, `RecordKind`, `FrontMatter` |
 | `Ingest/` | The pipeline's state machine, filing, and what the user does with a document or a label. | `IngestCoordinator`, `PipelineServices`, `DocumentFiler`, `ReviewActions`, `LabelActions`, `ArchiveReconciler` |
 | `FileOps/` | Names, moves, identity on disk (a package is one document), the Trash. | `FilenameBuilder`, `Placer`, `FileOperations`, `HashService`, `Packages`, `Xattr`, `SystemTrash`, `FolderTrash` |
-| `Watching/` | FSEvents on Incoming and on the archive. | `IncomingWatcher`, `ArchiveWatcher`, `SelfChangeRegistry`, `FSEventStream`, `SkipRules` |
+| `Watching/` | FSEvents on Incoming and on the archive; when a file has stopped changing; a file and a folder as the disk knows them. | `IncomingWatcher`, `ArchiveWatcher`, `SelfChangeRegistry`, `FSEventStream`, `SkipRules`, `Settling`, `FileOnDisk`, `FolderIdentity` |
 | `Ollama/` | The only network client, its guard, the server's lifecycle, one model call at a time. | `OllamaClient`, `OllamaConnection`, `OllamaEndpoint`, `SystemHostResolver`, `NetworkGuardProtocol`, `OllamaLifecycle`, `ModelManager`, `InferenceGate` |
 | `Tasks/` | Search tasks and conversations: two queues and the machinery they share, their actions, what an answer is shown, exports. | `ModelQueue`, `SearchTaskQueue`, `SearchTaskActions`, `TaskConversationQueue`, `TaskConversationActions`, `TaskContextBuilder`, `SearchTaskExporter` |
 | `Search/` | Full-text search fused with search by meaning. | `SearchService`, `VectorIndex`, `SearchPlanMatcher` |
@@ -221,12 +221,14 @@ command compares by meaning as the app does, reading the documents' vectors into
 or a question first needs them (`SearchService.loadVectors`). The app loads them as it applies its settings, before it
 files anything. Vectors that cannot be read stop nothing: they are logged, and search goes on by words, saying why.
 `start()` then starts the three queue workers and, as named background tasks, the Ollama supervision and the audit of
-its state, the two watcher pumps, the record-file writer, the settings subscription, hourly maintenance, and the
-working out of which labels look alike (`LabelStore.workOutLookAlikes`), once and at every change recorded after, which
-publishes how many there are (`LookAlikeMemo.suggestionCounts()`), so the app counts them without waiting; on an
+its state, the two watcher pumps, the record-file writer, the settings subscription and hourly maintenance; on an
 index still to be rebuilt, as when a record file that cannot be read refused its rebuild, it starts nothing until
-the index is rebuilt (`rebuildIndex()`). The app does both as one step the runtime owns, `openAndStart()`, off the
-main actor, as macOS may hold the first read of the archive behind its prompt for access.
+the index is rebuilt (`rebuildIndex()`). Before anything else, and before it waits for an archive that is away, the
+step that starts the runtime starts the working out of which labels look alike (`LabelStore.workOutLookAlikes`), once
+and at every change recorded after, which publishes how many there are (`LookAlikeMemo.suggestionCounts()`): it reads
+the index alone, so the app counts them without waiting, also while the rest cannot start. The app does both as one
+step the runtime owns, `openAndStart()`, off the main actor, as macOS may hold the first read of the archive behind its
+prompt for access.
 
 A runtime runs once. `stop()` cancels the step that starts it and every task, then waits: for the step, so nothing
 it goes on to start is left running; for the three queues, stopped together, as one worker may wait for another, as
@@ -246,9 +248,12 @@ the one the settings name, which only `bootstrap` and a switch read, so the runt
 quits then, writes only into its own. An archive's folder is made only when the user sets the archive up
 (`finishOnboarding()`, or a switch to a folder that is not there and that no index has held an archive in), never
 from what an index lacks; otherwise one that is not there is away (`RecordsError.archiveNotThere`,
-`RuntimeWork.away`), and is neither made again nor started on. Record
-files that cannot be written are no reason to stay: the switch returns which archive's wait
-(`ArchiveSwitch.unwritten`).
+`RuntimeWork.away`), at launch or while the work runs, and is neither made again, written into nor filed into. The step
+that starts the runtime waits for its folder, looking every `watcher.awayPollSeconds` and at once when a start is asked
+for again, as the user presses Try Again (`ArrumatorRuntime.archiveLook`), and goes on by itself once it is there; a
+start asked for meanwhile waits with it rather than failing; while the work runs, the archive watcher says the folder
+went and came back (`ArchiveWatcher.presence()`). Record files that cannot be written are no reason to stay: the switch
+returns which archive's wait (`ArchiveSwitch.unwritten`).
 
 ### A file from Incoming to the archive
 
@@ -308,6 +313,41 @@ After each stage the job row is saved with what the stage found (`JobPayload`), 
 The queue has one order, the order jobs were queued in (`JobStore.nextDue`); when a job is due only gates it. Reading
 documents again after a rebuild always gives way to new arrivals.
 
+### A change the user makes in the archive
+
+`ArchiveWatcher` takes what each FSEvents batch names as a hint and looks at the disk, under the very name the event
+gives (`FileOnDisk.isThere`): on a volume that ignores case, the old name of a rename that changed only case still finds
+the file, but names what went. The app's own changes are left out, the first event for each path the app expects using
+its expectation up (`SelfChangeRegistry`); a folder that came is looked through; what is inside a package is the package
+(`Packages`); and when FSEvents lost events in a folder, that folder is looked at again, what the index has
+unchanged where it has it left out. A file that came or changed waits until it has stopped changing (`Settling`, as
+Incoming waits); one still changing after `watcher.stabilityMaxWaitSeconds` is said once in History to be taking long,
+and waited for still, looked at every `watcher.awayPollSeconds`, no longer holding back the event saved as handled but
+kept in the index (`ArchiveWatcher.takingLongKey`) and looked at again at the next start; a path that went waits as
+long, and is not counted while a folder is looked through, and what came waits for what went, so a move, and a copy made
+with it, are reported in one batch, where things went before where they were. The archive's folder is known by its
+volume's own
+identifier and its inode (`FolderIdentity`), which stay when a disk is attached again, and kept in the index
+(`ArchiveWatcher.folderKey`): renamed, removed or gone with its disk, it is not there, and nothing in it is reported
+until it is back, when the whole archive is looked at again; another folder at its path is taken as the archive, said
+once in History (the earlier one, back, said to be back), and looked at whole, its record files merged with the index,
+never taken over it: the merge is owed in the index, in the write that names the folder, until the record files are read
+(`ArchiveRecords.mergeOwedKey`), and a read finding a folder other than the one named merges too. Looking at the disk is
+done away from the watcher's actor, in chunks, and ends when the watcher stops; what it asks the disk (`ArchiveDisk`) a
+test answers otherwise. The runtime's archive pump reads the record files again when one changed
+(`ArchiveRecords.reconcile`), and `ArchiveReconciler.apply` decides what each change is from what the disk and the index
+hold then, telling a file by its volume and inode (`FileOnDisk`) and by the identifier on it, never by how its path is
+spelled: the same file under another name is the document renamed; a move only when the old path no longer holds the
+identifier, the file that has the document's inode taken for it when a copy came with it; a file without an identifier
+of its own, by its inode. An inode tells a file only on a volume that keeps each file's ID for good, as APFS does and
+exFAT does not, and, to follow a document by it alone, only with the document's size. Anything else is a document of its
+own. A document whose file is not there, or whose path now holds another document's file, is missing, unless the
+archive's folder is not there either, and takes back its status when its file is found. Only then does the watcher save
+the last event the batch accounts for (`ArchiveWatcher.applied`); a change that could not be applied is recorded in
+History and nothing after it is saved, so it is applied again at the next start, up to `ingest.maxAttempts` starts,
+counted by its path in the index, and then given up, which History says. What a stop, a crash or a failure cuts off is
+reported again at the next start, and applying a change twice does nothing more.
+
 ### The index and the record files
 
 A change commits to SQLite; triggers on every recorded table mark the record file it touches in the same transaction;
@@ -360,7 +400,7 @@ Views never poll. `AppModel` holds one task per stream and mirrors the value:
 | `IngestCoordinator.statusUpdates()` | Which file is in hand, at which stage, and how many wait. |
 | `SearchTaskQueue.statusUpdates()`, `TaskConversationQueue.statusUpdates()` | Which request is read or question answered, by which model, and the answer so far. |
 | `OllamaLifecycle.states()` | Whether Ollama is ready. |
-| `ArrumatorRuntime.workUpdates()` | Whether the runtime's work runs, or was refused as the index is not rebuilt from its archive or the archive is away. |
+| `ArrumatorRuntime.workUpdates()` | Whether the runtime's work runs, was refused as the index is not rebuilt from its archive, or waits as the archive is away. |
 | `SettingsStore.changes()` | Each change to the settings: one made through the store, and one another process made, found when the file is read again before a change. The settings in force are read once, beside it. |
 | `LookAlikeMemo.suggestionCounts()` | How many pairs of labels look alike and wait for the user, each time they are worked out. |
 

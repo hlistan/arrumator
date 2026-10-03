@@ -145,6 +145,41 @@ public struct DocumentStore: Sendable {
         }
     }
 
+    /// The documents recorded at `path` or anywhere inside it, as in a folder: those whose path begins `path/`, which
+    /// in the paths' byte order are those from `path/` up to `path0`, as `0` follows `/`, so the index on paths finds them.
+    func documents(atOrInside path: String) async throws -> [DocumentRecord] {
+        try await database.reader.read { db in
+            try DocumentRecord.fetchAll(db, sql: "SELECT * FROM documents WHERE path = ? OR (path >= ? AND path < ?)",
+                                        arguments: [path, path + "/", path + "0"])
+        }
+    }
+
+    /// The inode the index has for each document whose file is in the archive at `path` or inside it, by the document's
+    /// path: what a look through the folder finds there unchanged needs no wait.
+    func recordedInodes(atOrInside path: String) async throws -> [String: Int64] {
+        let statuses = DocumentStatus.withFileInArchive.map(\.rawValue)
+        return try await database.reader.read { db in
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT path, inode FROM documents
+                WHERE (path = ? OR (path >= ? AND path < ?)) AND inode IS NOT NULL
+                  AND status IN (\(statuses.map { _ in "?" }.joined(separator: ",")))
+                """, arguments: StatementArguments([path, path + "/", path + "0"] + statuses))
+            return Dictionary(rows.map { ($0["path"] as String, $0["inode"] as Int64) }, uniquingKeysWith: { a, _ in a })
+        }
+    }
+
+    /// The documents whose file has the inode `inode`, as the index last saw it.
+    func documents(inode: Int64) async throws -> [DocumentRecord] {
+        try await database.reader.read { db in try DocumentRecord.filter(Column("inode") == inode).fetchAll(db) }
+    }
+
+    /// Keeps the inode a document's file has now, which its record files do not hold.
+    func setInode(_ inode: Int64, docID: Int64) async throws {
+        try await database.writer.write { db in
+            try db.execute(sql: "UPDATE documents SET inode = ? WHERE id = ?", arguments: [inode, docID])
+        }
+    }
+
     public func document(uid: String) async throws -> DocumentRecord? {
         try await database.reader.read { db in try DocumentRecord.filter(Column("uid") == uid).fetchOne(db) }
     }

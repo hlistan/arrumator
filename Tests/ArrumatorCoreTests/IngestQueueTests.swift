@@ -270,6 +270,63 @@ actor IngestFollower {
 
 /// Holds the model's reading of a file, when told to, until the worker is stopped, as a model still thinking when the
 /// app quits; what it holds now.
+@Suite struct ArchiveAwayIngestTests {
+    @Test(.enabled("the worker waits while the Mac is too hot to work") { try Harness.workerRuns() })
+    func whileTheArchiveIsAwayNothingInIncomingIsReadOrSentToTheModelAndOnceBackItIsFiled() async throws {
+        let read = Reads()
+        let h = try await Harness.make(analyzer: StubAnalyzer(during: { await read.add($0) }))
+        defer { h.env.cleanup() }
+        try await h.readyToWork()
+        await h.coordinator.archive(isAway: true)
+        await h.coordinator.enqueue(try h.env.drop("bill.txt", text: "EDP electricity"))
+        await h.coordinator.start()
+        defer { Task { await h.coordinator.stop() } }
+        try await Task.sleep(for: .milliseconds(500))
+        #expect(try await h.jobs().map(\.state) == [.pending], "the archive away, the worker begins nothing: Incoming waits")
+        #expect(await read.files.isEmpty, "and nothing is sent to the model")
+        await h.coordinator.archive(isAway: false)
+        #expect(await Patience.until { (try? await h.services.documents.list(DocumentFilter(statuses: [.filed]), limit: 5).count) == 1 },
+                "once it is back, the file is taken in by itself")
+        #expect(await read.files.count == 1, "and read once")
+    }
+
+    @Test(.enabled("the worker waits while the Mac is too hot to work") { try Harness.workerRuns() })
+    func aFileInHandWhenTheArchiveGoesAwayStopsAtItsNextStageWithoutSpendingAnAttempt() async throws {
+        let away = AwayOnRead()
+        let h = try await Harness.make(analyzer: StubAnalyzer(during: { _ in await away.go() }))
+        defer { h.env.cleanup() }
+        try await h.readyToWork()
+        await away.set(h.coordinator)
+        await h.coordinator.enqueue(try h.env.drop("bill.txt", text: "EDP electricity"))
+        await h.coordinator.start()
+        defer { Task { await h.coordinator.stop() } }
+        // The archive goes away while the model reads the file.
+        #expect(await Patience.until { (try? await h.jobs().first?.lastError) != nil }, "the file in hand stops at its next stage")
+        let job = try #require(try await h.jobs().first)
+        #expect(job.state == .filing && job.attempt == 0, "before it is filed, waiting for the archive without spending an attempt")
+        #expect(try await h.services.documents.list(DocumentFilter(statuses: [.filed]), limit: 5).isEmpty, "nothing is filed")
+        await h.coordinator.archive(isAway: false)
+        #expect(await Patience.until { (try? await h.services.documents.list(DocumentFilter(statuses: [.filed]), limit: 5).count) == 1 },
+                "once it is back, it is filed")
+    }
+}
+
+/// Sends the archive away when the model reads a file, as a disk taken out then.
+actor AwayOnRead {
+    private var coordinator: IngestCoordinator?
+
+    func set(_ coordinator: IngestCoordinator) { self.coordinator = coordinator }
+
+    func go() async { await coordinator?.archive(isAway: true) }
+}
+
+/// The files the model was given, in the order it was.
+actor Reads {
+    private(set) var files: [String] = []
+
+    func add(_ file: String) { files.append(file) }
+}
+
 actor Holding {
     private var holding: String?
     private(set) var held: String?

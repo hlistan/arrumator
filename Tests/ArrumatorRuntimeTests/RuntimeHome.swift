@@ -92,10 +92,19 @@ struct RuntimeHome {
     /// The watcher's timings for a test that waits for a file dropped into Incoming to be queued: what the real ones
     /// take seconds over, in a tenth of one.
     func watchQuickly() throws {
-        try tune("watcher", ["fsEventsLatency": .number(Self.quickly), "stabilityPollInterval": .number(Self.quickly)])
+        try tune("watcher", ["fsEventsLatency": .number(Self.quickly), "stabilityPollInterval": .number(Self.quickly),
+                             "awayPollSeconds": .number(Self.quickly)])
     }
 
     static let quickly = 0.1
+
+    /// An archive away looked for again only when a start is asked for, as the user presses Try Again: its poll comes
+    /// long after any test has given up waiting (`Patience.limit`), so only the asking can find it back in time.
+    func lookForTheArchiveOnlyWhenAsked() throws {
+        try tune("watcher", ["awayPollSeconds": .number(Self.longAfterAnyTest)])
+    }
+
+    static let longAfterAnyTest = 3600.0
 
     /// A stand-in for `ollama serve` in the home.
     func standInServer() throws -> StandInServer { try StandInServer(in: root) }

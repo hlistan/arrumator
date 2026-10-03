@@ -93,7 +93,8 @@ public struct HistoryStore: Sendable {
 
     public func events(limit: Int, kinds: Set<EventKind>? = nil, docID: Int64? = nil, before: Date? = nil) async throws -> [EventRecord] {
         try await database.reader.read { db in
-            var request = EventRecord.order(Column("at").desc).limit(limit)
+            // Events of one moment, the latest recorded first.
+            var request = EventRecord.order(Column("at").desc, Column("id").desc).limit(limit)
             if let kinds { request = request.filter(kinds.map(\.rawValue).contains(Column("kind"))) }
             if let docID { request = request.filter(Column("doc_id") == docID) }
             if let before { request = request.filter(Column("at") < before.unixSeconds) }

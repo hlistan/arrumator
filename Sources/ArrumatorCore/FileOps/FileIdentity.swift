@@ -158,6 +158,14 @@ public enum Xattr {
         if rc != 0 { throw XattrError.failed(name: name, path: url.path, errno: errno) }
     }
 
+    /// Takes the attribute `name` off the file at `url`; one without it is left as it is.
+    static func remove(_ name: String, from url: URL) throws {
+        let rc = url.withUnsafeFileSystemRepresentation { path in
+            removexattr(path, name, 0)
+        }
+        if rc != 0, errno != ENOATTR { throw XattrError.failed(name: name, path: url.path, errno: errno) }
+    }
+
     public static func get(_ name: String, from url: URL) -> String? {
         url.withUnsafeFileSystemRepresentation { path -> String? in
             guard let path else { return nil }

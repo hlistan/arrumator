@@ -5,6 +5,8 @@ import Foundation
 public enum IncomingArrival: Sendable, Hashable {
     case stable(URL)
     case unopenable(URL, Unopenable)
+    /// It has not stopped changing in `watcher.stabilityMaxWaitSeconds`; it is waited for still.
+    case stillChanging(URL)
 }
 
 /// Why the Incoming watcher stopped waiting for a file.
@@ -36,65 +38,13 @@ public actor IncomingWatcher {
     /// The files the watcher stopped waiting for, as they could not be opened, each as it was seen then. One is taken
     /// up again once it can be opened or it changes; kept through a stop and a start, so a rescan does not wait for it
     /// and report it again.
-    private var unopenable: [String: Sight] = [:]
+    private var unopenable: [String: FileSight] = [:]
     /// Who is sent what the watcher finds, each by a stream of its own (`arrivals()`).
     private var subscribers: [UUID: AsyncStream<IncomingArrival>.Continuation] = [:]
 
-    /// What one look at a file finds, in one walk of it for a package: it is gone; it is there but cannot be weighed,
-    /// as a package one of whose folders cannot be listed; it is a package of more items than may be listed; or it is
-    /// as `FileFingerprint` says, and can be opened or not. Nothing it does can be held up: a file is opened without
-    /// waiting (`O_NONBLOCK`), and what a package holds is not opened at all, its permissions are asked.
-    private enum Sight: Equatable {
-        case gone, unreadable
-        case tooManyItems(limit: Int)
-        case seen(FileFingerprint, opens: Bool)
-
-        init(_ url: URL, packageItems limit: Int) {
-            guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path) else {
-                self = FileManager.default.fileExists(atPath: url.path) ? .unreadable : .gone
-                return
-            }
-            guard attrs[.type] as? FileAttributeType == .typeDirectory else {
-                self = .seen(FileFingerprint(size: (attrs[.size] as? NSNumber)?.int64Value ?? 0, modified: attrs[.modificationDate] as? Date,
-                                             inode: (attrs[.systemFileNumber] as? NSNumber)?.int64Value),
-                             opens: attrs[.type] as? FileAttributeType == .typeRegular && Self.opens(url))
-                return
-            }
-            do {
-                let survey = try Packages.survey(url, limit: limit)
-                self = .seen(survey.fingerprint, opens: survey.isReadable)
-            } catch let FileOperationError.tooManyItems(_, limit) {
-                self = .tooManyItems(limit: limit)
-            } catch {
-                self = .unreadable
-            }
-        }
-
-        /// Whether the regular file at `file` opens for reading, asked so it cannot wait, as on a pipe with no writer.
-        private static func opens(_ file: URL) -> Bool {
-            let descriptor = file.withUnsafeFileSystemRepresentation { path in path.map { open($0, O_RDONLY | O_NONBLOCK | O_NOFOLLOW) } ?? -1 }
-            guard descriptor >= 0 else { return false }
-            close(descriptor)
-            return true
-        }
-
-        /// Its size, when it could be weighed.
-        var size: Int64? {
-            if case let .seen(fingerprint, _) = self { fingerprint.size } else { nil }
-        }
-
-        /// Why it is not waited for any longer, when it has not stopped being unopenable.
-        var unopenable: Unopenable {
-            if case let .tooManyItems(limit) = self { .tooManyItems(limit: limit) } else { .unreadable }
-        }
-    }
-
+    /// A file that came or changed, until it has stopped changing (`Settling`).
     private struct Candidate {
-        var sight: Sight
-        var stablePolls: Int
-        var firstSeen: Date
-        /// Since when it has been unchanged but could not be opened.
-        var unopenableSince: Date?
+        var settling: Settling
     }
 
     public init(config: WatcherConfig, skip: SkipRules, time: any TimeSource) {
@@ -117,11 +67,19 @@ public actor IncomingWatcher {
 
     private func unsubscribe(_ id: UUID) { subscribers[id] = nil }
 
-    /// Watches `root`, made when it is not there, leaving out what is in `excluding` (the archive when it is kept inside
-    /// Incoming), and takes in what is there already.
+    /// Watches `root`, leaving out what is in `excluding` (the archive when it is kept inside Incoming), and takes in what
+    /// is there already. `root` is made when it is not there, but only in a folder that is: no folder above it is made,
+    /// as one on a disk not connected, or the archive's folder while it is away when Incoming is kept inside it. Throws
+    /// then, and the start is made again when the settings are next applied.
     public func start(root: URL, excluding: [URL]) throws {
         stop()
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        var isFolder: ObjCBool = false
+        if !FileManager.default.fileExists(atPath: root.path, isDirectory: &isFolder) {
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        } else if !isFolder.boolValue {
+            // A file where Incoming is to be: it can be neither made nor watched.
+            throw CocoaError(.fileWriteFileExists, userInfo: [NSFilePathErrorKey: root.path])
+        }
         let root = root.folderOnDisk
         self.root = root
         excluded = excluding.map { $0.folderOnDisk.path + "/" }
@@ -224,7 +182,7 @@ public actor IncomingWatcher {
             schedulePolling()
             return
         }
-        let sight = Sight(url, packageItems: config.maxPackageItems)
+        let sight = FileSight(url, packageItems: config.maxPackageItems)
         guard sight != .gone else {
             unopenable[url.path] = nil
             return
@@ -234,7 +192,7 @@ public actor IncomingWatcher {
             guard sight != then else { return }
             unopenable[url.path] = nil
         }
-        candidates[url.path] = Candidate(sight: sight, stablePolls: 0, firstSeen: time.now())
+        candidates[url.path] = Candidate(settling: Settling(sight, at: time.now()))
         Log.debug(.watch, "Candidate", ["path": url.path, "size": sight.size.map(String.init) ?? "-"])
         schedulePolling()
     }
@@ -265,44 +223,38 @@ public actor IncomingWatcher {
     /// One stability pass, one look at each candidate: a candidate unchanged since the last pass, and that can be
     /// opened, has stopped changing once unchanged for `watcher.stabilityRequiredPolls` passes, and one that changed
     /// starts counting again. One unchanged but that cannot be opened or weighed, or a package of more than
-    /// `watcher.maxPackageItems` items, is waited for `watcher.unopenableWaitSeconds`, and then left. What it sends, in
-    /// the order sent.
+    /// `watcher.maxPackageItems` items, is waited for `watcher.unopenableWaitSeconds`, and then left. One still changing
+    /// after `watcher.stabilityMaxWaitSeconds` is said to be once, and waited for still, looked at every
+    /// `watcher.awayPollSeconds` from then on (`Settling.isDue`). What it sends, in the order sent.
     @discardableResult
     func poll() -> [IncomingArrival] {
         let now = time.now()
         var sent: [IncomingArrival] = []
-        for (path, candidate) in candidates {
+        for (path, candidate) in candidates where candidate.settling.isDue(at: now, config: config) {
             let url = URL(fileURLWithPath: path)
-            let sight = Sight(url, packageItems: config.maxPackageItems)
+            let sight = FileSight(url, packageItems: config.maxPackageItems)
             guard sight != .gone else {
                 candidates[path] = nil
                 continue
             }
             var c = candidate
-            if sight != c.sight {
-                c.sight = sight
-                c.stablePolls = 0
-                c.unopenableSince = nil
-            } else if case .seen(_, opens: true) = sight {
-                c.stablePolls += 1
-                c.unopenableSince = nil
-            } else {
-                c.stablePolls = 0
-                c.unopenableSince = c.unopenableSince ?? now
-            }
-            let size = sight.size ?? 0
-            let zeroByteWaitOver = sight.size == 0 && now.timeIntervalSince(c.firstSeen) >= config.zeroByteWaitSeconds
-            if (size > 0 && c.stablePolls >= config.stabilityRequiredPolls) || zeroByteWaitOver {
+            switch c.settling.poll(sight, now: now, config: config) {
+            case .settled:
                 candidates[path] = nil
-                Log.info(.watch, "File is stable", ["path": path, "size": String(size),
-                                                    "waited": String(format: "%.1f", now.timeIntervalSince(c.firstSeen))])
+                Log.info(.watch, "File is stable", ["path": path, "size": String(sight.size ?? 0),
+                                                    "waited": String(format: "%.1f", now.timeIntervalSince(c.settling.firstSeen))])
                 sent.append(.stable(url))
-            } else if let since = c.unopenableSince, now.timeIntervalSince(since) >= config.unopenableWaitSeconds {
+            case let .unopenable(why):
                 candidates[path] = nil
                 unopenable[path] = sight
                 Log.warning(.watch, "File cannot be taken in; no longer waited for", ["path": path])
-                sent.append(.unopenable(url, sight.unopenable))
-            } else {
+                sent.append(.unopenable(url, why))
+            case .stillChanging:
+                // Kept: this poll may have seen its last change, whose event is spent, and nothing else would take it up.
+                candidates[path] = c
+                Log.warning(.watch, "A file in Incoming has not stopped changing; it is waited for still", ["path": path])
+                sent.append(.stillChanging(url))
+            case .waiting:
                 candidates[path] = c
             }
         }

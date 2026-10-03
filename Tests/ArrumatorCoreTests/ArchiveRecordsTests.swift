@@ -1,4 +1,4 @@
-import ArrumatorCore
+@testable import ArrumatorCore
 import ArrumatorTesting
 import Foundation
 import GRDB
@@ -80,7 +80,7 @@ import Testing
         var bodies: [String?] = []
         for id in w.documents {
             bodies.append(try await index.body(docID: id))
-            #expect(try await index.embedding(docID: id, model: StubAnalyzer.embeddingModel) == [1, 0, 0], "and it is found by meaning again")
+            #expect(try await index.embedding(docID: id, model: StubAnalyzer.embeddingModel) == StubAnalyzer.embedding, "and it is found by meaning again")
         }
         #expect(bodies == ["EDP electricity July", "EDP electricity August"], "the text is searchable again")
         #expect(try await DocumentStore(database: database, time: TestTime(.advances)).list(DocumentFilter(), limit: 100).map(\.path).sorted() == paths,
@@ -200,8 +200,8 @@ import Testing
             let d = try #require(try await w.h.services.documents.document(id: id))
             let target = moved.deletingLastPathComponent().appendingPathComponent(d.filename)
             try FileManager.default.moveItem(at: d.url, to: target)
-            await ArchiveReconciler(services: w.h.services, coordinator: w.h.coordinator)
-                .apply([.documentMoved(uid: d.uid, newPath: target.path)])
+            try await ArchiveReconciler(services: w.h.services, coordinator: w.h.coordinator)
+                .apply([.found(path: target.path), .gone(path: d.path)])
         }
         try await w.records.flush()
         #expect(try w.listing(in: moved.deletingLastPathComponent()).contains("uid: \(doc.uid)"), "the entry follows its document")
@@ -234,6 +234,37 @@ import Testing
                 "files put in the archive by hand are taken in where they are, but not from the system folder, nor a document moved")
     }
 
+    @Test func aFileWithoutItsIdentifierWhereItsDocumentIsRecordedIsThatDocumentAfterARebuild() async throws {
+        let w = try await RecordsWorld.make()
+        defer { w.h.env.cleanup() }
+        let doc = try #require(try await w.h.services.documents.document(id: w.documents[0]))
+        // Its identifier left off, as a copy or a synchronisation may leave it.
+        try Xattr.remove(Xattr.documentID, from: doc.url)
+        let (database, records) = try w.freshIndex()
+        let summary = try await records.rebuild()
+        #expect(summary.missing == 0 && summary.adopted == 0, "the file where the document is recorded is its file, not a new one: \(summary)")
+        #expect(try await JobStore(database: database, time: TestTime(.advances)).active(kinds: [.adopt]).isEmpty,
+                "and it is not taken in again as another document")
+    }
+
+    @Test func aDocumentWhoseFileMovedFollowsItAfterARebuildThoughACopyWithoutItsIdentifierIsWhereItWas() async throws {
+        let w = try await RecordsWorld.make()
+        defer { w.h.env.cleanup() }
+        let doc = try #require(try await w.h.services.documents.document(id: w.documents[0]))
+        // The original moved into another folder, and a copy without the identifier put where it was.
+        let moved = w.h.env.archive.appendingPathComponent("Moved/\(doc.filename)").standardizedFileURL
+        try FileManager.default.createDirectory(at: moved.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.moveItem(at: doc.url, to: moved)
+        try FileManager.default.copyItem(at: moved, to: doc.url)
+        try Xattr.remove(Xattr.documentID, from: doc.url)
+        let (database, records) = try w.freshIndex()
+        let summary = try await records.rebuild()
+        let found = try #require(try await DocumentStore(database: database, time: TestTime(.advances)).document(id: doc.id ?? 0))
+        #expect(found.path == moved.path && summary.relocated == 1, "the document follows its file, by the identifier on it: \(found.path)")
+        let adoptions = try await JobStore(database: database, time: TestTime(.advances)).active(kinds: [.adopt])
+        #expect(adoptions.map(\.sourcePath) == [doc.path], "and the copy where it was is taken in as a document of its own")
+    }
+
     @Test func aRebuildTakesBackADocumentMarkedMissingWhoseFileIsFound() async throws {
         let w = try await RecordsWorld.make()
         defer { w.h.env.cleanup() }
@@ -242,7 +273,7 @@ import Testing
         let away = w.h.env.root.appendingPathComponent("Away/\(doc.filename)")
         try FileManager.default.createDirectory(at: away.deletingLastPathComponent(), withIntermediateDirectories: true)
         try FileManager.default.moveItem(at: doc.url, to: away)
-        await ArchiveReconciler(services: w.h.services, coordinator: w.h.coordinator).apply([.documentMissing(path: doc.path)])
+        try await ArchiveReconciler(services: w.h.services, coordinator: w.h.coordinator).apply([.gone(path: doc.path)])
         try await w.records.flush()
         #expect(try w.listing(in: w.h.env.archive).contains("status: missing"), "its entry says it is missing")
         // Put back into another folder of the archive while the index was lost.
@@ -346,5 +377,43 @@ import Testing
         }
         let asides = try FileManager.default.contentsOfDirectory(atPath: dir.path).filter { $0.contains("unreadable") }
         #expect(asides.isEmpty, "a sound index is never moved aside and rebuilt, losing its traces and queue, for a lock")
+    }
+
+    @Test func whatWasDecidedWhileAnotherFolderWasTheArchiveIsKeptWhenTheEarlierOneIsBack() async throws {
+        let h = try await Harness.make()
+        defer { h.env.cleanup() }
+        try await h.readyToWork()
+        let records = h.env.records()
+        let (_, tasks) = h.searchTasks(StubInterpreter(plans: [:]))
+        let (_, talk) = h.conversations(StubAnswerer(), interpreter: StubInterpreter(plans: [:]))
+        _ = try await h.labels.ignore(DocumentLabel(kind: .topic, value: "electricity"))
+        let task = try await tasks.create(prompt: "electricity bills")
+        _ = try await talk.ask(task.id, question: "How much in all?")
+        try await records.flush()
+        // The folder the index is kept for, as the archive watcher keeps it.
+        let first = try #require(ArchiveDisk.disk.identity(of: h.env.archive))
+        try await h.env.database.setMeta(ArchiveWatcher.folderKey, first.stored)
+        // Its disk not connected, and another folder put in its place, read before the watcher has seen it.
+        let earlier = h.env.root.appendingPathComponent("Earlier folder", isDirectory: true)
+        try FileManager.default.moveItem(at: h.env.archive, to: earlier)
+        try FileManager.default.createDirectory(at: h.env.archive, withIntermediateDirectories: true)
+        try await records.reconcile()
+        let second = try #require(ArchiveDisk.disk.identity(of: h.env.archive))
+        try await h.env.database.setMeta(ArchiveWatcher.folderKey, second.stored)
+        _ = try await h.labels.ignore(DocumentLabel(kind: .topic, value: "water"))
+        let later = try await tasks.create(prompt: "water bills")
+        _ = try await talk.ask(task.id, question: "And the year before?")
+        try await records.flush()
+        // The earlier folder back, its record files as they were.
+        try FileManager.default.moveItem(at: h.env.archive, to: h.env.root.appendingPathComponent("Other folder", isDirectory: true))
+        try FileManager.default.moveItem(at: earlier, to: h.env.archive)
+        try await records.reconcile()
+        let rules = try await h.env.database.reader.read { db in try LabelRule.fetchAll(db) }
+        let kept = try await SearchTaskStore(database: h.env.database, config: h.env.config.tasks, time: h.env.time).tasks().map(\.id)
+        let questions = try await TaskConversationStore(database: h.env.database, time: h.env.time).turns(task: task.id).map(\.question)
+        #expect(rules.count == 2 && Set(kept) == [task.id, later.id] && questions.count == 2,
+                "the rule, the task and the question made meanwhile are kept: the earlier folder's files are merged, not taken over the index")
+        #expect(try String(contentsOf: h.env.layout.labelRules, encoding: .utf8).contains("water"),
+                "and written into the folder that is the archive again")
     }
 }

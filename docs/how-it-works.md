@@ -349,10 +349,33 @@ original again, not it.
 
 ## Your own changes
 
-Moving or renaming a document in Finder is followed: the app finds the file by the identifier it stores on it and
-records the move in History. A file you put into the archive yourself, at the top or in a folder of yours, is read and
-labelled where it is, under its own name. A file removed from the archive is marked missing. Nothing you do in Finder
-is undone by the app.
+Moving or renaming a document in Finder is followed: the app finds the file by the identifier it stores on it, and by
+the file itself, and records the move in History. A rename that changes only the case of a name, or of a folder's, is
+one too: on a volume that ignores case, as the Mac's does unless formatted otherwise, the old name still finds the file,
+which is the same file. It is a move only when the document's old place no longer holds that file: a copy made in Finder
+keeps the identifier, and is a document of its own, as is a file another archive filed, even when the original is moved
+at the same time, as the original keeps what tells a file on disk apart, its inode, and a copy has its own. A file you
+put into the archive yourself, at the top or in a folder of yours, is read and labelled where it is, under its own name,
+once it has stopped changing (`watcher.stabilityPollInterval`, `watcher.stabilityRequiredPolls`), as Incoming waits for
+one; it is given an identifier of its own. One that has not stopped changing after `watcher.stabilityMaxWaitSeconds`,
+such as a file copied slowly or a library an app keeps open, is said once in History to be taking long, is looked at
+every `watcher.awayPollSeconds` from then on, and is taken once it stops, also after the app was stopped and started
+again meanwhile; so is one in Incoming, but for a stop, after which it is taken at its next change. A folder you rename,
+or move or copy into the archive, is looked through, and a package, a folder macOS shows as one document (an `.rtfd`, a
+Pages document), is one
+document. A file removed from the archive, or in a folder removed, is marked missing; put back, anywhere in the archive,
+it is as it was, waiting for you or left for later if it was. Nothing you do in Finder is undone by the app.
+
+The app sees these changes as macOS reports them. A change it had not finished taking in when it quit, or crashed, is
+seen again at the next start, and so is one it could not take in, up to `ingest.maxAttempts` starts, after which it is
+given up; History says so when it first fails and when it is given up, naming where. When macOS says it lost track of
+changes in a folder, the app looks at that folder again. The archive's own folder renamed, removed or on a disk that
+went is away: nothing in it is marked missing, nothing is filed into it and nothing is made again where it was. Once it
+is back, the same folder, also on a disk attached again, the work goes on by itself, and the app looks at the whole
+archive again. Another folder put at its path is taken as the archive, which History says once, and is looked at whole:
+a document whose file is not in it is missing, and one recorded where another document's file now is, too. The earlier
+folder back is said to be back. Either way, what its record files hold is merged with what was kept meanwhile, never
+taken over it.
 
 Reading a document again (`review retry`, **Read Again**) labels and names it again where it is, from the text read of
 it before (from its file, when the file changed since it was read), keeping its tags; putting an exact copy of it into

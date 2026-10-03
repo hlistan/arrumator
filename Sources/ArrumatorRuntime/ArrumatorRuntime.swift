@@ -65,6 +65,9 @@ public final class ArrumatorRuntime: Sendable {
     /// What a `.local` name of the Ollama server stands for is looked up with (`useOllama(at:)`, the doctor).
     let resolver: any HostResolving
     let tasks = BackgroundTasks()
+    /// Rung when a start is asked for again while the step that starts the runtime waits for the archive's folder, so
+    /// that it looks for it at once rather than at its next poll (`waitForArchive()`).
+    let archiveLook = Doorbell()
     /// Why each step of applying the settings last failed, as recorded in History, so a step that keeps failing the
     /// same way is recorded once (`apply(_:)`).
     private let applyFailures = Mutex<[ApplyStep: String]>([:])
@@ -294,8 +297,7 @@ public final class ArrumatorRuntime: Sendable {
         conversations = TaskConversationActions(services: services, queue: conversationQueue)
         reconciler = ArchiveReconciler(services: services, coordinator: coordinator)
         incomingWatcher = IncomingWatcher(config: config.watcher, skip: skip, time: time)
-        archiveWatcher = ArchiveWatcher(config: config.watcher, records: config.records, skip: skip, registry: registry,
-                                        database: database)
+        archiveWatcher = ArchiveWatcher(config: config.watcher, skip: skip, registry: registry, database: database, time: time)
         stats = StatsService(database: database, config: config.stats, time: time)
         self.resolver = resolver
         doctor = Doctor(database: database, archive: archive, paths: paths, appVersion: appVersion, time: time, resolver: resolver)
@@ -323,6 +325,9 @@ public final class ArrumatorRuntime: Sendable {
     /// `openAndStart()`, reading the archive with `opening`: what a test holds to stop the runtime while it reads.
     func openAndStart(opening: @escaping @Sendable () async throws -> Void) async throws {
         guard let step = await tasks.starting(reading: true, { [self] in
+            // Counted from the index alone, so also while the archive is away and its start waits for it.
+            await countLookAlikes()
+            try await waitForArchive()
             var unread: (any Error)?
             do { try await opening() } catch { unread = error }
             // Stopped meanwhile: a read that does not notice being stopped, such as one macOS holds, still ends here.
@@ -335,18 +340,25 @@ public final class ArrumatorRuntime: Sendable {
             do { try await beginOnRebuiltIndex() } catch { throw unread ?? error }
             if let unread { throw unread }
         }) else { throw CancellationError() }
+        // Asked again, as the user presses Try Again, while the step waits for the archive: it looks for it now.
+        archiveLook.ring()
         try await step.value
     }
 
     /// Starts Ollama supervision, the ingest worker, the search task queue, the conversation queue, both watchers and
     /// maintenance, once the runtime works out which labels look alike, which it does even when the rest cannot start
-    /// (`countLookAlikes()`); returns once they have started, saying whether they have. A
-    /// runtime starts once: a second start does nothing more, and one after `stop()` nothing at all. An index not rebuilt
-    /// from its archive, as when its rebuild was refused for a record file that cannot be read (`openArchive`), starts
-    /// nothing, until it is rebuilt (`rebuildIndex()`): what the workers did would be filed over the user's records.
+    /// (`countLookAlikes()`); returns once they have started, saying whether they have, after waiting for the archive's
+    /// folder while it is away (`waitForArchive()`). A runtime starts once: a second start does nothing more, and one
+    /// after `stop()` nothing at all. An index not rebuilt from its archive, as when its rebuild was refused for a record
+    /// file that cannot be read (`openArchive`), starts nothing, until it is rebuilt (`rebuildIndex()`): what the workers
+    /// did would be filed over the user's records.
     @discardableResult
     public func start() async -> Bool {
-        guard let step = await tasks.starting(reading: false, { [self] in try await beginOnRebuiltIndex() }) else { return false }
+        guard let step = await tasks.starting(reading: false, { [self] in
+            await countLookAlikes()
+            try await beginOnRebuiltIndex()
+        }) else { return false }
+        archiveLook.ring()
         // Why the archive could not be read, when `openAndStart()` began the step, is its caller's to show.
         _ = await step.result
         return await tasks.isStarted
@@ -356,12 +368,7 @@ public final class ArrumatorRuntime: Sendable {
     /// nothing, and lets the step that started go, so that the start after its rebuild begins one of its own; it is
     /// decided within that step, so a stop meanwhile is waited for like any start.
     private func beginOnRebuiltIndex() async throws {
-        await countLookAlikes()
-        guard records.archiveIsThere else {
-            Log.error(.app, "Not started: the archive's folder is not there", ["archive": archive.path])
-            await tasks.refused(as: .away)
-            throw RecordsError.archiveNotThere(archive.path)
-        }
+        try await waitForArchive()
         let pending: AppDatabase.PendingRebuild?
         do { pending = try await database.pendingRebuild() } catch {
             Log.error(.app, "Not started: whether the index was rebuilt from the archive cannot be read", ["error": error.localizedDescription])
@@ -378,7 +385,7 @@ public final class ArrumatorRuntime: Sendable {
     }
 
     /// Whether the work runs now, then each time that changes: started, refused as the index is not rebuilt from its
-    /// archive, or stopped. What the app shows, rather than what it asked for.
+    /// archive, away as its folder is not there, or stopped. What the app shows, rather than what it asked for.
     public func workUpdates() async -> AsyncStream<RuntimeWork> {
         await tasks.workUpdates()
     }
@@ -391,6 +398,7 @@ public final class ArrumatorRuntime: Sendable {
         // Subscribed before the watchers start, so nothing they find at once is missed.
         let arrivals = await incomingWatcher.arrivals()
         let archiveChanges = await archiveWatcher.changes()
+        let archivePresence = await archiveWatcher.presence()
         let current = await settings.current
         Log.info(.app, "Arrumator starting", ["version": appVersion, "archive": archive.path, "incoming": current.incomingPath])
         await audit(.appStarted, actor: .system, summary: "Arrumator \(appVersion) started", payload: nil)
@@ -407,16 +415,21 @@ public final class ArrumatorRuntime: Sendable {
         await tasks.run("incoming-pump") { [coordinator] in
             for await arrival in arrivals { await coordinator.receive(arrival) }
         }
-        await tasks.run("archive-pump") { [reconciler, records] in
-            for await changes in archiveChanges {
-                if changes.contains(.recordsChanged) {
+        await tasks.run("archive-pump") { [reconciler, records, archiveWatcher] in
+            // Once a change could not be applied, nothing after it is saved as applied, so the watcher reports it again at
+            // the next start, as it does what a stop cut off.
+            var appliedAll = true
+            for await reported in archiveChanges {
+                if reported.changes.contains(.recordsChanged) {
                     do { try await records.reconcile() } catch {
                         Log.error(.db, "Could not read changed record files", ["error": error.localizedDescription])
                     }
                 }
-                await reconciler.apply(changes)
+                do { appliedAll = try await reconciler.apply(reported.changes) && appliedAll } catch { return }
+                if appliedAll { await archiveWatcher.applied(reported) }
             }
         }
+        await followArchive(archivePresence)
         await tasks.run("records") { [database, records] in
             // Every change marks the record files it touched; write them as soon as the change commits.
             for await pending in database.pendingRecords() where pending > 0 {

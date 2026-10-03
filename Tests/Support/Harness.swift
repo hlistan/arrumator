@@ -44,6 +44,12 @@ public struct Harness: Sendable {
             time: env.time, ollama: ollama, timeZone: .current)
     }
 
+    /// The same pipeline over `database`, as after the index was lost and made again.
+    public func over(_ database: AppDatabase) -> Harness {
+        let env = env.with(database: database)
+        return Harness(env: env, services: Self.services(env, analyzer: services.analyzer, config: services.config))
+    }
+
     /// The same pipeline with `change` made to its configuration, such as retries without delay.
     public func with(_ change: (inout PipelineConfig) -> Void) -> Harness {
         var config = services.config

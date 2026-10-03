@@ -40,11 +40,10 @@ public struct PipelineConfig: Sendable, Codable, Hashable, ValidatedConfiguratio
             problems.append("labels.vocabulary.kinds.\(kind.rawValue): the user's own labels are never kept one vocabulary; remove it")
         }
         problems += ollama.problems
+        problems += watcher.problems
         problems += extraction.problems
         problems += entities.problems
         if database.observationRetry <= 0 { problems.append("database.observationRetry must be more than 0") }
-        if watcher.unopenableWaitSeconds < 0 { problems.append("watcher.unopenableWaitSeconds cannot be negative") }
-        if watcher.maxPackageItems < 1 { problems.append("watcher.maxPackageItems must be at least 1") }
         problems += tasks.problems
         problems += conversation.problems
         problems += limitProblems
@@ -128,30 +127,6 @@ public struct OllamaConfig: Sendable, Codable, Hashable {
     }
 }
 
-public struct WatcherConfig: Sendable, Codable, Hashable {
-    public var fsEventsLatency: Double
-    public var stabilityPollInterval: Double
-    public var stabilityRequiredPolls: Int
-    public var zeroByteWaitSeconds: Double
-    /// How long a file in Incoming that has stopped changing but cannot be opened, as when its permissions keep the app
-    /// from reading it, is waited for before the watcher stops waiting and History says so; it is taken up again once
-    /// it can be opened or it changes.
-    public var unopenableWaitSeconds: Double
-    /// The most items a package in Incoming may hold to be taken as one document; one that holds more, such as a photo
-    /// library, is not walked further, and is left, as one that cannot be opened is, saying why.
-    public var maxPackageItems: Int
-    public var ignoredNamePrefixes: [String]
-    public var ignoredNames: [String]
-    public var ignoredExtensions: [String]
-    public var ignoredNameSubstrings: [String]
-    /// Prefix + extension of the archive's record files (`_documents.md`, `_labels.md`, history files), and of those
-    /// earlier versions left, which are never read as documents.
-    public var managedFilePrefix: String
-    public var managedFileExtension: String
-    /// How long the app's own file operations are ignored by the archive watcher (must exceed FSEvents latency).
-    public var selfChangeTTLSeconds: Double
-}
-
 /// The archive's own files: a `_documents.md` beside the documents of each directory, and the `System` folder
 /// holding its history and the user's rules for labels (docs/storage.md). Documents are filed at the top of the archive.
 public struct RecordsConfig: Sendable, Codable, Hashable {
@@ -173,6 +148,8 @@ public struct RecordsConfig: Sendable, Codable, Hashable {
 }
 
 public struct IngestConfig: Sendable, Codable, Hashable {
+    /// How many times a stage of a job is tried before the job fails; also how many starts a change in the archive that
+    /// cannot be applied is tried at before it is given up (`ArchiveReconciler`).
     public var maxAttempts: Int
     /// Seconds before each retry of a failed job, the last one for every retry after; also how long a job waits for
     /// Ollama to come back.

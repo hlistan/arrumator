@@ -294,6 +294,69 @@ import Testing
                 "it is never a candidate, and opening it, which waits for a writer for ever, is never tried: the watcher goes on")
     }
 
+    @Test func aFileWhoseLastWriteComesJustBeforeTheLongestWaitIsTakenInOnceItStops() async throws {
+        let env = try TestEnvironmentSync.make()
+        defer { env.cleanup() }
+        let incoming = try env.folder("Incoming")
+        let time = TestTime(.blocks)
+        let watcher = env.watcher(time: time)
+        try await watcher.start(root: incoming, excluding: [])
+        defer { await watcher.stop() }
+        let scan = incoming.appendingPathComponent("big scan.pdf")
+        try Data("the first pages".utf8).write(to: scan)
+        await watcher.handle([Self.created(scan)])
+        #expect(await watcher.poll().isEmpty, "it waits")
+        time.advance(by: env.config.watcher.stabilityMaxWaitSeconds)
+        // Its last pages written just before the pass that finds it changing after the longest wait: their event is
+        // spent on a file already waited for.
+        let handle = try FileHandle(forWritingTo: scan)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data(" and the last pages".utf8))
+        try handle.close()
+        await watcher.handle([Self.created(scan)])
+        #expect(await watcher.poll() == [.stillChanging(scan)], "it is said once to be taking long, and not let go")
+        var taken: [IncomingArrival] = []
+        try #require(env.config.watcher.awayPollSeconds > env.config.watcher.stabilityPollInterval)
+        for _ in 0..<env.config.watcher.stabilityRequiredPolls + 1 {
+            time.advance(by: env.config.watcher.stabilityPollInterval)
+            taken += await watcher.poll()
+        }
+        #expect(taken.isEmpty, "taking long, it is not looked at at every poll, but every watcher.awayPollSeconds")
+        for _ in 0..<env.config.watcher.stabilityRequiredPolls {
+            time.advance(by: env.config.watcher.awayPollSeconds)
+            taken += await watcher.poll()
+        }
+        #expect(taken == [.stable(scan)], "it is taken in once it has stopped, with no event after its last write")
+    }
+
+    @Test func incomingIsMadeOnlyInAFolderThatIsThereAndNeverMakesTheArchivesFolder() async throws {
+        let env = try TestEnvironmentSync.make()
+        defer { env.cleanup() }
+        let watcher = env.watcher()
+        // Incoming kept inside an archive that is away, as on a disk not connected.
+        let archive = env.root.appendingPathComponent("Archive", isDirectory: true)
+        await #expect(throws: (any Error).self, "Incoming in a folder that is not there is not made") {
+            try await watcher.start(root: archive.appendingPathComponent("Incoming", isDirectory: true), excluding: [])
+        }
+        #expect(!FileManager.default.fileExists(atPath: archive.path), "nor the archive's folder above it")
+        // In a folder that is there, it is made.
+        let incoming = env.root.appendingPathComponent("Incoming", isDirectory: true)
+        try await watcher.start(root: incoming, excluding: [])
+        await watcher.stop()
+        #expect(FileManager.default.fileExists(atPath: incoming.path), "Incoming in a folder that is there is made")
+    }
+
+    @Test func aFileStillChangingAfterTheLongestWaitIsSaidInHistoryOnce() async throws {
+        let h = try await Harness.make()
+        defer { h.env.cleanup() }
+        let growing = try h.env.drop("growing.pdf", text: "still being copied")
+        await h.coordinator.receive(.stillChanging(growing))
+        let said = try await h.services.history.events(limit: 5, kinds: [.error]).map(\.summary)
+        #expect(said.count == 1 && said.first?.hasPrefix("growing.pdf in Incoming has not stopped changing in") == true,
+                "History says the file is taking long: \(said)")
+        #expect(try await h.jobs().isEmpty, "and it is not queued until it stops")
+    }
+
     @Test func aFileThatCannotBeOpenedIsSaidInHistoryAndNotQueued() async throws {
         let h = try await Harness.make()
         defer { h.env.cleanup() }
@@ -330,32 +393,6 @@ import Testing
         await watcher.handle([Self.created(bill)])
         #expect(await Patience.until { await taken.names == ["bill.pdf"] },
                 "a file that comes once the watcher is started again is sent to its new reader, as Incoming is watched again")
-    }
-
-    @Test func aChangeInTheArchiveAfterItsWatcherIsStoppedAndStartedAgainIsReported() async throws {
-        let env = try await TestEnvironment.make()
-        defer { env.cleanup() }
-        try FileManager.default.createDirectory(at: env.archive, withIntermediateDirectories: true)
-        let watcher = ArchiveWatcher(config: env.config.watcher, records: env.config.records, skip: SkipRules(watcher: env.config.watcher),
-                                     registry: SelfChangeRegistry(ttl: env.config.watcher.selfChangeTTLSeconds, time: env.time),
-                                     database: env.database)
-        let first = await watcher.changes()
-        let reading = Task { for await _ in first {} }
-        try await watcher.start(root: env.archive)
-        await watcher.stop()
-        reading.cancel()
-        await reading.value
-
-        let reported = Reported()
-        let again = await watcher.changes()
-        let collecting = Task { for await changes in again { await reported.add(changes) } }
-        defer { collecting.cancel() }
-        try await watcher.start(root: env.archive)
-        defer { await watcher.stop() }
-        let note = try env.put("note.txt", text: "put there by the user")
-        await watcher.handle([FSEvent(path: note.path, flags: UInt32(kFSEventStreamEventFlagItemIsFile | kFSEventStreamEventFlagItemCreated), id: 1)])
-        #expect(await Patience.until { await reported.changes.contains(.untrackedFile(path: note.path)) },
-                "a file the user puts in the archive once its watcher is started again is reported to the new reader")
     }
 
     @Test func theWatchersBoundsAreRefusedWhereTheyMakeNoSense() throws {
@@ -404,12 +441,6 @@ actor Taken {
     func add(_ arrival: IncomingArrival) {
         if case let .stable(url) = arrival { names.insert(url.lastPathComponent) }
     }
-}
-
-/// What the archive watcher reported, in the order it reported it.
-actor Reported {
-    private(set) var changes: [ArchiveChange] = []
-    func add(_ batch: [ArchiveChange]) { changes += batch }
 }
 
 /// A scratch folder and the bundled configuration, for tests that need no database. Its path is spelled as the file

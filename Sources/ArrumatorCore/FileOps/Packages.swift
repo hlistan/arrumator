@@ -32,6 +32,10 @@ public enum Packages {
         return url
     }
 
+    /// How many items are listed between two checks whether the work was stopped, in a package and in a folder a
+    /// watcher looks through: a size that changes no result, only how soon a stop is noticed.
+    static let chunk = 256
+
     /// Whether the item at `url` is a package: as the file system says while it is there, and, once it is gone, as the
     /// type its extension declares says (`UTType(filenameExtension:conformingTo:)`, a type the system or an app
     /// declares, not one made up for an unknown extension), so an event about what a package removed held is about the
@@ -99,7 +103,8 @@ public enum Packages {
 
     /// Everything the package at `package` holds, hidden items too, as the disk lists them, at most `limit`. A link is
     /// listed, never followed. Throws when any of it cannot be listed: what cannot be listed cannot be weighed, hashed or
-    /// opened.
+    /// opened. Throws `CancellationError` when its task is cancelled, which it checks every `chunk` items, so a stop is
+    /// never held behind a large package.
     static func entries(of package: URL, limit: Int?) throws -> [Entry] {
         let keys: [URLResourceKey] = [.isRegularFileKey, .isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey,
                                       .contentModificationDateKey, .isReadableKey]
@@ -114,6 +119,7 @@ public enum Packages {
         var names: [String] = []
         for case let url as URL in walker {
             if let limit, entries.count >= limit { throw FileOperationError.tooManyItems(package.path, limit: limit) }
+            if !entries.isEmpty, entries.count.isMultiple(of: chunk) { try Task.checkCancellation() }
             names = Array(names.prefix(walker.level - 1)) + [url.lastPathComponent.precomposedStringWithCanonicalMapping]
             let values = try url.resourceValues(forKeys: Set(keys))
             let kind: Entry.Kind = values.isSymbolicLink == true ? .link

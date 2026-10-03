@@ -63,8 +63,7 @@ public struct JobStore: Sendable {
     public func enqueue(path: String, kind: JobKind, docID: Int64? = nil, payload: JobPayload = JobPayload()) async throws -> Int64? {
         let now = time.now()
         return try await database.writer.write { db in
-            if var active = try JobRecord.filter(Column("source_path") == path)
-                .filter(Self.activeStates.contains(Column("state"))).fetchOne(db) {
+            if var active = try Self.active(db, path: path) {
                 guard active.kind == .reindex, kind != .reindex else { return active.id }
                 active.state = .cancelled
                 active.updatedAt = now
@@ -75,6 +74,15 @@ public struct JobStore: Sendable {
             try job.insert(db)
             return job.id
         }
+    }
+
+    /// The job the pipeline is still working on for the file at `path`, if there is one: one at most, by a unique index.
+    func active(path: String) async throws -> JobRecord? {
+        try await database.reader.read { db in try Self.active(db, path: path) }
+    }
+
+    private static func active(_ db: Database, path: String) throws -> JobRecord? {
+        try JobRecord.filter(Column("source_path") == path).filter(activeStates.contains(Column("state"))).fetchOne(db)
     }
 
     public func job(id: Int64) async throws -> JobRecord? {

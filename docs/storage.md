@@ -28,7 +28,9 @@ them, with their offset from UTC (`2026-10-02T11:40:58+01:00`). The front matter
 
 A document's entry sits next to the document: `_documents.md` lists the files in its own directory by name. Renaming or
 moving a directory of yours therefore never touches a record, and a file moved in Finder is found again by the
-identifier Arrumator stores on it as an extended attribute.
+identifier Arrumator stores on it as an extended attribute. A copy made in Finder keeps that attribute; it is a document
+of its own, given an identifier of its own, as long as its original is still in the archive, where its entry says or
+moved at the same time, which keeps the inode the copy does not have.
 
 Identifiers in the records are the database's own: document and event numbers are written into the files and restored
 exactly on a rebuild, so references between records keep working. A document is the one its identity (`uid`) names: an
@@ -55,16 +57,21 @@ says so, naming the archive.
 A folder that has never been an archive gets a new index. If it holds record files when it is opened, anywhere in it,
 the index is rebuilt from them; otherwise it starts empty. An archive moved to another path is the same case: its new
 index is rebuilt from its records. The app makes an archive's folder only when the user sets an archive up: when
-onboarding is finished, or on a switch to a folder that is not there and that no index of the app has held an
-archive in. Whether an archive is new is decided by what the user did, never by what its index lacks: a new index
-looks the same whether its archive is new or away, as on a new Mac, after the app is installed again or the index
-lost, or when the settings spell the path another way. At any other launch, and whenever settings are applied, an
-archive whose folder is not there, renamed, moved or on a disk that is not connected, is away, whatever its index
-holds: nothing is made, read, written or filed in its place, the app says its folder is not there, naming it, and
-starts nothing until it is back and the app is opened again. A setting can still be changed, and the archive left for
-another, whose History it is recorded in once its folder is back; a switch to an archive that is away is refused,
-naming its folder. The command line has no onboarding, and cannot tell a new archive from one away: none of its
-commands makes an archive's folder but `arrumatorcli archive switch`.
+onboarding is finished, or on a switch to a folder that is not there and that no index of the app has held an archive
+in. Whether an archive is new is decided by what the user did, never by what its index lacks: a new index looks the same
+whether its archive is new or away, as on a new Mac, after the app is installed again or the index lost, or when the
+settings spell the path another way. At any other launch, and whenever settings are applied, an archive whose folder is
+not there, renamed, moved or on a disk that is not connected, is away, whatever its index holds: nothing is made, read,
+written or filed in its place, Incoming waits, and the app says its folder is not there, naming it. The app looks for it
+every `watcher.awayPollSeconds`, also while it runs, and once the same folder is back, known by its volume and its own
+number however the disk is mounted, the work goes on by itself, the archive looked at whole and its record files
+written. Another folder at its path is taken as the archive, which History says, or, when it is the earlier one back,
+says it is back: what its record files hold is merged with what the index kept meanwhile, never taken over it, so a
+rule, a task or a question made meanwhile is kept and written into it. That they are owed a merge is kept in the index
+with the folder it names, until they are read, so an app stopped in between merges them when it next starts. A setting
+can still be changed, and the archive left for another, whose History it is recorded in once its folder is back; a
+switch to an archive that is away is refused, naming its folder. The command line has no onboarding, and cannot tell a
+new archive from one away: none of its commands makes an archive's folder but `arrumatorcli archive switch`.
 
 Earlier versions kept one index, `arrumator.sqlite`, for whichever archive the settings named. The first start of this
 version moves it into place as that archive's index, so nothing it held is lost: its write-ahead log is written into it
@@ -78,7 +85,13 @@ first, so the database file alone holds everything when it is moved.
 - **Embeddings** of documents are computed again with the embedding model.
 - **The job queue** is rebuilt by looking at the Incoming folder, so each file waiting there is given the tag of the
   folder it is in again. A tag a document already has is in its entry.
-- **Positions in the file-system event stream** and similar bookkeeping.
+- **Positions in the file-system event stream**, each saved once what the events before it reported is applied, and
+  none past a change that could not be applied, so a change the app quit or crashed before applying, or could not
+  apply, is reported again at the next start, up to `ingest.maxAttempts` times, which the index counts; and similar
+  bookkeeping.
+- **The inode of each document's file**, by which a copy is told from its original, and the archive's folder the index
+  was kept for. A rebuild takes each document's inode from its file as it finds it, and the folder from the archive it
+  is rebuilt from.
 
 Some working state is deliberately not kept in files, so a lost index loses it:
 
@@ -99,7 +112,9 @@ Some working state is deliberately not kept in files, so a lost index loses it:
 2. As soon as the transaction commits, the app writes each marked file from the index, and a command of
    `arrumatorcli` writes them before it exits, also when it fails part way, atomically: to a temporary file
    in the same directory, then renamed over the old one, which APFS guarantees is all or nothing. The file's SHA-256 is
-   kept in the index. A file changed again while it was being written stays marked and is written again.
+   kept in the index. A file changed again while it was being written stays marked and is written again. While the
+   archive's folder is not there, renamed or on a disk that went, nothing is written and no folder of it is made again
+   where it no longer is: its files stay marked, and are written once it is back.
 3. When the app starts, and whenever the archive watcher sees a record file change that the app did not make, every
    record file whose checksum differs from the one the index holds is read back. That covers edits made by hand,
    files synchronised from another Mac, and anything else that changed the files behind the app's back.
@@ -168,11 +183,13 @@ again, or run the command again.
 
 A rebuild reads every `_documents.md`, the history, the rules for labels, the search tasks and their conversations; a
 task's set keeps only the documents the archive still has entries for, and a conversation of a task `_tasks.md` does not
-have is left where it is, unread, and read again until its task is back; no new task is given its number. Documents
-whose file is not where their entry says are looked up by the identifier on the file, and one marked missing whose file
-is found again is filed again where it is. Files that have no entry, at the top of the archive or in a
-folder of yours at any depth, are taken in where they are and read by the model; the `System` folder and the folders
-the watcher ignores, such as a hidden one, are left out, and Incoming is never inside the archive
+have is left where it is, unread, and read again until its task is back; no new task is given its number. Documents are
+looked up by the identifier on their file, and follow it wherever it is in the archive, a file left where the entry
+says, as a copy without the identifier, being taken in as a document of its own; and one marked missing whose file is
+found again is filed again where it is; a file without the identifier where an entry not found elsewhere says its
+document is, as one a copy or a synchronisation left it off, is that document's. Files that have no entry, at the top of
+the archive or in a folder of yours at any depth, are taken in where they are and read by the model; the `System` folder
+and the folders the watcher ignores, such as a hidden one, are left out, and Incoming is never inside the archive
 ([Configuration](using-arrumator.md#configuration)). Then, in the background and giving way to new arrivals, each
 document's text is extracted again and its embedding recomputed. The model is not asked again: labels come back from
 the entries. Search by words and by meaning fills in as that proceeds; filing works from the start.

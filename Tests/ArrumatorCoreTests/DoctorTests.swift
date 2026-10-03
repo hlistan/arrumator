@@ -1,4 +1,4 @@
-import ArrumatorCore
+@testable import ArrumatorCore
 import ArrumatorTesting
 import Foundation
 import Testing
@@ -13,10 +13,12 @@ import Testing
     /// `listing`, when given, is how the server fails to list its models; `resolver` says what a `.local` name stands for.
     private func report(installed: [String], remoteHosts: [String: String] = [:], unreadable: [UnreadableRecordFile] = [],
                         listing: OllamaError? = nil, resolver: StubResolver = StubResolver(),
-                        settings change: (inout AppSettings) -> Void = { _ in }) async throws -> DoctorReport {
+                        settings change: (inout AppSettings) -> Void = { _ in },
+                        index: (AppDatabase) async throws -> Void = { _ in }) async throws -> DoctorReport {
         let env = try await TestEnvironment.make()
         defer { env.cleanup() }
         try FileManager.default.createDirectory(at: env.archive, withIntermediateDirectories: true)
+        try await index(env.database)
         var settings = await env.settings.current
         change(&settings)
         let mock = MockOllama(installed: installed, remoteHosts: remoteHosts) { _ in "{}" }
@@ -52,6 +54,18 @@ import Testing
         #expect(checks.map(\.status) == [.error, .error] && checks.map(\.detail) == files.map { "\($0.path): \($0.reason)" },
                 "the user is told which files the app neither reads nor writes, and why, to correct them: \(checks)")
         #expect(report.hasErrors && !report.checks.contains { $0.name == "Record files" }, "and the doctor fails until they read again")
+    }
+
+    @Test func anArchiveFolderOtherThanTheOneTheIndexWasKeptForIsAWarning() async throws {
+        let profile = try profile()
+        let installed = [profile.chatModel, profile.visionModel, profile.embedModel]
+        let replaced = try await report(installed: installed, index: { database in
+            try await database.setMeta(ArchiveWatcher.folderKey, FolderIdentity(volume: "another volume", place: "inode 1").stored)
+        })
+        let check = try #require(replaced.checks.first { $0.name == "Archive folder replaced" })
+        #expect(check.status == .warning, "the folder at the archive's path is not the one the index was kept for, which the user is told")
+        let kept = try await report(installed: installed)
+        #expect(!kept.checks.contains { $0.name == "Archive folder replaced" }, "and nothing is said of the folder the index was kept for")
     }
 
     @Test func aModelOfTheProfileThatIsNotInstalledIsAnError() async throws {

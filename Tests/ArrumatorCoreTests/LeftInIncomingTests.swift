@@ -166,7 +166,8 @@ struct RefusingUntil: Trashing {
         // Renamed in Finder; the archive watcher reports the new path as the disk spells it.
         let renamed = doc.url.deletingLastPathComponent().appendingPathComponent("Renamed by me.txt")
         try FileManager.default.moveItem(at: doc.url, to: renamed)
-        await ArchiveReconciler(services: h.services, coordinator: h.coordinator).apply([.documentMoved(uid: doc.uid, newPath: renamed.spelledOnDisk.standardizedFileURL.path)])
+        try await ArchiveReconciler(services: h.services, coordinator: h.coordinator)
+            .apply([.found(path: renamed.spelledOnDisk.standardizedFileURL.path), .gone(path: doc.path)])
         let moved = try #require(try await h.services.documents.document(id: id))
         #expect(h.services.isInArchive(moved), "renamed (\(named)), it is in the archive")
         #expect(try await h.services.documents.existing(sha256: moved.sha256, excluding: nil, archive: spelled)?.id == id,

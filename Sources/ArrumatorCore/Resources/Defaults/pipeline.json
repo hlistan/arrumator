@@ -48,8 +48,10 @@
     "stabilityPollInterval": 2.0,
     "stabilityRequiredPolls": 2,
     "zeroByteWaitSeconds": 30,
+    "stabilityMaxWaitSeconds": 900,
     "unopenableWaitSeconds": 60,
     "maxPackageItems": 2000,
+    "awayPollSeconds": 10,
     "ignoredNamePrefixes": [
       ".",
       "~$",

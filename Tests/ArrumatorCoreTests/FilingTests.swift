@@ -49,7 +49,7 @@ import Testing
                     "read again (\(time)), it keeps its suffix: its own file is not the one in the way, so no “(3)”")
         }
         let cased = try h.env.put("Mine/" + StubAnalyzer.edpFileName.lowercased() + ".txt", text: "EDP electricity September")
-        await ArchiveReconciler(services: h.services, coordinator: h.coordinator).apply([.untrackedFile(path: cased.path)])
+        try await ArchiveReconciler(services: h.services, coordinator: h.coordinator).apply([.found(path: cased.path)])
         await h.coordinator.drain()
         let adopted = try #require(try await h.services.documents.document(path: cased.path)?.id)
         try await h.review.retry(adopted)

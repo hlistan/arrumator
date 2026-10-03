@@ -324,7 +324,7 @@ import Testing
         let h = try await Harness.make()
         defer { h.env.cleanup() }
         let put = try h.env.put("Taxes 2024/receipt.txt", text: "A receipt")
-        await ArchiveReconciler(services: h.services, coordinator: h.coordinator).apply([.untrackedFile(path: put.path)])
+        try await ArchiveReconciler(services: h.services, coordinator: h.coordinator).apply([.found(path: put.path)])
         await h.coordinator.drain()
         let doc = try #require(try await h.services.documents.document(path: put.path))
         #expect(doc.labels == StubAnalyzer.edpBill, "a file the user put into the archive is read where it is, and its folder is no tag")

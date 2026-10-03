@@ -225,10 +225,17 @@ public struct AppDatabase: Sendable {
     }
 
     public func setMeta(_ key: String, _ value: String) async throws {
-        try await writer.write { db in
-            try db.execute(sql: "INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                           arguments: [key, value])
+        try await writer.write { db in try Self.setMeta(db, key, value) }
+    }
+
+    /// Sets `key` within a write of the caller's, so it is kept with what else that write keeps, or not at all.
+    static func setMeta(_ db: Database, _ key: String, _ value: String?) throws {
+        guard let value else {
+            try db.execute(sql: "DELETE FROM meta WHERE key = ?", arguments: [key])
+            return
         }
+        try db.execute(sql: "INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                       arguments: [key, value])
     }
 }
 
@@ -251,12 +258,11 @@ extension AppDatabase {
     /// The values of `observation` for as long as the stream is consumed, the current one first. GRDB ends an
     /// observation at its first error, which would leave whoever watches it deaf to every later change, as nothing
     /// subscribes again; so one that fails is logged once and made again after `observationRetry` seconds, and the
-    /// stream goes on from the value it has then. Only cancelling the stream's consumer ends it. A consumer slower than the
-    /// changes is given the newest value alone, never one for each change it missed.
+    /// stream goes on from the value it has then. Only cancelling the stream's consumer ends it.
     func values<Reducer: ValueReducer>(of observation: ValueObservation<Reducer>, named name: String) -> AsyncStream<Reducer.Value>
     where Reducer.Value: Sendable {
         let (reader, retry, time) = (reader, observationRetry, time)
-        return AsyncStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
+        return AsyncStream { continuation in
             let task = Task {
                 var failing = false
                 while !Task.isCancelled {

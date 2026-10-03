@@ -53,12 +53,18 @@ enum Limits {
 }
 
 extension WatcherConfig {
-    /// A file is taken once it stopped changing, polled at an interval and over polls that are not none; the app's own
-    /// changes are expected for longer than FSEvents takes to report them; and the archive's own files are told by a
-    /// prefix and an extension that name something.
+    /// A file is taken once it stopped changing, polled at an interval and over polls that are not none, and said to be
+    /// taking long only after it could have stopped; the app's own changes are expected for longer than FSEvents takes to
+    /// report them; the archive's own files are told by a prefix and an extension that name something; and an archive
+    /// away is looked for at an interval.
     var problems: [String] {
-        var problems = Limits.moreThanZero("watcher", ["stabilityPollInterval": stabilityPollInterval])
-        problems += Limits.atLeastOne("watcher", ["stabilityRequiredPolls": stabilityRequiredPolls])
+        var problems = Limits.moreThanZero("watcher", ["stabilityPollInterval": stabilityPollInterval, "awayPollSeconds": awayPollSeconds])
+        problems += Limits.atLeastOne("watcher", ["stabilityRequiredPolls": stabilityRequiredPolls, "maxPackageItems": maxPackageItems])
+        if unopenableWaitSeconds < 0 { problems.append("watcher.unopenableWaitSeconds cannot be negative") }
+        if stabilityMaxWaitSeconds <= max(zeroByteWaitSeconds, stabilityPollInterval * Double(stabilityRequiredPolls)) {
+            problems.append("watcher.stabilityMaxWaitSeconds must be more than watcher.zeroByteWaitSeconds and than "
+                + "watcher.stabilityPollInterval times watcher.stabilityRequiredPolls, so a file is said to be taking long only after it could have stopped")
+        }
         if fsEventsLatency < 0 { problems.append("watcher.fsEventsLatency cannot be negative") }
         if zeroByteWaitSeconds < 0 { problems.append("watcher.zeroByteWaitSeconds cannot be negative") }
         if selfChangeTTLSeconds <= fsEventsLatency {

@@ -55,6 +55,10 @@ public struct Doctor: Sendable {
         var isDir: ObjCBool = false
         let archiveExists = fm.fileExists(atPath: archive.path, isDirectory: &isDir) && isDir.boolValue
         add("Archive folder", archiveExists && fm.isWritableFile(atPath: archive.path), archive.path)
+        // Another folder than the one the index was kept for, put in its place: the app takes it as the archive at its next start.
+        if let kept = try? await database.meta(ArchiveWatcher.folderKey), let now = try? ArchiveDisk.disk.identity(of: archive)?.stored, kept != now {
+            add("Archive folder replaced", false, "another folder than the one the index was kept for; it is taken as the archive when Arrumator starts", warnOnly: true)
+        }
         add("Incoming folder", fm.fileExists(atPath: settings.incomingURL.path), settings.incomingURL.path, warnOnly: true)
         do {
             let fts = try await database.reader.read { db in try Bool.fetchOne(db, sql: "SELECT sqlite_compileoption_used('ENABLE_FTS5')") }

@@ -93,10 +93,11 @@ import Testing
         #expect(!FileManager.default.fileExists(atPath: home.folder("First").path), "nor when the app stops and writes its record files")
     }
 
-    @Test func aLaunchWhileTheArchiveIsAwayMakesNoFolderWhereItWasAndSaysItIsNotThere() async throws {
+    @Test func aLaunchWhileTheArchiveIsAwayMakesNoFolderWhereItWasAndGoesOnByItselfOnceItIsBack() async throws {
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }
         try await home.withoutOllama()
+        try home.watchQuickly()
         try await archiveWithADocument(home)
         // The disk the archive is on is not connected when the app starts.
         try FileManager.default.moveItem(at: home.folder("First"), to: home.folder("Away"))
@@ -106,18 +107,72 @@ import Testing
         let following = Task { for await work in updates { await follower.add(work) } }
         defer { following.cancel() }
         #expect(!FileManager.default.fileExists(atPath: home.folder("First").path), "the app makes no new, empty archive in its place")
-        await expectAway(home.folder("First"), "opening it says its folder is not there, naming it") { try await runtime.openAndStart() }
+        let starting = Task { try await runtime.openAndStart() }
         #expect(await Patience.until { await follower.received.last == .away }, "the app is told the archive is away")
-        #expect(await runtime.start() == false, "and nothing is filed into an archive that is not there")
+        #expect(await !runtime.tasks.isWorking, "and nothing is filed into an archive that is not there")
         try await runtime.settingsActions.change(TestSettingChange.make)
         #expect(!FileManager.default.fileExists(atPath: home.folder("First").path), "still nothing is made where it was")
+        // The disk connected again: the work starts by itself, with no new launch.
+        try FileManager.default.moveItem(at: home.folder("Away"), to: home.folder("First"))
+        try await starting.value
+        #expect(await Patience.until { await follower.received.last == .running }, "once its folder is back, the work starts by itself")
         await runtime.stop()
     }
 
-    @Test func anArchiveAwayAtLaunchIsOpenedWhenTheUserTriesAgainOnceItIsBack() async throws {
+    @Test func theArchiveGoingWhileTheAppRunsIsAwayUntilItIsBack() async throws {
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }
         try await home.withoutOllama()
+        try home.watchQuickly()
+        try await archiveWithADocument(home)
+        let runtime = try await home.open()
+        let follower = WorkFollower()
+        let updates = await runtime.workUpdates()
+        let following = Task { for await work in updates { await follower.add(work) } }
+        defer { following.cancel() }
+        await runtime.start()
+        try #require(await Patience.until { await follower.received.last == .running }, "the work runs")
+        try FileManager.default.moveItem(at: home.folder("First"), to: home.folder("Away"))
+        #expect(await Patience.until { await follower.received.last == .away }, "its folder gone, as a disk taken out, the archive is away")
+        try FileManager.default.moveItem(at: home.folder("Away"), to: home.folder("First"))
+        #expect(await Patience.until { await follower.received.last == .running }, "and back, the work goes on by itself")
+        let documents = try await runtime.services.documents.list(DocumentFilter(), limit: 10)
+        #expect(documents.map(\.status) == [.filed], "nothing in it was taken for missing")
+        await runtime.stop()
+    }
+
+    @Test func aFileInIncomingWaitsUnreadWhileTheArchiveGoneDuringTheRunIsAway() async throws {
+        let home = try await RuntimeHome.make()
+        defer { home.cleanup() }
+        try await home.withoutOllama()
+        try home.watchQuickly()
+        let runtime = try await home.open()
+        let follower = WorkFollower()
+        let updates = await runtime.workUpdates()
+        let following = Task { for await work in updates { await follower.add(work) } }
+        defer { following.cancel() }
+        await runtime.start()
+        try #require(await Patience.until { await follower.received.last == .running }, "the work runs")
+        try FileManager.default.moveItem(at: home.folder("First"), to: home.folder("Away"))
+        try #require(await Patience.until { await follower.received.last == .away }, "its folder gone, the archive is away")
+        let bill = home.folder("Incoming").appendingPathComponent("bill.txt")
+        try Data("EDP electricity".utf8).write(to: bill)
+        let jobs = { try await runtime.database.reader.read { db in try JobRecord.fetchAll(db) } }
+        try #require(await Patience.until { (try? await jobs().count) == 1 }, "the file is queued")
+        try await Task.sleep(for: .milliseconds(500))
+        #expect(try await jobs().map(\.state) == [.pending], "and waits unread while the archive is away: Incoming waits")
+        #expect(await runtime.coordinator.archiveAway, "as the worker is paused, so a file it has in hand is not read on either")
+        try FileManager.default.moveItem(at: home.folder("Away"), to: home.folder("First"))
+        #expect(await Patience.until { (try? await jobs().first?.state) != .pending }, "once it is back, the file is read")
+        #expect(await !runtime.coordinator.archiveAway, "the worker going on")
+        await runtime.stop()
+    }
+
+    @Test func anArchiveAwayAtLaunchIsOpenedAtOnceWhenTheUserTriesAgainOnceItIsBack() async throws {
+        let home = try await RuntimeHome.make()
+        defer { home.cleanup() }
+        try await home.withoutOllama()
+        try home.lookForTheArchiveOnlyWhenAsked()
         try await archiveWithADocument(home)
         try FileManager.default.moveItem(at: home.folder("First"), to: home.folder("Away"))
         let runtime = try await home.bootstrap()
@@ -125,11 +180,16 @@ import Testing
         let updates = await runtime.workUpdates()
         let following = Task { for await work in updates { await follower.add(work) } }
         defer { following.cancel() }
-        await expectAway(home.folder("First"), "the app starts, and is told the archive is away") { try await runtime.openAndStart() }
+        // The start waits for the archive rather than failing, so it is followed from a task of its own.
+        let starting = Task { try await runtime.openAndStart() }
+        #expect(await Patience.until { await follower.received.last == .away }, "the app starts, and is told the archive is away")
         // The disk is connected again, and the user presses Try Again, which opens the archive as at launch.
         try FileManager.default.moveItem(at: home.folder("Away"), to: home.folder("First"))
-        try await runtime.openAndStart()
-        #expect(await Patience.until { await follower.received.last == .running }, "the work runs")
+        let tryingAgain = Task { try await runtime.openAndStart() }
+        try #require(await Patience.until { await follower.received.last == .running },
+                     "the work runs at once, not when the archive would next have been looked for")
+        try await tryingAgain.value
+        try await starting.value
         #expect(try await runtime.services.documents.list(DocumentFilter(), limit: 10).count == 1, "on the archive it had")
         await runtime.stop()
     }
@@ -157,10 +217,12 @@ import Testing
         let stream = runtime.services.lookAlikes.suggestionCounts()
         let following = Task { for await count in stream { await counts.add(count) } }
         defer { following.cancel() }
-        await expectAway(home.folder("First"), "the archive is away, and nothing is filed") { try await runtime.openAndStart() }
+        let starting = Task { try await runtime.openAndStart() }
         #expect(await Patience.until { await counts.received.last == 1 },
-                "the labels its index holds are still counted, as the Labels page still lists them")
+                "the labels its index holds are counted while the start waits for the archive, as the Labels page still lists them")
+        #expect(await !runtime.tasks.isWorking, "and nothing is filed into an archive that is not there")
         await runtime.stop()
+        await #expect(throws: CancellationError.self, "the stop ends the start that waited") { try await starting.value }
     }
 
     static let note = "note.txt"
@@ -200,11 +262,15 @@ import Testing
         }
         try FileManager.default.moveItem(at: home.folder("First"), to: home.folder("Away"))
         let runtime = try await home.bootstrap()
-        await expectAway(home.folder("First"), "the archive is said to be away, though its index holds no document") {
-            try await runtime.openAndStart()
-        }
-        #expect(await !runtime.tasks.isStarted, "nothing is started on it, nor filed into it")
+        let follower = WorkFollower()
+        let updates = await runtime.workUpdates()
+        let following = Task { for await work in updates { await follower.add(work) } }
+        defer { following.cancel() }
+        let starting = Task { try await runtime.openAndStart() }
+        #expect(await Patience.until { await follower.received.last == .away }, "the archive is said to be away, though its index holds no document")
+        #expect(await !runtime.tasks.isWorking, "nothing is started on it, nor filed into it")
         await runtime.stop()
+        await #expect(throws: CancellationError.self, "the app quitting ends the wait for it") { try await starting.value }
         #expect(!FileManager.default.fileExists(atPath: home.folder("First").path), "and nothing is made or written where it was")
     }
 

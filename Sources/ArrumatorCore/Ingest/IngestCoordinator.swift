@@ -8,6 +8,8 @@ import UniformTypeIdentifiers
 public actor IngestCoordinator {
     let services: PipelineServices
     private var worker: Task<Void, Never>?
+    /// Whether the archive is away (`archive(isAway:)`).
+    public private(set) var archiveAway = false
     private let doorbell = Doorbell()
     private var statusContinuations: [UUID: AsyncStream<IngestStatus>.Continuation] = [:]
     public internal(set) var status = IngestStatus.idle {
@@ -67,9 +69,23 @@ public actor IngestCoordinator {
 
     public func wake() { doorbell.ring() }
 
+    /// The archive's folder is away, as on a disk not connected, or back. While it is away no job is begun, and the one
+    /// in hand stops at its next stage, waiting without spending an attempt (`handleFailure`): nothing of Incoming is read
+    /// or sent to the model. Its coming back wakes the worker.
+    public func archive(isAway: Bool) {
+        archiveAway = isAway
+        if !isAway { doorbell.ring() }
+    }
+
+    /// Throws what the archive's folder missing throws, so the job waits for it, when the archive is away (`archive(isAway:)`).
+    private func checkArchiveThere() throws {
+        if archiveAway { throw FileOperationError.folderMissing(services.archive.path) }
+    }
+
     /// Takes what the Incoming watcher found (`IncomingWatcher.arrivals()`): a file that has stopped changing is queued
     /// (`enqueue`), and one it stopped waiting for is recorded in History with why, so the user sees why it stays in
-    /// Incoming. That one is not queued; the watcher takes it up again once it can be opened or it changes.
+    /// Incoming. That one is not queued; the watcher takes it up again once it can be opened or it changes. One still
+    /// changing after `watcher.stabilityMaxWaitSeconds` is recorded once too; the watcher waits for it still.
     public func receive(_ arrival: IncomingArrival) async {
         switch arrival {
         case let .stable(url):
@@ -82,6 +98,10 @@ public actor IngestCoordinator {
                 "\(url.lastPathComponent) in Incoming holds more than \(Format.count(limit, "item")), too many for one document (watcher.maxPackageItems)"
             }
             await record(.error, summary: summary, path: path)
+        case let .stillChanging(url):
+            let minutes = Format.count(Int((services.config.watcher.stabilityMaxWaitSeconds / 60).rounded(.up)), "minute")
+            await record(.error, summary: "\(url.lastPathComponent) in Incoming has not stopped changing in \(minutes); it is taken once it stops",
+                         path: url.spelledOnDisk.path)
         }
     }
 
@@ -149,7 +169,7 @@ public actor IngestCoordinator {
             let settings = await services.settings.current
             let powerReason = PowerState.current().pauseReason(settings: settings, config: services.config.power)
             status.powerPauseReason = powerReason
-            if !settings.paused, powerReason == nil, FileManager.default.fileExists(atPath: services.archive.path) {
+            if !settings.paused, powerReason == nil, !archiveAway, FileManager.default.fileExists(atPath: services.archive.path) {
                 if let job = await nextDue() {
                     await process(job)
                     continue
@@ -158,6 +178,8 @@ public actor IngestCoordinator {
             await refreshQueueCount()
             var wait = await earliestDue().map { $0.timeIntervalSince(services.time.now()) }
             if powerReason != nil { wait = services.config.power.recheckSeconds }
+            // Away, it waits to be told the archive is back (`archive(isAway:)`), which rings.
+            if archiveAway { wait = nil }
             await doorbell.wait(timeout: wait.map { max(Self.minimumWait, $0) }, time: services.time)
         }
     }
@@ -249,6 +271,7 @@ public actor IngestCoordinator {
             try await save(&job, payload, state: payload.content == nil ? .extracting : .analysing)
         }
         if job.state == .pending || job.state == .hashing {
+            try checkArchiveThere()
             try await save(&job, payload, state: .hashing)
             guard FileManager.default.fileExists(atPath: source.path) else {
                 // A copy that went to the Trash before a stop: what is left of handing it over is done now.
@@ -285,6 +308,7 @@ public actor IngestCoordinator {
         guard let docID = job.docId, let sha = payload.sha256 else { throw IngestError.documentNotPersisted }
 
         if job.state == .extracting {
+            try checkArchiveThere()
             let context = try services.config.extractionContext(settings: settings, whenOllamaIsAway: .wait)
             let content = try await services.extractor.extract(source, sha256: sha, context: context, trace: trace)
             payload.content = content
@@ -297,6 +321,7 @@ public actor IngestCoordinator {
         guard let content = payload.content else { throw IngestError.contentUnavailable(docID) }
 
         if job.state == .analysing {
+            try checkArchiveThere()
             payload.outcome = try await services.analyse(docID: docID, jobID: job.id, content: content, given: payload.tags ?? [],
                                                          settings: settings, trace: trace)
             try await save(&job, payload, state: .filing)
@@ -304,6 +329,7 @@ public actor IngestCoordinator {
         guard let outcome = payload.outcome else { throw IngestError.invalidState("analysis missing") }
 
         if job.state == .filing {
+            try checkArchiveThere()
             try await fileDocument(&job, payload: &payload, docID: docID, content: content, outcome: outcome,
                                    settings: settings, trace: trace)
         }

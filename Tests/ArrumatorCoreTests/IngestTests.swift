@@ -146,7 +146,7 @@ struct RefusingTrash: Trashing {
         defer { h.env.cleanup() }
         let original = try await h.ingest("bill.txt", text: Self.bill)
         let put = try h.env.put("Old/bill copy.txt", text: Self.bill)
-        await ArchiveReconciler(services: h.services, coordinator: h.coordinator).apply([.untrackedFile(path: put.path)])
+        try await ArchiveReconciler(services: h.services, coordinator: h.coordinator).apply([.found(path: put.path)])
         await h.coordinator.drain()
         let adopted = try #require(try await h.services.documents.document(path: put.path))
         #expect(adopted.id != original.id && adopted.status == .filed && FileManager.default.fileExists(atPath: put.path),
@@ -350,7 +350,7 @@ struct RefusingTrash: Trashing {
         let reconciler = ArchiveReconciler(services: h.services, coordinator: h.coordinator)
         let loose = try h.env.put("contract.txt", text: "Rental contract")
         let deep = try h.env.put("Old/2024/receipt.txt", text: "A receipt")
-        await reconciler.apply([.untrackedFile(path: loose.path), .untrackedFile(path: deep.path)])
+        try await reconciler.apply([.found(path: loose.path), .found(path: deep.path)])
         await h.coordinator.drain()
         let docs = try await h.services.documents.list(DocumentFilter(), limit: 5)
         #expect(Set(docs.map(\.path)) == [loose.path, deep.path], "adopted where they are, at any depth, under their own names")
@@ -364,7 +364,7 @@ struct RefusingTrash: Trashing {
         let reconciler = ArchiveReconciler(services: h.services, coordinator: h.coordinator)
         let renamed = h.env.archive.appendingPathComponent("EDP July.txt").standardizedFileURL
         try FileManager.default.moveItem(at: doc.url, to: renamed)
-        await reconciler.apply([.documentMoved(uid: doc.uid, newPath: renamed.path)])
+        try await reconciler.apply([.found(path: renamed.path), .gone(path: doc.path)])
         #expect(try await h.services.documents.document(id: try #require(doc.id))?.path == renamed.path, "the record follows the file to its new name")
         let events = try await h.services.history.events(limit: 5, kinds: [.userRenamed, .userMoved], docID: doc.id)
         #expect(events.map(\.kind) == [.userRenamed], "a new name in the same place is a rename")
@@ -376,7 +376,7 @@ struct RefusingTrash: Trashing {
         let doc = try await h.ingest("bill.txt", text: "EDP electricity July")
         let id = try #require(doc.id)
         try FileManager.default.removeItem(at: doc.url)
-        await ArchiveReconciler(services: h.services, coordinator: h.coordinator).apply([.documentMissing(path: doc.path)])
+        try await ArchiveReconciler(services: h.services, coordinator: h.coordinator).apply([.gone(path: doc.path)])
         let missing = try #require(try await h.services.documents.document(id: id))
         #expect(missing.status == .missing && missing.labels == doc.labels, "the record stays, with its labels, marked missing")
         #expect(try await h.services.history.events(limit: 5, kinds: [.missing], docID: id).count == 1, "and the removal is in History")
@@ -403,7 +403,7 @@ struct RefusingTrash: Trashing {
         defer { h.env.cleanup() }
         let reconciler = ArchiveReconciler(services: h.services, coordinator: h.coordinator)
         let deep = try h.env.put("Old/receipt.txt", text: "A receipt")
-        await reconciler.apply([.untrackedFile(path: deep.path)])
+        try await reconciler.apply([.found(path: deep.path)])
         await h.coordinator.drain()
         let id = try #require(try await h.services.documents.document(path: deep.path)?.id)
         try await h.review.retry(id)

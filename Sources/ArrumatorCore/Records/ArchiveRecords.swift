@@ -252,7 +252,8 @@ public actor ArchiveRecords {
     // MARK: Files and their checksums
 
     /// `url`, with the directory it goes in made first: the system folder appears when it is first needed. Never in an
-    /// archive whose folder is not there, which a folder made in its place would hide.
+    /// archive whose folder is not there, renamed or on a disk that went, which a folder made in its place would hide:
+    /// its files stay marked, and are written once it is back.
     private func directoryMade(for url: URL) throws -> URL {
         guard archiveIsThere else { throw RecordsError.archiveNotThere(archive.path) }
         let directory = url.deletingLastPathComponent()
@@ -338,17 +339,25 @@ public actor ArchiveRecords {
             Log.warning(.db, "Record files not read: the index has not been rebuilt from the archive yet")
             return 0
         }
-        let known = try await knownHashes()
         let walk = await recordFiles()
         for folder in walk.unlisted { noteUnreadable(folder) }
         // Nothing of an archive that is not there is read, taken for gone or written again.
         guard archiveIsThere else { throw RecordsError.archiveNotThere(archive.path) }
+        var merging = try await owesMerge()
+        if merging { try await forgetFiles() }
+        let known = try await knownHashes()
         var reread = 0
         for (kind, url) in walk.records {
             do {
                 // Gone since the listing: the next read finds it gone.
                 guard let text = try RecordFile.text(at: url) else { continue }
                 if known[url.path] != FrontMatter.sha256(text) {
+                    // Another folder put in place while this one is read: what is read from now on, and every file
+                    // before it is written, is merged (`forgetFiles`), asked once what was read is in hand.
+                    if !merging, try await owesMerge() {
+                        try await forgetFiles()
+                        merging = true
+                    }
                     try await read(kind, url: url, text: text, replacing: nil)
                     reread += 1
                 }
@@ -369,6 +378,8 @@ public actor ArchiveRecords {
             }
         }
         if reread > 0 { Log.info(.db, "Record files read again", ["files": String(reread)]) }
+        // Read merged: what is marked for a file that could not be read keeps it merged once it can be.
+        if merging { try await database.writer.write { db in try AppDatabase.setMeta(db, Self.mergeOwedKey, nil) } }
         try await flushInTurn()
         return reread
     }
@@ -410,6 +421,50 @@ public actor ArchiveRecords {
             if replacing { try db.execute(sql: "DELETE FROM record_dirty WHERE key = ?", arguments: [kind.key]) }
             for kind in applied.rewrite { try Self.mark(db, kind) }
         }
+    }
+
+    /// Kept in the index, in the one write that names another folder as the archive's (`ArchiveWatcher`), until the
+    /// record files of that folder are read merged with the index (`reconcile`).
+    static let mergeOwedKey = "archive_folder_merge_owed"
+    static let mergeOwed = "yes"
+
+    /// Whether the record files at the archive's path are to be merged with the index rather than read as edits: another
+    /// folder was taken as the archive, or the earlier one is back, and they have not been read merged since
+    /// (`mergeOwedKey`); or the folder there is not the one the index was kept for (`ArchiveWatcher.folderKey`), as one
+    /// the watcher has not seen yet, or none. Decided by the read itself, which another folder may be put in place of at
+    /// any time.
+    private func owesMerge() async throws -> Bool {
+        if try await database.meta(Self.mergeOwedKey) != nil { return true }
+        guard let kept = try await database.meta(ArchiveWatcher.folderKey).flatMap(FolderIdentity.init(stored:)) else { return false }
+        // No folder there, as between another taken away and one put in its place, is not the one kept for either.
+        return ArchiveDisk.disk.identity(of: archive) != kept
+    }
+
+    /// The archive's folder is another than the one the index last read and wrote its record files in, or the earlier one
+    /// back (`owesMerge`): its files are not the ones the index knows, and their changes are no edits to take over what
+    /// the index holds. No file is known any more and every kind is marked, so each file is read next merged with the
+    /// index (`read`, which merges what is marked), never replacing it: what was decided meanwhile, such as a rule for
+    /// labels, a task or a question, is kept, and written into the folder that is now the archive. For one that has its
+    /// turn.
+    private func forgetFiles() async throws {
+        try await database.writer.write { db in
+            try db.execute(sql: "DELETE FROM record_files")
+            try Self.markEvery(db)
+        }
+        Log.info(.db, "Record files of another archive folder are merged with the index", ["archive": archive.path])
+    }
+
+    /// Marks every record file the index has anything for.
+    static func markEvery(_ db: Database) throws {
+        let upsert = " ON CONFLICT(key) DO UPDATE SET version = version + 1"
+        try db.execute(sql: "INSERT INTO record_dirty(key, version) SELECT DISTINCT ? || rtrim(path, replace(path, '/', '')), 1 FROM documents WHERE 1"
+                           + upsert, arguments: [RecordKind.documentsPrefix])
+        try db.execute(sql: "INSERT INTO record_dirty(key, version) SELECT DISTINCT ? || strftime('%Y-%m', at, 'unixepoch'), 1 FROM events WHERE 1"
+                           + upsert, arguments: [RecordKind.historyPrefix])
+        try db.execute(sql: "INSERT INTO record_dirty(key, version) SELECT DISTINCT ? || task_id, 1 FROM search_task_turns WHERE 1" + upsert,
+                       arguments: [RecordKind.conversationPrefix])
+        if try LabelRule.fetchCount(db) > 0 { try mark(db, .labelRules) }
+        if try SearchTaskRecord.fetchCount(db) > 0 { try mark(db, .searchTasks) }
     }
 
     static func ids(_ values: [Int64]) -> String {

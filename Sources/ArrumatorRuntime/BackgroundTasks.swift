@@ -9,7 +9,8 @@ public enum RuntimeWork: Sendable, Equatable {
     /// Nothing runs, as the index is not rebuilt from its archive, as when a record file that cannot be read refused
     /// its rebuild, until it is (`ArrumatorRuntime.rebuildIndex()`).
     case refused
-    /// Nothing runs, as the archive's folder is not there, as on a disk not connected: the archive is away.
+    /// The archive's folder is not there, as on a disk not connected: the archive is away. Nothing is filed into it or
+    /// written into its record files, and Incoming waits; once the same folder is back, the work goes on by itself.
     case away
 }
 
@@ -30,6 +31,8 @@ actor BackgroundTasks {
     private var tasks: [String: Task<Void, Never>] = [:]
     /// Whether the work runs, and those told of every change to it.
     private var work = RuntimeWork.idle
+    /// Whether the step that starts the runtime began the work.
+    private var running = false
     private var workFollowers: [UUID: AsyncStream<RuntimeWork>.Continuation] = [:]
 
     /// The step that starts the runtime: `body`, begun now, the first time; the same step after that, until the runtime
@@ -62,8 +65,23 @@ actor BackgroundTasks {
     /// it started runs.
     func began() {
         guard !closed else { return }
+        running = true
         set(.running)
     }
+
+    /// The archive's folder is not there (`away`), or is back: the work, or the start, waits while it is away, and goes
+    /// on as it was once it is back.
+    func away(_ isAway: Bool) {
+        guard !closed else { return }
+        if isAway {
+            set(.away)
+        } else if work == .away {
+            set(running ? .running : .idle)
+        }
+    }
+
+    /// Whether the work runs, as begun by a step, and the runtime is not stopped.
+    var isWorking: Bool { running && !closed }
 
     /// Whether the work is started: a step began it and was not let go, and the runtime is not stopped.
     var isStarted: Bool { !closed && step != nil }
@@ -104,6 +122,7 @@ actor BackgroundTasks {
         if forGood { stoppedForGood = true }
         step?.cancel()
         for task in tasks.values { task.cancel() }
+        running = false
         set(.idle)
         return (step, ArrumatorRuntime.Halted(started: step != nil, unread: stepReads && !wasRead))
     }

@@ -17,6 +17,13 @@ public struct FSEvent: Sendable, Hashable {
             || has(kFSEventStreamEventFlagRootChanged)
     }
     public var isHistoryDone: Bool { has(kFSEventStreamEventFlagHistoryDone) }
+    /// The watched folder itself was renamed, removed, or made again, or its volume went or came.
+    var isRootChanged: Bool { has(kFSEventStreamEventFlagRootChanged) }
+    /// Events were lost anywhere under the watched folder, or their numbers began again: nothing that came before
+    /// tells what is there now.
+    var lostEverywhere: Bool {
+        has(kFSEventStreamEventFlagUserDropped) || has(kFSEventStreamEventFlagKernelDropped) || has(kFSEventStreamEventFlagEventIdsWrapped)
+    }
 }
 
 /// Thin wrapper over a file-level FSEvents stream delivering batches through an `AsyncStream`.
@@ -77,6 +84,11 @@ public final class FSEventStream: @unchecked Sendable {
             stream = nil
         }
         box.continuation.finish()
+    }
+
+    /// The number of the last event of this Mac's file systems: a stream started after it reports what comes from now on.
+    static func currentEventID() -> UInt64 {
+        FSEventsGetCurrentEventId()
     }
 
     public static func deviceUUID(for path: String) -> String? {

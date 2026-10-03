@@ -36,6 +36,12 @@ public struct TestEnvironment: Sendable {
         try? FileManager.default.removeItem(at: root)
     }
 
+    /// The same folders and settings over `database`, as after the index was lost and made again.
+    public func with(database: AppDatabase) -> TestEnvironment {
+        TestEnvironment(root: root, paths: paths, archive: archive, incoming: incoming, database: database, config: config,
+                        settings: settings, time: time)
+    }
+
     /// What stands in for the Trash in everything built on this environment, so nothing a test does reaches the user's.
     public var trash: FolderTrash { FolderTrash(folder: root.appendingPathComponent("Trash", isDirectory: true)) }
 

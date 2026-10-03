@@ -195,9 +195,10 @@ extension ArchiveRecords {
     /// embeddings and traces stay attached.
     static let rebuiltTables = ["events", "label_rules", "search_task_documents", "search_task_exports", "search_task_turns", "search_tasks"]
 
-    /// Finds documents whose file is not where their entry says by the identifier on each file, takes back a document
-    /// marked missing whose file is found, as `ArchiveReconciler` does when it sees one come back, and takes in files
-    /// that no entry describes.
+    /// Finds documents whose file is not where their entry says by the identifier on each file, files a document marked
+    /// missing whose file is found, and takes in files that no entry describes. Each document found keeps the inode its
+    /// file has, which the record files do not hold, by which the archive watcher tells it from a copy
+    /// (`ArchiveReconciler`): it is written with where the document is, in one transaction.
     private func locateDocuments(summary: inout RebuildSummary) async throws {
         let documents = try await DocumentStore(database: database, time: time).list(DocumentFilter(), limit: Int.max)
         let byUID = Dictionary(documents.map { ($0.uid, $0) }, uniquingKeysWith: { a, _ in a })
@@ -206,13 +207,14 @@ extension ArchiveRecords {
         var untracked: [String] = []
         // The walk leaves out Incoming and the folders the watcher ignores.
         for url in await recordFiles().files where skip.ignoreReason(url) == nil {
-            if let uid = Xattr.get(Xattr.documentID, from: url), byUID[uid] != nil {
-                found[uid] = url.path
+            if let uid = Xattr.get(Xattr.documentID, from: url), let document = byUID[uid] {
+                // A file carrying it where the document is recorded is its file, before any other that carries it.
+                if found[uid] != document.path { found[uid] = url.path }
             } else {
                 untracked.append(url.path)
             }
         }
-        let store = DocumentStore(database: database, time: time)
+        var located: [DocumentRecord] = []
         for var document in documents {
             let path = found[document.uid]
             if document.status == .missing {
@@ -220,22 +222,35 @@ extension ArchiveRecords {
                 if path != document.path { summary.relocated += 1 }
                 document.path = path
                 document.status = .filed
-            } else if !FileManager.default.fileExists(atPath: document.path) {
-                if let path {
-                    document.path = path
-                    summary.relocated += 1
-                } else {
-                    document.status = .missing
-                    summary.missing += 1
-                }
-            } else {
-                continue
+            } else if let path, path != document.path,
+                      archive.holds(document.path) || !FileManager.default.fileExists(atPath: document.path) {
+                // Its file, by the identifier on it, is elsewhere in the archive: the document follows it, as the archive
+                // watcher has it follow (`ArchiveReconciler`), and a file left where it was recorded, as a copy without
+                // the identifier, is taken in as a document of its own. One left in Incoming stays with its file there.
+                document.path = path
+                summary.relocated += 1
+            } else if path == nil, !FileManager.default.fileExists(atPath: document.path) {
+                document.status = .missing
+                summary.missing += 1
             }
-            _ = try await store.save(document)
+            let inode = document.status == .missing ? nil : FileOnDisk(document.url)?.number
+            guard document != byUID[document.uid] || inode != document.inode else { continue }
+            document.inode = inode ?? document.inode
+            located.append(document)
         }
-        // A file put into the archive by hand is read and labelled where it is; the system folder holds no documents.
+        let now = time.now()
+        try await database.writer.write { [located] db in
+            for var document in located {
+                document.updatedAt = now
+                try document.update(db)
+            }
+        }
+        // A file put into the archive by hand is read and labelled where it is; the system folder holds no documents. A
+        // file without an identifier where a document not found elsewhere is recorded, as one whose identifier a copy
+        // or a synchronisation left off, is that document's, as the archive watcher takes it (`ArchiveReconciler`).
+        let recordedAt = Set(documents.filter { $0.status != .missing && found[$0.uid] == nil }.map(\.path))
         let jobs = JobStore(database: database, time: time)
-        for path in untracked where !layout.isSystem(URL(fileURLWithPath: path)) {
+        for path in untracked where !layout.isSystem(URL(fileURLWithPath: path)) && !recordedAt.contains(path) {
             if try await jobs.enqueue(path: path, kind: .adopt) != nil { summary.adopted += 1 }
         }
     }

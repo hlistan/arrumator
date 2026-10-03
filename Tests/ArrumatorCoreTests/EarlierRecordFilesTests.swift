@@ -257,4 +257,52 @@ import Testing
                 "those of kinds that are gone are dropped, as migrating the index dropped them")
         #expect(EventEntry.removedKinds.allSatisfy { EventKind(rawValue: $0) == nil }, "and no kind that exists is ever dropped")
     }
+
+    @Test func aDocumentAnEarlierReleaseFoundMissingIsFiledWhenItsFileIsFoundAgain() async throws {
+        let h = try await Harness.make()
+        defer { h.env.cleanup() }
+        let text = "EDP electricity July"
+        let away = h.env.root.appendingPathComponent("bill.txt")
+        try Data(text.utf8).write(to: away)
+        try Xattr.set(Xattr.documentID, RecordsWorld.uid(1), on: away)
+        try FileManager.default.createDirectory(at: h.env.archive, withIntermediateDirectories: true)
+        // As every release before the status was kept wrote them: the entry missing, and its event with nothing in it.
+        try """
+        ---
+        arrumator: 1
+        entries:
+        - id: 1
+          uid: \(RecordsWorld.uid(1))
+          file: bill.txt
+          original_name: bill.txt
+          added: 2026-07-05T10:00:00Z
+          filed: 2026-07-05T10:01:00Z
+          status: missing
+          content_type: public.plain-text
+          size: \(text.utf8.count)
+          sha256: \(try HashService.sha256(of: away))
+        ---
+        """.write(to: h.env.archive.appendingPathComponent(h.env.config.records.documentsFileName), atomically: true, encoding: .utf8)
+        let history = h.env.layout.historyFile(month: "2026-07")
+        try FileManager.default.createDirectory(at: history.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try """
+        ---
+        arrumator: 1
+        entries:
+        - id: 1
+          at: 2026-07-06T09:00:00Z
+          kind: missing
+          actor: user
+          document: 1
+          summary: bill.txt was removed from the archive
+          payload: '{}'
+        ---
+        """.write(to: history, atomically: true, encoding: .utf8)
+        try await h.env.records().rebuild()
+        #expect(try await h.services.documents.document(id: 1)?.status == .missing, "read back missing, as its file is not in the archive")
+        let back = try h.moveIntoArchive(away, to: "bill.txt")
+        try await h.reconciler.apply([.found(path: back.path)])
+        #expect(try await h.services.documents.document(id: 1)?.status == .filed,
+                "found again, it is filed, as a missing event with nothing in it has always meant")
+    }
 }

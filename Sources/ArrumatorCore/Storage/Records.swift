@@ -37,6 +37,10 @@ public enum DocumentStatus: String, Sendable, Codable, CaseIterable {
     /// Statuses of documents kept in the archive as themselves: what a search task finds, and what an exact copy is a
     /// copy of. A duplicate is a copy of one of them, and a document undone or missing is not in the archive.
     public static let inArchive: Set<DocumentStatus> = [.filed, .needsReview, .failed, .held]
+
+    /// Statuses of documents whose file is in the archive: those kept as themselves (`inArchive`) and the copies earlier
+    /// versions filed beside them.
+    static let withFileInArchive: Set<DocumentStatus> = inArchive.union([.duplicate])
 }
 
 public struct DocumentRecord: ArrumatorRecord, Identifiable, Hashable {

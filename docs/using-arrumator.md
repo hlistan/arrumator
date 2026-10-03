@@ -265,12 +265,16 @@ No tunable lives in code. Defaults are bundled in `Sources/ArrumatorCore/Resourc
   progress, `ollama.maxResponseBytes`; how long what the server said of where a model runs is trusted,
   `ollama.modelLocationMaxAge`, 0 to ask before every request; how many characters of a prompt a token of the model's
   context is reckoned to hold, `ollama.charsPerToken`, by which a search task's request and a question, with what they
-  are shown, are fit to the context they are read in before they are sent), `watcher` (when a file in Incoming has
-  stopped changing, what is never taken in, how long one that has stopped changing but cannot be opened is waited for
-  before History says so, `watcher.unopenableWaitSeconds`, 0 or more, and the most items a package may hold to be one
-  document, in Incoming or named to `arrumatorcli ingest`, `watcher.maxPackageItems`, at least 1), `records` (the names
-  of the archive's record files and of its system and history folders, such as `records.labelRulesFileName`,
-  `records.searchTasksFileName` and `records.conversationsFolderName`), `ingest` (attempts and retry delays, and how
+  are shown, are fit to the context they are read in before they are sent), `watcher` (when a file in Incoming or the
+  archive has stopped changing, what is never taken in, how long a file that has not stopped changing is waited for
+  before History says it is taking long, as it is waited for still, looked at every `watcher.awayPollSeconds`,
+  `watcher.stabilityMaxWaitSeconds`, how long one that has stopped changing but cannot be opened is waited for before it
+  is let go and, in Incoming, History says so, `watcher.unopenableWaitSeconds`, 0 or more, the most items a package may
+  hold to be one document, in Incoming, in the archive or named to `arrumatorcli ingest`, `watcher.maxPackageItems`, at
+  least 1, and how often the archive's folder is looked for while it is away, and a file taking long looked at,
+  `watcher.awayPollSeconds`), `records` (the names of the archive's record files and of its system and history folders,
+  such as `records.labelRulesFileName`, `records.searchTasksFileName` and `records.conversationsFolderName`), `ingest`
+  (attempts and retry delays, also how many starts a change in the archive that cannot be taken in is tried at, and how
   long quitting waits for the file in hand, the request being read and the question being answered to stop,
   `ingest.quitTimeout`, after which the `ollama serve` the app started is stopped all the same), `extraction` (OCR and
   extraction limits, among them how much of an e-mail is read, `extraction.emailReadCapBytes`, and of its body,
@@ -388,11 +392,15 @@ sidebar's bar, shows at the foot of the window that reading the archive failed, 
 any change to labels, rules, tasks or questions with the same reason, until the file is corrected or moved out of the
 archive and the index rebuilt in Settings › Advanced, which starts the filing again and clears the foot of the
 window, or the app opened again. An archive whose folder is not there, renamed, moved or on a disk that is not
-connected, is away: the app says **Not filing: the archive's folder is not there** above the bar, names the folder
-above every page and at the foot of the window, and makes no folder in its place. Once the disk is back, **Try Again**
-there opens it and starts filing; **Choose Another Archive…** switches to another. When the app cannot start at all,
-as when its settings cannot be read, the main window says why with **Try Again**, never the window that sets the app
-up. The
+connected, is away, at launch or while the app runs: the app says **Not filing: the archive's folder is not there**
+above the bar and names the folder at the foot of the window, makes no folder in its place, files nothing and writes no
+record file, and Incoming waits: nothing in it is read or sent to the model, and a file the app had in hand stops before
+its next step. An Incoming folder that is not there is made only in a folder that is, never on a disk not connected or
+in the archive's folder while it is away. It looks for the folder every `watcher.awayPollSeconds`, and once the same
+folder is back, also on a disk attached again, the work goes on by itself; the app need not be opened again, though
+**Try Again** above every page looks at once, and **Choose Another Archive…** switches to another. When the app cannot
+start at all, as when its settings cannot be read, the main window says why with **Try Again**, never the window that
+sets the app up. The
 app makes an archive's folder only when you set the archive up: when you finish onboarding, or switch to a folder that
 is not there. A setting you change meanwhile, as during onboarding, is changed, and recorded in History once
 the index is rebuilt; a change to labels before the archive has been read is refused, saying it can be made once
