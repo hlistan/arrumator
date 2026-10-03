@@ -43,21 +43,12 @@ extension CommandLineTests {
     func run(_ home: Home, _ arguments: [String]) throws -> Result {
         let command = Bundle(for: Marker.self).bundleURL.deletingLastPathComponent().appendingPathComponent("arrumatorcli")
         guard FileManager.default.isExecutableFile(atPath: command.path) else { throw CocoaError(.fileNoSuchFile) }
-        let process = Process()
-        process.executableURL = command
-        process.arguments = arguments
         // Only what the command needs: its scratch home and Trash, and a home folder for the disk-space check.
-        process.environment = ["ARRUMATOR_HOME": home.support.path, "ARRUMATOR_TRASH": home.root.appendingPathComponent("Trash").path,
-                               "HOME": FileManager.default.homeDirectoryForCurrentUser.path]
-        let out = Pipe()
-        let err = Pipe()
-        process.standardOutput = out
-        process.standardError = err
-        try process.run()
-        let stdout = out.fileHandleForReading.readDataToEndOfFile()
-        let stderr = err.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        return Result(status: process.terminationStatus, stdout: stdout, stderr: String(decoding: stderr, as: UTF8.self))
+        let outcome = try ChildProcess.run(command, arguments, environment: [
+            "ARRUMATOR_HOME": home.support.path, "ARRUMATOR_TRASH": home.root.appendingPathComponent("Trash").path,
+            "HOME": FileManager.default.homeDirectoryForCurrentUser.path,
+        ])
+        return Result(status: outcome.status, stdout: outcome.stdout, stderr: String(decoding: outcome.stderr, as: UTF8.self))
     }
 
     func settings(_ home: Home) throws -> AppSettings {

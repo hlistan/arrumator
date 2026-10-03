@@ -73,7 +73,7 @@ struct TasksPage: View {
         guard !asked.isEmpty else { return }
         prompt = ""
         let (effort, profile) = (model.settings?.taskEffort, askProfile)
-        Task {
+        Task<Void, Never> {
             guard let task = await model.load(Wording.askAction, {
                 try await $0.searchTasks.create(prompt: asked, effort: effort, profile: profile)
             }) else {
@@ -185,7 +185,7 @@ struct TaskCard: View {
         .confirmationDialog(Wording.removeTaskQuestion(detail?.task.name ?? ""), isPresented: $confirmingRemoval) {
             Button(Wording.removeTaskConfirm, role: .destructive) {
                 let id = taskID
-                Task { await model.perform(Wording.removeTaskAction) { try await $0.searchTasks.delete(id) } }
+                Task<Void, Never> { await model.perform(Wording.removeTaskAction) { try await $0.searchTasks.delete(id) } }
             }
         } message: {
             Text(Wording.removeTaskNote)
@@ -231,7 +231,7 @@ struct TaskCard: View {
                             change(SearchTaskChange(prompt: prompt))
                         } else {
                             let id = taskID
-                            Task { await model.perform(Wording.findAgainAction) { _ = try await $0.searchTasks.retry(id) } }
+                            Task<Void, Never> { await model.perform(Wording.findAgainAction) { _ = try await $0.searchTasks.retry(id) } }
                         }
                     }
                     .help(Wording.findAgainHelp)
@@ -352,7 +352,7 @@ struct TaskCard: View {
 
     private func change(_ change: SearchTaskChange) {
         let id = taskID
-        Task { await model.perform(Wording.changeTaskAction) { _ = try await $0.searchTasks.update(id, change) } }
+        Task<Void, Never> { await model.perform(Wording.changeTaskAction) { _ = try await $0.searchTasks.update(id, change) } }
     }
 
     /// Asks where, exports there, and shows the export in Finder. The panel opens where the task was last exported to, or
@@ -362,7 +362,7 @@ struct TaskCard: View {
         let start = last ?? model.settings?.archiveURL.deletingLastPathComponent().path
         guard let path = FolderPicker.choose(title: Wording.chooseExportFolder, startingAt: start) else { return }
         let id = taskID
-        Task {
+        Task<Void, Never> {
             guard let export = await model.load(Wording.exportAction, {
                 try await $0.searchTasks.export(id, to: URL(fileURLWithPath: path, isDirectory: true), format: format)
             }) else { return }
@@ -458,7 +458,7 @@ private struct SetDocument: View {
             ListRow(symbol: document.status.symbol, tint: document.status.tint, title: document.filename,
                     detail: Wording.rowDetail(of: document, archive: model.settings?.archiveURL, incoming: model.settings?.incomingURL),
                     subtitle: Wording.labels(document.labels))
-                .onTapGesture(count: 2) { model.open(document.path) }
+                .openAction { model.open(document.path) }
                 .help(Wording.doubleClickToOpen)
             Button(action: takeOut) {
                 Image(systemName: "xmark.circle.fill").accessibilityLabel(Wording.takeOutNamed(document.filename))
@@ -474,7 +474,7 @@ private struct SetDocument: View {
     private func takeOut() {
         guard let id = document.id else { return }
         let task = taskID
-        Task { await model.perform(Wording.takeOutOfTaskAction) { _ = try await $0.searchTasks.remove(task, documents: [id]) } }
+        Task<Void, Never> { await model.perform(Wording.takeOutOfTaskAction) { _ = try await $0.searchTasks.remove(task, documents: [id]) } }
     }
 }
 
@@ -492,7 +492,7 @@ struct CollectingBar: View {
             if !model.labelSelection.isEmpty {
                 Button(Wording.addAllShown) {
                     let (id, labels) = (task.id, model.labelSelection)
-                    Task { await model.perform(Wording.addToTaskAction) { _ = try await $0.searchTasks.add(id, labelled: labels) } }
+                    Task<Void, Never> { await model.perform(Wording.addToTaskAction) { _ = try await $0.searchTasks.add(id, labelled: labels) } }
                 }
                 .buttonStyle(.link)
             }
@@ -512,7 +512,7 @@ struct CollectToggle: View {
         let inSet = task.documents.contains(document)
         Button {
             let id = task.id
-            Task {
+            Task<Void, Never> {
                 await model.perform(inSet ? Wording.takeOutOfTaskAction : Wording.addToTaskAction) { runtime in
                     if inSet { _ = try await runtime.searchTasks.remove(id, documents: [document]) } else {
                         _ = try await runtime.searchTasks.add(id, documents: [document])

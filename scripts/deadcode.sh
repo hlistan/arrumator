@@ -1,9 +1,11 @@
 #!/bin/sh
 # Fails on unused code anywhere in the package, its tests, the command or the app (Periphery, .periphery.yml).
-# It reads the index stores the builds leave, so it runs after `swift test` and the app build: scripts/verify.sh --app.
+# It reads the index stores the builds leave, so it runs after `swift test` and the release build
+# (scripts/build-release.sh, which keeps an index of the app): scripts/verify.sh --app.
 set -u
 
 cd "$(dirname "$0")/.." || exit 1
+PATH=$PWD/.tools/bin:$PATH
 
 # SwiftPM keeps its index store at the root of its build folder, two levels above the products.
 package_index=$(cd "$(swift build --show-bin-path)/../.." && pwd)

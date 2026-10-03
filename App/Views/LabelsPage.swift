@@ -115,7 +115,7 @@ private struct SuggestionCard: View {
     }
 
     private func run(_ what: String, _ action: @escaping @Sendable (ArrumatorRuntime) async throws -> Void) {
-        Task { await model.perform(what) { try await action($0) } }
+        Task<Void, Never> { await model.perform(what) { try await action($0) } }
     }
 }
 
@@ -175,7 +175,7 @@ struct LabelCard: View {
         .confirmationDialog(Wording.removeEverywhereQuestion(Wording.label(label)), isPresented: $confirmingRemoval) {
             Button(Wording.removeEverywhere, role: .destructive) {
                 let label = label
-                Task { await model.perform(Wording.removeLabelAction) { try await $0.labels.ignore(label) } }
+                Task<Void, Never> { await model.perform(Wording.removeLabelAction) { try await $0.labels.ignore(label) } }
             }
         } message: {
             Text(Wording.removedForGoodFromLabels)
@@ -185,7 +185,7 @@ struct LabelCard: View {
     private func merge() {
         let (label, value) = (label, into.trimmingCharacters(in: .whitespaces))
         guard !value.isEmpty else { return }
-        Task { await model.perform(Wording.mergeLabelsAction) { try await $0.labels.merge(label, into: value) } }
+        Task<Void, Never> { await model.perform(Wording.mergeLabelsAction) { try await $0.labels.merge(label, into: value) } }
         into = ""
     }
 
@@ -205,7 +205,7 @@ private struct RuleRow: View {
                     detail: Wording.labelKind(rule.kind))
             Button(Wording.forget) {
                 guard let id = rule.id else { return }
-                Task { await model.perform(Wording.forgetRuleAction) { try await $0.labels.forget(rule: id) } }
+                Task<Void, Never> { await model.perform(Wording.forgetRuleAction) { try await $0.labels.forget(rule: id) } }
             }
             .buttonStyle(.borderless).font(.callout)
             .help(Wording.forgetHelp)

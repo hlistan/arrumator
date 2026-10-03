@@ -101,7 +101,9 @@ Support/Arrumator` or a running Arrumator of the user's.
    the window's elements (`tree`, `find`), presses buttons and menu items (`press`), clicks and double-clicks rows
    (`click`, `dclick`), types into fields (`set`, `type`), sends keys (`key return`, `key escape`, `key f cmd`), scrolls
    (`scroll`) and screenshots its window and no other (`shot`). The terminal it runs in needs Accessibility in System
-   Settings › Privacy & Security. It never reads the system's Apple menu, which lists the user's own recent files. The
+   Settings › Privacy & Security. It never reads the system's Apple menu, which lists the user's own recent files.
+   Its pointer events reach whatever window is under the pointer, so it refuses a click, hover or scroll at a point
+   where one of the process's windows is not the frontmost, and it refuses `shot` while a file panel is open. The
    screen must be unlocked: while it is locked, the accessibility API gives every window, any app's, as the application
    itself, `windows` lists none and `shot` makes no image, so wait for the user rather than read anything into it.
    A file panel (Choose…, Export) opens on the user's own folders: never read its elements, which list the user's files,

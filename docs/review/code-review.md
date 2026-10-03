@@ -65,7 +65,7 @@ more than one thing; a change that is only large is reviewed by area, and the re
 
 | # | The author has | Because |
 |---|---|---|
-| 1 | Run the verify command the change's scope calls for, and quoted its result (§4.9). For a change to code, also the warnings of a clean build, which the verify command does not show: `swift build --build-tests --build-path <a scratch folder> 2>&1 \| grep 'warning:'`. | Machines check first; a reviewer's time is not spent on what a gate finds. |
+| 1 | Run the verify command the change's scope calls for, and quoted its result (§4.9). A warning in Arrumator's own code fails the build, so a green run has none. | Machines check first; a reviewer's time is not spent on what a gate finds. |
 | 2 | Kept the change to one thing: a fix, a feature or a refactoring, not two. A refactoring that a fix needs goes first, on its own. The tests, the documents and the rule the Learn step adds belong to the change. | "The CL makes a minimal change that addresses just one thing" ([Google, *Small CLs*](https://google.github.io/eng-practices/review/developer/small-cls.html)). |
 | 3 | Kept it small: under about 400 changed lines of Swift in `Sources/` and `App/` where the change allows; tests, fixtures, bundled JSON and documents are not counted. A larger change says why it cannot be split. | Defect detection falls above 200 to 400 lines and after 60 to 90 minutes ([Cohen 2006](https://static0.smartbear.co/support/media/resources/cc/book/code-review-cisco-case-study.pdf)). |
 | 4 | Filled in the pull request template: what and why, acceptance criteria with the command that proves them, test coverage, what changes for an installed app. | Understanding the change is the reviewer's main difficulty; context makes review faster and better (Bacchelli and Bird 2013). |
@@ -423,14 +423,14 @@ The gates are line patterns, so they see less than their rule says, and review c
 
 | Rule | The check sees | Review also asks |
 |---|---|---|
-| Everything stays local (§4.1) | `URLSession`, `NWConnection`, `WKWebView` and `import Network` in Swift sources. | A child process, a framework that loads remote content, a link rendered from a model's answer, the session's proxy and redirect behaviour. |
+| Everything stays local (§4.1) | `URLSession`, `NWConnection`, `WKWebView` and `import Network` in Swift sources, and a child process started anywhere but the three named. | What a named child process does, a framework that loads remote content, a link rendered from a model's answer, the session's proxy and redirect behaviour. |
 | Log messages are constants (§4.1) | The compiler: `Log`'s message is a `StaticString`, so a message built at run time does not compile. | A field on `LogEntry.shareableFields` whose value comes from a document; a constant message that itself names a document. |
-| Nothing is deleted (§4.2) | Who calls `trashItem` and `SystemTrash()`. | `removeItem`, an atomic write over an existing file, a move that replaces. |
-| Rows open from the keyboard (§4.7) | A single-tap `onTapGesture` outside `rowAction`. | A double-click gesture, a hover-only control, an icon-only button without a name. |
-| Module boundaries (§5) | The dependencies each target declares. | The `import` lines themselves: a module reached through another target can be imported without being declared. |
-| No new warnings (§3) | Nothing: a warning does not fail the build. | The build log of the change. |
+| Nothing is deleted (§4.2) | Who calls `trashItem` and `SystemTrash()`; every `removeItem`, `unlink` or `rmdir` in `Sources/` and `App/` but the named few. | An atomic write over an existing file, a move that replaces, what one of the named removals is given. |
+| Rows open from the keyboard (§4.7) | A tap gesture, single or double, outside `rowAction` and `openAction`. | A hover-only control, an icon-only button without a name. |
+| Module boundaries (§5) | Each `import` of a module of the package or its dependencies against what the importing target declares (imports check). | A declaration widened to allow an import §5 forbids. |
+| No new warnings (§3) | The build: a warning in Arrumator's own targets is an error. | A warning silenced in place. |
 | Documents match the code (§4.10) | Names that exist; `pipeline.json` keys the documents name. | Keys no document names, `settings.json` keys, and every sentence about behaviour. |
-| A gate holds | The gate's own pattern. | A gate passes when its `grep` fails to run, so a renamed folder or a broken pattern looks like success. |
+| A gate holds | Its sample, which it must refuse, and a search that cannot run (a broken pattern, a missing folder), which fails it. | A new way of writing what it forbids that its pattern does not match. |
 
 ## A change an agent wrote
 
@@ -475,8 +475,7 @@ An agent that reviews follows everything above, and these rules, which are what 
 A review of everything is too large for one reader to hold, so it is divided, measured first, and checked twice.
 
 1. **Measure before reading.** Run `scripts/verify.sh --app` and quote it. Run `swift test --enable-code-coverage` for
-   line coverage by file (remove the `default.profraw` it leaves in the repository). Build once into a scratch build
-   folder to list the compiler's warnings.
+   line coverage by file (remove the `default.profraw` it leaves in the repository).
 2. **Divide by what the modules own**, as [§5](../../AGENTS.md#5-boundaries) and
    [Architecture](../architecture.md#inside-core) divide the code, into parts one reviewer can read whole, about four
    thousand lines each. Add one reviewer for the tests and one for the scripts, workflows and documents.

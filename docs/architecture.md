@@ -462,18 +462,22 @@ evolutionary architecture, and what each protects.
 | Rule | Checked by |
 |---|---|
 | Only `RuntimeEnvironment` reads the process environment. | `scripts/lint.sh`, environment gate |
-| Only `OllamaClient` opens connections, through the guard. | `scripts/lint.sh`, network gate |
+| Only `OllamaClient` opens connections, through the guard, and only the named few start a child process. | `scripts/lint.sh`, network gate |
 | A log message is a constant; what varies goes in its fields, which a diagnostics export keeps by allow-list. | `swift build`: `Log`'s message is a `StaticString`; `DiagnosticsTests` |
 | No `fatalError` or `try!` in shipped code. | `scripts/lint.sh`, crash gate; SwiftLint `force_unwrapping` |
 | Quitting has one path: work at quit runs before AppKit lets the app end, and nothing else in the app stops the runtime. | `scripts/lint.sh`, quit gate |
 | Only `SystemTrash` calls `trashItem`; everything else, a move across volumes among it, goes through `Trashing`. | `scripts/lint.sh`, trash gate |
-| What opens on a click opens from the keyboard. | `scripts/lint.sh`, rows gate |
+| Nothing is removed but a move's temporary copy, export staging, old logs, a record file the app wrote and a command's own throw-away folder. | `scripts/lint.sh`, delete gate |
+| What opens on a click or a double click opens from the keyboard. | `scripts/lint.sh`, rows gate |
 | A day or a moment Core and extraction read or write is in the time zone the runtime gives them (`ExtractorRegistry`, `ArchiveRecords`, `PipelineServices.timeZone`), and a day is Gregorian, never in the Mac's calendar. | `scripts/lint.sh`, calendar gate |
 | A runtime acts on its own archive: only `bootstrap` and a switch read the archive from the settings. | `scripts/lint.sh`, archive gate |
 | No `TODO`, `FIXME`, `HACK` or `XXX`. | `scripts/lint.sh`, debt gate |
 | The app icon is the project's own drawing. | `scripts/lint.sh`, icon gate |
 | No unused code. | `scripts/deadcode.sh` (Periphery) |
+| A module imports only what its target declares. | `scripts/lint.sh`, imports check |
+| Every gate can fail: it refuses a sample of what it forbids, and a search that cannot run fails it. | `scripts/lint.sh` |
 | Data-race safety. | `swift build` in Swift 6 language mode |
+| No compiler warning in Arrumator's own code. | `swift build` and the app build: warnings are errors (`Package.swift`, `project.yml`) |
 | Every default is in the bundled JSON; no unknown key is read. | `ConfigTests` |
 | The model is never asked for, or shown, a tag. | `DocumentAnalyzerTests`, `SearchInterpreterTests`; `PipelineConfig.problems` |
 | Shipped migrations keep their identifiers, and an earlier schema migrates. | `MigrationTests` |
@@ -482,10 +486,9 @@ evolutionary architecture, and what each protects.
 | No secret, signing material or real document is committed. | `scripts/check-secrets.sh`, the Git hooks |
 | Workflows are pinned and least-privileged. | actionlint, zizmor |
 
-Three rules have no check of their own and are held by review: that a module imports only what
-[§5](../AGENTS.md#5-boundaries) allows (the package manifest declares the dependencies, but an import of a module
-reached through another target still compiles), that concrete services are built only in Runtime, and that no
-compiler warning is added.
+Two rules have no check of their own and are held by review: that what a target declares is what
+[§5](../AGENTS.md#5-boundaries) allows (the imports check holds each `import` to the declarations, not the declarations
+to the table), and that concrete services are built only in Runtime.
 
 ## Limits to know
 

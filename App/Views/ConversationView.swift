@@ -32,7 +32,7 @@ struct ConversationView: View {
         .confirmationDialog(Wording.clearConversationQuestion(task.name), isPresented: $confirmingClear) {
             Button(Wording.clearConversationConfirm, role: .destructive) {
                 let id = task.id
-                Task { await model.perform(Wording.clearConversationAction) { try await $0.conversations.clear(id) } }
+                Task<Void, Never> { await model.perform(Wording.clearConversationAction) { try await $0.conversations.clear(id) } }
             }
         } message: {
             Text(Wording.clearConversationNote)
@@ -63,7 +63,7 @@ struct ConversationView: View {
         guard !typed.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         question = ""
         let id = task.id
-        Task {
+        Task<Void, Never> {
             if await model.perform(Wording.askQuestionAction, { try await $0.conversations.ask(id, question: typed) }) == nil,
                question.isEmpty {
                 question = typed
@@ -147,7 +147,7 @@ private struct TurnView: View {
             if progress != nil {
                 Button(Wording.stopAnswer) {
                     let id = turn.id
-                    Task { await model.perform(Wording.stopAnswerAction) { try await $0.conversations.stop(id) } }
+                    Task<Void, Never> { await model.perform(Wording.stopAnswerAction) { try await $0.conversations.stop(id) } }
                 }
                 .help(Wording.stopAnswerHelp)
             } else {
@@ -156,7 +156,7 @@ private struct TurnView: View {
                 }
                 Button(Wording.askAgain) {
                     let id = turn.id
-                    Task { await model.perform(Wording.askAgainAction) { _ = try await $0.conversations.askAgain(id) } }
+                    Task<Void, Never> { await model.perform(Wording.askAgainAction) { _ = try await $0.conversations.askAgain(id) } }
                 }
                 .help(Wording.askAgainHelp)
             }
@@ -272,7 +272,7 @@ private struct FindingView: View {
                 HStack(spacing: Style.rowAccessorySpacing) {
                     ListRow(symbol: document.status.symbol, tint: document.status.tint, title: document.filename,
                             detail: document.documentDate, subtitle: Wording.labels(document.labels))
-                        .onTapGesture(count: 2) { model.open(document.path) }
+                        .openAction { model.open(document.path) }
                         .help(Wording.doubleClickToOpen)
                     if let id = document.id, task.documents.contains(id) {
                         Image(systemName: "checkmark.circle.fill").foregroundStyle(Palette.tasksList).help(Wording.inTaskAlready)
@@ -287,6 +287,6 @@ private struct FindingView: View {
 
     private func add(_ ids: [Int64]) {
         let id = task.id
-        Task { await model.perform(Wording.addToTaskAction) { _ = try await $0.searchTasks.add(id, documents: ids) } }
+        Task<Void, Never> { await model.perform(Wording.addToTaskAction) { _ = try await $0.searchTasks.add(id, documents: ids) } }
     }
 }

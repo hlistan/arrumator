@@ -18,11 +18,15 @@ struct Verifier {
         let manifestURL = root.appending(path: Manifest.fileName)
         let manifest = try Manifest.decoder.decode(Manifest.self, from: Data(contentsOf: manifestURL))
         print("Verifying \(manifest.fixtures.count) fixtures in \(root.path)")
+        let readsText = await OCREngine.isAvailable()
+        if !readsText {
+            print("  OCR checks skipped: Vision cannot recognise text on this machine (virtual Macs cannot)")
+        }
         var outcomes = [selfCheck(seed: manifest.seed)]
         report(outcomes[0])
         var totalBytes = 0
         for record in manifest.fixtures {
-            let outcome = try await verify(record)
+            let outcome = try await verify(record, readsText: readsText)
             totalBytes += (try? Data(contentsOf: root.appending(path: record.file)).count) ?? 0
             report(outcome)
             outcomes.append(outcome)
@@ -69,7 +73,8 @@ struct Verifier {
 
     // MARK: Per-fixture checks
 
-    private func verify(_ record: FixtureRecord) async throws -> Outcome {
+    /// Checks one fixture; with `readsText` false, everything but what only OCR can tell.
+    private func verify(_ record: FixtureRecord, readsText: Bool) async throws -> Outcome {
         var outcome = Outcome(subject: record.file)
         let url = root.appending(path: record.file)
         guard let data = try? Data(contentsOf: url), !data.isEmpty else {
@@ -102,21 +107,7 @@ struct Verifier {
         case .text:
             checkTextFile(data, record, into: &outcome)
         case .pdfScan:
-            let layer = (TextProbe.pdfText(at: url) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            if !layer.isEmpty {
-                outcome.failures.append("scan has a text layer (\(layer.count) characters)")
-            }
-            let pages = ImageProbe.pages(ofPDFAt: url, dpi: settings.verification.ocrDPI)
-            guard !pages.isEmpty else {
-                outcome.failures.append("PDF has no renderable pages")
-                return outcome
-            }
-            var text = ""
-            for page in pages {
-                text += try await OCREngine().recognize(page, primary: record.lang) + "\n"
-            }
-            outcome.notes.append("no text layer, \(pages.count) page\(pages.count == 1 ? "" : "s")")
-            checkOCR(text, record, into: &outcome)
+            try await checkScan(url, record, readsText: readsText, into: &outcome)
         case .imagePhoto, .imageScreenshot:
             guard let image = ImageProbe.image(at: url) else {
                 outcome.failures.append("image cannot be decoded")
@@ -129,9 +120,36 @@ struct Verifier {
                     outcome.failures.append("EXIF DateTimeOriginal missing")
                 }
             }
-            checkOCR(try await OCREngine().recognize(image, primary: record.lang), record, into: &outcome)
+            if readsText {
+                checkOCR(try await OCREngine().recognize(image, primary: record.lang), record, into: &outcome)
+            } else {
+                outcome.notes.append("OCR skipped")
+            }
         }
         return outcome
+    }
+
+    /// A scan has no text layer, renders, and, where Vision reads text, OCRs to its title words.
+    private func checkScan(_ url: URL, _ record: FixtureRecord, readsText: Bool, into outcome: inout Outcome) async throws {
+        let layer = (TextProbe.pdfText(at: url) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !layer.isEmpty {
+            outcome.failures.append("scan has a text layer (\(layer.count) characters)")
+        }
+        let pages = ImageProbe.pages(ofPDFAt: url, dpi: settings.verification.ocrDPI)
+        guard !pages.isEmpty else {
+            outcome.failures.append("PDF has no renderable pages")
+            return
+        }
+        outcome.notes.append("no text layer, \(pages.count) page\(pages.count == 1 ? "" : "s")")
+        guard readsText else {
+            outcome.notes.append("OCR skipped")
+            return
+        }
+        var text = ""
+        for page in pages {
+            text += try await OCREngine().recognize(page, primary: record.lang) + "\n"
+        }
+        checkOCR(text, record, into: &outcome)
     }
 
     /// Text-layer formats must contain every title word, every expected identifier and no unlisted

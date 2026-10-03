@@ -28,7 +28,7 @@ struct SettingsView: View {
 /// Binding into the settings in force that saves on change. `loaded` is what the page was opened with, which the
 /// settings never go back from being, so the binding has a value without making one up.
 @MainActor
-func setting<T: Sendable>(_ model: AppModel, _ loaded: AppSettings, _ keyPath: WritableKeyPath<AppSettings, T> & Sendable) -> Binding<T> {
+func setting<T: Sendable>(_ model: AppModel, _ loaded: AppSettings, _ keyPath: any WritableKeyPath<AppSettings, T> & Sendable) -> Binding<T> {
     Binding(get: { (model.settings ?? loaded)[keyPath: keyPath] },
             set: { newValue in Task { await model.update { $0[keyPath: keyPath] = newValue } } })
 }

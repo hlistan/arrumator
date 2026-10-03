@@ -41,6 +41,10 @@ opt_in_rules:
   - yoda_condition
   - duplicate_imports
   - fatal_error_message
+  # AGENTS.md §3: a failure is never swallowed, and a throwing Task whose result nobody reads drops its error.
+  - unhandled_throwing_task
+  # A view's @State is its own: set from outside, it is silently ignored after the first render.
+  - private_swiftui_state
 
 line_length:
   warning: 200

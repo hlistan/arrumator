@@ -213,7 +213,7 @@ The rules of [AGENTS.md §3](../../AGENTS.md#3-core-principles) apply; these are
 | B4 | A new dependency is needed, maintained, licensed compatibly, unable to reach the network (§4.1), without build plugins or binary targets, and its notice ships with the release. | [Cox, *Our Software Dependency Problem*](https://research.swtch.com/deps) | Four direct dependencies |
 | B5 | Resources are reached through `Bundle.module`, and a default or a prompt is a resource, not a literal. | [Apple, *Bundling resources with a Swift package*](https://developer.apple.com/documentation/xcode/bundling-resources-with-a-swift-package) | `Defaults/`, `Prompts/` |
 | B6 | `project.yml` is the source of the project and of `Info.plist`; a generated file is not edited by hand. | [XcodeGen, *Project Spec*](https://github.com/yonaskolb/XcodeGen/blob/master/Docs/ProjectSpec.md) | `project.yml` |
-| B7 | The change adds no compiler warning. Nothing fails the build on one, and the verify command does not show them, so the author quotes the warnings of a clean build ([Before a review starts](code-review.md#before-a-review-starts), 1). | §3 | |
+| B7 | The change adds no compiler warning, and silences none in place: Arrumator's own targets treat every warning as an error. | §3 | `Package.swift`, `project.yml` |
 | B8 | A SwiftLint rule is disabled in place, with its reason, and a threshold is raised only by a change that says why. | `.swiftlint.yml` | |
 
 ## What the tools decide, and what a person must

@@ -101,7 +101,7 @@ struct DocumentCard: View {
     private func header(_ d: DocumentRecord) -> some View {
         HStack(alignment: .top, spacing: Style.thumbnailSpacing) {
             FileThumbnail(url: d.url, size: Style.thumbnail)
-                .onTapGesture(count: 2) { model.open(d.path) }
+                .openAction { model.open(d.path) }
                 .help(Wording.doubleClickToOpen)
             VStack(alignment: .leading, spacing: Style.cardHeaderSpacing) {
                 TextField(Wording.name, text: $name)
@@ -218,7 +218,7 @@ struct DocumentCard: View {
             Text(Wording.readAgainQueued).foregroundStyle(.secondary)
         } else {
             Button(Wording.readAgain) {
-                Task {
+                Task<Void, Never> {
                     readAgainAsked = await model.perform(Wording.readAgainAction) { try await $0.review.retry(documentID) } != nil
                 }
             }
@@ -316,7 +316,7 @@ struct LabelChip: View {
         .confirmationDialog(Wording.removeEverywhereQuestion(Wording.label(label)), isPresented: $confirmingRemoval) {
             Button(Wording.removeEverywhere, role: .destructive) {
                 let label = label
-                Task { await model.perform(Wording.removeLabelAction) { try await $0.labels.ignore(label) } }
+                Task<Void, Never> { await model.perform(Wording.removeLabelAction) { try await $0.labels.ignore(label) } }
             }
         } message: {
             Text(Wording.removedForGoodFromCard)

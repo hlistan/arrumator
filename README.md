@@ -162,3 +162,6 @@ privately, as [SECURITY.md](SECURITY.md) describes.
 ## License
 
 [MIT](LICENSE)
+
+Arrumator includes open-source packages under the MIT and Apache 2.0 licences. Their licence texts ship with every
+download, in `NOTICES.txt`: inside the app (`Arrumator.app/Contents/Resources`) and beside `arrumatorcli`.

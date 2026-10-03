@@ -25,6 +25,7 @@ targets:
       - package: ArrumatorPackages
         product: ArrumatorCore
     info:
+      # Written by `xcodegen generate` from these properties, its one source; Git ignores the file.
       path: App/Info.plist
       properties:
         CFBundleDisplayName: Arrumator
@@ -57,15 +58,17 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
         SWIFT_STRICT_CONCURRENCY: complete
+        # As the package's own targets (Package.swift): `any` written out, and no warning left standing.
+        SWIFT_UPCOMING_FEATURE_EXISTENTIAL_ANY: YES
+        SWIFT_TREAT_WARNINGS_AS_ERRORS: YES
+        GCC_TREAT_WARNINGS_AS_ERRORS: YES
         ENABLE_HARDENED_RUNTIME: true
         ENABLE_APP_SANDBOX: false
+        # Every build is signed ad hoc, to run here; scripts/release.sh signs a release for distribution.
         CODE_SIGN_STYLE: Manual
         CODE_SIGN_IDENTITY: "-"
         DEVELOPMENT_TEAM: ""
         COMBINE_HIDPI_IMAGES: true
-      configs:
-        Release:
-          CODE_SIGN_IDENTITY: Developer ID Application
 schemes:
   Arrumator:
     build:

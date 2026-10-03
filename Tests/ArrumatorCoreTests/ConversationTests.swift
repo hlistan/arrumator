@@ -160,13 +160,13 @@ import Testing
         let waiting = try await turn(talk, asked.id)
         #expect(waiting.state == .queued && waiting.problem == nil, "the question waits in the queue, no failure")
         let status = await away.status
-        let retry = w.h.env.time.now().addingTimeInterval(try #require(w.h.env.config.ingest.retryDelays.last))
+        let retry = w.h.env.time.now().addingTimeInterval(w.h.env.config.ingest.retryDelays.last)
         #expect(status.waitingForOllama && status.queued == 1 && status.retryAt == retry, "and the queue says it waits for Ollama, until when")
         #expect(status.progress(of: waiting) == .waitingForOllama(until: retry), "which the question shows")
         let (back, _) = w.h.conversations(StubAnswerer(fallback: Self.reply), interpreter: StubInterpreter(plans: [:]))
         await back.drain()
         #expect(try await turn(talk, asked.id).state == .queued, "it is not tried again before its time")
-        w.h.env.time.advance(by: try #require(w.h.env.config.ingest.retryDelays.last))
+        w.h.env.time.advance(by: w.h.env.config.ingest.retryDelays.last)
         await back.drain()
         #expect(try await turn(talk, asked.id).answer == Self.reply.text, "and is answered once it is due and Ollama answers")
     }

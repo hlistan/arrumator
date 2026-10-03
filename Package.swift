@@ -1,8 +1,11 @@
 // swift-tools-version: 6.2
 import PackageDescription
 
+// Every first-party target: `any` written out, and no warning left standing (AGENTS.md §3, "no new compiler warnings").
+// SwiftPM applies these to this package's own targets only, never to its dependencies.
 let strict: [SwiftSetting] = [
     .enableUpcomingFeature("ExistentialAny"),
+    .treatAllWarnings(as: .error),
 ]
 
 let package = Package(
@@ -61,7 +64,9 @@ let package = Package(
             swiftSettings: strict
         ),
         .target(name: "ArrumatorTesting", dependencies: ["ArrumatorCore"], path: "Tests/Support", swiftSettings: strict),
-        .testTarget(name: "ArrumatorCoreTests", dependencies: ["ArrumatorCore", "ArrumatorTesting"], swiftSettings: strict),
+        .testTarget(name: "ArrumatorCoreTests",
+                    dependencies: ["ArrumatorCore", "ArrumatorTesting", .product(name: "GRDB", package: "GRDB.swift")],
+                    swiftSettings: strict),
         .testTarget(name: "ArrumatorExtractTests", dependencies: ["ArrumatorExtract", "ArrumatorCore", "ArrumatorTesting"],
                     resources: [.copy("Resources")], swiftSettings: strict),
         .testTarget(name: "ArrumatorClassifyTests", dependencies: ["ArrumatorClassify", "ArrumatorCore", "ArrumatorTesting"],
@@ -69,7 +74,7 @@ let package = Package(
         .testTarget(name: "ArrumatorRuntimeTests", dependencies: ["ArrumatorRuntime", "ArrumatorCore", "ArrumatorTesting"],
                     swiftSettings: strict),
         // Runs the built command itself, so it depends on it to have it built beside the tests.
-        .testTarget(name: "ArrumatorCLITests", dependencies: ["ArrumatorCLI", "ArrumatorCore", "ArrumatorTesting"], swiftSettings: strict),
+        .testTarget(name: "ArrumatorCLITests", dependencies: ["ArrumatorCLI", "ArrumatorCore", "ArrumatorTesting", .product(name: "GRDB", package: "GRDB.swift")], swiftSettings: strict),
     ],
     swiftLanguageModes: [.v6]
 )

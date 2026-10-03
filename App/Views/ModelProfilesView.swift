@@ -64,7 +64,7 @@ struct ModelProfilesView: View {
     private func add() {
         let name = newName
         guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        Task {
+        Task<Void, Never> {
             guard let added = await model.changeSettings(Wording.addProfileAction, { try await $0.profiles.add(name: name) }) else { return }
             stopAdding()
             withAnimation(.snappy) { open = added.id }
@@ -158,7 +158,7 @@ private struct ProfileCard: View {
         .confirmationDialog(Wording.removeProfileQuestion(listing.profile.name), isPresented: $confirmingRemoval) {
             Button(Wording.removeProfileConfirm, role: .destructive) {
                 let id = listing.id
-                Task { if await model.changeSettings(Wording.removeProfileAction, { try await $0.profiles.remove(id) }) != nil { onClose() } }
+                Task<Void, Never> { if await model.changeSettings(Wording.removeProfileAction, { try await $0.profiles.remove(id) }) != nil { onClose() } }
             }
         } message: {
             Text(Wording.removeProfileNote)
@@ -217,7 +217,7 @@ private struct ProfileCard: View {
             if canReset {
                 Button(Wording.resetProfile) {
                     let id = listing.id
-                    Task { await model.changeSettings(Wording.resetProfileAction) { try await $0.profiles.reset(id) } }
+                    Task<Void, Never> { await model.changeSettings(Wording.resetProfileAction) { try await $0.profiles.reset(id) } }
                 }
                 .help(Wording.resetProfileHelp)
             }
@@ -266,7 +266,7 @@ private struct ProfileCard: View {
     private func save(_ change: ModelProfileChange) {
         guard !change.isEmpty else { return }
         let (id, before) = (listing.id, listing)
-        Task {
+        Task<Void, Never> {
             let saved = await model.changeSettings(Wording.changeProfileAction) { try await $0.profiles.update(id, change) }
             show(saved ?? before)
         }
@@ -293,7 +293,7 @@ struct ProfileInUsePicker: View {
 
     var body: some View {
         Picker(Wording.profile, selection: Binding(get: { inUse }, set: { id in
-            Task { await model.changeSettings(Wording.useProfileAction) { try await $0.profiles.use(id) } }
+            Task<Void, Never> { await model.changeSettings(Wording.useProfileAction) { try await $0.profiles.use(id) } }
         })) {
             ForEach(profiles) { Text($0.profile.name).tag($0.id) }
         }

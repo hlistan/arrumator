@@ -1,11 +1,16 @@
-# Every merge to main is checked. A merge that changes code (scripts/change-scope.sh says `release`) is then built and
-# published as a GitHub release: the app, the command and SHA256SUMS, with a build-provenance attestation. Any other
-# merge is not released. scripts/release.sh does the building; docs/releasing.md explains signing.
+# Releases what is on main and newer than the last release, when that includes code: scripts/change-scope.sh says
+# `release` for the change from the last release's tag to main. Every push to main tries, so a release that failed or
+# was cancelled goes out with the next push, or at once when this workflow is run on main by hand (Actions › Release ›
+# Run workflow). It publishes the app, the command and SHA256SUMS as a GitHub release, with a build-provenance
+# attestation. Three jobs, each holding only what it needs (docs/releasing.md): CI compiles and builds the release with
+# no secret; Sign and notarize holds the signing key and compiles nothing; Publish holds the token that writes the
+# release.
 name: Release
 
 on:
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions: {}
 
@@ -13,36 +18,88 @@ concurrency:
   group: release
   cancel-in-progress: false # releases go out one after another, never half-way
 
+env:
+  # One toolchain for every macOS job, named by path on the runner image (docs/releasing.md › Tools and runners).
+  DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
+
 jobs:
-  ci:
-    uses: ./.github/workflows/ci.yml
+  last-release:
+    name: Last release
+    # Only main is released, also when the workflow is run by hand.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
     permissions:
       contents: read
-
-  release:
-    name: Build and publish
-    needs: ci
-    if: needs.ci.outputs.scope == 'release'
-    runs-on: xcode-27
-    environment: release
-    permissions:
-      contents: write # the release and its tag
-      id-token: write # signs the provenance attestation
-      attestations: write
-    env:
-      # Signing is optional: without these secrets the release is signed ad hoc (see docs/releasing.md).
-      SIGNED: ${{ secrets.DEVELOPER_ID_CERTIFICATE_P12 != '' }}
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0 # the patch number counts the commits on main
+          fetch-depth: 0
+          fetch-tags: true
           persist-credentials: false
-      - name: Install XcodeGen
-        env:
-          HOMEBREW_NO_AUTO_UPDATE: "1"
-        run: brew install xcodegen
+      - name: The last release's tag
+        id: tag
+        run: |
+          tag=$(git describe --tags --abbrev=0 --match 'v[0-9]*' HEAD 2>/dev/null || true)
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Last release: ${tag:-none}" >> "$GITHUB_STEP_SUMMARY"
+
+  ci:
+    needs: last-release
+    uses: ./.github/workflows/ci.yml
+    with:
+      base: ${{ needs.last-release.outputs.tag }}
+      keep-release-build: true
+    permissions:
+      contents: read
+
+  sign:
+    name: Sign and notarize
+    needs: ci
+    if: needs.ci.outputs.scope == 'release'
+    runs-on: xcode-27
+    timeout-minutes: 90
+    environment: release
+    permissions: {}
+    outputs:
+      version: ${{ steps.package.outputs.version }}
+      signing: ${{ steps.signing.outputs.signing }}
+    env:
+      # How the release is signed is said, never inferred from which secrets are there (docs/releasing.md › Signing).
+      RELEASE_SIGNING: ${{ vars.RELEASE_SIGNING }}
+    steps:
+      - name: The pinned Xcode is on the runner
+        run: |
+          if [ ! -d "$DEVELOPER_DIR" ]; then
+            echo "::error::$DEVELOPER_DIR is not on this runner image; choose an Xcode it has (docs/releasing.md › Tools and runners)."
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: How the release is signed
+        id: signing
+        run: |
+          case $RELEASE_SIGNING in
+            developer-id | ad-hoc)
+              echo "signing=$RELEASE_SIGNING" >> "$GITHUB_OUTPUT"
+              echo "Signing: $RELEASE_SIGNING" >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            *)
+              echo "::error::Set the release environment's variable RELEASE_SIGNING to developer-id or ad-hoc (docs/releasing.md › Signing)."
+              exit 1
+              ;;
+          esac
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-build
+          path: ${{ runner.temp }}
+      - name: Unpack the release build
+        run: ditto -x -k "$RUNNER_TEMP/release-build.zip" "$RUNNER_TEMP/stage"
       - name: Import the Developer ID certificate and the notarization key
-        if: env.SIGNED == 'true'
+        if: env.RELEASE_SIGNING == 'developer-id'
         env:
           CERTIFICATE_P12: ${{ secrets.DEVELOPER_ID_CERTIFICATE_P12 }}
           CERTIFICATE_PASSWORD: ${{ secrets.DEVELOPER_ID_CERTIFICATE_PASSWORD }}
@@ -51,6 +108,14 @@ jobs:
           NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
           NOTARY_ISSUER: ${{ secrets.NOTARY_ISSUER }}
         run: |
+          missing=""
+          for name in CERTIFICATE_P12 CERTIFICATE_PASSWORD IDENTITY NOTARY_KEY_P8 NOTARY_KEY_ID NOTARY_ISSUER; do
+            [ -n "$(printenv "$name")" ] || missing="$missing $name"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::RELEASE_SIGNING is developer-id, but the release environment lacks the secrets for:$missing (docs/releasing.md › Signing)."
+            exit 1
+          fi
           keychain="$RUNNER_TEMP/signing.keychain-db"
           password=$(uuidgen)
           echo "$CERTIFICATE_P12" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
@@ -68,9 +133,37 @@ jobs:
             echo "NOTARY_KEY_ID=$NOTARY_KEY_ID"
             echo "NOTARY_ISSUER=$NOTARY_ISSUER"
           } >> "$GITHUB_ENV"
-      - name: Build the release
-        id: build
-        run: scripts/release.sh
+      - name: Sign, notarize and package
+        id: package
+        run: scripts/release.sh "$RUNNER_TEMP/stage"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release
+          path: dist/
+          if-no-files-found: error
+          retention-days: 1
+      - name: Remove the signing keychain
+        if: always() && env.RELEASE_SIGNING == 'developer-id'
+        run: |
+          security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true
+          rm -f "$RUNNER_TEMP/notary-key.p8"
+
+  publish:
+    name: Publish
+    needs: sign
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write # the release and its tag
+      id-token: write # signs the provenance attestation
+      attestations: write
+    env:
+      RELEASE_SIGNING: ${{ needs.sign.outputs.signing }}
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release
+          path: dist
       - name: Attest build provenance
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
@@ -78,19 +171,14 @@ jobs:
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.build.outputs.version }}
+          VERSION: ${{ needs.sign.outputs.version }}
         run: |
-          if [ "$SIGNED" = true ]; then
+          if [ "$RELEASE_SIGNING" = developer-id ]; then
             install="Signed with a Developer ID and notarized by Apple: unzip and move Arrumator to Applications."
           else
             install="Signed ad hoc, not notarized: the first time, macOS blocks it. Open it once, then choose"
             install="$install **Open Anyway** in System Settings › Privacy & Security. See the README › Install."
           fi
-          gh release create "v$VERSION" dist/*.zip dist/SHA256SUMS --target "$GITHUB_SHA" \
+          gh release create "v$VERSION" dist/*.zip dist/SHA256SUMS --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
             --title "Arrumator $VERSION" --generate-notes \
             --notes "$install Check a download with \`shasum -a 256 -c SHA256SUMS\` or \`gh attestation verify <file> --repo $GITHUB_REPOSITORY\`."
-      - name: Remove the signing keychain
-        if: always() && env.SIGNED == 'true'
-        run: |
-          security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true
-          rm -f "$RUNNER_TEMP/notary-key.p8"

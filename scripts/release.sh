@@ -1,109 +1,134 @@
 #!/bin/sh
-# Builds a release into dist/: Arrumator.app zipped twice, universal (Apple silicon and Intel) and for Apple silicon
-# alone, the `arrumatorcli` command for Apple silicon with its resource bundles zipped, and SHA256SUMS. CI runs it on
-# every merge to main that changes code (.github/workflows/release.yml); it runs the same way on a Mac.
+# Signs, notarizes and packages a release into dist/, from what scripts/build-release.sh staged: Arrumator.app zipped
+# twice, universal (Apple silicon and Intel) and for Apple silicon alone, the `arrumatorcli` command for Apple silicon
+# with its resource bundles zipped, and SHA256SUMS. CI runs it on what its build job staged, in a job that compiles
+# nothing (.github/workflows/release.yml); on a Mac it builds first.
 #
-# The version is MAJOR.MINOR from MARKETING_VERSION in project.yml, and a patch number that counts the commits on
-# the branch being released, so it grows with every merge to main, released or not. It is printed last, and written to
-# $GITHUB_OUTPUT as `version` when that is set.
+# Usage: scripts/release.sh [<stage>]
+#   <stage>  a folder scripts/build-release.sh filled; without it, scripts/build-release.sh runs first
 #
-# Signing, chosen by what the environment provides:
-#   DEVELOPER_ID      "Developer ID Application: Name (TEAMID)", a certificate in the keychain. Without it both are
-#                     signed ad hoc: they run, but macOS asks the user to allow them once (see README › Install).
-#   Notarization, with DEVELOPER_ID, by either
-#     NOTARY_PROFILE  a notarytool keychain profile (xcrun notarytool store-credentials <profile> …), or
-#     NOTARY_KEY, NOTARY_KEY_ID, NOTARY_ISSUER
-#                     an App Store Connect API key: the .p8 file's path, its key ID and its issuer ID.
+# How it signs is never left to which secrets happen to be there: RELEASE_SIGNING must say it, and a release that
+# cannot be signed as it says stops.
+#   developer-id  DEVELOPER_ID, "Developer ID Application: Name (TEAMID)", a certificate in the keychain; notarized
+#                 with NOTARY_PROFILE, a notarytool keychain profile (xcrun notarytool store-credentials <profile> …),
+#                 or with NOTARY_KEY, NOTARY_KEY_ID and NOTARY_ISSUER, an App Store Connect API key: the .p8 file's
+#                 path, its key ID and its issuer ID. Apple's verdict is read, not only notarytool's exit status.
+#   ad-hoc        signed ad hoc, not notarized: it runs, but macOS asks each user to allow it once (README › Install).
+# The version is the one scripts/build-release.sh staged. It is printed last, and written to $GITHUB_OUTPUT as
+# `version` when that is set.
 set -eu
 
 cd "$(dirname "$0")/.."
 
-series=$(sed -n 's/^ *MARKETING_VERSION: *"\{0,1\}\([0-9][0-9]*\.[0-9][0-9]*\)\..*$/\1/p' project.yml)
-if [ -z "$series" ]; then
-  echo "release: project.yml has no MARKETING_VERSION of the form MAJOR.MINOR.PATCH" >&2
-  exit 1
+# How long notarization may take before the release stops; Apple goes on with the submission regardless.
+notary_timeout=1h
+
+case ${RELEASE_SIGNING:-} in
+  developer-id)
+    if [ -z "${DEVELOPER_ID:-}" ]; then
+      echo "release: RELEASE_SIGNING is developer-id but DEVELOPER_ID is not set" >&2
+      exit 1
+    fi
+    if [ -z "${NOTARY_PROFILE:-}" ] && { [ -z "${NOTARY_KEY:-}" ] || [ -z "${NOTARY_KEY_ID:-}" ] || [ -z "${NOTARY_ISSUER:-}" ]; }; then
+      echo "release: a Developer ID release is notarized: set NOTARY_PROFILE, or NOTARY_KEY, NOTARY_KEY_ID and NOTARY_ISSUER" >&2
+      exit 1
+    fi
+    identity=$DEVELOPER_ID
+    # A Developer ID signature carries a secure timestamp and the hardened runtime, as notarization requires.
+    sign_flags="--timestamp --options runtime"
+    ;;
+  ad-hoc)
+    if [ -n "${DEVELOPER_ID:-}" ]; then
+      echo "release: RELEASE_SIGNING is ad-hoc but DEVELOPER_ID is set; say developer-id to sign with it" >&2
+      exit 1
+    fi
+    identity=-
+    # An ad-hoc signature cannot be timestamped.
+    sign_flags="--options runtime"
+    ;;
+  *)
+    echo "release: set RELEASE_SIGNING to developer-id or ad-hoc (docs/releasing.md › Signing)" >&2
+    exit 1
+    ;;
+esac
+
+if [ $# -gt 1 ]; then
+  echo "usage: scripts/release.sh [<stage>]" >&2
+  exit 2
 fi
-build=$(git rev-list --count HEAD)
-version=$series.$build
+if [ $# -eq 1 ]; then
+  stage=$1
+else
+  scripts/build-release.sh
+  stage=build/Release/stage
+fi
+version=$(cat "$stage/VERSION")
 
 out=dist
-rm -rf "$out" build/Release
+rm -rf "$out"
 mkdir -p "$out"
 
-# A Developer ID signature carries a secure timestamp and the hardened runtime, as notarization requires; an ad-hoc
-# one cannot be timestamped.
-if [ -n "${DEVELOPER_ID:-}" ]; then
-  identity=$DEVELOPER_ID
-  sign_flags="--timestamp --options runtime"
-else
-  identity=-
-  sign_flags="--options runtime"
-fi
-notarize() { # notarize <zip>
+notarytool() { # notarytool <command> <arguments…>, with the credentials the environment gives
   if [ -n "${NOTARY_PROFILE:-}" ]; then
-    xcrun notarytool submit "$1" --keychain-profile "$NOTARY_PROFILE" --wait
+    xcrun notarytool "$@" --keychain-profile "$NOTARY_PROFILE"
   else
-    xcrun notarytool submit "$1" --key "$NOTARY_KEY" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER" --wait
+    xcrun notarytool "$@" --key "$NOTARY_KEY" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER"
   fi
 }
-if [ -n "${DEVELOPER_ID:-}" ] && [ -z "${NOTARY_PROFILE:-}" ] && [ -z "${NOTARY_KEY:-}" ]; then
-  echo "release: DEVELOPER_ID is set but neither NOTARY_PROFILE nor NOTARY_KEY; a signed app must be notarized" >&2
-  exit 1
-fi
+# notarize <zip>: fails unless Apple accepts it, printing Apple's log of what it found otherwise.
+notarize() {
+  submission=$(notarytool submit "$1" --wait --timeout "$notary_timeout" --output-format json) || {
+    echo "release: notarytool could not submit $1 or did not hear back within $notary_timeout: $submission" >&2
+    return 1
+  }
+  status=$(printf '%s' "$submission" | plutil -extract status raw -o - -)
+  if [ "$status" != Accepted ]; then
+    id=$(printf '%s' "$submission" | plutil -extract id raw -o - -)
+    notarytool log "$id" >&2 || true
+    echo "release: Apple did not accept $1: $status" >&2
+    return 1
+  fi
+}
+# sign <code>: signs it with the identity chosen above, with no entitlements: the build signs it to run locally, which
+# grants a debugger access (get-task-allow), and notarization refuses that.
+sign() {
+  # The flags are several words on purpose.
+  # shellcheck disable=SC2086
+  codesign --force --sign "$identity" $sign_flags "$1"
+  codesign --verify --deep --strict "$1"
+  if codesign -d --entitlements - --xml "$1" 2>/dev/null | grep -q get-task-allow; then
+    echo "release: $1 still allows a debugger to attach" >&2
+    return 1
+  fi
+}
 
-echo "→ Arrumator $version, signed by ${DEVELOPER_ID:-an ad-hoc signature}"
+echo "→ Arrumator $version, signed $RELEASE_SIGNING${DEVELOPER_ID:+ by $DEVELOPER_ID}"
 
-# The app, signed with the identity chosen above: the certificate DEVELOPER_ID names, or ad hoc ("-").
-xcodegen generate --quiet
-# build_app <archs> <name>: builds the app for <archs> and zips it as dist/Arrumator-<version>-<name>.zip.
-build_app() {
-  derived=build/Release/$2
-  xcodebuild -project Arrumator.xcodeproj -scheme Arrumator -configuration Release -derivedDataPath "$derived" \
-    -quiet ARCHS="$1" ONLY_ACTIVE_ARCH=NO MARKETING_VERSION="$version" CURRENT_PROJECT_VERSION="$build" \
-    CODE_SIGN_IDENTITY="$identity" CODE_SIGN_STYLE=Manual OTHER_CODE_SIGN_FLAGS="$sign_flags" build
-  app=$derived/Build/Products/Release/Arrumator.app
-  codesign --verify --deep --strict "$app"
-  test "$(lipo -archs "$app/Contents/MacOS/Arrumator")" = "$1"
-  app_zip=$out/Arrumator-$version-$2.zip
-  ditto -c -k --keepParent "$app" "$app_zip"
-  if [ -n "${DEVELOPER_ID:-}" ]; then
-    notarize "$app_zip"
+for variant in universal apple-silicon; do
+  app=$stage/$variant/Arrumator.app
+  sign "$app"
+  zip=$out/Arrumator-$version-$variant.zip
+  ditto -c -k --keepParent "$app" "$zip"
+  if [ "$RELEASE_SIGNING" = developer-id ]; then
+    notarize "$zip"
     xcrun stapler staple "$app"
     spctl --assess --type execute "$app"
-    rm "$app_zip"
-    ditto -c -k --keepParent "$app" "$app_zip"
+    rm "$zip"
+    ditto -c -k --keepParent "$app" "$zip"
   fi
-}
-build_app "x86_64 arm64" universal
-build_app arm64 apple-silicon
+done
 
-# The command. It reads its version from an Info.plist linked into the executable (AppVersion), and its prompts and
-# defaults from the resource bundles SwiftPM places next to it, which therefore ship in the same folder.
-plist=build/Release/arrumatorcli-Info.plist
-plutil -create xml1 "$plist"
-plutil -insert CFBundleIdentifier -string dev.arrumator.cli "$plist"
-plutil -insert CFBundleName -string arrumatorcli "$plist"
-plutil -insert CFBundleShortVersionString -string "$version" "$plist"
-plutil -insert CFBundleVersion -string "$build" "$plist"
-swift build -c release --product arrumatorcli \
-  -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker "$plist"
-bin=$(swift build -c release --show-bin-path)
-cli=build/Release/arrumatorcli-$version
-mkdir -p "$cli"
-cp "$bin/arrumatorcli" "$cli/"
-cp -R "$bin"/*.bundle "$cli/"
-# The flags are several words on purpose.
-# shellcheck disable=SC2086
-codesign --force --sign "$identity" $sign_flags "$cli/arrumatorcli"
+cli=$stage/arrumatorcli-$version
+sign "$cli/arrumatorcli"
 test "$("$cli/arrumatorcli" --version)" = "$version"
 cli_zip=$out/arrumatorcli-$version-apple-silicon.zip
 ditto -c -k --keepParent "$cli" "$cli_zip"
-if [ -n "${DEVELOPER_ID:-}" ]; then
+if [ "$RELEASE_SIGNING" = developer-id ]; then
   notarize "$cli_zip"
 fi
 
 (cd "$out" && shasum -a 256 -- *.zip > SHA256SUMS)
-echo "Built $version:"
+echo "Signed and packaged $version:"
 ls -1 "$out"
 if [ -n "${GITHUB_OUTPUT:-}" ]; then
   echo "version=$version" >> "$GITHUB_OUTPUT"
