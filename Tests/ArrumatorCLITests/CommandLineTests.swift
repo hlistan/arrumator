@@ -517,3 +517,23 @@ extension CommandLineTests {
         #expect(try paused() == 2, "what it changed before it failed is in the archive's history when it exits")
     }
 }
+
+/// What the command line says of labels that look alike.
+extension CommandLineTests {
+    @Test func labelsThatLookAlikeAreListedSayingWhy() throws {
+        let home = try Home.make()
+        defer { home.cleanup() }
+        let (sender, object) = ({ DocumentLabel(kind: .sender, value: $0) }, { DocumentLabel(kind: .object, value: $0) })
+        _ = try file(home, [("a.txt", [sender("EDP Comercial"), object("contract V/2026/532774")]),
+                            ("b.txt", [sender("EDP Comercail"), object("contract V2026532774")]), ("c.txt", [sender("EDP Comercial")])])
+        let result = try run(home, ["labels", "similar", "--json"])
+        let rows = try JSONSerialization.jsonObject(with: result.stdout) as? [[String: Any]] ?? []
+        let listed = rows.map { [$0["kind"] as? String, $0["value"] as? String, $0["into"] as? String, $0["reason"] as? String] }
+        #expect(listed.contains(["object", "contract V2026532774", "contract V/2026/532774", "sameDigitsGroupedOtherwise"])
+                && listed.contains(["sender", "EDP Comercail", "EDP Comercial", "writtenAlike"]) && listed.count == 2,
+                "the same digits grouped otherwise and a typo, each with why it is offered: \(result.text) \(result.stderr)")
+        let lines = try run(home, ["labels", "similar"]).text.split(separator: "\n")
+        #expect(lines.count == 2 && lines.contains { $0.contains("V2026532774") && $0.contains("same digits, grouped otherwise") }
+                && lines.contains { $0.contains("EDP Comercail") && !$0.contains("same digits") }, "and so does the text: \(lines)")
+    }
+}

@@ -108,7 +108,7 @@ import Testing
         _ = try await actions.forget(rule: mine)
         try await records.flush()
         #expect(FileManager.default.fileExists(atPath: url.path), "a file the index never wrote is not removed for holding nothing the index has")
-        let rules = try await LabelStore(database: database, config: w.h.env.config.labels).rules()
+        let rules = try await LabelStore(database: database, config: w.h.env.config.labels, lookAlikes: LookAlikeMemo()).rules()
         #expect(rules.map(\.summary) == ["sender “EDP Comercial” → “EDP”"], "it is read into the index instead, and kept: \(rules.map(\.summary))")
     }
 

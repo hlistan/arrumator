@@ -60,19 +60,32 @@ extension LabelUsage {
 /// Two labels of one kind that look alike enough to be one, waiting for the user to merge them or keep them apart.
 /// `into` is the one more documents have, which a merge keeps.
 public struct LabelSuggestion: Sendable, Codable, Hashable, Identifiable {
+    /// Why two labels are offered to be merged.
+    public enum Reason: String, Sendable, Codable, Hashable {
+        /// They are written alike enough (`KindVocabularyConfig.suggestSimilarity`).
+        case writtenAlike
+        /// They hold the same digits in the same order, which punctuation groups otherwise
+        /// (`LabelSimilarity.Key.isRegrouping(of:)`): perhaps one number written two ways, which only the user can tell,
+        /// so they are offered whatever the kind's thresholds, and never merged on their own.
+        case sameDigitsGroupedOtherwise
+    }
+
     public var kind: LabelKind
     public var value: String
     public var into: String
-    /// How alike they are written, from 0 to 1 (`LabelSimilarity`).
+    /// How alike they are written, from 0 to 1 (`LabelSimilarity`); for the same digits grouped otherwise, how alike
+    /// they are written but for where their numbers end.
     public var similarity: Double
+    public var reason: Reason
 
     public var id: String { "\(kind.rawValue):\(value)→\(into)" }
 
-    public init(kind: LabelKind, value: String, into: String, similarity: Double) {
+    public init(kind: LabelKind, value: String, into: String, similarity: Double, reason: Reason) {
         self.kind = kind
         self.value = value
         self.into = into
         self.similarity = similarity
+        self.reason = reason
     }
 }
 

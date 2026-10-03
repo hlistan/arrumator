@@ -61,7 +61,7 @@ import Testing
 
         try text.write(to: url, atomically: true, encoding: .utf8)
         let summary = try #require(try await records.rebuildIfPending(), "once the file is corrected, it is rebuilt")
-        let rules = try await LabelStore(database: database, config: w.h.env.config.labels).rules()
+        let rules = try await LabelStore(database: database, config: w.h.env.config.labels, lookAlikes: LookAlikeMemo()).rules()
         #expect(summary.labelRules == 1 && rules.map(\.summary) == ["sender “EDP Comercial” → “EDP”"] && rules.map(\.id) == [1],
                 "with the rules the file holds, under their own numbers: \(rules.map(\.summary))")
         let next = try await actions.ignore(DocumentLabel(kind: .topic, value: "electricity"))

@@ -122,7 +122,7 @@ import Testing
         let actions = LabelActions(database: h.env.database, time: h.env.time)
         try await actions.merge(DocumentLabel(kind: .tag, value: "Taxes 2024"), into: "Taxes")
         try await actions.ignore(DocumentLabel(kind: .tag, value: "Receipts"))
-        let guidance = try await LabelStore(database: h.env.database, config: h.env.config.labels).guidance()
+        let guidance = try await LabelStore(database: h.env.database, config: h.env.config.labels, lookAlikes: LookAlikeMemo()).guidance()
         _ = try await h.analyse(Fixtures.content("fatura.pdf", text: Fixtures.edpText), guidance: guidance)
         let request = try #require(await h.mock.chatRequests.first)
         let prompt = request.messages.map(\.content).joined(separator: "\n")

@@ -153,14 +153,15 @@ struct Labels: AsyncParsableCommand {
 
     struct Similar: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
-            abstract: "Labels written so alike they may be one, each with the label a merge would keep, the most alike first.")
+            abstract: "Labels written so alike, or with the same digits grouped otherwise, that they may be one, each with the label a merge would keep, the most alike first.")
         @OptionGroup var options: GlobalOptions
 
         func run() async throws {
             let suggestions = try await options.runtime().services.labels.suggestions()
             options.emit(suggestions) {
                 suggestions.isEmpty ? "No labels look alike." : Terminal.table(suggestions.map {
-                    [$0.kind.rawValue, "“\($0.value)”", "→ “\($0.into)”", String(format: "%.2f", $0.similarity)]
+                    [$0.kind.rawValue, "“\($0.value)”", "→ “\($0.into)”", String(format: "%.2f", $0.similarity),
+                     $0.reason == .sameDigitsGroupedOtherwise ? "same digits, grouped otherwise" : ""]
                 })
             }
         }

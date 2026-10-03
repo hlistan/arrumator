@@ -16,6 +16,8 @@ public struct PipelineServices: Sendable {
     /// Where an exact copy of a document in the archive goes once its original is read again in its place.
     public var trash: any Trashing
     public var time: any TimeSource
+    /// Which labels looked alike when last worked out, shared by every `LabelStore` this makes (`labels`).
+    public let lookAlikes = LookAlikeMemo()
 
     public init(database: AppDatabase, archive: URL, config: PipelineConfig, settings: SettingsStore, extractor: any ContentExtracting,
                 analyzer: any DocumentAnalyzing, filer: DocumentFiler, traces: TraceRecorder, vectors: VectorIndex,
@@ -47,7 +49,7 @@ public struct PipelineServices: Sendable {
                                            models: try? settings.modelProfile(), settings: settings))
     }
 
-    public var labels: LabelStore { LabelStore(database: database, config: config.labels) }
+    public var labels: LabelStore { LabelStore(database: database, config: config.labels, lookAlikes: lookAlikes) }
 
     /// The tags a file at `url` is given when it is queued (`GivenTag`): the name of the folder at the top of Incoming it is
     /// in (`IncomingFolders`), then those `given` with the command that files it, each once and at most

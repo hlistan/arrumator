@@ -53,10 +53,13 @@ public struct LabelRule: ArrumatorRecord, Identifiable, Hashable {
 public struct LabelStore: Sendable {
     public let database: AppDatabase
     public let config: LabelsConfig
+    /// Which labels looked alike when `suggestions()` was last asked, for each kind.
+    public let lookAlikes: LookAlikeMemo
 
-    public init(database: AppDatabase, config: LabelsConfig) {
+    public init(database: AppDatabase, config: LabelsConfig, lookAlikes: LookAlikeMemo) {
         self.database = database
         self.config = config
+        self.lookAlikes = lookAlikes
     }
 
     /// Every label in use, by kind, the most used first. With `selection`, only the documents that have every label of
@@ -91,9 +94,20 @@ public struct LabelStore: Sendable {
         return LabelConsolidator(config: config.vocabulary, rules: rules, vocabulary: usage)
     }
 
-    /// Pairs of labels in use alike enough to be one, which the user has not decided about.
+    /// Pairs of labels in use alike enough to be one, which the user has not decided about. Which labels of a kind look
+    /// alike is brought up to date from when it was last asked, comparing only the labels added since (`LookAlikeMemo`);
+    /// one asking while another works it out waits for it. Stopping is thrown, the work done kept.
     public func suggestions() async throws -> [LabelSuggestion] {
-        try await consolidator().suggestions()
+        try await consolidator().suggestions(by: lookAlikes, comparing: LabelSimilarity.lookAlike(_:_:atLeast:))
+    }
+
+    /// Works out which labels look alike, as `suggestions()` does, so that the first to ask for them seldom waits: what
+    /// the runtime does once the archive is open. Stopping ends it, keeping what it has done; a failure is logged.
+    public func workOutLookAlikes() async {
+        do { _ = try await suggestions() } catch {
+            guard !(error is CancellationError || Task.isCancelled) else { return }
+            Log.error(.db, "Could not work out which labels look alike", ["error": error.localizedDescription])
+        }
     }
 
     /// What the model is shown of the archive: the labels it uses most, and the user's merges and unwanted labels, of the

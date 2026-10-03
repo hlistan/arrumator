@@ -119,7 +119,9 @@ looked for in the file name, the text and the labels; `field:word` or `field:"a 
 `filename`, `body`, or a kind of label, `sender`, `party`, `type`, `topic`, `object`, `reference`, `date`, `period`,
 `deadline`, `amount`, `jurisdiction`, `language` or `tag`. Each field counts as much as its weight in
 `search.bm25Weights`, in that order, a tag as much as a sender. A document found by meaning alone must reach
-`search.semanticMinSimilarity` (calibrated in [Evaluation › Search](evaluation.md#search)).
+`search.semanticMinSimilarity` (calibrated in [Evaluation › Search](evaluation.md#search)). Meaning is compared with
+the vectors of the profile's embedding model alone, held in memory: when it cannot be, as while Ollama is away, the
+words alone find the documents, and the command says why after the count, such as `(full text: query too short)`.
 
 ### Statistics
 

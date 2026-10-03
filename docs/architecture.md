@@ -216,12 +216,16 @@ table in [AGENTS.md §5](../AGENTS.md#5-boundaries).
 `openArchive()` brings the index in line with the record files: an index that records it is still to be rebuilt, being
 new or its rebuild refused or cut short, is rebuilt from them, any other reads back whatever changed on disk. Only
 there, walking the archive whole, is a new index found to have nothing to rebuild from; never when it is made, when
-the archive may not show its records yet. `start()`
-then starts the three queue workers and, as named background tasks, the Ollama supervision and the audit of its state,
-the two watcher pumps, the record-file writer, the settings subscription and hourly maintenance; on an index still to
-be rebuilt, as when a record file that cannot be read refused its rebuild, it starts nothing until the index is rebuilt
-(`rebuildIndex()`). The app does both as one step the runtime owns, `openAndStart()`, off the main actor, as macOS may
-hold the first read of the archive behind its prompt for access.
+the archive may not show its records yet. Then it sets the query embedder of the profile's embedding model, so every
+command compares by meaning as the app does, reading the documents' vectors into the vector index only when a search
+or a question first needs them (`SearchService.loadVectors`). The app loads them as it applies its settings, before it
+files anything. Vectors that cannot be read stop nothing: they are logged, and search goes on by words, saying why.
+`start()` then starts the three queue workers and, as named background tasks, the Ollama supervision and the audit of
+its state, the two watcher pumps, the record-file writer, the settings subscription, hourly maintenance, and the
+working out of which labels look alike (`LabelStore.workOutLookAlikes`), so the app's first count of them seldom
+waits; on an index still to be rebuilt, as when a record file that cannot be read refused its rebuild, it starts
+nothing until the index is rebuilt (`rebuildIndex()`). The app does both as one step the runtime owns,
+`openAndStart()`, off the main actor, as macOS may hold the first read of the archive behind its prompt for access.
 
 A runtime runs once. `stop()` cancels the step that starts it and every task, then waits: for the step, so nothing
 it goes on to start is left running; for the three queues, stopped together, as one worker may wait for another, as

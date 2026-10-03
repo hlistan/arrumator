@@ -348,12 +348,12 @@ public actor TaskConversationQueue {
         let set = members.filter { $0.inclusion != .removed }.map(\.document)
         let earlier = try await store.turns(task: taskID).filter { $0.id < id }
         let builder = TaskContextBuilder(database: services.database, search: search, config: services.config)
-        let context = try await trace.measure(.context, input: ContextInput(question: record.question, set: set.count),
-                                              output: { ContextTrace($0) }) {
+        let chosen = try await trace.measure(.context, input: ContextInput(question: record.question, set: set.count),
+                                             output: { ContextTrace($0) }) {
             try await builder.context(for: record.question, set: set, earlier: earlier)
         }
         let today = services.time.now().formatted(Date.ISO8601FormatStyle(timeZone: .current).year().month().day())
-        let answer = try await answerer.answer(record.question, context: context, effort: task.effort, profile: profile, today: today,
+        let answer = try await answerer.answer(record.question, context: chosen.shown, effort: task.effort, profile: profile, today: today,
                                                config: services.config, trace: trace) { [weak self] progress in
             await self?.progressed(id, progress)
         }
@@ -407,19 +407,25 @@ struct ContextInput: Encodable {
 }
 
 /// What choosing an answer's context records: the documents shown with their text and by name, by number in the order
-/// shown, how many were not shown at all, how much text was shown, and how many earlier exchanges.
+/// shown, how many were not shown at all, how much text was shown, how many earlier exchanges, and whether the question's
+/// meaning ordered the documents as well as its words, or, when it did not, why.
 struct ContextTrace: Encodable {
     var read: [Int64]
     var listed: [Int64]
     var unlisted: Int
     var characters: Int
     var exchanges: Int
+    var semanticUsed: Bool
+    var semanticUnavailableReason: String?
 
-    init(_ context: TaskContext) {
+    init(_ chosen: TaskContextBuilder.ContextChoice) {
+        let context = chosen.shown
         read = context.read.map(\.id)
         listed = context.listed.map(\.id)
         unlisted = context.unlisted
         characters = context.read.reduce(0) { $0 + ($1.text?.count ?? 0) }
         exchanges = context.conversation.count
+        semanticUsed = chosen.semanticUsed
+        semanticUnavailableReason = chosen.semanticUnavailableReason
     }
 }

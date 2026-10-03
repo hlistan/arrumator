@@ -58,9 +58,18 @@ public struct SearchHit: Sendable, Identifiable, Hashable {
 
 public struct SearchResults: Sendable, Hashable {
     public var hits: [SearchHit]
+    /// Whether documents were compared with the query by meaning too; when they were not, why.
     public var semanticUsed: Bool
     public var semanticUnavailableReason: String?
     public var elapsedMs: Double
+}
+
+/// The documents of a set that a text concerns, the most first (`SearchService.relevance`): whether they were compared
+/// with it by meaning too, and, when they were not, why, as a search says (`SearchResults`).
+public struct Relevance: Sendable, Hashable {
+    public var documents: [Int64]
+    public var semanticUsed: Bool
+    public var semanticUnavailableReason: String?
 }
 
 /// Builds safe FTS5 MATCH expressions from user input: quoted terms, `"phrases"`, `field:term`, `field:"phrase"`, prefix
@@ -144,71 +153,129 @@ public actor SearchService {
     /// The column snippets are cut from: the document's text.
     static let bodyColumn = 1
 
+    /// Why documents were not compared by meaning: the query asked for its words alone; it is too short to mean
+    /// anything (`search.minSemanticQueryChars`); no embedding model is ready; there were no documents to compare.
+    public static let notAsked = "disabled"
+    public static let tooShort = "query too short"
+    public static let noEmbedder = "no embedding model"
+    public static let noDocuments = "no documents"
+
     private let database: AppDatabase
     private let vectors: VectorIndex
     private var embedder: (any Embedder)?
     private let config: SearchConfig
+    private let time: any TimeSource
     private var cache: [String: [Float]] = [:]
     private var cacheOrder: [String] = []
+    /// The load of a model's vectors under way, which every caller that needs them meanwhile waits for.
+    private var loading: (model: String, task: Task<Void, any Error>)?
 
-    public init(database: AppDatabase, vectors: VectorIndex, embedder: (any Embedder)?, config: SearchConfig) {
+    public init(database: AppDatabase, vectors: VectorIndex, embedder: (any Embedder)?, config: SearchConfig, time: any TimeSource) {
         self.database = database
         self.vectors = vectors
         self.embedder = embedder
         self.config = config
+        self.time = time
     }
 
+    /// Compares documents by meaning with `embedder` from now on, or by their words alone when it is nil, and forgets the
+    /// query vectors of the one before. Its vectors are loaded when a comparison first needs them (`loadVectors`).
     public func setEmbedder(_ embedder: (any Embedder)?) {
         self.embedder = embedder
         cache.removeAll()
         cacheOrder.removeAll()
     }
 
+    /// Loads into the vector index the vectors the index keeps of the embedder's model, unless it holds them already:
+    /// what a comparison by meaning does first, and what the app does when it starts, before it files anything, so no
+    /// document filed meanwhile is left out. Without an embedder there is nothing to load. Throws what reading them
+    /// throws.
+    public func loadVectors() async throws {
+        guard let embedder else { return }
+        try await loadVectors(of: embedder.modelId)
+    }
+
+    /// Loads `model`'s vectors once for every caller that needs them meanwhile: a second search while the first loads
+    /// waits for that load rather than reading them again. The load begins before the read (`VectorIndex.beginLoad`),
+    /// so what is filed while it reads is kept. Its read is one query, so a caller stopped meanwhile stops once it ends.
+    private func loadVectors(of model: String) async throws {
+        guard await vectors.model != model else { return }
+        if let loading, loading.model == model {
+            try await loading.task.value
+            try Task.checkCancellation()
+            return
+        }
+        let task = Task { [database, time, vectors] in
+            await vectors.beginLoad(model: model)
+            do {
+                await vectors.load(model: model, rows: try await IndexStore(database: database, time: time).embeddings(model: model))
+            } catch {
+                await vectors.abandonLoad(model: model)
+                throw error
+            }
+        }
+        loading = (model, task)
+        defer { if loading?.task == task { loading = nil } }
+        try await task.value
+        try Task.checkCancellation()
+    }
+
     /// Full-text phase only (fast path for type-ahead).
     public func fullText(_ query: SearchQuery) async throws -> SearchResults {
-        let start = Date()
+        let start = time.now()
         let hits = try await ftsHits(query)
         return SearchResults(hits: Array(hits.prefix(config.resultLimit)), semanticUsed: false, semanticUnavailableReason: nil,
-                             elapsedMs: Date().timeIntervalSince(start) * 1000)
+                             elapsedMs: time.now().timeIntervalSince(start) * 1000)
     }
 
+    /// The documents that hold the query's words, fused with those alike to it in meaning (`fuse`). When they cannot be
+    /// compared by meaning, as when Ollama is away, the words alone find them, and the results say why. Stopping is
+    /// thrown.
     public func search(_ query: SearchQuery) async throws -> SearchResults {
-        let start = Date()
+        let start = time.now()
         let text = query.text.trimmingCharacters(in: .whitespacesAndNewlines)
         let fts = try await ftsHits(query)
-        var reason: String?
-        var semantic: [(docID: Int64, score: Float)] = []
-        if !query.semantic {
-            reason = "disabled"
-        } else if text.count < config.minSemanticQueryChars {
-            reason = "query too short"
-        } else if let embedder {
-            do {
-                let vector = try await queryVector(text, embedder: embedder)
-                let allowed = try await allowedIDs(query.filter)
-                semantic = await vectors.topK(vector, k: config.ftsCandidateLimit, allowed: allowed)
-            } catch {
-                reason = error.localizedDescription
-                Log.warning(.search, "Semantic search unavailable", ["error": reason ?? ""])
-            }
-        } else {
-            reason = "no embedding model"
-        }
-        let fused = try await fuse(fts: fts, semantic: semantic)
-        let elapsed = Date().timeIntervalSince(start) * 1000
+        let meaning = query.semantic
+            ? try await alike(to: text, k: config.ftsCandidateLimit, waitingForOllama: false) { try await self.allowedIDs(query.filter) }
+            : (found: [], unavailable: Self.notAsked)
+        let fused = try await fuse(fts: fts, semantic: meaning.found)
+        let elapsed = time.now().timeIntervalSince(start) * 1000
         Log.debug(.search, "Search", ["ms": String(format: "%.0f", elapsed), "fts": String(fts.count),
-                                      "semantic": String(semantic.count)])
-        return SearchResults(hits: Array(fused.prefix(config.resultLimit)), semanticUsed: reason == nil,
-                             semanticUnavailableReason: reason, elapsedMs: elapsed)
+                                      "semantic": String(meaning.found.count)])
+        return SearchResults(hits: Array(fused.prefix(config.resultLimit)), semanticUsed: meaning.unavailable == nil,
+                             semanticUnavailableReason: meaning.unavailable, elapsedMs: elapsed)
     }
 
+    /// The documents alike in meaning to `text`, the most alike first, at most `k`, among those `allowed` gives (all when
+    /// it gives nil); or, when they cannot be compared by meaning, as when their vectors cannot be read, none, and why.
+    /// Stopping is thrown, and so is Ollama being away when `waitingForOllama`, for what asks to wait for it all the same.
+    private func alike(to text: String, k: Int, waitingForOllama: Bool,
+                       among allowed: () async throws -> Set<Int64>?) async throws -> (found: [(docID: Int64, score: Float)], unavailable: String?) {
+        guard text.count >= config.minSemanticQueryChars else { return ([], Self.tooShort) }
+        guard let embedder else { return ([], Self.noEmbedder) }
+        do {
+            try await loadVectors(of: embedder.modelId)
+            let vector = try await queryVector(text, embedder: embedder)
+            return (try await vectors.topK(vector, model: embedder.modelId, k: k, allowed: try await allowed()), nil)
+        } catch let error as OllamaError where waitingForOllama && error.isTransient {
+            throw error
+        } catch {
+            if error is CancellationError || Task.isCancelled { throw error }
+            Log.warning(.search, "Search by meaning unavailable", ["error": error.localizedDescription])
+            return ([], error.localizedDescription)
+        }
+    }
+
+    /// `text`'s vector by `embedder`, kept for the next `search.queryCacheSize` texts asked for. A text two searches ask
+    /// for at once is embedded by both and kept once.
     private func queryVector(_ text: String, embedder: any Embedder) async throws -> [Float] {
         let key = embedder.modelId + "\u{1}" + text
         if let hit = cache[key] { return hit }
         guard let vector = try await embedder.embed([text]).first else { throw OllamaError.emptyResponse }
-        cache[key] = vector
-        cacheOrder.append(key)
-        if cacheOrder.count > config.queryCacheSize { cache[cacheOrder.removeFirst()] = nil }
+        if cache.updateValue(vector, forKey: key) == nil {
+            cacheOrder.append(key)
+            if cacheOrder.count > config.queryCacheSize { cache[cacheOrder.removeFirst()] = nil }
+        }
         return vector
     }
 
@@ -296,10 +363,10 @@ public actor SearchService {
     /// search orders what it finds. A question is no search: it is written in sentences, so any of its words finds a
     /// document, and BM25 weighs each by how rare it is (Robertson and Zaragoza, "The Probabilistic Relevance Framework:
     /// BM25 and Beyond", 2009), so a common word counts for little. Without an embedding model, or when it fails, the
-    /// words alone order them; documents `text` does not concern at all are left out. Ollama that cannot be reached is
-    /// thrown, as is stopping: what asks has to wait for Ollama all the same.
-    public func relevance(of text: String, among ids: [Int64]) async throws -> [Int64] {
-        guard !ids.isEmpty else { return [] }
+    /// words alone order them, and the relevance says why; documents `text` does not concern at all are left out.
+    /// Ollama that cannot be reached is thrown, as is stopping: what asks has to wait for Ollama all the same.
+    public func relevance(of text: String, among ids: [Int64]) async throws -> Relevance {
+        guard !ids.isEmpty else { return Relevance(documents: [], semanticUsed: false, semanticUnavailableReason: Self.noDocuments) }
         let weights = config.bm25Weights.map { String($0) }.joined(separator: ", ")
         var fts: [Int64] = []
         if let match = FTSQueryBuilder.anyOf(text) {
@@ -310,21 +377,10 @@ public actor SearchService {
                     """, arguments: StatementArguments([match]) + StatementArguments(ids))
             }
         }
-        var semantic: [(docID: Int64, score: Float)] = []
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let embedder, trimmed.count >= config.minSemanticQueryChars {
-            do {
-                semantic = await vectors.topK(try await queryVector(trimmed, embedder: embedder), k: ids.count, allowed: Set(ids))
-            } catch let error as OllamaError where error.isTransient {
-                throw error
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                Log.warning(.search, "Relevance by meaning unavailable", ["error": error.localizedDescription])
-            }
-        }
-        let order = Self.fusedOrder(fts: fts, semantic: semantic, rrfK: config.rrfK, minSimilarity: config.semanticMinSimilarity)
-        return order.withWords.map(\.id) + order.meaningOnly.map(\.id)
+        let meaning = try await alike(to: text.trimmingCharacters(in: .whitespacesAndNewlines), k: ids.count, waitingForOllama: true) { Set(ids) }
+        let order = Self.fusedOrder(fts: fts, semantic: meaning.found, rrfK: config.rrfK, minSimilarity: config.semanticMinSimilarity)
+        return Relevance(documents: order.withWords.map(\.id) + order.meaningOnly.map(\.id), semanticUsed: meaning.unavailable == nil,
+                         semanticUnavailableReason: meaning.unavailable)
     }
 
     private func allowedIDs(_ filter: DocumentFilter) async throws -> Set<Int64>? {

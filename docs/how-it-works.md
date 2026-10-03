@@ -149,14 +149,29 @@ prompt, without retraining it, so what it learns stays in your archive and follo
 **Every label the model gives is tidied.** Your rules come first: a label you merged is written as you want it,
 following one merge into the next, and one you do not want is dropped. Then a label of a kind the vocabulary keeps
 (sender, party, topic, object, reference, jurisdiction) becomes the label the archive already uses when the two are
-written alike enough: `labels.vocabulary.kinds.<kind>.mergeSimilarity`. At 1, the default for names, objects and
-references, only labels written the same way but for case, accents, punctuation, spacing and word order are one
-(`EDP-Comercial, S.A.` is `EDP Comercial SA`); for topics and jurisdictions a typo is forgiven too (`electricty`). How
-alike two labels are written is their Jaro-Winkler similarity, the measure record linkage uses for names, over their
-words in sorted order; labels whose numbers differ are never alike. A label the archive already uses stays itself,
-unless more documents have it written another way. Only writing is compared, never meaning: that one label means
-another in other words is the model's judgment, or yours. What was changed, and by which rule, is in the document's
-trace (the `consolidate` step) and its History entry.
+written alike enough: `labels.vocabulary.kinds.<kind>.mergeSimilarity`. Labels whose numbers differ are never alike:
+numbers are compared first, each as it is written and in the order they are written, so `FT 1/23` is not `FT 12/3`,
+nor `Rua das Flores 12, 3` the same address as `Rua das Flores 3, 12`. A number is a run of digits that only spaces
+break: an identifier printed in groups is the one typed without them, so the IBAN `PT50 0002 0123 1234 5678 9015 4` is
+`PT50000201231234567890154` and the tax number `123 456 789` is `123456789`, while punctuation and letters end a
+number. The same digits in the same order, where one label's numbers end only where the other's do, and the other's
+end at more places, set by punctuation (`V/2026/532774` and `V2026532774`, `123.456.789` and `123456789`, `FT 1/23`
+and `FT 123`), may be one number written two ways, or two numbers: that is no degree of likeness but a relation of its
+own, so such labels are never merged on their own, whatever `mergeSimilarity`, and are offered under Look Alike for
+every kind, whatever its `suggestSimilarity`, as below. Numbers that end in different places, each where the other's
+does not (`FT 1/23` and `FT 12/3`), are neither merged nor offered. At 1, the default for names,
+objects and references, only labels written the same way but for case, accents, punctuation, spacing and word order
+are one (`EDP-Comercial, S.A.` is `EDP Comercial SA`); for topics and jurisdictions a typo is forgiven too
+(`electricty`). Words may change places, but only between two numbers, or between a number and the
+label's end, never across a number, nor may the letters and digits within a word: `EDP Comercial 12` is
+`Comercial EDP 12`, but `car AB12CD` is not `car CD12AB`, `car AA-12-BB` not `car BB-12-AA`, and `12 Rua das Flores`
+not the same writing as `Rua das Flores 12`, though it may look alike enough to be offered. A label without numbers
+keeps its words in any order. These come together: `account Santander PT50 0002 0123` is
+`Santander account PT5000020123`. How alike two labels are written is their Jaro-Winkler similarity, the measure record
+linkage uses for names, over their words so ordered. A label the archive already uses stays itself, unless more
+documents have it written another way. Only writing is compared, never meaning: that one label means another in other
+words is the model's judgment, or yours. What was changed, and by which rule, is in the document's trace (the
+`consolidate` step) and its History entry.
 
 **Your tags are your words.** A tag is never made another because one in use is written alike, nor offered under Look
 Alike: `Taxes-2024` stays `Taxes-2024` beside a `Taxes 2024` more documents have, until you merge the two. Only your
@@ -166,8 +181,11 @@ effort's `promptLabels`, saying so.
 
 **What is merely alike waits for you.** Labels in use written alike enough to be one
 (`labels.vocabulary.kinds.<kind>.suggestSimilarity`), but not enough to merge without asking, such as two names a
-letter apart, are listed under **Look Alike** on the Labels page, the most alike first, at most
-`labels.vocabulary.suggestionLimit`. The sidebar shows how many wait.
+letter apart, are listed under **Look Alike** on the Labels page, and so are labels with the same digits grouped
+otherwise, for every kind and whatever its `suggestSimilarity`, references included. They come the most alike first,
+those with the same digits grouped otherwise as alike as their writing but for where their numbers end, at most
+`labels.vocabulary.suggestionLimit`; `arrumatorcli labels similar` says which are which. The sidebar shows how many
+wait.
 
 What you decide becomes a rule, recorded in History and kept in the archive (`System/_labels.md`,
 [Storage](storage.md)):
@@ -178,6 +196,10 @@ What you decide becomes a rule, recorded in History and kept in the archive (`Sy
 - **Remove everywhere** (ignore) a label: it is taken off every document, and the model's answers lose it from then on.
 - **Keep apart** two alike labels: they are never merged and never offered to merge again.
 - **Forget** a rule: documents read from then on no longer follow it. Documents it already changed keep their labels.
+
+A rule is about a label however it is written, as above, so a rule made by an earlier version follows today's rule of
+sameness: one about `NIF 123 456 789` also covers `NIF 123456789`, and one about `car AA-12-BB` no longer covers
+`car BB-12-AA`, nor one about `V/2026/532774` the reference `V2026532774`.
 
 On the Labels page, open a label to merge it or remove it everywhere, open a pair under Look Alike to merge it either
 way or keep it apart, and forget a rule under What You Decided. A label's menu on a document's card opens it there, or
@@ -364,13 +386,16 @@ local model's context holds the text of a few documents, not of a thousand, so a
 needs, as retrieval-augmented generation does ([sources](organizing-principles-sources.md#sources-for-conversations)):
 first the documents the last answer drew on, which a question such as "translate it" goes on about; then those the
 question concerns, those holding any of its words, the rarer a word the more it counts, fused with those alike to it in
-meaning, as search finds them; then the rest by their own date, the newest first. In that order each is shown with its
-text, its start and its end cut to `conversation.documentChars` as a document is read, while the text fits in
-`conversation.contextChars`; a document whose text does not fit, or has not been read yet, is listed by its name, date
-and labels, at most `conversation.maxListed`, and the answer is told how many more there are. A set the context holds
-is shown whole. The answer is also shown the conversation so far, the latest questions and answers up to
-`conversation.historyChars`, the latest cut to fit when it alone is longer, and today's date. It is never shown your
-tags. A question is at most `conversation.maxQuestionChars` long.
+meaning, as search finds them, in the app and from a terminal alike; then the rest by their own date, the newest first.
+In that order each is shown with its text, its start and its end cut to `conversation.documentChars` as a document is
+read, while the text fits in `conversation.contextChars`; a document whose text does not fit, or has not been read
+yet, is listed by its name, date and labels, at most `conversation.maxListed`. Once that many are listed, a document
+not read yet is passed over, and the first whose text is too long for the room left ends the choice; the answer is told
+how many more there are. The text of no more documents is read than are shown or listed, and one more, however large
+the set: which have a text is told without reading it. A set the context holds is shown whole. The
+answer is also shown the conversation so far, the latest questions and answers up to `conversation.historyChars`, the
+latest cut to fit when it alone is longer, and today's date. It is never shown your tags. A question is at most
+`conversation.maxQuestionChars` long.
 
 **The answer** comes in a fixed schema: the answer, in Markdown, in the language of the question unless it asks for
 another, naming documents by their names, working out a total or a comparison the question asks for, and saying when
@@ -408,7 +433,8 @@ the documents stay in the task.
 Every conversation is kept in the archive beside its task (`System/Conversations/_<task>.md`, [Storage](storage.md)),
 with the questions and answers written out below its data for people to read, so a rebuild brings it back; removing a
 task removes its conversation. Clearing a conversation is recorded in History. A question and its answer are kept in the
-conversation, and each answer is traced: what it was shown (the `context` step), its prompts and the model's answers
+conversation, and each answer is traced: what it was shown, and whether the question's meaning ordered the documents as
+well as its words or, when it could not, why (the `context` step), its prompts and the model's answers
 (`answer`), and a request for more documents as it was read and matched (`interpret` and `match`;
 `arrumatorcli tasks conversation <task> --full`). That a question is being answered, and by which model, is no
 decision, so History does not record it: the queue says it while it lasts, and the app shows it.

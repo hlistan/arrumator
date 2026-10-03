@@ -1,7 +1,7 @@
 import Foundation
 import GRDB
 
-public enum LabelError: Error, LocalizedError {
+public enum LabelError: Error, LocalizedError, Equatable {
     case notALabel(LabelKind, String)
     case sameLabel(LabelKind, String)
     case ruleNotFound(Int64)
@@ -42,18 +42,17 @@ public struct LabelActions: Sendable {
         let now = time.now()
         return try await database.writer.write { db in
             let rules = try LabelRule.fetchAll(db)
-            for rule in rules where rule.action != .keepApart && rule.concerns(from) {
-                _ = try rule.delete(db)
+            let over = rules.filter { rule in
+                // The new merge is the label's rule now.
+                (rule.action != .keepApart && rule.concerns(from))
+                    // The user wants `into` now: a rule dropping it, or merging it back into what is merged into it, is over.
+                    || (rule.concerns(into) && (rule.action == .ignore || rule.target.map { LabelSimilarity.sameWriting($0, from.value) } == true))
+                    || rule.keepsApart(from.value, into.value, kind: from.kind)
             }
-            // The user wants `into` now: a rule dropping it, or merging it back into what is merged into it, is over.
-            for rule in rules where rule.concerns(into) && (rule.action == .ignore || rule.target.map { LabelSimilarity.sameWriting($0, from.value) } == true) {
-                _ = try rule.delete(db)
-            }
-            for rule in rules where rule.keepsApart(from.value, into.value, kind: from.kind) {
-                _ = try rule.delete(db)
-            }
-            // Labels merged into this one follow it to its new writing.
-            for var rule in rules where rule.action == .merge && rule.kind == from.kind
+            for rule in over { _ = try rule.delete(db) }
+            // Labels merged into this one follow it to its new writing; a rule that is over follows nothing.
+            let gone = Set(over)
+            for var rule in rules where !gone.contains(rule) && rule.action == .merge && rule.kind == from.kind
                 && rule.target.map({ LabelSimilarity.sameWriting($0, from.value) }) == true && !rule.concerns(into) {
                 rule.target = into.value
                 try rule.update(db)

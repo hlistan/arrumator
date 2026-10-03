@@ -220,7 +220,8 @@ public final class ArrumatorRuntime: Sendable {
 
     /// Brings the index in line with the archive before anything else uses it: an index created or set aside and not
     /// rebuilt since, as it records itself, is rebuilt from the record files, otherwise record files changed on disk are
-    /// read again; then every stale record file is written. Reads the archive, so macOS may first ask for access to it.
+    /// read again; then every stale record file is written, and search is readied as the app's is (`prepareSearch`).
+    /// Reads the archive, so macOS may first ask for access to it.
     public func openArchive() async throws {
         if let summary = try await records.rebuildIfPending() {
             Log.info(.app, "Index rebuilt from the archive", ["documents": String(summary.documents), "queued": String(summary.queued)])
@@ -228,6 +229,7 @@ public final class ArrumatorRuntime: Sendable {
             try await records.reconcile()
         }
         try await records.flush()
+        await prepareSearch(await settings.current, loadingVectors: false)
     }
 
     private init(appVersion: String, environment: RuntimeEnvironment, logLevelOverride: LogLevel?, time: any TimeSource,
@@ -258,7 +260,7 @@ public final class ArrumatorRuntime: Sendable {
         analyzer = DocumentAnalyzer(gate: gate, models: models, prompts: prompts)
         let skip = SkipRules(watcher: config.watcher)
         vectors = VectorIndex()
-        search = SearchService(database: database, vectors: vectors, embedder: nil, config: config.search)
+        search = SearchService(database: database, vectors: vectors, embedder: nil, config: config.search, time: time)
         traces = TraceRecorder(database: database, appVersion: appVersion, time: time)
         let placer = Placer(builder: FilenameBuilder(config: config.naming), operations: FileOperations(naming: config.naming))
         let extractor = try ExtractorRegistry(ollama: GatedOllama(gate: gate), recognizer: VisionTextRecognizer(),
@@ -324,11 +326,11 @@ public final class ArrumatorRuntime: Sendable {
         try await step.value
     }
 
-    /// Starts Ollama supervision, the ingest worker, the search task queue, the conversation queue, both watchers and
-    /// maintenance. Returns once they have started, saying whether they have. A runtime starts once: a second start does
-    /// nothing more, and one after `stop()` nothing at all. An index not yet rebuilt from its archive, as when its rebuild
-    /// was refused for a record file that cannot be read (`openArchive`), starts nothing, until it is rebuilt
-    /// (`rebuildIndex()`): what the workers did would be filed over the user's records once it was rebuilt.
+    /// Starts Ollama supervision, the ingest worker, the search task queue, the conversation queue, both watchers,
+    /// maintenance and working out which labels look alike; returns once they have started, saying whether they have. A
+    /// runtime starts once: a second start does nothing more, and one after `stop()` nothing at all. An index not rebuilt
+    /// from its archive, as when its rebuild was refused for a record file that cannot be read (`openArchive`), starts
+    /// nothing, until it is rebuilt (`rebuildIndex()`): what the workers did would be filed over the user's records.
     @discardableResult
     public func start() async -> Bool {
         guard let step = await tasks.starting(reading: false, { [self] in try await beginOnRebuiltIndex() }) else { return false }
@@ -426,6 +428,7 @@ public final class ArrumatorRuntime: Sendable {
                 do { try await time.sleep(seconds: config.maintenance.interval) } catch { return }
             }
         }
+        await tasks.run("look-alikes") { [services] in await services.labels.workOutLookAlikes() }
     }
 
     /// Stops everything `start()` started, for good, and waits until it has. Everything is told to stop before anything
@@ -519,7 +522,7 @@ public final class ArrumatorRuntime: Sendable {
                                   address: ollama.baseURL)
         Log.shared.setMinLevel(logLevelOverride ?? current.logLevel)
         do {
-            try await prepareSearch(current)
+            await prepareSearch(current, loadingVectors: true)
             try await incomingWatcher.start(root: current.incomingURL)
             try await archiveWatcher.start(root: archive, excluding: [current.incomingURL])
         } catch {
@@ -528,16 +531,6 @@ public final class ArrumatorRuntime: Sendable {
             Log.error(.app, "Could not apply settings", ["error": error.localizedDescription])
         }
         await coordinator.wake()
-    }
-
-    /// Loads the vector index and the query embedder for the embedding model of the profile in use (no watchers started).
-    public func prepareSearch(_ current: AppSettings) async throws {
-        let model = try current.modelProfile().embedModel
-        await search.setEmbedder(OllamaEmbedder(gate: gate, model: model, keepAlive: config.ollama.keepAlive.embed,
-                                                numCtx: config.analysis.embeddingNumCtx))
-        if await vectors.model != model {
-            await vectors.load(model: model, rows: try await services.index.embeddings(model: model))
-        }
     }
 
     private func maintain() async {
@@ -583,5 +576,22 @@ extension ArrumatorRuntime {
             }
         }
         try await settingsActions.change { $0.onboardingCompleted = true }
+    }
+}
+
+extension ArrumatorRuntime {
+    /// Sets the query embedder of the profile in use and, when `loadingVectors`, loads its vectors now, as the app does
+    /// before it files anything; otherwise a search loads them when it needs them (`SearchService.loadVectors`). What
+    /// fails is logged, and search goes on by words; what a stop cuts short is done at the next start, or when needed.
+    private func prepareSearch(_ current: AppSettings, loadingVectors: Bool) async {
+        do {
+            let model = try current.modelProfile().embedModel
+            await search.setEmbedder(OllamaEmbedder(gate: gate, model: model, keepAlive: config.ollama.keepAlive.embed,
+                                                    numCtx: config.analysis.embeddingNumCtx))
+            if loadingVectors { try await search.loadVectors() }
+        } catch {
+            guard !(error is CancellationError || Task.isCancelled) else { return }
+            Log.error(.search, "Search by meaning not readied; searching by words", ["error": error.localizedDescription])
+        }
     }
 }

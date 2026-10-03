@@ -335,7 +335,7 @@ The questions that have found real faults in each part of the code. Ask the ones
 | 3 | Is a result applied only if the item is still in the state, and has the inputs, the worker left it with? |
 | 4 | Does a retry write something (a trace, an event, a log line) each time, growing without bound while Ollama is away? |
 | 5 | Do the app and the command line reach this code with the same collaborators prepared (the embedder, the vector index, the lifecycle)? |
-| 6 | For label sameness: do numbers and their boundaries survive every shortcut, and is there a test with shifted and reordered digits? |
+| 6 | For label sameness: do numbers and their boundaries survive every shortcut (join, sort, split)? Test digits shifted, reordered and regrouped, letters moved around digits, words moved across a number and an identifier spaced otherwise, both ways, at every caller of sameness, and two equivalences that each hold alone together. A relation that is not a degree, such as a regrouping, passes through no threshold a setting can move. |
 | 7 | For vectors: are model, dimension and normalisation checked wherever vectors enter, and can one bad row empty the index? |
 
 ### Ollama, the network and lifecycle

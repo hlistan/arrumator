@@ -81,6 +81,9 @@ import Testing
         let trace = try #require(try await w.h.services.traces.trace(id: traceID))
         #expect(trace.0.source == TraceSource.conversation.rawValue && trace.1.map(\.stage) == ["context", "answer"],
                 "the answer is traced: what it was shown, then how it was answered")
+        let context = try #require(JSON.decode([String: JSONValue].self, from: trace.1.first?.outputJson))
+        #expect(context["semanticUsed"] == .bool(false) && context["semanticUnavailableReason"] == .string(SearchService.noEmbedder),
+                "and whether the documents were ordered by the question's meaning too, here without an embedding model: \(context)")
     }
 
     @Test func aQuestionWithoutWordsTooLongOrAboutNoTaskIsRefusedAndNothingIsAsked() async throws {

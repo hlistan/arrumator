@@ -68,7 +68,7 @@ public struct Harness: Sendable {
     }
 
     public var labels: LabelActions { LabelActions(database: env.database, time: env.time) }
-    public var search: SearchService { SearchService(database: env.database, vectors: VectorIndex(), embedder: nil, config: env.config.search) }
+    public var search: SearchService { SearchService(database: env.database, vectors: VectorIndex(), embedder: nil, config: env.config.search, time: env.time) }
 
     /// Drops `name` into Incoming, or a folder in it when `name` is a path, and runs the pipeline over it; the document
     /// it became.

@@ -1,4 +1,4 @@
-import ArrumatorCore
+@testable import ArrumatorCore
 @testable import ArrumatorRuntime
 import ArrumatorTesting
 import Foundation
@@ -82,6 +82,63 @@ import Testing
         let changes = try await runtime.services.history.events(limit: 10, kinds: [.settingsChanged])
         #expect(changes.count == 1, "an archive with no records has nothing to read, so its index takes the change's event once it is opened")
         #expect(try await runtime.services.history.events(limit: 10, kinds: [.rebuilt]).isEmpty, "with no rebuild from nothing")
+    }
+
+    /// A runtime open on an archive with one document filed and embedded by the embedding model of the profile in use,
+    /// and the document.
+    private func archiveWithAVector(_ home: RuntimeHome) async throws -> (ArrumatorRuntime, Int64) {
+        let first = try await home.open()
+        var bill = DocumentRecord.arrived(path: home.folder("First").appendingPathComponent("bill.pdf").path, sha256: "bill", size: 1,
+                                          uttype: "com.adobe.pdf", inode: nil, modified: nil, now: first.time.now())
+        bill.status = .filed
+        let id = try #require(try await first.services.documents.save(bill).id)
+        let model = try await first.settings.current.modelProfile().embedModel
+        try await first.services.index.upsertEmbedding(docID: id, model: model, vector: [1, 0], sourceText: "bill")
+        return (first, id)
+    }
+
+    @Test func anArchiveOpenedByACommandReadsItsVectorsOnlyToCompareByMeaning() async throws {
+        let home = try await RuntimeHome.make()
+        defer { home.cleanup() }
+        let (first, id) = try await archiveWithAVector(home)
+        let model = try await first.settings.current.modelProfile().embedModel
+
+        // What every command does first; one that asks a question, as `tasks ask` does, then compares by meaning.
+        let command = try await home.open()
+        #expect(await command.vectors.model == nil, "opening the archive reads no vectors")
+        try await command.search.loadVectors()
+        #expect(try await command.vectors.topK([1, 0], model: model, k: 5).map(\.docID) == [id],
+                "a comparison by meaning reads those of the archive's documents, by the embedding model of the profile in use")
+    }
+
+    @Test func aRuntimeStartedWorksOutWhichLabelsLookAlikeBeforeTheAppAsks() async throws {
+        let home = try await RuntimeHome.make()
+        defer { home.cleanup() }
+        try await home.withoutOllama()
+        let runtime = try await home.open()
+        for (place, sender) in ["EDP Comercial", "EDP Comercail"].enumerated() {
+            var bill = DocumentRecord.arrived(path: home.folder("First").appendingPathComponent("bill \(place).pdf").path, sha256: "bill \(place)",
+                                              size: 1, uttype: "com.adobe.pdf", inode: nil, modified: nil, now: runtime.time.now())
+            bill.status = .filed
+            bill.labelsJson = JSON.string([DocumentLabel(kind: .sender, value: sender)])
+            _ = try await runtime.services.documents.save(bill)
+        }
+        await runtime.start()
+        #expect(await Patience.until { runtime.services.lookAlikes.known(.sender)?.pairs.isEmpty == false },
+                "once it has started, the runtime works out which labels look alike, so the app's first count finds it done")
+        await runtime.stop()
+    }
+
+    @Test func anArchiveWhoseVectorsCannotBeReadIsOpenedAndSearchedByWords() async throws {
+        let home = try await RuntimeHome.make()
+        defer { home.cleanup() }
+        let (first, id) = try await archiveWithAVector(home)
+        try await first.database.writer.write { try $0.execute(sql: "DROP TABLE embeddings") }
+
+        let command = try await home.open()
+        let ordered = try await command.search.relevance(of: "the electricity bill", among: [id])
+        #expect(!ordered.semanticUsed && ordered.semanticUnavailableReason?.isEmpty == false,
+                "every command opens the archive, and a question is ordered by its words, saying why")
     }
 
     @Test func recordsThatArriveBeforeTheArchiveIsOpenedAreRebuiltFrom() async throws {

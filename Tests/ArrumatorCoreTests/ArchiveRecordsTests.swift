@@ -86,7 +86,7 @@ import Testing
         #expect(try await DocumentStore(database: database, time: TestTime(.advances)).list(DocumentFilter(), limit: 100).map(\.path).sorted() == paths,
                 "reading again moves nothing")
         #expect(await analyzer.calls.files.isEmpty, "and asks the model nothing")
-        let search = SearchService(database: database, vectors: VectorIndex(), embedder: nil, config: services.config.search)
+        let search = SearchService(database: database, vectors: VectorIndex(), embedder: nil, config: services.config.search, time: services.time)
         #expect(Set(try await search.fullText(SearchQuery(text: "jurisdiction:portugal")).hits.map(\.id)) == Set(w.documents),
                 "a document is found by its labels again, from its record")
     }
@@ -166,7 +166,7 @@ import Testing
         let (database, records) = try w.freshIndex()
         let summary = try await records.rebuild()
         #expect(summary.labelRules == 2, "both rules are read from the archive")
-        let rebuilt = try await LabelStore(database: database, config: w.h.env.config.labels).rules()
+        let rebuilt = try await LabelStore(database: database, config: w.h.env.config.labels, lookAlikes: LookAlikeMemo()).rules()
         #expect(rebuilt.map(\.summary) == ["sender “EDP Comercial” → “EDP”", "topic “electricity” ignored"], "they come back with a lost index")
         #expect(try await DocumentStore(database: database, time: TestTime(.advances)).list(DocumentFilter(), limit: 5).allSatisfy { $0.labels(.sender) == ["EDP"] },
                 "as do the labels they changed")

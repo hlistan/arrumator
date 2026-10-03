@@ -127,7 +127,6 @@ struct Search: AsyncParsableCommand {
 
     func run() async throws {
         let runtime = try await options.runtime()
-        try await runtime.prepareSearch(await runtime.settings.current)
         let results = try await runtime.search.search(SearchQuery(text: query.joined(separator: " "), semantic: !noSemantic))
         options.emit(results.hits.map { SearchRow(id: $0.id, path: $0.document.path, score: $0.score, snippet: SearchHighlight.plain($0.snippet),
                                                    sources: $0.sources.map(\.rawValue).sorted(), labels: $0.document.labels,
