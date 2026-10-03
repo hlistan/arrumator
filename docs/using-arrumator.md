@@ -14,13 +14,14 @@ keyboard navigation on in System Settings), and Return or Space opens one. Its d
 more of its labels, show beneath it. Clicking a row opens the document in place as a card with its name and its labels,
 one row for each kind it has ([labels](how-it-works.md#labels)), and which model read it, or that no text could be taken
 from it and the model saw only its name, and any problem it had, with what would help when **Read Again** alone cannot:
-a copy saved without its password, or a good copy, put in Incoming. The name can be changed there (a blank one is
-refused, saying so), any label taken off with its × or its menu's **Remove from This Document**, and a label added by
-choosing its kind and writing its value; each change is recorded in History, in words: "Renamed to …; added sender
-“EDP”; removed type “invoice”". A label's menu opens it on the Labels page, shows the documents that have it, or removes
-it from every document. The card's actions follow the document's state: **Looks Right** confirms it as it is, **Read
-Again** has the model read it again, saying it waits to be read after the files already in Incoming, **Leave for Later**
-holds it, and **Undo Filing** moves it back to Incoming.
+a copy saved without its password, or a good copy, put in Incoming. The name can be changed there (a blank one, one
+cleaning leaves nothing of and one of the app's own files are refused, saying so), any label taken off with its × or
+its menu's **Remove from This Document**, and a label added by choosing its kind and writing its value; each change is
+recorded in History, in words: "Renamed to …; added sender “EDP”; removed type “invoice”". A label's menu opens it on
+the Labels page, shows the documents that have it, or removes it from every document. The card's actions follow the
+document's state: **Looks Right** confirms it as it is, **Read Again** has the model read it again, saying it waits
+to be read after the files already in Incoming, **Leave for Later** holds it, and **Undo Filing** moves it back to
+Incoming.
 
 - **Incoming**: under **In Progress**, the file being worked on now, with a spinner and what is being done to it
   (**Reading its text**, **Being read by the model**, …); under **Queued**, every other file, in the order they arrived,
@@ -181,8 +182,9 @@ documents embedded by another model are found by meaning only once they are read
 
 ## Audit, logs and tuning
 
-- **History**: every arrival (with the tag its folder in Incoming gives it), exact copy (under the document it has read
-  again, with where the copy went and the tags it gave), extraction, reading (with the labels it gave, which of the
+- **History**: every arrival (with the tag its folder in Incoming gives it), file in Incoming that cannot be opened,
+  exact copy (under the document it has read again, with where the copy went and the tags it gave), extraction,
+  reading (with the labels it gave, which of the
   model's labels were tidied and why, and what gave its tags), filing, correction of a name or
   labels, decision about labels (a merge, a label removed everywhere, two kept apart, a rule forgotten), confirmation,
   undo, move or rename in Finder, search task (asked, with the effort and profile it is read with, what it found or why
@@ -240,19 +242,22 @@ No tunable lives in code. Defaults are bundled in `Sources/ArrumatorCore/Resourc
   wait for more of its answer and, but for a download, how long the whole of it may take, and 0 is no timeout; the
   most bytes one answer may hold, a reply or all the lines of an answer streamed, and one line of a download's
   progress, `ollama.maxResponseBytes`; how long what the server said of where a model runs is trusted,
-  `ollama.modelLocationMaxAge`, 0 to ask before every request), `watcher`, `records` (the names of the archive's record
-  files and of its system and history folders, such as `records.labelRulesFileName`, `records.searchTasksFileName` and
-  `records.conversationsFolderName`), `ingest` (attempts and retry delays, and how long quitting waits for the file in
-  hand, the request being read and the question being answered to stop, `ingest.quitTimeout`, after which the
-  `ollama serve` the app started is stopped all the same), `extraction` (OCR and extraction limits, among them how
-  much of an e-mail is read, `extraction.emailReadCapBytes`, and of its body, `extraction.emailBodyCapBytes`, how many
-  pixels an image may declare, `extraction.image.maxPixels`, beyond which it is read for its metadata alone, how many
-  pages of a scanned PDF or a TIFF OCR reads: all when there are at most `extraction.pdf.ocrAllIfAtMost`, else the
-  first `extraction.pdf.ocrHeadPages` and the last, and what a ZIP file, an archive or an Office document, may hold: at
-  most `extraction.zipMaxEntries` entries, each read up to `extraction.zipEntryCapBytes`; an archive, workbook or
-  presentation that holds more, whose directory does not match the file or whose entries share bytes of it, is read
-  for its metadata alone, and a Word document is still converted by `textutil`, without its title and author),
-  `entities` (dates and identifiers), `analysis`
+  `ollama.modelLocationMaxAge`, 0 to ask before every request), `watcher` (when a file in Incoming has stopped
+  changing, what is never taken in, how long one that has stopped changing but cannot be opened is waited for before
+  History says so, `watcher.unopenableWaitSeconds`, 0 or more, and the most items a package may hold to be one
+  document, in Incoming or named to `arrumatorcli ingest`, `watcher.maxPackageItems`, at least 1), `records` (the
+  names of the archive's record files and of its system and history folders, such as `records.labelRulesFileName`,
+  `records.searchTasksFileName` and `records.conversationsFolderName`), `ingest` (attempts and retry delays, and how
+  long quitting waits for the file in hand, the request being read and the question being answered to stop,
+  `ingest.quitTimeout`, after which the `ollama serve` the app started is stopped all the same), `extraction` (OCR and
+  extraction limits, among them how much of an e-mail is read, `extraction.emailReadCapBytes`, and of its body,
+  `extraction.emailBodyCapBytes`, how many pixels an image may declare, `extraction.image.maxPixels`, beyond which it is
+  read for its metadata alone, how many pages of a scanned PDF or a TIFF OCR reads: all when there are at most
+  `extraction.pdf.ocrAllIfAtMost`, else the first `extraction.pdf.ocrHeadPages` and the last, and what a ZIP file, an
+  archive or an Office document, may hold: at most `extraction.zipMaxEntries` entries, each read up to
+  `extraction.zipEntryCapBytes`; an archive, workbook or presentation that holds more, whose directory does not match
+  the file or whose entries share bytes of it, is read for its metadata alone, and a Word document is still converted
+  by `textutil`, without its title and author), `entities` (dates and identifiers), `analysis`
   (what the model is shown and how it is asked, such as `analysis.excerptChars`, of which the end of the document gets
   `1 / analysis.excerptTailDivisor`, `analysis.repairAttempts`, the context a document, a search request and an image
   are read with, `analysis.numCtx`, one so that a model that reads and describes images stays loaded once, what a model
@@ -307,7 +312,7 @@ Environment variables:
 | `ARRUMATOR_HOME` | Relocates all state: indexes, settings and logs (`$ARRUMATOR_HOME/Logs`). It does not move the archive or Incoming, which `settings.json` names. |
 | `ARRUMATOR_OLLAMA_URL` | The Ollama server while set, in place of the setting; this Mac or the local network only, and an address that is not stops the app and every command, naming the variable. |
 | `ARRUMATOR_PIPELINE_CONFIG` | An extra `pipeline.json` override file, applied after yours. |
-| `ARRUMATOR_TRASH` | A folder the app and every command use as the Trash: an exact copy, a file undone or a document taken out goes there rather than to yours. For a run in a scratch `ARRUMATOR_HOME`. |
+| `ARRUMATOR_TRASH` | A folder the app and every command use as the Trash: an exact copy, the file a document was copied from into an archive on another volume, a file undone or a document taken out goes there rather than to yours. For a run in a scratch `ARRUMATOR_HOME`. |
 | `ARRUMATOR_LOG_LEVEL` | `error`, `warning`, `info`, `debug` or `trace`, over the setting; any other value stops the app with the reason. |
 
 ## Where everything is kept

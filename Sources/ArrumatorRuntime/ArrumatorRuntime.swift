@@ -262,7 +262,8 @@ public final class ArrumatorRuntime: Sendable {
         vectors = VectorIndex()
         search = SearchService(database: database, vectors: vectors, embedder: nil, config: config.search, time: time)
         traces = TraceRecorder(database: database, appVersion: appVersion, time: time)
-        let placer = Placer(builder: FilenameBuilder(config: config.naming), operations: FileOperations(naming: config.naming))
+        let placer = Placer(builder: FilenameBuilder(config: config.naming, reserved: skip),
+                            operations: FileOperations(trash: trash, sameVolume: FileOperations.onOneVolume))
         let extractor = try ExtractorRegistry(ollama: GatedOllama(gate: gate), recognizer: VisionTextRecognizer(),
                                               shell: ShellRunner(time: time), time: time)
         services = PipelineServices(
@@ -375,7 +376,7 @@ public final class ArrumatorRuntime: Sendable {
         // `setPaused`), so applying records nothing.
         let changes = await settings.changes()
         // Subscribed before the watchers start, so nothing they find at once is missed.
-        let stableFiles = await incomingWatcher.stableFiles()
+        let arrivals = await incomingWatcher.arrivals()
         let archiveChanges = await archiveWatcher.changes()
         let current = await settings.current
         Log.info(.app, "Arrumator starting", ["version": appVersion, "archive": archive.path, "incoming": current.incomingPath])
@@ -391,7 +392,7 @@ public final class ArrumatorRuntime: Sendable {
         await taskQueue.start()
         await conversationQueue.start()
         await tasks.run("incoming-pump") { [coordinator] in
-            for await url in stableFiles { await coordinator.enqueue(url) }
+            for await arrival in arrivals { await coordinator.receive(arrival) }
         }
         await tasks.run("archive-pump") { [reconciler, records] in
             for await changes in archiveChanges {
@@ -523,7 +524,7 @@ public final class ArrumatorRuntime: Sendable {
         Log.shared.setMinLevel(logLevelOverride ?? current.logLevel)
         do {
             await prepareSearch(current, loadingVectors: true)
-            try await incomingWatcher.start(root: current.incomingURL)
+            try await incomingWatcher.start(root: current.incomingURL, excluding: [archive])
             try await archiveWatcher.start(root: archive, excluding: [current.incomingURL])
         } catch {
             // Stopped while it applied them: what was not applied is applied at the next start.

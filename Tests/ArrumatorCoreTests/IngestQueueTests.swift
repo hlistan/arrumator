@@ -237,8 +237,6 @@ import Testing
         let document = try await h.services.documents.save(.arrived(path: url.path, sha256: sha, size: fingerprint.size, uttype: "public.plain-text",
                                                                     inode: fingerprint.inode, modified: fingerprint.modified, now: h.env.time.now()))
         let id = try #require(document.id)
-        let source = SourceFile(path: url.path, originalFilename: "bill.txt", fileExtension: "txt", utType: "public.plain-text",
-                                byteSize: fingerprint.size, createdAt: nil, modifiedAt: fingerprint.modified, sha256: sha)
         let settings = await h.env.settings.current
         let stopper = Stopper()
         // Stopped, as the app quitting stops the worker, as soon as the file has been moved and before the move is recorded.
@@ -246,9 +244,9 @@ import Testing
         let trace = TraceContext(traceID: traced.traceID, sink: StopAfterPlacing(stopper: stopper))
         let filing = Task {
             _ = await Patience.until { await stopper.holds }
-            return try await h.services.filer.file(document, source: source, analysis: DocumentAnalysis(fileName: StubAnalyzer.edpFileName, model: "stub"),
-                                                   status: .filed, directory: h.env.archive, inPlace: false, actor: .system,
-                                                   settings: settings, trace: trace, event: nil, recording: nil)
+            return try await h.services.filer.file(document, archive: h.services.archive, analysis: DocumentAnalysis(fileName: StubAnalyzer.edpFileName, model: "stub"),
+                                                   status: .filed, directory: h.env.archive, inPlace: false, fingerprint: fingerprint,
+                                                   actor: .system, settings: settings, trace: trace, event: nil, recording: nil)
         }
         await stopper.hold(filing)
         let filed = await filing.result

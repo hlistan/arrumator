@@ -80,8 +80,8 @@ gate quit "quitting has one path: work at quit runs before AppKit lets the app e
   'applicationWillTerminate|willTerminateNotification|\.stop\(\)|stopBeforeQuitting\(' \
   App
 
-gate trash "a file the app has no more use for goes to the Trash through Trashing, which the tests and eval replace with a folder of their own: only SystemTrash and a move across volumes call trashItem, and only the app and arrumatorcli use SystemTrash" \
-  '^Sources/ArrumatorCore/FileOps/(Trash|FileOperations)\.swift:|^App/AppModel\.swift:[0-9]+: +trash: environment\.trash\(orElse: SystemTrash\(\)\)\)$|^Sources/ArrumatorCLI/Arrumator\.swift:[0-9]+: .*trash: environment\.trash\(orElse: SystemTrash\(\)\)\)$' \
+gate trash "a file the app has no more use for goes to the Trash through Trashing, which the tests and eval replace with a folder of their own: only SystemTrash calls trashItem, and only the app and arrumatorcli use SystemTrash" \
+  '^Sources/ArrumatorCore/FileOps/Trash\.swift:|^App/AppModel\.swift:[0-9]+: +trash: environment\.trash\(orElse: SystemTrash\(\)\)\)$|^Sources/ArrumatorCLI/Arrumator\.swift:[0-9]+: .*trash: environment\.trash\(orElse: SystemTrash\(\)\)\)$' \
   'trashItem\(|SystemTrash\(\)' \
   Sources App Tests
 

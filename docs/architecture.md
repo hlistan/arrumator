@@ -108,7 +108,7 @@ flowchart LR
 | Index | GRDB `DatabasePool` over SQLite, at `~/Library/Application Support/Arrumator/Indexes`. | The app's own. Rebuilt from the archive when lost. |
 | Settings and overrides | `settings.json` and an optional `pipeline.json` beside the indexes; five `ARRUMATOR_*` variables read by `RuntimeEnvironment`. | Written by the user: decoded strictly, unknown keys refused by name. |
 | Apple frameworks and tools | PDFKit, Vision, NaturalLanguage, ImageIO, AVFoundation, Quick Look thumbnails; `/usr/bin/textutil` and `/usr/bin/ditto` as child processes (`ShellRunner`, `DiagnosticsExporter`). | Trusted code, fed untrusted files. |
-| Trash | `Trashing`: the Mac's Trash for the app and the command line, a folder for tests and `eval`. A move across volumes puts its source in the Mac's Trash itself. | Where a file the app has no more use for goes. Never deleted. |
+| Trash | `Trashing`: the Mac's Trash for the app and the command line, a folder for tests and `eval`, and for a run in a scratch home (`ARRUMATOR_TRASH`). | Where a file the app has no more use for goes, the source of a move to another volume among them. Never deleted. |
 | Logs | JSONL per day in `~/Library/Logs/Arrumator`, and the unified log with fields marked private. | Must never hold document text. |
 
 Three boundaries carry the risk, and a change that touches one is reviewed with the
@@ -189,7 +189,7 @@ table in [AGENTS.md §5](../AGENTS.md#5-boundaries).
 | `Storage/` | The index: schema and migrations, record types, one store per concern. | `AppDatabase`, `DocumentStore`, `JobStore`, `IndexStore`, `HistoryStore`, `TraceRecorder`, `LabelStore`, `SearchTaskStore`, `TaskConversationStore` |
 | `Records/` | The archive's record files: rendering, reading back, rebuilding the index. | `ArchiveRecords`, `ArchiveLayout`, `RecordKind`, `FrontMatter` |
 | `Ingest/` | The pipeline's state machine, filing, and what the user does with a document or a label. | `IngestCoordinator`, `PipelineServices`, `DocumentFiler`, `ReviewActions`, `LabelActions`, `ArchiveReconciler` |
-| `FileOps/` | Names, moves, identity on disk, the Trash. | `FilenameBuilder`, `Placer`, `FileOperations`, `HashService`, `Xattr`, `SystemTrash`, `FolderTrash` |
+| `FileOps/` | Names, moves, identity on disk (a package is one document), the Trash. | `FilenameBuilder`, `Placer`, `FileOperations`, `HashService`, `Packages`, `Xattr`, `SystemTrash`, `FolderTrash` |
 | `Watching/` | FSEvents on Incoming and on the archive. | `IncomingWatcher`, `ArchiveWatcher`, `SelfChangeRegistry`, `FSEventStream`, `SkipRules` |
 | `Ollama/` | The only network client, its guard, the server's lifecycle, one model call at a time. | `OllamaClient`, `OllamaConnection`, `OllamaEndpoint`, `NetworkGuardProtocol`, `OllamaLifecycle`, `ModelManager`, `InferenceGate` |
 | `Tasks/` | Search tasks and conversations: two queues, their actions, what an answer is shown, exports. | `SearchTaskQueue`, `SearchTaskActions`, `TaskConversationQueue`, `TaskConversationActions`, `TaskContextBuilder`, `SearchTaskExporter` |
@@ -270,16 +270,29 @@ stateDiagram-v2
 *The stages of an ingest job (`JobState`). A job is also `held` when the model it needs is missing, and `failed` when
 a stage has failed `ingest.maxAttempts` times; both are left out of the drawing because any stage can end that way.*
 
-1. **Queued.** `IncomingWatcher` emits a file once it has stopped changing. `IngestCoordinator.enqueue` decides its tags
-   from the folder it is in, inserts a job (one active job per path, by a unique index) and records its arrival.
-2. **Hashed.** SHA-256 of the file. An exact copy of a document the archive holds is handed over to that document,
-   which is read again, and the copy goes to the Trash ([exact copies](how-it-works.md#exact-copies)).
+1. **Queued.** `IncomingWatcher` emits a file, or a package whole (`Packages`), once it has stopped changing. It
+   watches Incoming as the file system spells it, as FSEvents reports paths, and leaves out the archive kept inside it;
+   a file it cannot open, or a package of more than `watcher.maxPackageItems` items, it reports once it has waited
+   `watcher.unopenableWaitSeconds` for it, which `IngestCoordinator.receive` records in History.
+   `IngestCoordinator.enqueue` takes the document a path belongs to, at its path as the file system spells it
+   (`URL.spelledOnDisk`), the one form a path in Incoming is queued, looked up and recorded in; decides its tags from
+   the folder it is in; inserts a job (one active job per path, by a unique index) and records its arrival.
+2. **Hashed.** SHA-256 of the file, or of what a package holds. An exact copy of a document the archive holds is
+   handed over to that document, which is read again, and the copy goes to the Trash
+   ([exact copies](how-it-works.md#exact-copies)).
 3. **Extracted.** `ContentExtracting` turns the file into `ExtractedContent`; the text goes into the full-text index.
 4. **Analysed.** `DocumentAnalyzing` asks the model once; the answer is validated and its labels are made one
    vocabulary with the archive's (`LabelConsolidator`).
 5. **Filed.** `DocumentFiler` builds the name, moves the file, and records the document row, the History event and the
    job's destination in one transaction. The move and its record run in a task of their own, so a stop that arrives
-   between them cannot separate them.
+   between them cannot separate them. A file no longer as it was hashed (`JobPayload.fingerprint`) is not moved
+   (`FileOperationError.sourceChanged`): its job goes back to the start, as a new arrival, for one of its attempts. One
+   whose name stays its own where it is (`Placer.keeps`) is not moved at all. Across volumes the move is a checked copy,
+   after which the file goes to the Trash; a file the Trash refuses stays, its copy goes there instead
+   (`FileOperations.move`), and, as a refusal that will not change, it is not tried again: it is left in Incoming,
+   failed, in Needs You, saying why, as a file that cannot be parked in the archive is, and as an exact copy the Trash
+   refuses is. A move makes the folders below the archive it needs, never the archive's own folder: one that is gone
+   is `FileOperationError.folderMissing`, and the job waits for it, as for Ollama, spending no attempt.
 
 After each stage the job row is saved with what the stage found (`JobPayload`), which is what lets a job resume.
 
@@ -366,7 +379,7 @@ The rules a change must keep:
   status and Ollama's state. A stream of events (files that stopped changing, changes in the archive, settings changes)
   delivers each event, has no first value and is not cut to the newest.
 - **Every stream is made for the one who listens to it.** A task cancelled while it awaits an `AsyncStream` ends that
-  stream for good, so each subscriber gets a stream of its own (`statusUpdates()`, `stableFiles()`, `changes()`), and
+  stream for good, so each subscriber gets a stream of its own (`statusUpdates()`, `arrivals()`, `changes()`), and
   a wait never listens to a stream other waits share: the doorbell a worker waits on ends each wait by a one-shot of
   its own (`Doorbell`, `OneShot`).
 - **Every wait ends when its task is cancelled**, the wait for the generation lane included (`AsyncSemaphore`), and
@@ -452,7 +465,7 @@ evolutionary architecture, and what each protects.
 | A log message is a constant; what varies goes in its fields, which a diagnostics export keeps by allow-list. | `swift build`: `Log`'s message is a `StaticString`; `DiagnosticsTests` |
 | No `fatalError` or `try!` in shipped code. | `scripts/lint.sh`, crash gate; SwiftLint `force_unwrapping` |
 | Quitting has one path: work at quit runs before AppKit lets the app end, and nothing else in the app stops the runtime. | `scripts/lint.sh`, quit gate |
-| Only `SystemTrash` and a move across volumes call `trashItem`; everything else goes through `Trashing`. | `scripts/lint.sh`, trash gate |
+| Only `SystemTrash` calls `trashItem`; everything else, a move across volumes among it, goes through `Trashing`. | `scripts/lint.sh`, trash gate |
 | What opens on a click opens from the keyboard. | `scripts/lint.sh`, rows gate |
 | A runtime acts on its own archive: only `bootstrap` and a switch read the archive from the settings. | `scripts/lint.sh`, archive gate |
 | No `TODO`, `FIXME`, `HACK` or `XXX`. | `scripts/lint.sh`, debt gate |

@@ -19,15 +19,21 @@ public struct Harness: Sendable {
         coordinator = IngestCoordinator(services: services)
     }
 
-    /// The pipeline's services over `env`, with `config` in force.
-    public static func services(_ env: TestEnvironment, analyzer: any DocumentAnalyzing, config: PipelineConfig) -> PipelineServices {
-        let placer = Placer(builder: FilenameBuilder(config: config.naming), operations: FileOperations(naming: config.naming))
+    /// The pipeline's services over `env`, with `config` in force, moving files as `sameVolume` tells a rename from a
+    /// copy to another volume: as the disk says, unless a test makes every move cross a volume; and with `trash` as the
+    /// Trash, the environment's own unless a test gives one that refuses.
+    public static func services(_ env: TestEnvironment, analyzer: any DocumentAnalyzing, config: PipelineConfig,
+                                sameVolume: @escaping FileOperations.VolumeCheck = FileOperations.onOneVolume,
+                                trash: (any Trashing)? = nil) -> PipelineServices {
+        let trash = trash ?? env.trash
+        let placer = Placer(builder: FilenameBuilder(config: config.naming, reserved: SkipRules(watcher: config.watcher)),
+                            operations: FileOperations(trash: trash, sameVolume: sameVolume))
         return PipelineServices(
             database: env.database, archive: env.archive, config: config, settings: env.settings, extractor: PlainTestExtractor(),
             analyzer: analyzer,
             filer: DocumentFiler(database: env.database, placer: placer, index: IndexStore(database: env.database, time: env.time),
                                  registry: SelfChangeRegistry(ttl: config.watcher.selfChangeTTLSeconds, time: env.time), time: env.time),
-            traces: TraceRecorder(database: env.database, appVersion: "test", time: env.time), vectors: VectorIndex(), trash: env.trash,
+            traces: TraceRecorder(database: env.database, appVersion: "test", time: env.time), vectors: VectorIndex(), trash: trash,
             time: env.time)
     }
 

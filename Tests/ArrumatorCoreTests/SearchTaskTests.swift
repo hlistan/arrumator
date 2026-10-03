@@ -108,7 +108,7 @@ import Testing
     @Test func theMatcherFindsDocumentsInTheArchiveWithTheLabelsAndWordsAskedFor() async throws {
         let w = try await world()
         defer { w.h.env.cleanup() }
-        let matcher = SearchPlanMatcher(database: w.h.env.database, limit: 100)
+        let matcher = SearchPlanMatcher(database: w.h.env.database, archive: w.h.env.archive, limit: 100)
         #expect(Set(try await matcher.documents(Self.invoices2025)) == (try w.ids("edp_2025_03.txt", "aguas_2025_05.txt")),
                 "the 2025 invoices about electricity or water: not the 2024 one, the phone bill, the contract or the tax assessment")
         let meter = SearchPlan(title: "", labels: [Self.label(.sender, "EDP")], words: ["meter \"reading\""], grouping: [])
@@ -122,7 +122,7 @@ import Testing
         try await w.h.review.undo(try w.id("aguas_2025_05.txt"))
         #expect(try await matcher.documents(Self.invoices2025) == [try w.id("edp_2025_03.txt")],
                 "a document undone back to Incoming is no longer in the archive")
-        let one = SearchPlanMatcher(database: w.h.env.database, limit: 1)
+        let one = SearchPlanMatcher(database: w.h.env.database, archive: w.h.env.archive, limit: 1)
         #expect(try await one.documents(Self.invoices) == [try w.id("edp_2025_03.txt")],
                 "at most the limit, the newest by their own date first: the March invoice, not the January one processed after it")
     }
@@ -132,7 +132,7 @@ import Testing
         let w = try await world(filing: Self.invoicesNewestFirst, apart: 60)
         defer { w.h.env.cleanup() }
         let newestFirst = try Self.invoicesNewestFirst.map(w.id)
-        let matcher = SearchPlanMatcher(database: w.h.env.database, limit: newestFirst.count)
+        let matcher = SearchPlanMatcher(database: w.h.env.database, archive: w.h.env.archive, limit: newestFirst.count)
         #expect(try await matcher.documents(Self.invoices) == newestFirst,
                 "a task's documents are found newest by their own date first, not the most recently processed first")
 

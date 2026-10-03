@@ -6,11 +6,29 @@ public struct DocumentFilter: Sendable, Hashable {
     /// Documents that have every one of these labels, each written however the archive writes it
     /// (`LabelSimilarity.sameWriting`): the scope the sidebar's labels narrow down to.
     public var labels: [DocumentLabel]
+    /// Documents whose file is in this folder, at any depth: in the archive, given its root, as the index records the
+    /// paths of its documents (`PipelineServices.archive`). A document left in Incoming has a status of one in the archive
+    /// (failed, held) but is none.
+    public var within: URL?
 
-    public init(statuses: Set<DocumentStatus>? = nil, labels: [DocumentLabel] = []) {
+    public init(statuses: Set<DocumentStatus>? = nil, labels: [DocumentLabel] = [], within: URL? = nil) {
         self.statuses = statuses
         self.labels = labels
+        self.within = within
     }
+
+    /// The condition that a document's path, `d.path`, is below `folder` as any of its spellings writes it
+    /// (`URL.spellings`): a range of the paths that begin with a spelling and a separator for each, the separator
+    /// followed by `0` in UTF-8, the order SQLite compares text in. Narrows a query to what `URL.holds` then decides.
+    static func pathCondition(within folder: URL) -> (String, StatementArguments) {
+        let spellings = folder.spellings
+        var args = StatementArguments()
+        for root in spellings { args += [root + "/", root + Self.afterSeparator] }
+        return (" AND (" + Array(repeating: "(d.path >= ? AND d.path < ?)", count: spellings.count).joined(separator: " OR ") + ")", args)
+    }
+
+    /// The character that follows the path separator, `/`, in UTF-8.
+    static let afterSeparator = "0"
 
     /// The filter as conditions on `documents d`, each opening with AND, for every query that lists documents: the
     /// document store's, the label store's and search's. A label is matched against the archive's writings of it, so
@@ -21,6 +39,11 @@ public struct DocumentFilter: Sendable, Hashable {
         if let statuses {
             sql += " AND d.status IN (\(Self.placeholders(statuses.count)))"
             args += StatementArguments(statuses.map(\.rawValue).sorted())
+        }
+        if let within {
+            let (condition, values) = Self.pathCondition(within: within)
+            sql += condition
+            args += values
         }
         for label in labels {
             let writings = try String.fetchAll(db, sql: """
@@ -126,15 +149,23 @@ public struct DocumentStore: Sendable {
         try await database.reader.read { db in try DocumentRecord.filter(Column("uid") == uid).fetchOne(db) }
     }
 
-    /// The oldest document in the archive as itself (`DocumentStatus.inArchive`: filed, waiting for the user, parked
-    /// after failing or left for later) recorded with this content hash, other than `id`: what an exact copy of it is a
-    /// copy of. A copy an earlier version filed (`duplicate`) is none.
-    public func existing(sha256: String, excluding id: Int64?) async throws -> DocumentRecord? {
+    /// The oldest document in the archive at `archive` as itself (`DocumentStatus.inArchive`: filed, waiting for the
+    /// user, parked after failing or left for later, and its file in the archive) recorded with this content hash, other
+    /// than `id`: what an exact copy of it is a copy of. A copy an earlier version filed (`duplicate`) is none, and so is a
+    /// document left in Incoming, as one the Trash would not take.
+    public func existing(sha256: String, excluding id: Int64?, archive: URL) async throws -> DocumentRecord? {
         try await database.reader.read { db in
-            var r = DocumentRecord.filter(Column("sha256") == sha256)
-                .filter(DocumentStatus.inArchive.map(\.rawValue).contains(Column("status")))
-            if let id { r = r.filter(Column("id") != id) }
-            return try r.order(Column("id")).fetchOne(db)
+            let (within, args) = DocumentFilter.pathCondition(within: archive)
+            let statuses = DocumentStatus.inArchive.map(\.rawValue).sorted()
+            var sql = "SELECT d.* FROM documents d WHERE d.sha256 = ? AND d.status IN (\(databaseQuestionMarks(count: statuses.count)))\(within)"
+            var arguments: StatementArguments = [sha256]
+            arguments += StatementArguments(statuses)
+            arguments += args
+            if let id {
+                sql += " AND d.id != ?"
+                arguments += [id]
+            }
+            return try DocumentRecord.fetchAll(db, sql: sql + " ORDER BY d.id", arguments: arguments).first { archive.holds($0.path) }
         }
     }
 

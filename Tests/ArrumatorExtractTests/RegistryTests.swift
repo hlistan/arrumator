@@ -48,6 +48,19 @@ struct RegistryTests {
         #expect(content.text.contains("Downloaded statement"), "its text layer is read")
     }
 
+    @Test("A package is read whole: an .rtfd's text, its size what it holds")
+    func package() async throws {
+        let scratch = try Scratch()
+        let notes = scratch.url("Notes.rtfd")
+        try FileManager.default.createDirectory(at: notes, withIntermediateDirectories: true)
+        let rtf = "{\\rtf1\\ansi A note about the boiler service.}"
+        try Data(rtf.utf8).write(to: notes.appendingPathComponent("TXT.rtf"))
+        let content = try await registry.extract(notes, sha256: "x", context: try TestConfig.context(), trace: .disabled)
+        #expect(content.source.utType == UTType.rtfd.identifier, "a folder macOS shows as one document is the document it is")
+        #expect(content.text.contains("A note about the boiler service."), "and its text is read from what it holds")
+        #expect(content.source.byteSize == Int64(rtf.utf8.count), "its size is that of the files it holds")
+    }
+
     @Test("Source facts include kMDItemWhereFroms from the binary plist xattr")
     func whereFroms() async throws {
         let scratch = try Scratch()

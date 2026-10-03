@@ -176,12 +176,13 @@ public struct SearchTaskActions: Sendable {
         }
     }
 
-    /// Adds every document in the archive that has all these labels, as the sidebar narrows them down
+    /// Adds every document in the archive, its file there, that has all these labels, as the sidebar narrows them down
     /// (`DocumentFilter.labels`): at most `tasks.maxDocuments`, the newest by their own date, as a task finds them
     /// (`SearchPlanMatcher`). Returns the documents that were not in the set before.
     @discardableResult
     public func add(_ id: Int64, labelled labels: [DocumentLabel]) async throws -> [Int64] {
-        let documents = try await services.documents.list(DocumentFilter(statuses: DocumentStatus.inArchive, labels: labels),
+        let archive = services.archive
+        let documents = try await services.documents.list(DocumentFilter(statuses: DocumentStatus.inArchive, labels: labels, within: archive),
                                                           order: .documentDate, limit: config.maxDocuments)
         return try await add(id, documents: documents.compactMap(\.id))
     }
@@ -230,7 +231,7 @@ public struct SearchTaskActions: Sendable {
         guard let detail = try await store.detail(id: id) else { throw SearchTaskError.taskNotFound(id) }
         guard detail.tree.count > 0 else { throw SearchTaskError.nothingToExport(id) }
         let incoming = await services.settings.current.incomingURL
-        let exporter = SearchTaskExporter(naming: services.config.naming, tasks: config, excluded: [services.archive, incoming])
+        let exporter = SearchTaskExporter(builder: services.filer.placer.builder, tasks: config, excluded: [services.archive, incoming])
         let (path, manifest) = try exporter.export(detail, into: folder, format: format)
         let now = services.time.now()
         let config = config

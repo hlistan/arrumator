@@ -70,6 +70,8 @@ struct DocumentCard: View {
     @State private var showingTrace = false
     /// Read Again was pressed: the card says the document waits to be read, until it is.
     @State private var readAgainAsked = false
+    /// What the card offers, as Core decides it from where the document is (`ReviewActions.choices`).
+    @State private var choices = DocumentChoices(actions: [], notFiled: false)
     @FocusState private var editingName: Bool
 
     var body: some View {
@@ -175,6 +177,9 @@ struct DocumentCard: View {
                         if [.needsReview, .failed, .held].contains(d.status), let advice = Wording.advice(analysis) {
                             Text(advice).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                         }
+                        if choices.notFiled {
+                            Text(Wording.notFiledAdvice).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        }
                     }
                     .textSelection(.enabled)
                 }
@@ -188,21 +193,19 @@ struct DocumentCard: View {
             Button(Wording.showInFinder) { model.reveal(d.path) }
             Button(Wording.howWasThisRead) { showingTrace = true }
             Spacer()
-            switch d.status {
-            case .filed:
-                Button(Wording.undoFiling) { run(Wording.undoAction) { try await $0.review.undo(documentID) } }
-                    .help(Wording.undoFilingHelp)
-                Button(Wording.looksRight) { run(Wording.confirmAction) { try await $0.review.confirm(documentID) } }
-                    .help(Wording.confirmFiledHelp)
-            case .needsReview, .failed:
-                Button(Wording.leaveForLater) { run(Wording.holdAction) { try await $0.review.hold(documentID) } }
-                readAgain
-                Button(Wording.looksRight) { run(Wording.confirmAction) { try await $0.review.confirm(documentID) } }
-                    .help(Wording.confirmWaitingHelp)
-            case .held, .undone:
-                readAgain
-            default:
-                EmptyView()
+            ForEach(choices.actions, id: \.self) { action in
+                switch action {
+                case .undo:
+                    Button(Wording.undoFiling) { run(Wording.undoAction) { try await $0.review.undo(documentID) } }
+                        .help(Wording.undoFilingHelp)
+                case .confirm:
+                    Button(Wording.looksRight) { run(Wording.confirmAction) { try await $0.review.confirm(documentID) } }
+                        .help(d.status == .filed ? Wording.confirmFiledHelp : Wording.confirmWaitingHelp)
+                case .hold:
+                    Button(Wording.leaveForLater) { run(Wording.holdAction) { try await $0.review.hold(documentID) } }
+                case .readAgain:
+                    readAgain
+                }
             }
         }
         .buttonStyle(.borderless)
@@ -241,15 +244,16 @@ struct DocumentCard: View {
         run(Wording.changeLabelsAction) { try await $0.review.edit(documentID, fileName: nil, labels: labels) }
     }
 
-    /// Renames the file when the user leaves the name, as Things saves a field; an unchanged name is left alone. A blank
-    /// one is refused, saying why, and the field shows the name the file keeps.
+    /// Renames the file when the user leaves the name, as Things saves a field; an unchanged name is left alone. A name
+    /// the document cannot have (`IngestError.unusableFileName`: a blank one, one cleaning leaves nothing of, one of the
+    /// app's own files) or a rename that fails is refused, saying why, and the field shows the name the file keeps.
     private func rename() async {
         guard let d = document else { return }
         let current = (d.filename as NSString).deletingPathExtension
         let value = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard value != current else { return }
-        await model.perform(Wording.renameAction) { try await $0.review.edit(documentID, fileName: value, labels: nil) }
-        if value.isEmpty { name = current }
+        let renamed: Void? = await model.perform(Wording.renameAction) { try await $0.review.edit(documentID, fileName: value, labels: nil) }
+        if renamed == nil { name = current }
     }
 
     private func run(_ what: String, _ action: @escaping @Sendable (ArrumatorRuntime) async throws -> Void) {
@@ -263,6 +267,9 @@ struct DocumentCard: View {
     private func load() async {
         let readBefore = document?.updatedAt
         document = await model.load(Wording.loadDocumentAction) { try await $0.services.documents.document(id: documentID) } ?? nil
+        if let document, let offered = await model.load(Wording.loadDocumentAction, { await $0.review.choices(for: document) }) {
+            choices = offered
+        }
         // Read again since, or no longer waiting: Read Again is offered again where it applies.
         if document?.updatedAt != readBefore || document.map({ ![.needsReview, .failed, .held, .undone].contains($0.status) }) == true {
             readAgainAsked = false

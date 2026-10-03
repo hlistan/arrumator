@@ -32,6 +32,47 @@ document is filed at its top and found again by its labels, its words or its mea
 yours: the app reads files you put in it where they are, and never moves them out. A folder you put into Incoming is
 yours too, and gives what is in it a label of yours, a tag ([below](#folders-in-incoming-and-tags)).
 
+### What Incoming takes in
+
+A file is taken once it has stopped changing: unchanged for `watcher.stabilityRequiredPolls` looks
+`watcher.stabilityPollInterval` seconds apart, and one it can open, so a copy in progress is never read half (an empty
+file after `watcher.zeroByteWaitSeconds`). Hidden files, downloads in progress, Office's lock files and the app's own
+files are never taken (`watcher.ignoredNamePrefixes` and the keys beside it), and nothing in the archive is, when you
+keep the archive inside Incoming, nor anything that is no file, such as a named pipe. Incoming is watched as the disk
+spells it, and a file in it is known by its path as the disk spells it, whoever names it, so a path to it through a
+link, or written in another case than the disk's, names the same file: the watcher and `arrumatorcli ingest` queue it
+once, and a document undone into it is left there by the next rescan. `arrumatorcli ingest` refuses, saying why, what
+the watcher never takes: a link, which would file what it points to, wherever that is, and a hidden, temporary or
+app-managed file.
+
+- **A package**, a folder macOS shows as one document (an `.rtfd`, a Pages document), is one document, never the files
+  it holds one by one; `arrumatorcli ingest` given a file inside one takes the package. It is taken whole once nothing
+  in it has changed, its size is that of the files it holds, and it is known by a SHA-256 over everything it holds,
+  each item's path in it and its bytes, so a copy of it, under whatever name, is an [exact copy](#exact-copies). It is
+  moved whole. One that holds more than `watcher.maxPackageItems` items, as a photo library does, is no document: it is
+  walked no further, left where it is, and History says so, and `arrumatorcli ingest` refuses it, saying so.
+- **A file that cannot be opened**, as when its permissions do not let Arrumator read it, is waited for
+  `watcher.unopenableWaitSeconds` once it has stopped changing, then left where it is, and History says so. It is
+  taken once it can be opened or it changes, and said again at the next start while it still cannot be opened.
+- **Into an archive on another volume**, a file is copied, the copy checked against the file's SHA-256 and given its
+  dates, and only then does the file go to the Trash. One the Trash will not take, as on a volume without one, is not
+  tried again: it stays in Incoming, waiting for you in Needs You as not filed, with why, and its copy goes to the
+  Trash instead, so there is never a second one. When that Trash will not take the copy either, History and the
+  document say where the copy is. Its card offers **Read Again** and **Leave for Later**, never **Looks Right**, as it
+  is in no archive. A rescan leaves the file alone while it is that file, by its size, date and identity on the disk;
+  saved again, it is the same document arriving again. **Read Again** reads it as an arrival, from its file.
+  It is no document of the archive meanwhile: no copy is taken for one of it, and no search task finds it. Whether a
+  document is in the archive is told by where its file is, however the archive's folder is named, through a link or in
+  another case.
+- **A file changed after it was read**, between its hashing and its filing, is not filed as what was read of it: it is
+  read again from the start, as a new arrival, and History says it changed. What was read of it, its labels but its
+  tags, its text and its place in the search, goes; a file gone meanwhile ends its document as missing, and one that
+  changed into an exact copy of a document in the archive ends it as a copy does. That counts as one of its attempts
+  (`ingest.maxAttempts`), so a file that changes at every reading ends as any file that keeps failing does.
+- **When the archive's folder is not there**, as when it was renamed away or its disk is not attached, a file waits
+  to be filed, spending no attempt, and History says so once. The app never makes the archive's folder again where it
+  is gone; the file is filed once the folder is back.
+
 ### Documents in any language
 
 Nothing in reading a document is tied to a language. The extractor tells the language of the text among all that
@@ -68,8 +109,11 @@ that cannot be read, or leaves a list out, goes back to the model with what was 
 and one cut off at its length limit (`analysis.llmOptions.numPredict` tokens) goes back saying so. No other model is
 asked after it: a document it never answers validly waits for you ([below](#documents-that-wait-for-you)). The file name
 goes through the same cleaning every file name does: no path separators or other characters `naming.forbiddenCharacters`
-lists (one between words, as in "Fatura: julho", becomes " - ", one inside a word or number a "-"), bounded length,
-and, when Settings says so, transliterated.
+lists (one between words, as in "Fatura: julho", becomes " - ", one inside a word or number a "-"), no invisible
+characters but the joiners some scripts and emoji are written with, bounded length, and, when Settings says so,
+transliterated. A name cleaning leaves nothing of, as one of dots and dashes, is no name, and nor is one of the app's
+own files or one Incoming never takes in (a record file's `_….md`, a lock file's `~$…`): the document then keeps the
+name it has, the one it arrived with, or, read again in the archive, the one it has there.
 
 ## Labels
 
@@ -256,7 +300,7 @@ their card:
 A document that waits keeps its own name: what the model read of it is in doubt. Confirm one as it is
 (**Looks Right**), correct its name or labels, or have it read again. A file that keeps failing to be processed at all
 (`ingest.maxAttempts`) is parked in the archive the same way, with status failed, so Incoming stays clean and nothing
-is lost.
+is lost; one that cannot be moved into the archive either stays in Incoming, failed, saying why.
 
 While Ollama cannot be reached a document waits where it stopped, and a missing model holds it until the model is
 downloaded; neither costs it an attempt.
@@ -276,9 +320,9 @@ that document to be read again. This is how you have documents read with another
 - **It keeps its tags**, the folders' and those you gave it, and a copy put into a folder in Incoming, or given `--tag`,
   gives it those tags at once, before it is read; what the model gives replaces what it gave before.
 - **The copy goes to the Trash**, never deleted, as the archive holds the same bytes; take it back from there. A copy
-  the
-  Trash will not take, as on a volume without one, stays in Incoming, and the document is not read again: the copy is
-  tried again (`ingest.maxAttempts`) and then recorded as failed, saying why.
+  the Trash will not take, as on a volume without one, is not tried again: it stays in Incoming, waiting for you in
+  Needs You as not filed, saying why, a rescan leaves it alone, and the document is not read again. **Read Again** on
+  it, once the Trash takes it, hands it over as any copy: it becomes no second document.
 - **History records it once, under the document**: `bill.pdf is a copy of 2026-07-05 EDP Comercial - Fatura.pdf, which
   is read again; the copy is in the Trash; tagged “Taxes 2024” by its folder in Incoming`, with where the copy was and
   went. The trace of the copy's arrival (`hash`, `dedupe` with the document it copies, `tag`) is the event's; the
@@ -297,10 +341,11 @@ labelled where it is, under its own name. A file removed from the archive is mar
 is undone by the app.
 
 Reading a document again (`review retry`, **Read Again**) labels and names it again where it is, from the text read of
-it
-before, keeping its tags; putting an exact copy of it into Incoming does the same, reading its text from its file again
-too ([exact copies](#exact-copies)). A document you undid is back in Incoming, held; read again, it is filed at the top
-of the archive.
+it before (from its file, when the file changed since it was read), keeping its tags; putting an exact copy of it into
+Incoming does the same, reading its text from its file again too ([exact copies](#exact-copies)). A reading that gives
+no name leaves it the name it has, and one that names it as it is named, but for case or the collision suffix
+(`naming.collisionFormat`) a taken name gave it, moves nothing. A document you undid is back in Incoming, held; read
+again, it is filed at the top of the archive.
 
 ## Search tasks
 

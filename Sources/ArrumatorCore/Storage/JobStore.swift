@@ -18,6 +18,12 @@ public struct JobPayload: Sendable, Codable, Hashable {
     public var copyOf: Int64?
 
     public init() {}
+
+    /// What the file was when it was hashed, from `size`, `mtime` and `inode`; nil when it was not hashed in this job,
+    /// as a document read again is not.
+    var fingerprint: FileFingerprint? {
+        size.map { FileFingerprint(size: $0, modified: mtime, inode: inode) }
+    }
 }
 
 extension ExtractedContent: Hashable {

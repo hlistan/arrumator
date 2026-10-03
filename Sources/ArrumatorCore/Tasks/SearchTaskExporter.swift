@@ -7,13 +7,11 @@ import Foundation
 /// (`naming.collisionFormat`). The app builds every path: a folder is named after its label as a file name is cleaned
 /// (`FilenameBuilder`), so a label can never reach another directory (AGENTS.md §4.5).
 struct SearchTaskExporter {
-    let naming: NamingConfig
+    /// What cleans the names of the folders and finds free names for what is made.
+    let builder: FilenameBuilder
     let tasks: TasksConfig
     /// Folders an export may not go into: the archive and Incoming, which would take the copies in as documents.
     let excluded: [URL]
-
-    private var builder: FilenameBuilder { FilenameBuilder(config: naming) }
-    private var operations: FileOperations { FileOperations(naming: naming) }
 
     /// Exports the set into `folder`, made if it does not exist; returns the folder or archive made and what it holds.
     func export(_ detail: SearchTaskDetail, into folder: URL, format: ExportFormat) throws -> (URL, ExportManifest) {
@@ -28,11 +26,10 @@ struct SearchTaskExporter {
         } catch {
             throw SearchTaskError.exportFailed(folder.path, error.localizedDescription)
         }
-        let name = builder.bounded(detail.task.name, fileExtension: "")
-        let top = name.isEmpty ? String(detail.task.id) : name
+        let top = builder.bounded(detail.task.name, fileExtension: "") ?? String(detail.task.id)
         switch format {
         case .folder:
-            let (root, _) = try operations.uniqueDestination(directory: folder, filename: top)
+            let (root, _) = try builder.uniqueDestination(directory: folder, filename: top)
             return (root, try copy(detail.tree, into: root))
         case .zip:
             // The folder is put together beside where the archive goes, then packed; the temporary folder holds only the
@@ -41,7 +38,7 @@ struct SearchTaskExporter {
             defer { try? FileManager.default.removeItem(at: staging) }
             let root = staging.appendingPathComponent(top, isDirectory: true)
             let manifest = try copy(detail.tree, into: root)
-            let (archive, _) = try operations.uniqueDestination(directory: folder, filename: top + "." + Self.zipExtension)
+            let (archive, _) = try builder.uniqueDestination(directory: folder, filename: top + "." + Self.zipExtension)
             try Self.composeNames(under: root)
             try Self.zip(root, to: archive)
             return (archive, manifest)
@@ -65,7 +62,7 @@ struct SearchTaskExporter {
                 continue
             }
             do {
-                let (target, _) = try operations.uniqueDestination(directory: directory, filename: document.filename)
+                let (target, _) = try builder.uniqueDestination(directory: directory, filename: document.filename)
                 try FileManager.default.copyItem(at: document.url, to: target)
                 manifest.files.append(ExportedFile(document: id, path: (path + [target.lastPathComponent]).joined(separator: "/")))
             } catch {
@@ -92,8 +89,8 @@ struct SearchTaskExporter {
             default: value
             }
         }
-        let name = shown.map { builder.bounded($0, fileExtension: "") } ?? ""
-        return name.isEmpty ? builder.bounded(try tasks.withoutLabelFolder(kind), fileExtension: "") : name
+        return try shown.flatMap { builder.bounded($0, fileExtension: "") }
+            ?? builder.bounded(tasks.withoutLabelFolder(kind), fileExtension: "") ?? ""
     }
 
     /// Renames everything under `directory` to its composed (NFC) name. A Mac may write names decomposed, a letter then

@@ -18,9 +18,13 @@ public struct DocumentFiler: Sendable {
     }
 
     /// - Parameters:
+    ///   - archive: the archive the document is filed into, the runtime's own (`PipelineServices.archive`): its folder is
+    ///     never made again where it is gone (`FileOperationError.folderMissing`).
     ///   - directory: where the document goes: the top of the archive for a new arrival, its own directory for one
     ///     already in the archive, which is renamed where it is.
     ///   - inPlace: adopt the file where it is (the user put it there), without moving or renaming it.
+    ///   - fingerprint: what the file was when it was read, when that is known: one that has changed since is not
+    ///     moved (`FileOperationError.sourceChanged`), as what was read of it is not what it holds.
     ///   - event: the history kind to record; nil follows `status` (filed, or waiting for the user).
     ///   - recording: runs in the transaction that records the filing, with the document as filed, so what the caller
     ///     keeps of it (a job's destination) commits with it or not at all.
@@ -32,20 +36,21 @@ public struct DocumentFiler: Sendable {
     /// The move and its record therefore run as a task of their own: "an unstructured task doesn't have a parent task"
     /// (The Swift Programming Language › Concurrency › Unstructured Concurrency), and cancelling a task reaches only its
     /// children. A stop asked for before filing begins leaves the file where it is.
-    public func file(_ document: DocumentRecord, source: SourceFile, analysis: DocumentAnalysis, status: DocumentStatus,
-                     directory: URL, inPlace: Bool, actor: EventActor, settings: AppSettings, trace: TraceContext,
+    public func file(_ document: DocumentRecord, archive: URL, analysis: DocumentAnalysis, status: DocumentStatus, directory: URL, inPlace: Bool,
+                     fingerprint: FileFingerprint?, actor: EventActor, settings: AppSettings, trace: TraceContext,
                      event: EventKind?, recording: (@Sendable (Database, DocumentRecord) throws -> Void)?) async throws -> DocumentRecord {
         guard let docID = document.id else { throw IngestError.documentNotPersisted }
         try Task.checkCancellation()
         return try await Task {
-            try await place(document, docID: docID, source: source, analysis: analysis, status: status, directory: directory,
-                            inPlace: inPlace, actor: actor, settings: settings, trace: trace, event: event, recording: recording)
+            try await place(document, docID: docID, archive: archive, analysis: analysis, status: status, directory: directory, inPlace: inPlace,
+                            fingerprint: fingerprint, actor: actor, settings: settings, trace: trace, event: event, recording: recording)
         }.value
     }
 
-    /// Moves the document and records where it went, as `file` describes.
-    private func place(_ document: DocumentRecord, docID: Int64, source: SourceFile, analysis: DocumentAnalysis, status: DocumentStatus,
-                       directory: URL, inPlace: Bool, actor: EventActor, settings: AppSettings, trace: TraceContext,
+    /// Moves the document and records where it went, as `file` describes. A document whose name stays its own where it
+    /// is (`Placer.keeps`), as one read again whose reading names it as it is named, is not moved.
+    private func place(_ document: DocumentRecord, docID: Int64, archive: URL, analysis: DocumentAnalysis, status: DocumentStatus, directory: URL,
+                       inPlace: Bool, fingerprint: FileFingerprint?, actor: EventActor, settings: AppSettings, trace: TraceContext,
                        event: EventKind?, recording: (@Sendable (Database, DocumentRecord) throws -> Void)?) async throws -> DocumentRecord {
         var newPath = document.path
         if inPlace {
@@ -55,14 +60,15 @@ public struct DocumentFiler: Sendable {
             }
         } else {
             let plan = await trace.measure(.name, input: ["modelName": analysis.fileName ?? ""], output: { (p: PlacementPlan) in p }) {
-                placer.plan(analysis: analysis, source: source, directory: directory, settings: settings)
+                placer.plan(analysis: analysis, current: document.url, directory: directory, settings: settings)
             }
-            let planned = URL(fileURLWithPath: plan.directory).appendingPathComponent(plan.filename).path
-            if planned != document.path {
+            if !placer.keeps(plan, at: document.url) {
+                let planned = URL(fileURLWithPath: plan.directory).appendingPathComponent(plan.filename).path
                 await registry.expect([planned, document.path])
                 let result = try await trace.measure(.place, input: plan, output: { (m: MoveResult) in m }) {
-                    try placer.execute(plan, source: document.url, sha256: document.sha256, documentUID: document.uid,
-                                       originalName: document.originalFilename, filedAt: time.now())
+                    try placer.execute(plan, source: document.url, archive: archive, sha256: document.sha256,
+                                       fingerprint: fingerprint, documentUID: document.uid, originalName: document.originalFilename,
+                                       filedAt: time.now())
                 }
                 await registry.expect([result.to])
                 newPath = result.to
@@ -97,13 +103,4 @@ public struct FiledPayload: Sendable, Codable, Hashable {
     public var to: String
     /// Why the document waits for the user, when it does.
     public var problems: [String]
-}
-
-extension DocumentRecord {
-    /// The file as it is known before it is read: what filing a document the pipeline could not process, parked after
-    /// failing, names it from.
-    var unreadSource: SourceFile {
-        SourceFile(path: path, originalFilename: originalFilename, fileExtension: (originalFilename as NSString).pathExtension,
-                   utType: uttype, byteSize: size, createdAt: nil, modifiedAt: fileMtime, sha256: sha256)
-    }
 }

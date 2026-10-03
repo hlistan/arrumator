@@ -102,7 +102,7 @@ struct RefusingTrash: Trashing {
         #expect(event.summary == "bill copy.txt is a copy of \(original.filename), which is read again; the copy is in the Trash",
                 "History says, under the original, what became of the copy")
         let payload = try #require(JSON.decode(CopyPayload.self, from: event.payloadJson))
-        #expect(payload.copy == copy.standardizedFileURL.path && payload.trashed.map { URL(fileURLWithPath: $0).lastPathComponent } == "bill copy.txt"
+        #expect(payload.copy == copy.spelledOnDisk.path && payload.trashed.map { URL(fileURLWithPath: $0).lastPathComponent } == "bill copy.txt"
                     && payload.tags == nil, "and where the copy was and went: \(event.payloadJson)")
         #expect(try await h.jobs().map(\.state) == [.done, .duplicate, .done],
                 "the copy's job ends as a copy's, and reading its original is a job of its own")
@@ -140,7 +140,7 @@ struct RefusingTrash: Trashing {
                 "its original is not read again, and nothing of the archive goes to the Trash")
     }
 
-    @Test func aCopyTheTrashRefusesStaysInIncomingAndItsOriginalIsNotReadAgain() async throws {
+    @Test func aCopyTheTrashRefusesStaysInIncomingOnceSaidAndItsOriginalIsNotReadAgain() async throws {
         let base = try await Harness.make()
         defer { base.env.cleanup() }
         let original = try await base.ingest("bill.txt", text: Self.bill)
@@ -150,17 +150,22 @@ struct RefusingTrash: Trashing {
         services.trash = RefusingTrash()
         let coordinator = IngestCoordinator(services: services)
         let copy = try base.env.drop("bill copy.txt", text: Self.bill)
-        await coordinator.enqueue(copy)
-        await coordinator.drain()
+        for arrival in ["arrives", "is found again by a rescan"] {
+            await coordinator.enqueue(copy)
+            for _ in 0..<services.config.ingest.maxAttempts { await coordinator.drain() }
 
-        #expect(FileManager.default.fileExists(atPath: copy.path), "the copy stays where it was: nothing is lost")
-        #expect(await analyzer.calls.files.isEmpty, "its original is not read again while the copy cannot go")
-        let job = try #require(try await base.jobs().last)
-        #expect(job.state == .failed && job.attempt == services.config.ingest.maxAttempts, "the copy's job is tried again, then fails")
-        let failed = try #require(try await services.history.events(limit: 5, kinds: [.failed]).first)
-        #expect(failed.summary == IngestError.notTrashed(copy.standardizedFileURL.path, reason: RefusingTrash.reason).localizedDescription,
-                "History says why: \(failed.summary)")
-        #expect(try await services.documents.list(DocumentFilter(), limit: 5).map(\.id) == [original.id], "and no document is made of it")
+            #expect(FileManager.default.fileExists(atPath: copy.path), "when it \(arrival), the copy stays where it was: nothing is lost")
+            #expect(await analyzer.calls.files.isEmpty, "when it \(arrival), its original is not read again while the copy cannot go")
+            let jobs = try await base.jobs()
+            #expect(jobs.count == 2 && jobs.last?.state == .failed && jobs.last?.attempt == 0,
+                    "when it \(arrival), the copy's job ends at once, as a Trash that refuses will refuse again")
+            let failed = try await services.history.events(limit: 5, kinds: [.failed]).map(\.summary)
+            let why = IngestError.notTrashed(copy.spelledOnDisk.path, reason: RefusingTrash.reason).localizedDescription
+            #expect(failed == ["bill copy.txt stays in Incoming: \(why)"], "when it \(arrival), History says why, once: \(failed)")
+            let left = try #require(try await services.documents.list(DocumentFilter(), limit: 5).first { $0.id != original.id })
+            #expect(left.status == .failed && left.path == copy.spelledOnDisk.path && left.status.isReviewable,
+                    "when it \(arrival), it waits for the user in Needs You, left where it is, which a rescan leaves alone")
+        }
     }
 
     @Test func aStopAfterTheCopyWentToTheTrashStillHasItsOriginalReadAgain() async throws {
@@ -299,8 +304,8 @@ struct RefusingTrash: Trashing {
         let id = try #require(doc.id)
         try await h.review.undo(id)
         let undone = try #require(try await h.services.documents.document(id: id))
-        #expect(undone.status == .undone && undone.path == h.env.incoming.appendingPathComponent("bill.txt").path,
-                "undo puts the file back in Incoming under its original name")
+        #expect(undone.status == .undone && undone.path == h.env.incoming.appendingPathComponent("bill.txt").spelledOnDisk.path,
+                "undo puts the file back in Incoming under its original name, at its path as the disk spells it, as a rescan names it")
         try await h.review.retry(id)
         await h.coordinator.drain()
         let refiled = try #require(try await h.services.documents.document(id: id))
@@ -373,11 +378,16 @@ struct RefusingTrash: Trashing {
         defer { h.env.cleanup() }
         let filed = try await h.ingest("bill.txt", text: "EDP electricity July")
         let id = try #require(filed.id)
-        for blank in ["", "   ", "\n\t"] {
-            await #expect(throws: IngestError.blankFileName, "a name of nothing is no name: “\(blank)”") {
+        for blank in ["", "   ", "\n\t", " ... ", "/"] {
+            await #expect(throws: IngestError.unusableFileName(blank), "a name cleaning leaves nothing of is no name: “\(blank)”") {
                 try await h.review.edit(id, fileName: blank, labels: nil)
             }
         }
+        await #expect(throws: IngestError.unusableFileName("~$Bill"), "nor is one the app keeps for files it never takes in") {
+            try await h.review.edit(id, fileName: "~$Bill", labels: nil)
+        }
+        #expect(IngestError.unusableFileName("  ").errorDescription == "A document needs a name; it cannot be blank",
+                "a blank name is refused in those words")
         let after = try #require(try await h.services.documents.document(id: id))
         #expect(after.filename == filed.filename && FileManager.default.fileExists(atPath: after.path), "the file keeps its name")
         #expect(try await h.services.history.events(limit: 5, kinds: [.corrected], docID: id).isEmpty, "and nothing is recorded")

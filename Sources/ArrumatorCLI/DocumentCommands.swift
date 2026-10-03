@@ -24,10 +24,12 @@ struct Ingest: AsyncParsableCommand {
         guard tag.count <= runtime.config.labels.maxPerKind else {
             throw ValidationError("--tag is given at most \(runtime.config.labels.maxPerKind) times (labels.maxPerKind)")
         }
+        // Each file as the queue takes it, the package a path inside one names; one Incoming never takes in, as a link or
+        // a package of too many items, is refused with why before anything is read.
+        let urls = try files.map { try runtime.services.arrival(URL(fileURLWithPath: $0.expandingTilde), settings: settings) }
         _ = await runtime.lifecycle.ensureRunning()
         var jobs: [Int64] = []
-        for path in files {
-            let url = URL(fileURLWithPath: path.expandingTilde).standardizedFileURL
+        for url in urls {
             if dryRun {
                 let sink = MemoryTraceSink()
                 let trace = TraceContext(traceID: 0, sink: sink)
@@ -237,8 +239,13 @@ struct Replay: AsyncParsableCommand {
 
 func resolveDocument(_ reference: String, runtime: ArrumatorRuntime) async throws -> Int64 {
     if let id = Int64(reference) { return id }
-    let path = URL(fileURLWithPath: reference.expandingTilde).standardizedFileURL.path
-    guard let id = try await runtime.services.documents.document(path: path)?.id else {
+    // A document in Incoming is recorded as the file system spells its path (`URL.spelledOnDisk`), one in the archive
+    // as its settings spell it.
+    let named = URL(fileURLWithPath: reference.expandingTilde)
+    let path = named.standardizedFileURL.path
+    var found = try await runtime.services.documents.document(path: named.spelledOnDisk.path)
+    if found == nil { found = try await runtime.services.documents.document(path: path) }
+    guard let id = found?.id else {
         throw ValidationError("No document at \(path)")
     }
     return id

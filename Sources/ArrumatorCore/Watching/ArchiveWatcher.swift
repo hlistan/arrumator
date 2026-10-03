@@ -63,7 +63,7 @@ public actor ArchiveWatcher {
     }
 
     /// The changes the user makes in the archive, from now on, for as long as the caller listens, through every stop and
-    /// start of the watcher. Every caller is given a stream of its own, as `IncomingWatcher.stableFiles()` is, and every
+    /// start of the watcher. Every caller is given a stream of its own, as `IncomingWatcher.arrivals()` is, and every
     /// change is kept until it is read.
     public func changes() -> AsyncStream<[ArchiveChange]> {
         let id = UUID()

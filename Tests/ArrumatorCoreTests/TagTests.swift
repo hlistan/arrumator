@@ -57,8 +57,9 @@ import Testing
         }
         let folders = IncomingFolders(incoming: incoming, watcher: env.config.watcher, labels: env.config.labels)
         let scan = try put("Taxes 2024/scan.pdf")
-        #expect(folders.tag(of: scan) == GivenTag(label: Self.tag, source: .folder, folder: incoming.appendingPathComponent(Self.folder).path),
-                "a folder placed in Incoming gives its name, as it is written, to what is in it")
+        #expect(folders.tag(of: scan) == GivenTag(label: Self.tag, source: .folder,
+                                                  folder: incoming.appendingPathComponent(Self.folder).standardizedFileURL.path),
+                "a folder placed in Incoming gives its name, as it is written, to what is in it, kept at its path as the index writes paths")
         #expect(folders.tag(of: try put("Taxes 2024/Q1/receipts/deeper.pdf"))?.label == Self.tag,
                 "at any depth: only the top folder counts, and the folders inside it give nothing")
         #expect(folders.tag(of: incoming.appendingPathComponent("taxes 2024/scan.pdf"))?.label == Self.tag,

@@ -6,11 +6,11 @@ import UniformTypeIdentifiers
 /// (`JobStore.nextDue`). Every transition is persisted, so a job stopped part way, by quitting, a crash or a forced
 /// quit, keeps its stage and its place, and carries on from its last finished stage first at the next start.
 public actor IngestCoordinator {
-    private let services: PipelineServices
+    let services: PipelineServices
     private var worker: Task<Void, Never>?
     private let doorbell = Doorbell()
     private var statusContinuations: [UUID: AsyncStream<IngestStatus>.Continuation] = [:]
-    public private(set) var status = IngestStatus.idle {
+    public internal(set) var status = IngestStatus.idle {
         didSet { if status != oldValue { for c in statusContinuations.values { c.yield(status) } } }
     }
 
@@ -67,22 +67,52 @@ public actor IngestCoordinator {
 
     public func wake() { doorbell.ring() }
 
+    /// Takes what the Incoming watcher found (`IncomingWatcher.arrivals()`): a file that has stopped changing is queued
+    /// (`enqueue`), and one it stopped waiting for is recorded in History with why, so the user sees why it stays in
+    /// Incoming. That one is not queued; the watcher takes it up again once it can be opened or it changes.
+    public func receive(_ arrival: IncomingArrival) async {
+        switch arrival {
+        case let .stable(url):
+            await enqueue(url)
+        case let .unopenable(url, why):
+            let path = url.spelledOnDisk.path
+            let summary = switch why {
+            case .unreadable: "\(url.lastPathComponent) in Incoming cannot be opened; it is taken once it can be"
+            case let .tooManyItems(limit):
+                "\(url.lastPathComponent) in Incoming holds more than \(Format.count(limit, "item")), too many for one document (watcher.maxPackageItems)"
+            }
+            await record(.error, summary: summary, path: path)
+        }
+    }
+
     /// Called by the Incoming watcher for each stable file, and by `arrumatorcli ingest`, which may give it `tags` of
-    /// its own. The tags the file is given are decided now, from where it is in Incoming (`PipelineServices.tags`), and
-    /// kept with its job.
+    /// its own. The file is taken as the document it belongs to (`PipelineServices.arrival`: the package a path inside
+    /// one names), at its path in the one form a path is queued and looked up in (`URL.spelledOnDisk`), so whoever names
+    /// it, through a link or in another case, names one job and one document; what is not taken, as a link or a package
+    /// of too many items, is recorded in History with why. A document left where it is (`stays`) is not queued again.
+    /// The tags the file is given are decided now, from where it is in Incoming (`PipelineServices.tags`), and kept with
+    /// its job.
     @discardableResult
-    public func enqueue(_ url: URL, tags: [String] = []) async -> Int64? {
-        let path = url.standardizedFileURL.path
+    public func enqueue(_ named: URL, tags: [String] = []) async -> Int64? {
+        let url: URL
+        do { url = try services.arrival(named, settings: await services.settings.current) } catch {
+            await record(.error, summary: error.localizedDescription, path: named.spelledOnDisk.path)
+            return nil
+        }
+        let path = url.path
         do {
-            if let known = try await services.documents.document(path: path),
-               [.held, .undone].contains(known.status) {
+            let known = try await services.documents.document(path: path)
+            if let known, stays(known, at: url) {
                 Log.debug(.ingest, "Ignoring held document", ["path": path, "doc": String(known.id ?? 0)])
                 return nil
             }
+            // A file put where a document was left in Incoming, as an editor saving it, is that document arriving again.
+            let again = known.flatMap { isLeftInIncoming($0) ? $0.id : nil }
+            if let again { try await services.index.forgetReading(docID: again) }
             var payload = JobPayload()
             let given = services.tags(for: url, given: tags, settings: await services.settings.current)
             payload.tags = given.isEmpty ? nil : given
-            let id = try await services.jobs.enqueue(path: path, kind: .ingest, payload: payload)
+            let id = try await services.jobs.enqueue(path: path, kind: .ingest, docID: again, payload: payload)
             let summary = ([url.lastPathComponent] + [GivenTag.note(given)].compactMap { $0 }).joined(separator: " · ")
             try await services.history.record(.arrived, job: id, summary: summary, payload: ArrivedPayload(path: path, tags: payload.tags))
             Log.info(.ingest, "Queued", ["path": path, "job": id.map(String.init) ?? "-", "tags": given.map(\.label.value).joined(separator: ", ")])
@@ -226,6 +256,7 @@ public actor IngestCoordinator {
                     return
                 }
                 try await save(&job, payload, state: .cancelled)
+                try await end(job.docId, as: .missing)
                 try await services.history.record(.missing, doc: job.docId, job: job.id, trace: trace.traceID,
                                                   summary: "\(source.lastPathComponent) disappeared before processing")
                 return
@@ -277,8 +308,15 @@ public actor IngestCoordinator {
         }
     }
 
-    private func ensureDocument(for job: JobRecord, source: URL, sha: String, fingerprint: FileFingerprint) async throws -> DocumentRecord {
-        if let id = job.docId, let existing = try await services.documents.document(id: id) { return existing }
+    /// The document the job's file is: the one the job has, as the file is now, hashed again after it changed
+    /// (`readFromTheStart`), or a new one.
+    func ensureDocument(for job: JobRecord, source: URL, sha: String, fingerprint: FileFingerprint) async throws -> DocumentRecord {
+        if let id = job.docId, var existing = try await services.documents.document(id: id) {
+            guard existing.sha256 != sha || existing.size != fingerprint.size || existing.inode != fingerprint.inode
+                    || existing.fileMtime != fingerprint.modified else { return existing }
+            (existing.sha256, existing.size, existing.inode, existing.fileMtime) = (sha, fingerprint.size, fingerprint.inode, fingerprint.modified)
+            return try await services.documents.save(existing)
+        }
         // A type the file system cannot tell is plain data, as UTType calls it.
         let uttype = (try? source.resourceValues(forKeys: [.contentTypeKey]).contentType?.identifier) ?? UTType.data.identifier
         let record = DocumentRecord.arrived(path: source.path, sha256: sha, size: fingerprint.size, uttype: uttype,
@@ -348,8 +386,8 @@ public actor IngestCoordinator {
             let directory = job.kind == .ingest ? services.archive : document.url.deletingLastPathComponent()
             let (unfiledJob, unfiledPayload, now) = (job, payload, services.time.now())
             filedRecord = try await services.filer.file(
-                document, source: content.source, analysis: analysis, status: status, directory: directory,
-                inPlace: job.kind == .adopt, actor: .system, settings: settings, trace: trace, event: nil,
+                document, archive: services.archive, analysis: analysis, status: status, directory: directory, inPlace: job.kind == .adopt,
+                fingerprint: payload.fingerprint, actor: .system, settings: settings, trace: trace, event: nil,
                 recording: { db, filed in
                     var filedPayload = unfiledPayload
                     filedPayload.targetPath = filed.path
@@ -371,92 +409,6 @@ public actor IngestCoordinator {
         try await save(&job, payload, state: status == .needsReview ? .needsReview : .done)
         Log.info(.ingest, status == .needsReview ? "Filed; waiting for the user" : "Filed", ["doc": String(docID), "path": filedRecord.path])
     }
-
-    // MARK: Failures
-
-    private func handleFailure(_ job: inout JobRecord, payload: JobPayload, error: any Error, trace: TraceContext) async {
-        // Stopping interrupts the job; that is no failure. Its saved stage lets it resume where it stopped.
-        guard !Task.isCancelled else {
-            Log.info(.ingest, "Job interrupted by stopping", ["job": String(job.id ?? 0), "stage": job.state.rawValue])
-            return
-        }
-        let message = error.localizedDescription
-        let config = services.config.ingest
-        let ollamaDown = (error as? OllamaError).map { $0.isTransient } ?? false
-        job.lastError = message
-        job.setPayload(payload)
-        if case OllamaError.modelNotFound = error {
-            job.state = .held
-            await keep(job, event: .error, summary: "Model missing: \(message)", trace: trace)
-            await services.traces.finish(trace, outcome: "held", docID: job.docId)
-            Log.error(.ingest, "Model missing; job held", ["job": String(job.id ?? 0), "error": message])
-            return
-        }
-        if ollamaDown {
-            status.waitingForOllama = true
-            job.nextRunAt = services.time.now().addingTimeInterval(config.retryDelays.last)
-            await keep(job, event: .retry, summary: "Waiting for Ollama: \(message)", trace: trace)
-            await services.traces.finish(trace, outcome: "waiting", docID: job.docId)
-            Log.warning(.ingest, "Ollama unavailable; will retry", ["job": String(job.id ?? 0), "error": message])
-            return
-        }
-        job.attempt += 1
-        if job.attempt < config.maxAttempts {
-            job.nextRunAt = services.time.now().addingTimeInterval(config.retryDelays.clamped(job.attempt - 1))
-            await keep(job, event: .retry, summary: "Attempt \(job.attempt) failed: \(message)", trace: trace)
-            await services.traces.finish(trace, outcome: "retry", docID: job.docId)
-            Log.warning(.ingest, "Stage failed; retrying", ["job": String(job.id ?? 0), "stage": job.state.rawValue,
-                                                            "attempt": String(job.attempt), "error": message])
-            return
-        }
-        job.state = .failed
-        await keep(job, event: nil, summary: message, trace: trace)
-        await parkFailedDocument(job: job, message: message, trace: trace)
-        await services.traces.finish(trace, outcome: "failed", docID: job.docId)
-        Log.error(.ingest, "Job failed", ["job": String(job.id ?? 0), "error": message])
-    }
-
-    /// Saves what a failure did to a job and records it in the history. Both are already the failure path, so neither
-    /// throws: what cannot be saved is logged, and the job, unchanged in the queue, is taken again in its turn.
-    private func keep(_ job: JobRecord, event: EventKind?, summary: String, trace: TraceContext) async {
-        do { try await services.jobs.update(job) } catch {
-            Log.error(.ingest, "Could not save a failed job", ["job": String(job.id ?? 0), "error": error.localizedDescription])
-        }
-        guard let event else { return }
-        do {
-            try await services.history.record(event, doc: job.docId, job: job.id, trace: trace.traceID, summary: summary)
-        } catch {
-            Log.error(.ingest, "Could not record a failure in the history", ["job": String(job.id ?? 0), "event": event.rawValue,
-                                                                             "error": error.localizedDescription])
-        }
-    }
-
-    /// Moves a new file that could not be processed into the archive, where it waits for the user, so Incoming stays
-    /// clean and nothing is lost; a document already in the archive stays where it is.
-    private func parkFailedDocument(job: JobRecord, message: String, trace: TraceContext) async {
-        do {
-            let settings = await services.settings.current
-            guard let docID = job.docId, let document = try await services.documents.document(id: docID) else {
-                try await services.history.record(.failed, job: job.id, trace: trace.traceID, summary: message)
-                return
-            }
-            let analysis = DocumentAnalysis(problems: ["Processing failed: \(message)"])
-            if FileManager.default.fileExists(atPath: document.path), job.kind == .ingest {
-                _ = try await services.filer.file(document, source: document.unreadSource, analysis: analysis, status: .failed,
-                                                  directory: services.archive, inPlace: false, actor: .system,
-                                                  settings: settings, trace: trace, event: .failed, recording: nil)
-            } else {
-                var failed = document
-                failed.status = .failed
-                failed.analysisJson = JSON.string(analysis)
-                _ = try await services.documents.save(failed)
-                try await services.history.record(.failed, doc: docID, job: job.id, trace: trace.traceID,
-                                                  summary: "\(document.originalFilename): \(message)")
-            }
-        } catch {
-            Log.error(.ingest, "Could not park failed document", ["job": String(job.id ?? 0), "error": error.localizedDescription])
-        }
-    }
 }
 
 // MARK: Exact copies
@@ -468,11 +420,13 @@ extension IngestCoordinator {
     /// Its file is hashed again, as it may have been changed since it was filed: a file the archive no longer holds the
     /// same bytes of is no copy.
     private func original(of source: URL, sha256: String, job: JobRecord, trace: TraceContext) async throws -> DocumentRecord? {
-        guard job.kind != .adopt else { return nil }
+        // Only an arrival is a copy: a file the user put into the archive, and a document of it read again, are their own.
+        guard job.kind == .ingest else { return nil }
         let documents = services.documents
+        let archive = services.archive
         return try await trace.measure(.dedupe, input: ["sha256": sha256],
                                        output: { (d: DocumentRecord?) in ["copyOf": d?.id.map(String.init) ?? "none"] }) {
-            guard let found = try await documents.existing(sha256: sha256, excluding: job.docId),
+            guard let found = try await documents.existing(sha256: sha256, excluding: job.docId, archive: archive),
                   found.url.resolvingSymlinksInPath() != source.resolvingSymlinksInPath(),
                   FileManager.default.fileExists(atPath: found.path), try HashService.sha256(of: found.url) == sha256 else { return nil }
             return found
@@ -500,6 +454,8 @@ extension IngestCoordinator {
         }
         let current = try await services.documents.document(id: originalID) ?? original
         try await services.queueReadingAgain(current, content: nil, settings: settings)
+        // A file that was a document of its own, as one left in Incoming or one that changed into this copy, ends as one.
+        try await end(job.docId, as: .duplicate, of: originalID)
         let tags = payload.tags ?? []
         let summary = ["\(copy.lastPathComponent) is a copy of \(original.filename), which is read again",
                        trashed.map { _ in "the copy is in the Trash" }, GivenTag.note(tags)].compactMap { $0 }.joined(separator: "; ")
@@ -527,4 +483,8 @@ public struct CopyPayload: Sendable, Codable, Hashable {
         self.trashed = trashed
         self.tags = tags
     }
+
+    /// Whether this copy was the file at `url`, however that path is spelled: a copy's path is recorded as the queue
+    /// spells it (`URL.spelledOnDisk`), and so is compared.
+    public func isCopy(at url: URL) -> Bool { copy == url.spelledOnDisk.path }
 }

@@ -10,6 +10,8 @@ struct InspectedFile: Sendable {
 
 /// Builds `SourceFile` (size, dates, `kMDItemWhereFroms`) and resolves the file's `UTType`.
 enum SourceInspector {
+    /// A package (`Packages`), a folder macOS shows as one document, is inspected as the document it is, its size what
+    /// it holds; any other folder is refused.
     static func inspect(_ url: URL, sha256: String) throws(ExtractionError) -> InspectedFile {
         let keys: Set<URLResourceKey> = [.isDirectoryKey, .isPackageKey, .fileSizeKey, .creationDateKey,
                                          .contentModificationDateKey, .contentTypeKey, .isReadableKey]
@@ -27,7 +29,12 @@ enum SourceInspector {
             throw .fileUnreadable(path: url.path, underlying: "is a folder")
         }
         let type = TypeResolver.resolve(url, contentType: values.contentType, isDirectory: isDirectory)
-        let size = isDirectory ? packageSize(url) : Int64(values.fileSize ?? 0)
+        let size: Int64
+        do {
+            size = isDirectory ? try FileFingerprint.of(url).size : Int64(values.fileSize ?? 0)
+        } catch {
+            throw .fileUnreadable(path: url.path, underlying: error.localizedDescription)
+        }
         let source = SourceFile(path: url.path, originalFilename: url.lastPathComponent,
                                 fileExtension: url.pathExtension.lowercased(), utType: type.identifier,
                                 byteSize: size, createdAt: values.creationDate,
@@ -48,16 +55,6 @@ enum SourceInspector {
               let list = try? PropertyListSerialization.propertyList(from: buffer, format: nil) as? [String]
         else { return [] }
         return list.filter { !$0.isEmpty }
-    }
-
-    private static func packageSize(_ url: URL) -> Int64 {
-        guard let enumerator = FileManager.default.enumerator(at: url, includingPropertiesForKeys: [.fileSizeKey])
-        else { return 0 }
-        var total: Int64 = 0
-        for case let file as URL in enumerator {
-            total += Int64((try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
-        }
-        return total
     }
 }
 

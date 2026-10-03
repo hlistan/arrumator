@@ -284,7 +284,8 @@ public actor SearchTaskQueue {
             Log.warning(.search, "The model could not read a search task", ["task": String(id)])
             return SearchTaskState.failed.rawValue
         }
-        let matcher = SearchPlanMatcher(database: services.database, limit: services.config.tasks.maxDocuments)
+        let matcher = SearchPlanMatcher(database: services.database, archive: services.archive,
+                                        limit: services.config.tasks.maxDocuments)
         let found = try await trace.measure(.match, input: plan, output: { (ids: [Int64]) in ["documents": ids] }) {
             try await matcher.documents(plan)
         }

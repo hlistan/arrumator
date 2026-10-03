@@ -25,6 +25,8 @@ public struct TestEnvironment: Sendable {
             $0.archivePath = archive.path
             $0.incomingPath = incoming.path
         }
+        // The archive's folder is there, as the app makes it when it applies its settings: filing never makes it.
+        try FileManager.default.createDirectory(at: archive, withIntermediateDirectories: true)
         let database = try AppDatabase.inMemory()
         return TestEnvironment(root: root, paths: paths, archive: archive, incoming: incoming, database: database, config: config,
                                settings: settings, time: TestTime(.advances))

@@ -23,7 +23,9 @@ extension Date {
 public enum DocumentStatus: String, Sendable, Codable, CaseIterable {
     case arrived, processing, filed, needsReview, failed
     /// A copy an earlier version filed beside the document it repeats (`duplicateOf`), as the archive's record files
-    /// still hold it. None is made now: an exact copy has its original read again in its place (`IngestCoordinator`).
+    /// still hold it; or a file in Incoming that was a document of its own until it was found an exact copy of
+    /// `duplicateOf` and went to the Trash. None is filed now: an exact copy has its original read again in its place
+    /// (`IngestCoordinator`).
     case duplicate
     case undone, held, missing
 
@@ -80,6 +82,14 @@ public struct DocumentRecord: ArrumatorRecord, Identifiable, Hashable {
     }
 
     public var url: URL { URL(fileURLWithPath: path) }
+    /// What its file was when it was last hashed, or nil when that was not recorded.
+    public var fingerprint: FileFingerprint? { inode == nil && fileMtime == nil ? nil : FileFingerprint(size: size, modified: fileMtime, inode: inode) }
+    /// Whether its file is still as it was last hashed, by size, modification time and identity on the volume; true when
+    /// that was not recorded, as for a document taken in from a record file.
+    public var isAsRecorded: Bool {
+        guard let fingerprint else { return true }
+        return (try? FileFingerprint.of(url))?.matches(fingerprint) ?? false
+    }
     public var filename: String { (path as NSString).lastPathComponent }
     public var analysis: DocumentAnalysis? { JSON.decode(DocumentAnalysis.self, from: analysisJson) }
     /// Nil while the document has no labels and has not been labelled; empty when the model found nothing worth a label.

@@ -387,7 +387,8 @@ public actor TaskConversationQueue {
             guard let plan = interpretation.plan else {
                 return TurnFinding(request: request, plan: nil, documents: [], problem: interpretation.problem)
             }
-            let matcher = SearchPlanMatcher(database: services.database, limit: services.config.tasks.maxDocuments)
+            let matcher = SearchPlanMatcher(database: services.database, archive: services.archive,
+                                            limit: services.config.tasks.maxDocuments)
             let found = try await trace.measure(.match, input: plan, output: { (ids: [Int64]) in ["documents": ids] }) {
                 try await matcher.documents(plan)
             }

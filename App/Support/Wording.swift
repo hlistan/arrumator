@@ -213,7 +213,7 @@ enum Wording {
                 return ([archiveFolder] + directory.dropFirst(root.count + 1).split(separator: "/").map(String.init)).joined(separator: pathSeparator)
             }
         }
-        if let incoming, directory == incoming.standardizedFileURL.path { return incomingFolder }
+        if let incoming, document.url.deletingLastPathComponent().folderOnDisk == incoming.folderOnDisk { return incomingFolder }
         return directory
     }
 
@@ -260,6 +260,9 @@ enum Wording {
         }
         return nil
     }
+
+    /// Beneath what keeps a document left in Incoming waiting: it was not filed, and what to do.
+    static let notFiledAdvice = "It was not filed and stays in Incoming. Read Again tries it again once what kept it there is mended."
 
     /// Said once Read Again has put a document back in the queue.
     static let readAgainQueued = "Waiting to be read again, after the files already in Incoming."

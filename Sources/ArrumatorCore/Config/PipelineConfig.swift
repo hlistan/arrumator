@@ -41,6 +41,8 @@ public struct PipelineConfig: Sendable, Codable, Hashable, ValidatedConfiguratio
         problems += ollama.problems
         problems += extraction.problems
         if database.observationRetry <= 0 { problems.append("database.observationRetry must be more than 0") }
+        if watcher.unopenableWaitSeconds < 0 { problems.append("watcher.unopenableWaitSeconds cannot be negative") }
+        if watcher.maxPackageItems < 1 { problems.append("watcher.maxPackageItems must be at least 1") }
         problems += tasks.problems
         problems += conversation.problems
         return problems
@@ -105,6 +107,13 @@ public struct WatcherConfig: Sendable, Codable, Hashable {
     public var stabilityPollInterval: Double
     public var stabilityRequiredPolls: Int
     public var zeroByteWaitSeconds: Double
+    /// How long a file in Incoming that has stopped changing but cannot be opened, as when its permissions keep the app
+    /// from reading it, is waited for before the watcher stops waiting and History says so; it is taken up again once
+    /// it can be opened or it changes.
+    public var unopenableWaitSeconds: Double
+    /// The most items a package in Incoming may hold to be taken as one document; one that holds more, such as a photo
+    /// library, is not walked further, and is left, as one that cannot be opened is, saying why.
+    public var maxPackageItems: Int
     public var ignoredNamePrefixes: [String]
     public var ignoredNames: [String]
     public var ignoredExtensions: [String]

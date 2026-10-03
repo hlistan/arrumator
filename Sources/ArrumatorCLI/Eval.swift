@@ -187,7 +187,7 @@ struct Eval: AsyncParsableCommand {
     /// corpus says it copies; one taken for no copy, as when `--only` left its original out, is scored as a document.
     private func scoreCopy(fixture: Fixture, pass: Int, dropped: URL, seconds: Double, runtime: ArrumatorRuntime) async throws -> Row {
         let event = try await runtime.services.history.events(limit: 1, kinds: [.duplicate]).first
-        guard let event, JSON.decode(CopyPayload.self, from: event.payloadJson)?.copy == dropped.standardizedFileURL.path,
+        guard let event, JSON.decode(CopyPayload.self, from: event.payloadJson)?.isCopy(at: dropped) == true,
               let docID = event.docId, let original = try await runtime.services.documents.document(id: docID) else {
             return try await score(fixture: fixture, pass: pass, filedFrom: dropped, seconds: seconds, runtime: runtime)
         }

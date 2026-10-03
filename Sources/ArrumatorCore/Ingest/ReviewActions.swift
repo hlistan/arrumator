@@ -1,6 +1,23 @@
 import Foundation
 import GRDB
 
+/// What the user can do with a document from its card, beside correcting its name and labels.
+public enum DocumentAction: String, Sendable, Hashable, CaseIterable {
+    case undo, confirm, hold, readAgain
+}
+
+/// What a document's card offers, decided where the document is: the actions in the order they are shown, and whether
+/// it was left in Incoming not filed, which its card says, with what to do.
+public struct DocumentChoices: Sendable, Hashable {
+    public var actions: [DocumentAction]
+    public var notFiled: Bool
+
+    public init(actions: [DocumentAction], notFiled: Bool) {
+        self.actions = actions
+        self.notFiled = notFiled
+    }
+}
+
 /// What the user does with a document: confirm it, correct its name or labels, read it again, leave it for later,
 /// undo its filing. Every action is recorded in the history.
 public struct ReviewActions: Sendable {
@@ -17,10 +34,23 @@ public struct ReviewActions: Sendable {
         return d
     }
 
+    /// What `document`'s card offers, by its status and by where its file is: a document left in Incoming (failed, not
+    /// filed) can be read again or left for later, never confirmed as filed or undone, as it is in no archive.
+    public func choices(for document: DocumentRecord) async -> DocumentChoices {
+        let inArchive = services.isInArchive(document)
+        let actions: [DocumentAction] = switch document.status {
+        case .filed: inArchive ? [.undo, .confirm] : []
+        case .needsReview, .failed: inArchive ? [.hold, .readAgain, .confirm] : [.hold, .readAgain]
+        case .held, .undone: [.readAgain]
+        case .arrived, .processing, .duplicate, .missing: []
+        }
+        return DocumentChoices(actions: actions, notFiled: !inArchive && document.status == .failed)
+    }
+
     /// Confirms the document as it is: its name and labels are right. One waiting for the user is filed.
     public func confirm(_ docID: Int64) async throws {
         var doc = try await document(docID)
-        guard [.filed, .needsReview, .failed].contains(doc.status) else {
+        guard [.filed, .needsReview, .failed].contains(doc.status), services.isInArchive(doc) else {
             throw IngestError.invalidState("only a document in the archive can be confirmed")
         }
         var analysis = doc.analysis ?? DocumentAnalysis()
@@ -53,16 +83,20 @@ public struct ReviewActions: Sendable {
 
     /// Moves a filed document back to Incoming, held, so it is not filed again automatically. Incoming may be on
     /// another volume than the archive; the move is then a copy checked against the document's hash before the
-    /// archive's file goes to the Trash (`FileOperations`), never a delete.
+    /// archive's file goes to the Trash (`FileOperations`), never a delete, and a file the Trash will not take stays
+    /// where it is, undone in nothing.
     public func undo(_ docID: Int64) async throws {
         var doc = try await document(docID)
         let settings = await services.settings.current
         guard FileManager.default.fileExists(atPath: doc.path) else { throw IngestError.sourceMissing(doc.path) }
         let from = doc.path
-        let operations = services.filer.placer.operations
-        let (destination, collision) = try operations.uniqueDestination(directory: settings.incomingURL, filename: doc.originalFilename)
+        let placer = services.filer.placer
+        // Spelled as the watcher and `enqueue` spell a path in Incoming, so a rescan finds the undone document there.
+        let incoming = settings.incomingURL.folderOnDisk
+        let (destination, collision) = try placer.builder.uniqueDestination(directory: incoming, filename: doc.originalFilename)
         await services.filer.registry.expect([from, destination.path])
-        _ = try operations.move(doc.url, to: destination, collision: collision, expectedSHA256: doc.sha256)
+        _ = try placer.operations.move(doc.url, to: destination, within: incoming, collision: collision, expectedSHA256: doc.sha256,
+                                       fingerprint: nil)
         doc.path = destination.path
         doc.status = .undone
         doc = try await services.documents.save(doc)
@@ -77,17 +111,20 @@ public struct ReviewActions: Sendable {
     /// label of another kind than a tag labels a document not labelled yet; a tag, the user's own, does not
     /// (`DocumentLabel.stored`).
     public func edit(_ docID: Int64, fileName: String?, labels: [DocumentLabel]?) async throws {
-        if let fileName, fileName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { throw IngestError.blankFileName }
+        let placer = services.filer.placer
         var doc = try await document(docID)
+        let target = try fileName.map { name in
+            guard let target = placer.builder.bounded(name, fileExtension: doc.url.pathExtension) else { throw IngestError.unusableFileName(name) }
+            return target
+        }
         var edited: [String: String] = [:]
         var said: [String] = []
-        if let fileName {
-            let target = services.filer.placer.builder.bounded(fileName, fileExtension: doc.url.pathExtension)
+        if let target {
             if target != doc.filename {
-                let operations = services.filer.placer.operations
-                let (url, collision) = try operations.uniqueDestination(directory: doc.url.deletingLastPathComponent(), filename: target)
+                let (url, collision) = try placer.builder.uniqueDestination(directory: doc.url.deletingLastPathComponent(), filename: target)
                 await services.filer.registry.expect([doc.path, url.path])
-                _ = try operations.move(doc.url, to: url, collision: collision, expectedSHA256: doc.sha256)
+                _ = try placer.operations.move(doc.url, to: url, within: doc.url.deletingLastPathComponent(), collision: collision,
+                                               expectedSHA256: doc.sha256, fingerprint: nil)
                 doc.path = url.path
                 var analysis = doc.analysis ?? DocumentAnalysis()
                 analysis.fileName = (url.lastPathComponent as NSString).deletingPathExtension

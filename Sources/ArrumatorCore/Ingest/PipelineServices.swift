@@ -40,6 +40,24 @@ public struct PipelineServices: Sendable {
     public var history: HistoryStore { HistoryStore(database: database, time: time) }
     public var index: IndexStore { IndexStore(database: database, time: time) }
 
+    /// Whether `document`'s file is in this pipeline's archive, whatever its status and however either path is spelled
+    /// (`URL.holds`): one left in Incoming, failed or held there, is not.
+    public func isInArchive(_ document: DocumentRecord) -> Bool {
+        archive.holds(document.path)
+    }
+
+    /// The document a file named to be filed is, as the queue takes it: the package that holds it when it is in one, at
+    /// its path as the disk spells it (`Packages.document(holding:incoming:)`). What the Incoming watcher never takes in is
+    /// refused, saying why (`IngestError.notTaken`): a link, which would file what it points to, wherever that is, a
+    /// hidden or temporary file, one of the app's own (`SkipRules`); and so is a package of more than
+    /// `watcher.maxPackageItems` items (`FileOperationError.tooManyItems`), before anything reads it whole.
+    public func arrival(_ named: URL, settings: AppSettings) throws -> URL {
+        let url = Packages.document(holding: named, incoming: settings.incomingURL)
+        if let reason = SkipRules(watcher: config.watcher).ignoreReason(url) { throw IngestError.notTaken(url.path, reason: reason) }
+        try Packages.check(url, holdsAtMost: config.watcher.maxPackageItems)
+        return url
+    }
+
     /// Starts a trace stamped with the prompt version and the models of the profile in use. Settings that name no profile
     /// they list leave it unstamped: reading with them fails, saying so, and the trace records that.
     public func startTrace(docID: Int64?, jobID: Int64?, attempt: Int, source: TraceSource,
@@ -105,20 +123,25 @@ public struct PipelineServices: Sendable {
     /// or, for one outside it (back in Incoming), at the top of the archive. It keeps its tags, which its row in the
     /// queue shows, and one in a folder in Incoming is given that folder's too. With `content`, its text as read
     /// before, reading starts with the model; without it, its text is read from its file again too, as a file that
-    /// arrives is read. The job, or the one already queued for its file, which reads it as well.
+    /// arrives is read. One outside the archive, as one left in Incoming, or whose file is no longer as it was recorded
+    /// (`FileFingerprint.matches`) is read as an arrival: hashed again, so an exact copy is handed over to its original
+    /// (`IngestCoordinator`), and its text read from its file. The job, or the one already queued for its file, which
+    /// reads it as well.
     @discardableResult
     public func queueReadingAgain(_ document: DocumentRecord, content: ExtractedContent?, settings: AppSettings) async throws -> Int64? {
         guard let docID = document.id else { throw IngestError.documentNotPersisted }
         var doc = document
-        let inArchive = doc.path.hasPrefix(archive.path + "/")
-        if [.undone, .held].contains(doc.status) {
+        let inArchive = isInArchive(doc)
+        if !inArchive || [.undone, .held].contains(doc.status) {
             doc.status = .processing
             doc = try await documents.save(doc)
         }
         // What earlier stages found of it goes with the job, so it starts at the first stage it lacks (`IngestCoordinator`).
         var payload = JobPayload()
-        payload.sha256 = doc.sha256
-        payload.content = content
+        if inArchive, doc.isAsRecorded {
+            payload.sha256 = doc.sha256
+            payload.content = content
+        }
         let kept = (doc.labels ?? []).filter(\.kind.isUsersOwn).map { GivenTag(label: $0, source: .document) }
         let tags = kept + (inArchive ? [] : self.tags(for: doc.url, given: [], settings: settings))
         payload.tags = tags.isEmpty ? nil : tags
