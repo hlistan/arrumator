@@ -56,13 +56,13 @@ struct LabelsPage: View {
         let shown = expanded.contains(kind) ? all : Array(all.prefix(pageSize))
         return PageSection(Wording.labelKinds(kind)) {
             ForEach(shown, id: \.label) { item in
-                if model.openLabel == item.label {
+                if model.session.openLabel == item.label {
                     LabelCard(label: item.label, others: all.map(\.label.value).filter { $0 != item.label.value })
                 } else {
                     // The most used first, each with how many documents have it, which is why it comes where it does.
                     ListRow(symbol: "tag", tint: .secondary, title: Wording.label(item.label),
                             detail: Format.count(item.documents, "document"))
-                        .rowAction { withAnimation(.snappy) { model.openLabel = item.label } }
+                        .rowAction { withAnimation(.snappy) { model.session.openLabel = item.label } }
                 }
             }
             if shown.count < all.count {
@@ -96,8 +96,9 @@ private struct SuggestionCard: View {
                 Text(Wording.alike(suggestion.value, suggestion.into)).font(.title3.weight(.semibold))
                 Spacer()
                 Button(action: close) { Image(systemName: "xmark") }.buttonStyle(.borderless).foregroundStyle(.secondary).help(Wording.close)
+                    .accessibilityLabel(Wording.closeNamed(Wording.alike(suggestion.value, suggestion.into)))
             }
-            Text(Wording.writtenAlike(suggestion.kind))
+            Text(Wording.alikeBecause(suggestion.reason, kind: suggestion.kind))
                 .foregroundStyle(.secondary)
             HStack(spacing: Style.actionSpacing) {
                 Button(Wording.showDocuments) { model.browse(b) }
@@ -115,7 +116,7 @@ private struct SuggestionCard: View {
     }
 
     private func run(_ what: String, _ action: @escaping @Sendable (ArrumatorRuntime) async throws -> Void) {
-        Task { await model.perform(what) { try await action($0) } }
+        Task<Void, Never> { await model.perform(what) { try await action($0) } }
     }
 }
 
@@ -127,12 +128,9 @@ struct LabelCard: View {
     let others: [String]
     @State private var into = ""
     @State private var confirmingRemoval = false
-
-    /// The labels offered to merge into, the most alike first.
-    private var candidates: [String] {
-        let limit = model.runtime?.config.labels.vocabulary.suggestionLimit ?? others.count
-        return Array(others.sorted { LabelSimilarity.similarity($0, label.value) > LabelSimilarity.similarity($1, label.value) }.prefix(limit))
-    }
+    /// The labels offered to merge into, the most alike first (`LabelSimilarity.mostAlike`), worked out when the card
+    /// opens or the labels change, never as it is drawn.
+    @State private var candidates: [String] = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: Style.labelCardSpacing) {
@@ -143,6 +141,7 @@ struct LabelCard: View {
                 }
                 Spacer()
                 Button { close() } label: { Image(systemName: "xmark") }.buttonStyle(.borderless).foregroundStyle(.secondary).help(Wording.close)
+                    .accessibilityLabel(Wording.closeNamed(Wording.label(label)))
             }
             HStack(spacing: Style.inlineControlSpacing) {
                 Text(Wording.mergeInto).foregroundStyle(.secondary)
@@ -157,6 +156,7 @@ struct LabelCard: View {
                         Image(systemName: "chevron.down")
                     }
                     .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help(Wording.chooseLabelInUse)
+                    .accessibilityLabel(Wording.chooseLabelInUse)
                 }
                 Button(Wording.merge) { merge() }.disabled(into.trimmingCharacters(in: .whitespaces).isEmpty)
             }
@@ -172,10 +172,14 @@ struct LabelCard: View {
         }
         .card()
         .onExitCommand { close() }
+        .task(id: [label.value] + others) {
+            guard let limit = model.runtime?.config.labels.vocabulary.suggestionLimit else { return }
+            candidates = LabelSimilarity.mostAlike(to: label.value, among: others, limit: limit)
+        }
         .confirmationDialog(Wording.removeEverywhereQuestion(Wording.label(label)), isPresented: $confirmingRemoval) {
             Button(Wording.removeEverywhere, role: .destructive) {
                 let label = label
-                Task { await model.perform(Wording.removeLabelAction) { try await $0.labels.ignore(label) } }
+                Task<Void, Never> { await model.perform(Wording.removeLabelAction) { try await $0.labels.ignore(label) } }
             }
         } message: {
             Text(Wording.removedForGoodFromLabels)
@@ -185,12 +189,12 @@ struct LabelCard: View {
     private func merge() {
         let (label, value) = (label, into.trimmingCharacters(in: .whitespaces))
         guard !value.isEmpty else { return }
-        Task { await model.perform(Wording.mergeLabelsAction) { try await $0.labels.merge(label, into: value) } }
+        Task<Void, Never> { await model.perform(Wording.mergeLabelsAction) { try await $0.labels.merge(label, into: value) } }
         into = ""
     }
 
     private func close() {
-        withAnimation(.snappy) { if model.openLabel == label { model.openLabel = nil } }
+        withAnimation(.snappy) { if model.session.openLabel == label { model.session.openLabel = nil } }
     }
 }
 
@@ -205,7 +209,7 @@ private struct RuleRow: View {
                     detail: Wording.labelKind(rule.kind))
             Button(Wording.forget) {
                 guard let id = rule.id else { return }
-                Task { await model.perform(Wording.forgetRuleAction) { try await $0.labels.forget(rule: id) } }
+                Task<Void, Never> { await model.perform(Wording.forgetRuleAction) { try await $0.labels.forget(rule: id) } }
             }
             .buttonStyle(.borderless).font(.callout)
             .help(Wording.forgetHelp)

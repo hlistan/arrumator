@@ -25,6 +25,7 @@ targets:
       - package: ArrumatorPackages
         product: ArrumatorCore
     info:
+      # Written by `xcodegen generate` from these properties, its one source; Git ignores the file.
       path: App/Info.plist
       properties:
         CFBundleDisplayName: Arrumator
@@ -41,6 +42,13 @@ targets:
         NSRemovableVolumesUsageDescription: Arrumator can keep your archive or Incoming folder on an external drive.
         NSNetworkVolumesUsageDescription: Arrumator can keep your archive or Incoming folder on a network volume.
         NSLocalNetworkUsageDescription: Arrumator sends documents to your Ollama server on the local network to read and file them, and nowhere else.
+        # Plain HTTP to the user's Ollama on the local network by an IP address, which App Transport Security no longer
+        # allows by default since macOS 14; unqualified and .local names it allows (https://developer.apple.com/
+        # documentation/bundleresources/information-property-list/nsapptransportsecurity/nsallowslocalnetworking), and
+        # 127.0.0.1 and localhost were seen to load without the key. Where requests may go is NetworkGuardProtocol's to
+        # decide, never this key's.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
         ITSAppUsesNonExemptEncryption: false
     settings:
       base:
@@ -50,15 +58,17 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
         SWIFT_STRICT_CONCURRENCY: complete
+        # As the package's own targets (Package.swift): `any` written out, and no warning left standing.
+        SWIFT_UPCOMING_FEATURE_EXISTENTIAL_ANY: YES
+        SWIFT_TREAT_WARNINGS_AS_ERRORS: YES
+        GCC_TREAT_WARNINGS_AS_ERRORS: YES
         ENABLE_HARDENED_RUNTIME: true
         ENABLE_APP_SANDBOX: false
+        # Every build is signed ad hoc, to run here; scripts/release.sh signs a release for distribution.
         CODE_SIGN_STYLE: Manual
         CODE_SIGN_IDENTITY: "-"
         DEVELOPMENT_TEAM: ""
         COMBINE_HIDPI_IMAGES: true
-      configs:
-        Release:
-          CODE_SIGN_IDENTITY: Developer ID Application
 schemes:
   Arrumator:
     build:

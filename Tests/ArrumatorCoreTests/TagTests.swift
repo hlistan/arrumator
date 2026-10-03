@@ -20,11 +20,6 @@ import Testing
         try await StatsService(database: h.env.database, config: h.env.config.stats, time: h.env.time).insights()
     }
 
-    static func records(_ h: Harness, database: AppDatabase? = nil) -> ArchiveRecords {
-        ArchiveRecords(database: database ?? h.env.database, settings: h.env.settings, config: h.env.config, registry: nil,
-                       time: TestTime(.advances))
-    }
-
     // MARK: The kind
 
     @Test func aTagIsKeptAsWrittenOnOneLineAndCutAtTheLimit() throws {
@@ -50,6 +45,19 @@ import Testing
                 "tags are not kept one vocabulary, but the user merges or removes them as labels of the kinds that are")
     }
 
+    @Test(.enabled(if: Volume.ignoresCase, "only a volume that ignores case finds a folder by its name in another case"))
+    func aFolderNamedInAnotherCaseNamesTheTagAsTheDiskKeepsIt() throws {
+        let env = try TestEnvironmentSync.make()
+        defer { env.cleanup() }
+        let incoming = try env.folder("Incoming")
+        let scan = incoming.appendingPathComponent("\(Self.folder)/scan.pdf")
+        try FileManager.default.createDirectory(at: scan.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("a document".utf8).write(to: scan)
+        let folders = IncomingFolders(incoming: incoming, watcher: env.config.watcher, labels: env.config.labels)
+        #expect(folders.tag(of: incoming.appendingPathComponent("\(Self.folder.lowercased())/scan.pdf"))?.label == Self.tag,
+                "the folder's name as the disk keeps it, however the path to a file spells it")
+    }
+
     @Test func theFolderAtTheTopOfIncomingNamesTheTagAndNothingElseDoes() throws {
         let env = try TestEnvironmentSync.make()
         defer { env.cleanup() }
@@ -62,12 +70,11 @@ import Testing
         }
         let folders = IncomingFolders(incoming: incoming, watcher: env.config.watcher, labels: env.config.labels)
         let scan = try put("Taxes 2024/scan.pdf")
-        #expect(folders.tag(of: scan) == GivenTag(label: Self.tag, source: .folder, folder: incoming.appendingPathComponent(Self.folder).path),
-                "a folder placed in Incoming gives its name, as it is written, to what is in it")
+        #expect(folders.tag(of: scan) == GivenTag(label: Self.tag, source: .folder,
+                                                  folder: incoming.appendingPathComponent(Self.folder).standardizedFileURL.path),
+                "a folder placed in Incoming gives its name, as it is written, to what is in it, kept at its path as the index writes paths")
         #expect(folders.tag(of: try put("Taxes 2024/Q1/receipts/deeper.pdf"))?.label == Self.tag,
                 "at any depth: only the top folder counts, and the folders inside it give nothing")
-        #expect(folders.tag(of: incoming.appendingPathComponent("taxes 2024/scan.pdf"))?.label == Self.tag,
-                "the folder's name as the disk keeps it, however the path to a file spells it")
         #expect(folders.tag(of: try put("loose.pdf")) == nil, "a file directly in Incoming gets none")
         let package = incoming.appendingPathComponent("Notes.rtfd", isDirectory: true)
         try FileManager.default.createDirectory(at: package, withIntermediateDirectories: true)
@@ -95,7 +102,7 @@ import Testing
         let queued = try await h.jobs()
         #expect(queued.map(\.tags) == [[Self.tag], [Self.tag], []],
                 "the tag is decided when a file is queued, from where it is in Incoming, and kept with its job before it is read")
-        #expect(queued.first?.payload.tags == [Self.given(h)], "with the folder that gave it")
+        #expect(try queued.first?.payload.tags == [Self.given(h)], "with the folder that gave it")
         await h.coordinator.drain()
 
         let documents = try await h.services.documents.list(DocumentFilter(), limit: 10)
@@ -115,7 +122,7 @@ import Testing
         }
         #expect(left.isEmpty, "and is left empty of files, every one filed")
 
-        try await Self.records(h).flush()
+        try await h.env.records().flush()
         let listing = try String(contentsOf: h.env.archive.appendingPathComponent(h.env.config.records.documentsFileName), encoding: .utf8)
         #expect(listing.contains("kind: tag") && listing.contains("value: Taxes 2024"), "the tag is in the archive's record of the document")
 
@@ -156,11 +163,11 @@ import Testing
         #expect(event.summary == "Not read: the model gave no valid answer; tagged “Taxes 2024” by its folder in Incoming",
                 "History says why it was not read, and that it was tagged all the same")
 
-        try await Self.records(h).flush()
+        try await h.env.records().flush()
         let text = try String(contentsOf: h.env.archive.appendingPathComponent(h.env.config.records.documentsFileName), encoding: .utf8)
         #expect(text.contains("tags_only: true") && text.contains("value: Taxes 2024"), "its record keeps the tag, and that it is no more yet")
         let database = try AppDatabase.inMemory()
-        try await Self.records(h, database: database).rebuild()
+        try await h.env.records(index: database).rebuild()
         let back = try #require(try await DocumentStore(database: database, time: TestTime(.advances)).document(id: id))
         #expect(back.labels == [Self.tag] && !back.isLabelled, "a rebuild brings back the tag, with the document still not labelled")
 
@@ -180,8 +187,7 @@ import Testing
         let h = try await Harness.make()
         defer { h.env.cleanup() }
         let id = try #require(try await h.ingest("Taxes 2024/bill.txt", text: "EDP electricity July").id)
-        let filed = try #require(try await h.services.documents.document(id: id))
-        try await h.review.edit(id, fileName: nil, labels: (filed.labels ?? []) + [Self.mine])
+        try await h.review.edit(id, fileName: nil, labels: LabelEdit(adding: [Self.mine]))
         h.env.time.advance(by: 60)
         var services = h.services
         services.analyzer = StubAnalyzer(labels: LabelingTests.meoContract)
@@ -200,15 +206,15 @@ import Testing
         let h = try await Harness.make(analyzer: StubAnalyzer(labels: nil, fileName: nil))
         defer { h.env.cleanup() }
         let id = try #require(try await h.ingest("bill.txt", text: "EDP electricity July").id)
-        try await h.review.edit(id, fileName: nil, labels: [Self.mine])
+        try await h.review.edit(id, fileName: nil, labels: LabelEdit(adding: [Self.mine]))
         let tagged = try #require(try await h.services.documents.document(id: id))
         let waiting = try await h.services.documents.unlabelled()
         #expect(tagged.labels == [Self.mine] && !tagged.isLabelled && waiting == [id],
                 "a tag is the user's own and labels nothing: the document still waits for the model")
-        try await h.review.edit(id, fileName: nil, labels: [])
+        try await h.review.edit(id, fileName: nil, labels: LabelEdit(removing: [Self.mine]))
         let untagged = try #require(try await h.services.documents.document(id: id))
         #expect(untagged.labels == nil && !untagged.isLabelled, "and without it, the document has no labels at all, as before")
-        try await h.review.edit(id, fileName: nil, labels: [Self.mine, DocumentLabel(kind: .sender, value: "EDP")])
+        try await h.review.edit(id, fileName: nil, labels: LabelEdit(adding: [Self.mine, DocumentLabel(kind: .sender, value: "EDP")]))
         let labelled = try #require(try await h.services.documents.document(id: id))
         let left = try await h.services.documents.unlabelled()
         #expect(labelled.isLabelled && left.isEmpty,
@@ -298,8 +304,7 @@ import Testing
         let h = try await Harness.make()
         defer { h.env.cleanup() }
         let id = try #require(try await h.ingest("bill.txt", text: "EDP electricity July").id)
-        let filed = try #require(try await h.services.documents.document(id: id))
-        try await h.review.edit(id, fileName: nil, labels: (filed.labels ?? []) + [Self.mine])
+        try await h.review.edit(id, fileName: nil, labels: LabelEdit(adding: [Self.mine]))
         h.env.time.advance(by: 60)
         let (services, coordinator, analyzer) = h.readingOtherwise()
         await coordinator.enqueue(try h.env.drop("Taxes 2024/bill copy.txt", text: "EDP electricity July"))
@@ -330,7 +335,7 @@ import Testing
         let h = try await Harness.make()
         defer { h.env.cleanup() }
         let put = try h.env.put("Taxes 2024/receipt.txt", text: "A receipt")
-        await ArchiveReconciler(services: h.services, coordinator: h.coordinator).apply([.untrackedFile(path: put.path)])
+        try await ArchiveReconciler(services: h.services, coordinator: h.coordinator).apply([.found(path: put.path)])
         await h.coordinator.drain()
         let doc = try #require(try await h.services.documents.document(path: put.path))
         #expect(doc.labels == StubAnalyzer.edpBill, "a file the user put into the archive is read where it is, and its folder is no tag")
@@ -360,7 +365,7 @@ import Testing
                 "the folder's tag first, then those given on the command line, each once")
         let many = h.services.tags(for: url, given: (1...10).map { "Box \($0)" }, settings: settings)
         #expect(many.count == h.env.config.labels.maxPerKind && many.first == Self.given(h), "at most labels.maxPerKind, the folder's first")
-        let content = try await h.services.extractor.extract(url, sha256: "x", context: try h.env.config.extractionContext(settings: settings),
+        let content = try await h.services.extractor.extract(url, sha256: "x", context: try h.env.config.extractionContext(settings: settings, whenOllamaIsAway: .wait),
                                                              trace: .disabled)
         let reading = try await h.services.read(content, tags: given.map(\.label), settings: settings, trace: .disabled)
         #expect(reading.outcome.labels == StubAnalyzer.edpBill + [Self.tag, Self.mine], "a dry run shows them beside what the model gives")

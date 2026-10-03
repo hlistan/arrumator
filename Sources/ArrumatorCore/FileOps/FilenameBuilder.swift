@@ -1,33 +1,49 @@
 import Foundation
 
-/// Produces safe, bounded file names. The name is the model's; a document the model gave no name keeps its own.
+/// Produces safe, bounded file names, and finds a free one in a directory. The name is the model's; a document the
+/// model gave no name it can have keeps its own. No document is given a name the app keeps for its own files or that
+/// its watchers never take in (`SkipRules.ignoreReason(name:)`), such as a record file's.
 public struct FilenameBuilder: Sendable {
     public let config: NamingConfig
+    /// The names no document may have: those of the app's own files, and those the watchers ignore.
+    let reserved: SkipRules
+    /// Upper bound on ` (n)` suffix attempts before giving up.
+    static let maxCollisionAttempts = 10_000
 
-    public init(config: NamingConfig) {
+    public init(config: NamingConfig, reserved: SkipRules) {
         self.config = config
+        self.reserved = reserved
     }
 
-    /// Name for a filed document: the analysis's `fileName`, or else the name it arrived with.
-    public func name(for analysis: DocumentAnalysis, source: SourceFile, transliterate: Bool) -> String {
-        let chosen = analysis.fileName?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let name = chosen.flatMap { $0.isEmpty ? nil : $0 } ?? source.stem
-        return bounded(transliterate ? Self.transliterated(name) : name, fileExtension: source.fileExtension)
+    /// Name for a filed document: the analysis's `fileName`, or else `current`, the name the document has now, its
+    /// extension kept: the name it arrived with for a file in Incoming, and the name it has in the archive for one read
+    /// again there, which a reading that gives no name therefore never renames. Each is cleaned (`bounded`); when
+    /// nothing of either is left that is a name, the document keeps `current` as it is.
+    public func name(for analysis: DocumentAnalysis, current: String, transliterate: Bool) -> String {
+        let fileExtension = (current as NSString).pathExtension
+        let own = (current as NSString).deletingPathExtension
+        let written = [analysis.fileName, own].compactMap { $0 }.map { transliterate ? Self.transliterated($0) : $0 }
+        return written.lazy.compactMap { bounded($0, fileExtension: fileExtension) }.first ?? current
     }
 
-    /// Sanitises a free-form name and trims it to the character and byte limits, keeping the extension.
-    public func bounded(_ name: String, fileExtension: String) -> String {
+    /// What a free-form name becomes as a file name: cleaned (`sanitize`), cut to the character and byte limits, with
+    /// `fileExtension` in lower case after it. Nil when nothing that is a name is left of it, as of one of nothing but
+    /// spaces, dots and dashes, or when what is left is a name no document may have (`reserved`).
+    public func bounded(_ name: String, fileExtension: String) -> String? {
         let ext = fileExtension.lowercased()
         let suffix = ext.isEmpty ? "" : "." + ext
         var base = sanitize(name)
         if base.lowercased().hasSuffix(suffix), !suffix.isEmpty { base = String(base.dropLast(suffix.count)) }
         while !fits(base + suffix), !base.isEmpty { base.removeLast() }
-        base = base.trimmingCharacters(in: CharacterSet(charactersIn: " .-"))
-        return (base.isEmpty ? sanitize(fileExtension) : base) + suffix
+        base = base.trimmingCharacters(in: Self.trimmed)
+        guard !base.isEmpty, reserved.ignoreReason(name: base + suffix) == nil else { return nil }
+        return base + suffix
     }
 
     private func fits(_ s: String) -> Bool { s.count <= config.maxChars && s.utf8.count <= config.maxBytes }
 
+    /// What a name cut to its limits may not begin or end with.
+    static let trimmed = CharacterSet(charactersIn: " .-")
     /// The character that separates the names of a path (POSIX): it never stays in a file name, whatever
     /// `naming.forbiddenCharacters` lists, so a name from the model can never reach another directory (§4.5).
     static let pathSeparator = "/"
@@ -36,7 +52,13 @@ public struct FilenameBuilder: Sendable {
     /// What a forbidden character between words becomes ("Fatura: julho"), so the dash is not glued to the word before.
     static let spacedReplacement = " - "
 
-    /// NFC, path separators, forbidden and control characters replaced, no leading dots, collapsed whitespace.
+    /// The zero-width non-joiner and joiner: format characters, as invisible as the control characters a name loses,
+    /// but part of how a word is written in Persian, in the scripts of India and in emoji, whose spelling changes
+    /// without them (The Unicode Standard, ch. 23.2, "Layout Controls").
+    static let joiners: Set<Unicode.Scalar> = ["\u{200C}", "\u{200D}"]
+
+    /// NFC, path separators, forbidden and control characters replaced, no leading dots, collapsed whitespace. Of the
+    /// invisible format characters, such as those that turn the direction of text, only the joiners are kept.
     public func sanitize(_ s: String) -> String {
         var out = s.precomposedStringWithCanonicalMapping
         for c in [Self.pathSeparator] + config.forbiddenCharacters {
@@ -44,7 +66,7 @@ public struct FilenameBuilder: Sendable {
             out = out.replacingOccurrences(of: "\\s*\(escaped)\\s+|\\s+\(escaped)", with: Self.spacedReplacement, options: .regularExpression)
             out = out.replacingOccurrences(of: c, with: Self.replacement)
         }
-        out = String(out.unicodeScalars.map { CharacterSet.controlCharacters.contains($0) ? " " : Character($0) })
+        out = String(out.unicodeScalars.map { CharacterSet.controlCharacters.contains($0) && !Self.joiners.contains($0) ? " " : Character($0) })
         out = out.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
         while out.hasPrefix(".") { out.removeFirst() }
         return out.trimmingCharacters(in: CharacterSet(charactersIn: " ."))
@@ -52,5 +74,42 @@ public struct FilenameBuilder: Sendable {
 
     static func transliterated(_ s: String) -> String {
         (s.applyingTransform(.toLatin, reverse: false) ?? s).applyingTransform(.stripDiacritics, reverse: false) ?? s
+    }
+
+    /// `filename` with the collision suffix `n` (`naming.collisionFormat`) before its extension.
+    private func collided(_ filename: String, _ n: Int) -> String {
+        let ext = (filename as NSString).pathExtension
+        return (filename as NSString).deletingPathExtension + String(format: config.collisionFormat, n) + (ext.isEmpty ? "" : "." + ext)
+    }
+
+    /// First free URL for `filename` inside `directory`, with the collision suffix before the extension when it is
+    /// taken. `filename` must be one name, never a path: nothing it says can place the file anywhere but in `directory`.
+    public func uniqueDestination(directory: URL, filename: String) throws -> (URL, Int?) {
+        guard !filename.isEmpty, filename != ".", filename != "..", !filename.contains(Self.pathSeparator),
+              !filename.unicodeScalars.contains("\u{0}") else { throw FileOperationError.notAFileName(filename) }
+        let fm = FileManager.default
+        let first = directory.appendingPathComponent(filename)
+        if !fm.fileExists(atPath: first.path) { return (first, nil) }
+        for n in 2...Self.maxCollisionAttempts {
+            let url = directory.appendingPathComponent(collided(filename, n))
+            if !fm.fileExists(atPath: url.path) { return (url, n) }
+        }
+        throw FileOperationError.tooManyCollisions(first.path)
+    }
+
+    /// Whether a document named `current` is already named `planned`: the same name but for case (or how its letters
+    /// are composed), or for the collision suffix `uniqueDestination` gave it because the name was taken. Filing it
+    /// again under `planned` where it is then moves nothing, so a document read again neither changes only the case of
+    /// its name nor gains a new suffix each time, counting its own file as the one in the way.
+    func isSameName(_ current: String, as planned: String) -> Bool {
+        let folded = { (name: String) in name.precomposedStringWithCanonicalMapping.lowercased() }
+        let (current, planned) = (folded(current), folded(planned))
+        if current == planned { return true }
+        let ext = (planned as NSString).pathExtension
+        let (stem, plannedStem) = ((current as NSString).deletingPathExtension, (planned as NSString).deletingPathExtension)
+        guard (current as NSString).pathExtension == ext, stem.hasPrefix(plannedStem) else { return false }
+        let suffix = stem.dropFirst(plannedStem.count)
+        guard let n = Int(String(suffix.filter { $0.isASCII && $0.isNumber })), n >= 2 else { return false }
+        return folded(collided(planned, n)) == current
     }
 }

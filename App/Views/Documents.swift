@@ -7,50 +7,34 @@ import SwiftUI
 /// that adds it to the task's set or takes it out.
 struct DocumentList: View {
     @Environment(AppModel.self) private var model
-    let documents: [DocumentRecord]
+    let documents: [ListedDocument]
 
     var body: some View {
-        ForEach(documents, id: \.id) { document in
-            if let id = document.id, model.openDocument == id {
-                DocumentCard(documentID: id) { if model.openDocument == id { model.openDocument = nil } }
+        ForEach(documents) { listed in
+            if let id = listed.id, model.session.openDocument == id {
+                DocumentCard(documentID: id) { if model.session.openDocument == id { model.session.openDocument = nil } }
             } else {
                 HStack(spacing: Style.rowAccessorySpacing) {
-                    row(document)
-                        .rowAction { withAnimation(.snappy) { model.openDocument = document.id } }
-                    if let task = model.collecting, let id = document.id {
+                    ListRow(symbol: listed.record.status.symbol, tint: listed.record.status.tint, title: listed.record.filename,
+                            detail: listed.detail, subtitle: listed.labels)
+                        .rowAction { withAnimation(.snappy) { model.session.openDocument = listed.id } }
+                    if let task = model.session.collecting, let id = listed.id {
                         CollectToggle(task: task, document: id)
                     }
                 }
             }
         }
     }
-
-    private func row(_ d: DocumentRecord) -> some View {
-        ListRow(symbol: d.status.symbol, tint: d.status.tint, title: d.filename,
-                detail: Wording.rowDetail(of: d, archive: model.settings?.archiveURL, incoming: model.settings?.incomingURL),
-                subtitle: Wording.labels(d.labels))
-    }
 }
 
-/// Documents under headings, in the order they come, a heading wherever `heading` names another than the one before:
-/// what was processed under the day it was processed, the latest first (Processed, and what was just processed on
-/// Incoming, read the same way), and the documents the sidebar's labels choose under the month of their own date, the
-/// newest first and those without a date last.
+/// Documents under headings (`DocumentSection`): what was processed under the day it was processed, the latest first
+/// (Processed, and what was just processed on Incoming, read the same way), and the documents the sidebar's labels choose
+/// under the month of their own date, the newest first and those without a date last.
 struct DocumentSections: View {
-    let documents: [DocumentRecord]
-    let heading: (DocumentRecord) -> String
-
-    private var sections: [(title: String, documents: [DocumentRecord])] {
-        var out: [(title: String, documents: [DocumentRecord])] = []
-        for document in documents {
-            let title = heading(document)
-            if out.last?.title == title { out[out.count - 1].documents.append(document) } else { out.append((title, [document])) }
-        }
-        return out
-    }
+    let sections: [DocumentSection]
 
     var body: some View {
-        ForEach(sections, id: \.title) { section in
+        ForEach(sections) { section in
             PageSection(section.title) { DocumentList(documents: section.documents) }
         }
     }
@@ -70,6 +54,8 @@ struct DocumentCard: View {
     @State private var showingTrace = false
     /// Read Again was pressed: the card says the document waits to be read, until it is.
     @State private var readAgainAsked = false
+    /// What the card offers, as Core decides it from where the document is (`ReviewActions.choices`).
+    @State private var choices = DocumentChoices(actions: [], notFiled: false)
     @FocusState private var editingName: Bool
 
     var body: some View {
@@ -99,7 +85,7 @@ struct DocumentCard: View {
     private func header(_ d: DocumentRecord) -> some View {
         HStack(alignment: .top, spacing: Style.thumbnailSpacing) {
             FileThumbnail(url: d.url, size: Style.thumbnail)
-                .onTapGesture(count: 2) { model.open(d.path) }
+                .openAction { model.open(d.path) }
                 .help(Wording.doubleClickToOpen)
             VStack(alignment: .leading, spacing: Style.cardHeaderSpacing) {
                 TextField(Wording.name, text: $name)
@@ -116,6 +102,7 @@ struct DocumentCard: View {
             Spacer(minLength: 0)
             Button { close() } label: { Image(systemName: "xmark") }
                 .buttonStyle(.borderless).foregroundStyle(.secondary).help(Wording.close)
+                .accessibilityLabel(Wording.closeNamed(d.filename))
         }
     }
 
@@ -123,7 +110,7 @@ struct DocumentCard: View {
     private func placement(_ d: DocumentRecord) -> some View {
         HStack(spacing: Style.placementSpacing) {
             Image(systemName: d.status.symbol).foregroundStyle(d.status.tint)
-            Text(Wording.outcome(of: d, archive: model.settings?.archiveURL, incoming: model.settings?.incomingURL))
+            Text(Wording.outcome(of: d, archive: model.archive, incoming: model.settings?.incomingURL))
         }
         .font(.callout)
     }
@@ -137,7 +124,7 @@ struct DocumentCard: View {
                     label(Wording.labelKind(kind))
                     HStack(spacing: Style.chipSpacing) {
                         ForEach(labels.filter { $0.kind == kind }, id: \.self) { item in
-                            LabelChip(label: item) { save(labels.filter { $0 != item }) }
+                            LabelChip(label: item) { save(LabelEdit(removing: [item])) }
                         }
                     }
                 }
@@ -152,8 +139,8 @@ struct DocumentCard: View {
                     TextField(Wording.labelPrompt(newKind), text: $newValue)
                         .accessibilityLabel(Wording.labelPrompt(newKind))
                         .textFieldStyle(.roundedBorder)
-                        .onSubmit { add(to: labels) }
-                    Button(Wording.add) { add(to: labels) }
+                        .onSubmit { add() }
+                    Button(Wording.add) { add() }
                         .disabled(newValue.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
                 .controlSize(.small)
@@ -175,6 +162,9 @@ struct DocumentCard: View {
                         if [.needsReview, .failed, .held].contains(d.status), let advice = Wording.advice(analysis) {
                             Text(advice).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                         }
+                        if choices.notFiled {
+                            Text(Wording.notFiledAdvice).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        }
                     }
                     .textSelection(.enabled)
                 }
@@ -188,21 +178,19 @@ struct DocumentCard: View {
             Button(Wording.showInFinder) { model.reveal(d.path) }
             Button(Wording.howWasThisRead) { showingTrace = true }
             Spacer()
-            switch d.status {
-            case .filed:
-                Button(Wording.undoFiling) { run(Wording.undoAction) { try await $0.review.undo(documentID) } }
-                    .help(Wording.undoFilingHelp)
-                Button(Wording.looksRight) { run(Wording.confirmAction) { try await $0.review.confirm(documentID) } }
-                    .help(Wording.confirmFiledHelp)
-            case .needsReview, .failed:
-                Button(Wording.leaveForLater) { run(Wording.holdAction) { try await $0.review.hold(documentID) } }
-                readAgain
-                Button(Wording.looksRight) { run(Wording.confirmAction) { try await $0.review.confirm(documentID) } }
-                    .help(Wording.confirmWaitingHelp)
-            case .held, .undone:
-                readAgain
-            default:
-                EmptyView()
+            ForEach(choices.actions, id: \.self) { action in
+                switch action {
+                case .undo:
+                    Button(Wording.undoFiling) { run(Wording.undoAction) { try await $0.review.undo(documentID) } }
+                        .help(Wording.undoFilingHelp)
+                case .confirm:
+                    Button(Wording.looksRight) { run(Wording.confirmAction) { try await $0.review.confirm(documentID) } }
+                        .help(d.status == .filed ? Wording.confirmFiledHelp : Wording.confirmWaitingHelp)
+                case .hold:
+                    Button(Wording.leaveForLater) { run(Wording.holdAction) { try await $0.review.hold(documentID) } }
+                case .readAgain:
+                    readAgain
+                }
             }
         }
         .buttonStyle(.borderless)
@@ -215,7 +203,7 @@ struct DocumentCard: View {
             Text(Wording.readAgainQueued).foregroundStyle(.secondary)
         } else {
             Button(Wording.readAgain) {
-                Task {
+                Task<Void, Never> {
                     readAgainAsked = await model.perform(Wording.readAgainAction) { try await $0.review.retry(documentID) } != nil
                 }
             }
@@ -228,28 +216,30 @@ struct DocumentCard: View {
 
     // MARK: Changes
 
-    /// Adds the label being typed; one of a single-valued kind takes the place of the one there.
-    private func add(to labels: [DocumentLabel]) {
+    /// Adds the label being typed; Core decides what it does to the labels the document has then (`LabelEdit`).
+    private func add() {
         let value = newValue.trimmingCharacters(in: .whitespaces)
         guard !value.isEmpty else { return }
-        let kept = newKind.isSingle ? labels.filter { $0.kind != newKind } : labels
-        save(kept + [DocumentLabel(kind: newKind, value: value)])
+        save(LabelEdit(adding: [DocumentLabel(kind: newKind, value: value)]))
         newValue = ""
     }
 
-    private func save(_ labels: [DocumentLabel]) {
-        run(Wording.changeLabelsAction) { try await $0.review.edit(documentID, fileName: nil, labels: labels) }
+    /// Sends what the user did to the labels, never the set the card last showed, so changes made in quick succession
+    /// each keep the others.
+    private func save(_ change: LabelEdit) {
+        run(Wording.changeLabelsAction) { try await $0.review.edit(documentID, fileName: nil, labels: change) }
     }
 
-    /// Renames the file when the user leaves the name, as Things saves a field; an unchanged name is left alone. A blank
-    /// one is refused, saying why, and the field shows the name the file keeps.
+    /// Renames the file when the user leaves the name, as Things saves a field; an unchanged name is left alone. A name
+    /// the document cannot have (`IngestError.unusableFileName`: a blank one, one cleaning leaves nothing of, one of the
+    /// app's own files) or a rename that fails is refused, saying why, and the field shows the name the file keeps.
     private func rename() async {
         guard let d = document else { return }
         let current = (d.filename as NSString).deletingPathExtension
         let value = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard value != current else { return }
-        await model.perform(Wording.renameAction) { try await $0.review.edit(documentID, fileName: value, labels: nil) }
-        if value.isEmpty { name = current }
+        let renamed: Void? = await model.perform(Wording.renameAction) { try await $0.review.edit(documentID, fileName: value, labels: nil) }
+        if renamed == nil { name = current }
     }
 
     private func run(_ what: String, _ action: @escaping @Sendable (ArrumatorRuntime) async throws -> Void) {
@@ -262,7 +252,11 @@ struct DocumentCard: View {
 
     private func load() async {
         let readBefore = document?.updatedAt
-        document = await model.load(Wording.loadDocumentAction) { try await $0.services.documents.document(id: documentID) } ?? nil
+        guard let read = await model.load(Wording.loadDocumentAction, { try await $0.services.documents.document(id: documentID) }) else { return }
+        document = read
+        if let document, let offered = await model.load(Wording.loadDocumentAction, { await $0.review.choices(for: document) }) {
+            choices = offered
+        }
         // Read again since, or no longer waiting: Read Again is offered again where it applies.
         if document?.updatedAt != readBefore || document.map({ ![.needsReview, .failed, .held, .undone].contains($0.status) }) == true {
             readAgainAsked = false
@@ -309,7 +303,7 @@ struct LabelChip: View {
         .confirmationDialog(Wording.removeEverywhereQuestion(Wording.label(label)), isPresented: $confirmingRemoval) {
             Button(Wording.removeEverywhere, role: .destructive) {
                 let label = label
-                Task { await model.perform(Wording.removeLabelAction) { try await $0.labels.ignore(label) } }
+                Task<Void, Never> { await model.perform(Wording.removeLabelAction) { try await $0.labels.ignore(label) } }
             }
         } message: {
             Text(Wording.removedForGoodFromCard)

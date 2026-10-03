@@ -1,87 +1,94 @@
 import ArrumatorCore
-import CoreXLSX
 import Foundation
 import UniformTypeIdentifiers
 
-/// Excel workbooks through CoreXLSX: every sheet name, and up to `maxSheets` × `maxRows` × `maxColumns` cells
-/// rendered as TSV (shared and inline strings resolved, numbers as stored).
+/// Excel workbooks: the names of the first `maxSheets` sheets, in the workbook's order, and up to `maxSheets` × `maxRows`
+/// × `maxColumns` cells rendered as TSV (shared and inline strings resolved, numbers as stored).
+///
+/// The parts are read with Foundation's `XMLParser`, as SpreadsheetML lays them out (ECMA-376 Part 1, §18.2 the
+/// workbook, §18.3 sheets, §18.4 shared strings; Part 2 for the package's relationships): the package's
+/// relationships lead to the workbook, the workbook's to its sheets and shared strings. Each part is read up to
+/// `zipEntryCapBytes`, and a sheet's rows are collected as it is parsed, which stops at `maxRows`.
 struct XLSXExtractor: FileExtractor {
     let name = "xlsx"
-    let version = 1
+    let version = 2
+    /// Workbooks and their templates, with macros or without, which keep their sheets in the same parts.
     var supportedTypes: [UTType] {
-        [UTType("org.openxmlformats.spreadsheetml.sheet"), UTType("org.openxmlformats.spreadsheetml.sheet.macroenabled")]
-            .compactMap { $0 }
+        ["sheet", "sheet.macroenabled", "template", "template.macroenabled"]
+            .compactMap { UTType("org.openxmlformats.spreadsheetml.\($0)") }
     }
 
     func extract(_ job: ExtractionJob) async throws -> ExtractionDraft {
-        let limits = job.config.xlsx
-        guard let file = XLSXFile(filepath: job.url.path) else {
-            return .metadataOnly(kind: .spreadsheet, warnings: [ExtractionWarning(.corrupted, "not a ZIP package")])
-        }
-        var sheetNames: [String] = []
-        var sections: [String] = []
-        var tables: [String] = []
-        var warnings: [ExtractionWarning] = []
+        let config = job.config
+        let zip: ZipReader
         do {
-            let sharedStrings = try file.parseSharedStrings()
-            for workbook in try file.parseWorkbooks() {
-                for (index, sheet) in try file.parseWorksheetPathsAndNames(workbook: workbook).enumerated() {
-                    let sheetName = sheet.name ?? "Sheet \(index + 1)"
-                    sheetNames.append(sheetName)
-                    guard sections.count < limits.maxSheets else { continue }
-                    try Task.checkCancellation()
-                    let worksheet = try file.parseWorksheet(at: sheet.path)
-                    let rows = Self.rows(worksheet, sharedStrings: sharedStrings, limits: limits)
-                    let tsv = DelimitedText.tsv(rows)
-                    sections.append("## \(sheetName)\n\(tsv)")
-                    if tables.count < job.config.maxTables, !tsv.isEmpty {
-                        tables.append(String(tsv.prefix(job.config.tableSnippetChars)))
-                    }
-                    if (worksheet.data?.rows.count ?? 0) > limits.maxRows {
-                        warnings.append(ExtractionWarning(.textTruncated, "sheet \(sheetName): first \(limits.maxRows) rows"))
-                    }
+            zip = try ZipReader(url: job.url, config: config)
+        } catch {
+            return .metadataOnly(kind: .spreadsheet, warnings: [error.warning])
+        }
+        let limits = config.xlsx
+        var warnings: [ExtractionWarning] = []
+        var sheets: [SpreadsheetPackage.Sheet] = []
+        var sheetCount = 0
+        var sharedStrings: [String] = []
+        do {
+            let package = try SpreadsheetPackage(zip, maxSheets: limits.maxSheets)
+            sheets = package.sheets
+            sheetCount = package.sheetCount
+            try zip.locate(sheets.map(\.path) + [package.sharedStringsPath])
+            if let read = try zip.head(at: package.sharedStringsPath) {
+                sharedStrings = try SharedStringsCollector.strings(read.data)
+                if read.truncated {
+                    warnings.append(ExtractionWarning(.textTruncated, "shared strings: read the first \(read.data.count) bytes"))
                 }
             }
         } catch is CancellationError {
             throw CancellationError()
+        } catch let error as ZipReadError {
+            warnings.append(error.warning)
         } catch {
             warnings.append(ExtractionWarning(.corrupted, String(describing: error)))
         }
-        if sheetNames.count > limits.maxSheets {
-            warnings.append(ExtractionWarning(.textTruncated, "first \(limits.maxSheets) of \(sheetNames.count) sheets"))
+
+        var sections: [String] = []
+        var tables: [String] = []
+        for sheet in sheets {
+            try Task.checkCancellation()
+            do {
+                guard let read = try zip.head(at: sheet.path) else {
+                    warnings.append(ExtractionWarning(.corrupted, "sheet \(sheet.name): its part \(sheet.path) is missing"))
+                    continue
+                }
+                let parsed = try WorksheetCollector.rows(read.data, sharedStrings: sharedStrings, limits: limits)
+                let tsv = DelimitedText.tsv(parsed.rows)
+                sections.append("## \(sheet.name)\n\(tsv)")
+                if tables.count < config.maxTables, !tsv.isEmpty {
+                    tables.append(String(tsv.prefix(config.tableSnippetChars)))
+                }
+                if parsed.moreRows {
+                    warnings.append(ExtractionWarning(.textTruncated, "sheet \(sheet.name): first \(limits.maxRows) rows"))
+                } else if read.truncated {
+                    warnings.append(ExtractionWarning(.textTruncated, "sheet \(sheet.name): read the first \(read.data.count) bytes"))
+                } else if !parsed.wellFormed {
+                    warnings.append(ExtractionWarning(.corrupted, "sheet \(sheet.name): not well-formed XML"))
+                }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch let error as ZipReadError {
+                warnings.append(error.warning)
+            } catch {
+                warnings.append(ExtractionWarning(.corrupted, "sheet \(sheet.name): \(error)"))
+            }
+        }
+        if sheetCount > sheets.count {
+            warnings.append(ExtractionWarning(.textTruncated, "first \(sheets.count) of \(sheetCount) sheets"))
         }
         let text = sections.joined(separator: "\n\n")
         var draft = ExtractionDraft(kind: .spreadsheet, textOrigin: text.isEmpty ? .none : .textLayer, text: text)
-        draft.structure = ContentStructure(paragraphCount: 0, tables: tables, sheetNames: sheetNames)
-        draft.metadata = OOXMLCoreProperties.metadata(of: job.url, entryCap: job.config.zipEntryCapBytes, prefix: "doc")
-        draft.warnings = warnings
+        draft.structure = ContentStructure(paragraphCount: 0, tables: tables, sheetNames: sheets.map(\.name))
+        let core = OOXMLCoreProperties.metadata(in: zip, prefix: "doc")
+        draft.metadata = core.metadata
+        draft.warnings = warnings + core.warnings
         return draft
-    }
-
-    private static func rows(_ worksheet: Worksheet, sharedStrings: SharedStrings?,
-                             limits: ExtractionConfig.XLSX) -> [[String]] {
-        guard let first = ColumnReference("A") else { return [] }
-        return (worksheet.data?.rows ?? []).prefix(limits.maxRows).compactMap { row in
-            var cells: [String] = []
-            for cell in row.cells {
-                let column = first.distance(to: cell.reference.column)
-                guard column >= 0, column < limits.maxColumns else { continue }
-                let value = text(of: cell, sharedStrings: sharedStrings)
-                if cells.count <= column { cells += [String](repeating: "", count: column + 1 - cells.count) }
-                cells[column] = value
-            }
-            return cells.allSatisfy(\.isEmpty) ? nil : cells
-        }
-    }
-
-    /// Cell text; shared-string indices are bounds-checked because they come from the file.
-    private static func text(of cell: Cell, sharedStrings: SharedStrings?) -> String {
-        if cell.type == .sharedString {
-            guard let sharedStrings, let index = cell.value.flatMap(Int.init),
-                  sharedStrings.items.indices.contains(index) else { return "" }
-            let item = sharedStrings.items[index]
-            return item.text ?? item.richText.compactMap(\.text).joined()
-        }
-        return cell.inlineString?.text ?? cell.value ?? ""
     }
 }

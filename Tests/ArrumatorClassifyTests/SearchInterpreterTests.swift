@@ -21,7 +21,7 @@ import Testing
 
     /// The answer to `request`: EDP's electricity invoices of 2025, by sender and year. `overrides` replaces a list,
     /// `omitting` leaves one out.
-    static func answer(_ overrides: [String: JSONValue] = [:], omitting: String? = nil) -> String {
+    static func answer(_ overrides: [String: JSONValue] = [:], omitting: String? = nil) throws -> String {
         var fields: [String: JSONValue] = [:]
         for kind in ClassificationSchema.answerOrder { fields[ClassificationSchema.labelsKey(kind)] = .array([]) }
         fields["senders"] = .array([asked("EDP Comercial", "EDP")])
@@ -33,14 +33,14 @@ import Testing
         fields["title"] = .string("EDP invoices 2025")
         for (key, value) in overrides { fields[key] = value }
         if let omitting { fields[omitting] = nil }
-        return JSON.string(fields)
+        return try JSON.string(fields)
     }
 
     static func strings(_ values: String...) -> JSONValue { .array(values.map(JSONValue.string)) }
 
     static let edp2025 = SearchPlan(title: "EDP invoices 2025",
                                     labels: [DocumentLabel(kind: .sender, value: "EDP Comercial"), DocumentLabel(kind: .type, value: "invoice"),
-                                             DocumentLabel(kind: .topic, value: "electricity"), DocumentLabel(kind: .date, value: "2025")],
+                                             DocumentLabel(kind: .date, value: "2025"), DocumentLabel(kind: .topic, value: "electricity")],
                                     words: [], grouping: [.sender, .date])
 
     // MARK: Validation
@@ -107,6 +107,18 @@ import Testing
                 "a quote with words of its own is kept, though an earlier kind quotes some of them too")
     }
 
+    @Test func wordsTwoKindsQuoteAskForTheKindTheModelGivesFirst() throws {
+        let request = "faturas de março de 2025"
+        let checked = try Self.validator().validate(try Self.answer([
+            "senders": .array([]), "topics": .array([]), "types": .array([Self.asked("invoice", "faturas")]),
+            "parties": .array([Self.asked("Março 2025 Lda", "março de 2025")]), "dates": .array([Self.asked("2025-03", "março de 2025")]),
+        ]), request: request)
+        #expect(checked.plan.labels.values(.date) == ["2025-03"] && checked.plan.labels.values(.party).isEmpty,
+                "the date, which the model gives before a party (ClassificationSchema.answerOrder), is what the words ask for")
+        #expect(checked.notes.contains { $0.hasPrefix("parties: “Março 2025 Lda” is asked for by words a label of another kind quotes") },
+                "and the party they also quote is dropped, noted for the trace: \(checked.notes)")
+    }
+
     @Test func aDateOrDeadlineAskedForMayBeAnySpanOfTime() throws {
         let request = "invoices from March 2025, from 1.4.2025 to 30.6.2025, last year, due in 2026, in Portuguese, of 54.21 euros"
         let checked = try Self.validator().validate(Self.answer([
@@ -151,7 +163,7 @@ import Testing
         #expect(throws: AnswerValidationError.invalid(["group_by: “colour” is no kind of label"]), "an arrangement by what is no kind") {
             try validator.validate(Self.answer(["group_by": Self.strings("colour")]), request: Self.request)
         }
-        let unfounded = Self.answer(["senders": .array([Self.asked("MEO", "phone")]), "types": .array([]), "topics": .array([]),
+        let unfounded = try Self.answer(["senders": .array([Self.asked("MEO", "phone")]), "types": .array([]), "topics": .array([]),
                                      "dates": .array([Self.asked("someday", "someday")])])
         #expect(throws: AnswerValidationError.invalid([
             "senders: “MEO” is not asked for by the request (“phone”), dropped", "dates: “someday” is no date, dropped",
@@ -163,7 +175,7 @@ import Testing
 
     // MARK: Asking the model
 
-    private struct World {
+    struct World {
         let env: TestEnvironment
         let mock: MockOllama
         let interpreter: SearchPromptInterpreter
@@ -171,11 +183,13 @@ import Testing
 
         /// Reads `prompt` by `profile`, else by the one Settings uses.
         func interpret(_ prompt: String, effort: TaskEffort = .medium, profile: ModelProfile? = nil,
-                       vocabulary: [LabelKind: [LabelUsage]] = [:]) async throws -> SearchInterpretation {
+                       vocabulary: [LabelKind: [LabelUsage]] = [:], config: PipelineConfig? = nil) async throws -> SearchInterpretation {
             let profile = if let profile { profile } else { try await env.settings.current.modelProfile() }
-            return try await interpreter.interpret(prompt, effort: effort, profile: profile, vocabulary: vocabulary, today: "2026-07-05",
-                                                   config: env.config, trace: TraceContext(traceID: 1, sink: sink))
+            return try await interpreter.interpret(prompt, effort: effort, profile: profile, vocabulary: vocabulary, today: Self.today,
+                                                   config: config ?? env.config, trace: TraceContext(traceID: 1, sink: sink))
         }
+
+        static let today = "2026-07-05"
     }
 
     /// The chat model of the profile Settings uses, and the other models the Ollama double has: one that thinks and says
@@ -195,8 +209,8 @@ import Testing
 
     /// The interpreter over a new environment, `env` when given, its model calls answered by `handler` and a failure
     /// asked again after each of `retryDelays`.
-    private func world(_ env: TestEnvironment? = nil, retryDelays: [Double] = [],
-                       _ handler: @escaping MockOllama.ChatHandler) async throws -> World {
+    func world(_ env: TestEnvironment? = nil, retryDelays: [Double] = [],
+               _ handler: @escaping MockOllama.ChatHandler) async throws -> World {
         let env = if let env { env } else { try await TestEnvironment.make() }
         let thinks = MockOllama.thinkingCapabilities
         let mock = MockOllama(installed: [Self.chat, Self.thinker, Self.switcher, Self.leveller, Self.nonThinker, "bge-m3"],
@@ -207,12 +221,8 @@ import Testing
         return World(env: env, mock: mock, interpreter: interpreter)
     }
 
-    static func usage(_ kind: LabelKind, _ values: String...) -> [LabelUsage] {
-        values.enumerated().map { LabelUsage(label: DocumentLabel(kind: kind, value: $1), documents: values.count - $0) }
-    }
-
     @Test func theModelIsToldTheArchivesLabelsTodayAndTheRequestAndAnswersInTheSchema() async throws {
-        let w = try await world { _ in Self.answer() }
+        let w = try await world { _ in try Self.answer() }
         defer { w.env.cleanup() }
         let vocabulary: [LabelKind: [LabelUsage]] = [.sender: Self.usage(.sender, "EDP Comercial", "MEO"),
                                                      .reference: Self.usage(.reference, "invoice FT 2026/1")]
@@ -224,7 +234,7 @@ import Testing
         #expect(!text.contains("invoice FT 2026/1"), "a kind the effort's promptLabels does not list is not shown: references are each document's own")
         #expect(text.contains("## TODAY\n2026-07-05") && text.contains("## REQUEST\n" + Self.request),
                 "with today's date and the request as written")
-        let schema = JSON.string(try #require(request.format))
+        let schema = try JSON.string(try #require(request.format))
         #expect(schema.contains("\"group_by\"") && schema.contains("\"jurisdiction\"") && schema.contains("\"asked_as\""),
                 "each label comes with the words that ask for it, and the arrangement is one of the kinds of label")
         let step = try #require(await w.sink.steps.first { $0.stage == .interpret })
@@ -233,14 +243,14 @@ import Testing
     }
 
     @Test func anEmptyArchiveIsNotDescribed() async throws {
-        let w = try await world { _ in Self.answer() }
+        let w = try await world { _ in try Self.answer() }
         defer { w.env.cleanup() }
         _ = try await w.interpret("invoices")
         #expect(await w.mock.chatRequests.first?.messages[1].content.hasPrefix("## TODAY") == true, "there is nothing to tell the model of")
     }
 
     @Test func anInvalidAnswerIsRepairedAndOneNeverRightGivesNoPlanWithTheReason() async throws {
-        let repaired = try await world { request in request.messages.count > 2 ? Self.answer() : Self.answer(omitting: "words") }
+        let repaired = try await world { request in request.messages.count > 2 ? try Self.answer() : try Self.answer(omitting: "words") }
         defer { repaired.env.cleanup() }
         #expect(try await repaired.interpret(Self.request).plan == Self.edp2025, "the second answer, after being told what was wrong")
         #expect(await repaired.mock.chatRequests.last?.messages.last?.content.contains("words is missing") == true, "the repair says what was missing")
@@ -296,7 +306,7 @@ import Testing
                 "the profile's chat model is asked, then again repairAttempts times, and neither its vision model nor Settings' in its place")
         #expect(input["model"] == .string(Self.thinker), "and the trace says which model read the request: \(input)")
 
-        let w = try await world { _ in Self.answer() }
+        let w = try await world { _ in try Self.answer() }
         defer { w.env.cleanup() }
         let read = try await w.interpret(Self.request, profile: mine)
         #expect(read.model == Self.thinker && read.plan == Self.edp2025, "the task records the model that read it")
@@ -328,7 +338,7 @@ import Testing
 
     @Test func anAnswerCutOffAtItsLengthLimitGoesBackSayingSo() async throws {
         let high = try #require(try PipelineConfig.bundledDefaults().tasks.efforts[.high])
-        let w = try await world { request in request.messages.count > 2 ? Self.answer() : MockOllama.cutOff }
+        let w = try await world { request in request.messages.count > 2 ? try Self.answer() : MockOllama.cutOff }
         defer { w.env.cleanup() }
         let read = try await w.interpret(Self.request, effort: .high, profile: Self.profile(reading: Self.thinker))
         #expect(read.plan == Self.edp2025, "the next answer, written more briefly, is read")
@@ -340,7 +350,7 @@ import Testing
     }
 
     @Test func aProfileWhoseChatModelIsNotInstalledFailsTheTaskUnread() async throws {
-        let w = try await world { _ in Self.answer() }
+        let w = try await world { _ in try Self.answer() }
         defer { w.env.cleanup() }
         await #expect(throws: OllamaError.modelNotFound("llama-9:1t"), "no other model reads it in its place unasked, and the task says which it needs") {
             try await w.interpret(Self.request, profile: Self.profile(reading: "llama-9:1t"))
@@ -349,15 +359,15 @@ import Testing
     }
 
     @Test func aModelWhoseCapabilitiesCannotBeReadIsToldNothingOfThinkingUnlessOllamaIsAway() async throws {
-        let w = try await world { _ in Self.answer() }
+        let w = try await world { _ in try Self.answer() }
         defer { w.env.cleanup() }
         let mine = Self.profile(reading: Self.thinker)
-        await w.mock.failShowing(Self.thinker, with: .http(status: 400, body: "unexpected"))
+        await w.mock.failShowing(Self.thinker, with: OllamaError.http(status: 400, body: "unexpected"))
         let read = try await w.interpret(Self.request, effort: .high, profile: mine)
         let asked = await w.mock.chatRequests
         #expect(read.plan == Self.edp2025 && asked.map(\.model) == [Self.thinker] && asked.map(\.think) == [nil],
                 "a model Ollama cannot say what it can do of still reads the request, told nothing about thinking, as it allows")
-        await w.mock.failShowing(Self.thinker, with: .unreachable("connection refused"))
+        await w.mock.failShowing(Self.thinker, with: OllamaError.unreachable("connection refused"))
         await #expect(throws: OllamaError.unreachable("connection refused"), "a server that cannot be reached is an error, so the task waits") {
             try await w.interpret(Self.request, effort: .high, profile: mine)
         }
@@ -372,7 +382,7 @@ import Testing
             LabelUsage(label: DocumentLabel(kind: .sender, value: $1), documents: senders.count - $0)
         }]
         for effort in TaskEffort.allCases {
-            let w = try await world { _ in Self.answer() }
+            let w = try await world { _ in try Self.answer() }
             defer { w.env.cleanup() }
             _ = try await w.interpret(Self.request, effort: effort, vocabulary: vocabulary)
             let limit = try #require(efforts[effort]?.promptLabels[.sender])
@@ -402,7 +412,7 @@ import Testing
         #expect(seconds > 0, "an effort gives an answer a time of its own")
         let w = try await world(retryDelays: config.ollama.retryDelays) { request in
             if request.model == Self.thinker { throw Self.tooLong }
-            return Self.answer()
+            return try Self.answer()
         }
         defer { w.env.cleanup() }
         let read = try await w.interpret(Self.request, effort: .medium, profile: Self.profile(reading: Self.thinker))
@@ -439,6 +449,8 @@ import Testing
     @Test func aServerThatCannotBeReachedIsAnErrorSoTheTaskWaits() async throws {
         let w = try await world { _ in throw OllamaError.unreachable("connection refused") }
         defer { w.env.cleanup() }
-        await #expect(throws: OllamaError.self, "the queue keeps the task and asks again later") { try await w.interpret("EDP invoices") }
+        await #expect(throws: OllamaError.unreachable("connection refused"), "the queue keeps the task and asks again later") {
+            try await w.interpret("EDP invoices")
+        }
     }
 }

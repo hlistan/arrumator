@@ -11,6 +11,16 @@ public final class TestTime: TimeSource {
     /// 2026-07-05 12:00:00 UTC: a fixed day for everything a test stamps.
     public static let start = Date(timeIntervalSince1970: 1_783_252_800)
 
+    /// The time zone the pipeline a test builds reckons days in, whatever the Mac's: fourteen hours ahead of UTC, where
+    /// `start` is already 2026-07-06, so a day reckoned in UTC, or in the Mac's own zone, is told apart from it.
+    public static let zone: TimeZone = {
+        guard let zone = TimeZone(identifier: "Pacific/Kiritimati") else { preconditionFailure("a constant zone exists") }
+        return zone
+    }()
+
+    /// `start`'s day in `zone`.
+    public static let startDay = "2026-07-06"
+
     private let current: Mutex<Date>
     private let sleeping: Sleeping
 
@@ -35,5 +45,24 @@ public final class TestTime: TimeSource {
             for await _ in stream {}
             throw CancellationError()
         }
+    }
+}
+
+/// Time that a test reads as `TestTime` and that never passes on its own: every sleep is recorded, then waits until its
+/// task is cancelled. What a worker asked to wait for, when the test needs to know how long it would have waited.
+public final class SleepLog: TimeSource {
+    private let time: TestTime
+    private let asked = Mutex<[Double]>([])
+
+    public init(_ time: TestTime) { self.time = time }
+
+    /// Every sleep asked for, in seconds, in the order asked.
+    public var sleeps: [Double] { asked.withLock { $0 } }
+
+    public func now() -> Date { time.now() }
+
+    public func sleep(seconds: Double) async throws {
+        asked.withLock { $0.append(seconds) }
+        try await TestTime(.blocks).sleep(seconds: seconds)
     }
 }

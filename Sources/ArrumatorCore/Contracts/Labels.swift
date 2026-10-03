@@ -54,6 +54,11 @@ public struct DocumentLabel: Sendable, Codable, Hashable {
         self.kind = kind
         self.value = value
     }
+
+    /// The label as `distinct()` tells labels apart: its kind, and its value whatever its case or accents.
+    var distinctKey: String {
+        kind.rawValue + ":" + value.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+    }
 }
 
 extension [DocumentLabel] {
@@ -65,8 +70,7 @@ extension [DocumentLabel] {
         var seen = Set<String>()
         var kinds = Set<LabelKind>()
         return filter { label in
-            let key = label.kind.rawValue + ":" + label.value.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
-            guard seen.insert(key).inserted else { return false }
+            guard seen.insert(label.distinctKey).inserted else { return false }
             return !label.kind.isSingle || kinds.insert(label.kind).inserted
         }
     }

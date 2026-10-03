@@ -9,10 +9,11 @@ public struct DateEvidence: Sendable {
     public var fileCreated: Date?
     public var fileModified: Date?
     public var now: Date
-    public var calendar: Calendar
+    /// What the plausible years and a file date's day are reckoned in.
+    public var calendar: GregorianCalendar
 
     public init(firstPageLength: Int?, metadataDates: [MetadataDate], fileCreated: Date?, fileModified: Date?,
-                now: Date, calendar: Calendar) {
+                now: Date, calendar: GregorianCalendar) {
         self.firstPageLength = firstPageLength
         self.metadataDates = metadataDates
         self.fileCreated = fileCreated
@@ -67,7 +68,7 @@ public struct DocumentDateResolver: Sendable {
     public func resolve(_ candidates: [DateCandidate], in text: String, evidence: DateEvidence) -> DateResolution {
         let ns = text as NSString
         let lineStarts = Self.lineStarts(ns)
-        let currentYear = evidence.calendar.component(.year, from: evidence.now)
+        let currentYear = evidence.calendar.year(of: evidence.now)
         let plausibleYears = (currentYear - config.yearsBack)...(currentYear + config.yearsForward)
         let firstPortionEnd = Double(evidence.firstPageLength ?? ns.length) * config.firstPortionShare
         let metadataDays = Set(evidence.metadataDates.map(\.day))
@@ -149,8 +150,7 @@ public struct DocumentDateResolver: Sendable {
         ]
         for (date, source, label) in fileDates {
             guard let date else { continue }
-            let day = CalendarDay(date: date, calendar: evidence.calendar)
-            return DetectedDate(date: day.iso, score: 0, source: source, context: label)
+            return DetectedDate(date: evidence.calendar.day(of: date).iso, score: 0, source: source, context: label)
         }
         return nil
     }
@@ -183,15 +183,9 @@ public struct DocumentDateResolver: Sendable {
         return nearest
     }
 
-    /// Whole-word, case-insensitive alternation of `words` (longest first; spaces match any whitespace run).
+    /// `words` as whole words (`LabelPhrases`); nil when there is none.
     private static func labelRegex(_ words: [String]) -> NSRegularExpression? {
-        let parts = words.map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
-            .sorted { $0.count > $1.count }
-            .map { NSRegularExpression.escapedPattern(for: $0).replacingOccurrences(of: " ", with: #"\s+"#) }
-        guard !parts.isEmpty else { return nil }
-        let pattern = #"(?<![\p{L}\p{N}])(?:"# + parts.joined(separator: "|") + #")(?![\p{L}\p{N}])"#
-        return try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
+        LabelPhrases.alternation(words).map { LabelPhrases.regex(#"(?<![\p{L}\p{N}])"# + $0 + #"(?![\p{L}\p{N}])"#) }
     }
 
     // MARK: Lines

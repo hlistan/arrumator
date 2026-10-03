@@ -1,6 +1,20 @@
 import AppKit
 import ArrumatorCore
+import ArrumatorRuntime
 import SwiftUI
+
+extension RuntimeActivity.Mark {
+    /// The menu bar icon for the app's state.
+    var symbol: String {
+        switch self {
+        case .problem: "exclamationmark.triangle"
+        case .paused: "pause.circle"
+        case .filing: "tray.and.arrow.down.fill"
+        case .needsYou: "tray.full"
+        case .idle: "tray"
+        }
+    }
+}
 
 /// The visual language, after Things: one quiet list per page under a large title, rows without separators, and an
 /// item that opens in place as a card. Colour is kept for the few marks that carry meaning.
@@ -196,6 +210,8 @@ enum Style {
     static let filterFieldCornerRadius: CGFloat = 7
     /// How strongly the sidebar's label filter is filled.
     static let filterFieldFillOpacity = 0.6
+    /// Around what the main window says above every page while the archive is away.
+    static let archiveAwayInsets = EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16)
     /// Least space between a list's name in the sidebar and the spinner after it while it is at work, as Tasks while a
     /// search request is read.
     static let sidebarSpinnerSpacing: CGFloat = 6
@@ -241,9 +257,8 @@ enum Style {
 
     /// The Settings window.
     static let settingsWindow = CGSize(width: 900, height: 620)
-    /// What the stepper for how long model prompts are kept offers.
-    static let retentionDays = 1...3_650
-    /// The step of the stepper for how long model prompts are kept.
+    /// The step of the stepper for how long model prompts are kept, over the days Core allows
+    /// (`AppSettings.traceRawRetentionDaysRange`).
     static let retentionDaysStep = 30
     /// Between a model profile's name and the words after it, in its row and opened.
     static let profileNameSpacing: CGFloat = 8
@@ -434,7 +449,7 @@ enum EventStyle {
         case .analysed: "tag"
         case .filed: "checkmark.circle"
         case .needsReview: "questionmark.circle"
-        case .duplicate: "doc.on.doc"
+        case .duplicate, .foundInTwoPlaces: "doc.on.doc"
         case .error, .failed: "exclamationmark.triangle"
         case .retry: "arrow.clockwise"
         case .corrected, .userMoved, .userRenamed, .markedCorrect: "hand.point.up.left"

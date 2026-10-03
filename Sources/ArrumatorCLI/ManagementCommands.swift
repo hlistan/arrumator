@@ -14,7 +14,7 @@ struct Review: AsyncParsableCommand {
         func run() async throws {
             let runtime = try await options.runtime()
             let docs = try await runtime.services.documents.reviewQueue()
-            options.emit(docs) {
+            try options.emit(docs) {
                 docs.isEmpty ? "Nothing to review." : Terminal.table(docs.map { d in
                     ["#\(d.id ?? 0)", d.status.rawValue, d.filename, d.analysis?.problems.joined(separator: "; ") ?? ""]
                 })
@@ -91,18 +91,19 @@ struct Review: AsyncParsableCommand {
 /// What a command that changed a document prints: the document as it is now.
 func report(_ id: Int64, runtime: ArrumatorRuntime, options: GlobalOptions) async throws {
     guard let document = try await runtime.services.documents.document(id: id) else { throw ValidationError("No document \(id)") }
-    options.emit(document) { "#\(id) \(document.status.rawValue): \(document.path)" }
+    try options.emit(document) { "#\(id) \(document.status.rawValue): \(document.path)" }
 }
 
 struct Rebuild: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         abstract: "Rebuild the index from the archive's record files. Changes not yet written to them are written first; "
-            + "documents then have their text read again in the background of the app or `arrumatorcli run`.")
+            + "documents then have their text read again in the background of the app or `arrumatorcli run`. A record file that "
+            + "cannot be read stops it before anything changes, naming the file.")
     @OptionGroup var options: GlobalOptions
 
     func run() async throws {
-        let summary = try await options.runtime().records.rebuildIndex()
-        options.emit(summary) { summary.summary + ". \(summary.queued) documents queued to be read again." }
+        let summary = try await options.runtime().records.rebuild()
+        try options.emit(summary) { summary.summary + ". \(summary.queued) documents queued to be read again." }
     }
 }
 
@@ -115,7 +116,7 @@ struct Archive: AsyncParsableCommand {
         @OptionGroup var options: GlobalOptions
         func run() async throws {
             let summary = try await options.runtime().summary()
-            options.emit(summary) { Archive.describe(summary) }
+            try options.emit(summary) { Archive.describe(summary) }
         }
     }
 
@@ -123,12 +124,15 @@ struct Archive: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
             abstract: "File into another archive from now on. A folder that was an archive is opened as it was left.")
         @OptionGroup var options: GlobalOptions
-        @Argument(help: "The archive's folder; created if it does not exist.") var path: String
+        @Argument(help: "The archive's folder; made when it is not there and no index has held an archive in it, never in place of one that is away.") var path: String
         func run() async throws {
-            let next = try await options.runtime().switchArchive(to: path)
+            let switched = try await options.runtimeEvenIfUnread().switchArchive(to: path)
+            // Said on standard error, so the output stays one JSON document with --json.
+            if let unwritten = switched.unwritten { FileHandle.standardError.write(Data((unwritten.note + "\n").utf8)) }
+            let next = switched.runtime
             try await next.openArchive()
             let summary = next.summary()
-            options.emit(summary) { "Switched archives. A running app keeps its archive until it is restarted.\n" + Archive.describe(summary) }
+            try options.emit(summary) { "Switched archives. A running app keeps its archive until it is restarted.\n" + Archive.describe(summary) }
         }
     }
 

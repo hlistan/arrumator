@@ -23,7 +23,9 @@ extension Date {
 public enum DocumentStatus: String, Sendable, Codable, CaseIterable {
     case arrived, processing, filed, needsReview, failed
     /// A copy an earlier version filed beside the document it repeats (`duplicateOf`), as the archive's record files
-    /// still hold it. None is made now: an exact copy has its original read again in its place (`IngestCoordinator`).
+    /// still hold it; or a file in Incoming that was a document of its own until it was found an exact copy of
+    /// `duplicateOf` and went to the Trash. None is filed now: an exact copy has its original read again in its place
+    /// (`IngestCoordinator`).
     case duplicate
     case undone, held, missing
 
@@ -35,6 +37,10 @@ public enum DocumentStatus: String, Sendable, Codable, CaseIterable {
     /// Statuses of documents kept in the archive as themselves: what a search task finds, and what an exact copy is a
     /// copy of. A duplicate is a copy of one of them, and a document undone or missing is not in the archive.
     public static let inArchive: Set<DocumentStatus> = [.filed, .needsReview, .failed, .held]
+
+    /// Statuses of documents whose file is in the archive: those kept as themselves (`inArchive`) and the copies earlier
+    /// versions filed beside them.
+    static let withFileInArchive: Set<DocumentStatus> = inArchive.union([.duplicate])
 }
 
 public struct DocumentRecord: ArrumatorRecord, Identifiable, Hashable {
@@ -80,6 +86,14 @@ public struct DocumentRecord: ArrumatorRecord, Identifiable, Hashable {
     }
 
     public var url: URL { URL(fileURLWithPath: path) }
+    /// What its file was when it was last hashed, or nil when that was not recorded.
+    public var fingerprint: FileFingerprint? { inode == nil && fileMtime == nil ? nil : FileFingerprint(size: size, modified: fileMtime, inode: inode) }
+    /// Whether its file is still as it was last hashed, by size, modification time and identity on the volume; true when
+    /// that was not recorded, as for a document taken in from a record file.
+    public var isAsRecorded: Bool {
+        guard let fingerprint else { return true }
+        return (try? FileFingerprint.of(url))?.matches(fingerprint) ?? false
+    }
     public var filename: String { (path as NSString).lastPathComponent }
     public var analysis: DocumentAnalysis? { JSON.decode(DocumentAnalysis.self, from: analysisJson) }
     /// Nil while the document has no labels and has not been labelled; empty when the model found nothing worth a label.
@@ -120,6 +134,9 @@ public enum EventKind: String, Sendable, Codable, CaseIterable {
     case settingsChanged, ollamaState, appStarted, paused, resumed
     /// The index was rebuilt from the archive's record files.
     case rebuilt
+    /// A document was found in more than one place of the archive, and nothing told which is a copy
+    /// (`DocumentInTwoPlaces`).
+    case foundInTwoPlaces
     /// The user merged a label into another, on every document and in every reading from then on.
     case labelsMerged
     /// The user took a label off every document and does not want it given again.
@@ -165,7 +182,7 @@ public struct EventRecord: ArrumatorRecord, Identifiable, Hashable {
 /// the worker's live status (`IngestStatus.current`) says which. The rest are how it ended: `duplicate` for a file that
 /// was an exact copy of a document in the archive, which is read again in its place.
 public enum JobState: String, Sendable, Codable, CaseIterable {
-    case pending, hashing, extracting, analysing, filing, done, duplicate, needsReview, failed, held, cancelled
+    case pending, hashing, extracting, analysing, filing, done, duplicate, needsReview, failed, cancelled
 
     public var isActive: Bool { [.pending, .hashing, .extracting, .analysing, .filing].contains(self) }
 }
@@ -192,6 +209,10 @@ public struct JobRecord: ArrumatorRecord, Identifiable, Hashable {
     public var payloadJson: String
     public var createdAt: Date
     public var updatedAt: Date
+    /// The claim of the worker that has the job in hand (`JobClaims`), and its process as `ProcessTag` writes it; nil
+    /// for a job no worker has.
+    public var claim: String?
+    public var claimedBy: String?
     public mutating func didInsert(_ inserted: InsertionSuccess) { id = inserted.rowID }
 }
 

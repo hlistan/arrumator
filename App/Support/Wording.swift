@@ -1,4 +1,5 @@
 import ArrumatorCore
+import ArrumatorRuntime
 import Foundation
 
 /// How documents, what the model read them as, and events are put into words on screen. Every sentence, title and
@@ -43,6 +44,8 @@ enum Wording {
     static let setup = "Setup…"
     static let minimise = "Minimise"
     static let close = "Close"
+    /// The name of a card's close button, naming what it closes.
+    static func closeNamed(_ name: String) -> String { "Close “\(name)”" }
     static let editMenu = "Edit"
     static let undo = "Undo"
     static let redo = "Redo"
@@ -62,6 +65,10 @@ enum Wording {
     static let idle = "Idle"
     static let waitingForFolders = "Waiting for access to your folders"
     static let startingForFolders = "Starting: waiting for folder access"
+    /// Nothing is filed, as the archive's index could not be rebuilt from its record files.
+    static let archiveNotRead = "Not filing: reading the archive failed"
+    /// Nothing is filed, as the archive's folder is not there, as on a disk that is not connected.
+    static let archiveAway = "Not filing: the archive's folder is not there"
     static let waitingForOllama = "Waiting for Ollama"
 
     /// Why filing waits, such as low battery.
@@ -69,6 +76,51 @@ enum Wording {
 
     /// The stage a file is at, and the file.
     static func working(on file: String, stage: String) -> String { "\(stage): \(file)" }
+
+    /// Why nothing is filed (`RuntimeActivity.Holdup`): at the foot of the sidebar, or, `inMenuBar`, in the menu bar
+    /// popover's status line, which says the app is starting while it waits for the folders.
+    static func holdup(_ holdup: RuntimeActivity.Holdup, inMenuBar: Bool) -> String {
+        switch holdup {
+        case .waitingForFolders: inMenuBar ? startingForFolders : waitingForFolders
+        case .archiveNotRead: archiveNotRead
+        case .archiveAway: archiveAway
+        case .paused: paused
+        case let .power(reason): waiting(reason)
+        case let .ollama(state): state.summary
+        }
+    }
+
+    /// What the app is doing now (`RuntimeActivity.Now`), in the menu bar popover.
+    static func now(_ now: RuntimeActivity.Now) -> String {
+        switch now {
+        case let .held(holdup): self.holdup(holdup, inMenuBar: true)
+        case .waitingForOllama: waitingForOllama
+        case let .filing(path, stage): working(on: (path as NSString).lastPathComponent, stage: doing(stage))
+        case let .tasks(work): tasksWork(work)
+        case let .queued(count): queued(count)
+        case .idle: idle
+        }
+    }
+
+    /// Heads the main window when the app could not start, above why.
+    static let notStarted = "Arrumator could not start"
+    static let tryAgain = "Try Again"
+    /// The menu of the rest, at the sidebar's foot and in the menu bar popover.
+    static let moreActions = "More"
+    static let chooseAnotherArchive = "Choose Another Archive…"
+    /// What the main window says while the archive's folder is not there, naming it.
+    static func archiveAwayNotice(_ path: String) -> String {
+        "The archive at \(path) is not there, as on a disk that is not connected. Nothing is filed until it is back."
+    }
+
+    /// What a search task is at work on (`RuntimeActivity.TasksWork`).
+    static func tasksWork(_ work: RuntimeActivity.TasksWork) -> String {
+        switch work {
+        case let .readingRequest(model): readingRequest(with: model)
+        case .waitingForOllama: waitingForOllama
+        case let .answering(model): answeringQuestion(with: model)
+        }
+    }
 
     /// What is being done to a file at a stage, while it is: "Reading its text", not the funnel's "Read".
     static func doing(_ state: JobState) -> String {
@@ -78,7 +130,7 @@ enum Wording {
         case .extracting: "Reading its text"
         case .analysing: "Being read by the model"
         case .filing: "Filing"
-        case .done, .duplicate, .needsReview, .failed, .held, .cancelled: "Finishing"
+        case .done, .duplicate, .needsReview, .failed, .cancelled: "Finishing"
         }
     }
 
@@ -97,6 +149,15 @@ enum Wording {
 
     /// An action that failed, and why: "Rename: The file is locked."
     static func failure(_ action: String, _ reason: String) -> String { "\(action): \(reason)" }
+
+    /// Why an action failed, in the user's words: a change refused as the archive has not been read yet, as during
+    /// onboarding, says so; anything else as it says itself.
+    static func reason(_ error: any Error) -> String {
+        if case let RecordsError.notRebuilt(files) = error, files.isEmpty { return notReadYet }
+        return error.localizedDescription
+    }
+
+    static let notReadYet = "This can be changed once Arrumator has read your archive folder."
 
     static let readArchiveAction = "Reading the archive"
     static let switchArchivesAction = "Switch archives"
@@ -200,7 +261,7 @@ enum Wording {
                 return ([archiveFolder] + directory.dropFirst(root.count + 1).split(separator: "/").map(String.init)).joined(separator: pathSeparator)
             }
         }
-        if let incoming, directory == incoming.standardizedFileURL.path { return incomingFolder }
+        if let incoming, document.url.deletingLastPathComponent().folderOnDisk == incoming.folderOnDisk { return incomingFolder }
         return directory
     }
 
@@ -247,6 +308,9 @@ enum Wording {
         }
         return nil
     }
+
+    /// Beneath what keeps a document left in Incoming waiting: it was not filed, and what to do.
+    static let notFiledAdvice = "It was not filed and stays in Incoming. Read Again tries it again once what kept it there is mended."
 
     /// Said once Read Again has put a document back in the queue.
     static let readAgainQueued = "Waiting to be read again, after the files already in Incoming."

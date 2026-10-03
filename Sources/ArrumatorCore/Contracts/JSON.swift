@@ -1,5 +1,16 @@
 import Foundation
 
+public enum JSONError: Error, LocalizedError, Equatable {
+    /// A value of the named type could not be written as JSON, for the reason given.
+    case notEncodable(String, String)
+
+    public var errorDescription: String? {
+        switch self {
+        case let .notEncodable(type, why): "A \(type) could not be written as JSON: \(why)"
+        }
+    }
+}
+
 public enum JSON {
     public static let encoder: JSONEncoder = {
         let e = JSONEncoder()
@@ -21,9 +32,14 @@ public enum JSON {
         return d
     }()
 
-    public static func string(_ value: some Encodable, pretty: Bool = false) -> String {
-        guard let data = try? (pretty ? prettyEncoder : encoder).encode(value) else { return "null" }
-        return String(decoding: data, as: UTF8.self)
+    /// `value` as JSON. A value JSON cannot hold, such as a number that is not finite, throws `JSONError.notEncodable`,
+    /// naming its type and why, never its contents: nothing is stored in its place, as "null" would read back as no value.
+    public static func string(_ value: some Encodable, pretty: Bool = false) throws -> String {
+        do {
+            return String(decoding: try (pretty ? prettyEncoder : encoder).encode(value), as: UTF8.self)
+        } catch {
+            throw JSONError.notEncodable(String(describing: type(of: value)), String(describing: error))
+        }
     }
 
     /// Decodes JSON the app stored itself; nil for none. Stored JSON that cannot be read is logged with its type and

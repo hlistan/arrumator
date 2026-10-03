@@ -33,14 +33,19 @@ public struct SearchTaskChange: Sendable, Hashable {
 
 /// What the user does with search tasks: ask for documents in their own words, change what a task asks for or how it
 /// arranges them, add documents to its set or take them out, export the set, ask again, remove the task. Each change is
-/// made in one transaction with its History event, and reaches the archive's `System/_tasks.md`.
+/// made in one transaction with its History event, and reaches the archive's `System/_tasks.md`. A change that asks for
+/// another reading, and removing the task, stop the reading in hand at once, and removing it stops answering its
+/// questions, as the model reads one thing at a time and would otherwise go on for what is kept of nothing.
 public struct SearchTaskActions: Sendable {
     public let services: PipelineServices
     public let queue: SearchTaskQueue
+    /// The queue answering questions about tasks' documents, told when a task is removed.
+    public let conversations: TaskConversationQueue
 
-    public init(services: PipelineServices, queue: SearchTaskQueue) {
+    public init(services: PipelineServices, queue: SearchTaskQueue, conversations: TaskConversationQueue) {
         self.services = services
         self.queue = queue
+        self.conversations = conversations
     }
 
     public var store: SearchTaskStore { SearchTaskStore(database: services.database, config: services.config.tasks, time: services.time) }
@@ -74,7 +79,8 @@ public struct SearchTaskActions: Sendable {
     }
 
     /// Renames the task, arranges its set otherwise, or gives it another prompt, effort or profile, each of which sends it
-    /// back into the queue to be read again. A profile the settings do not list is refused, and nothing is changed.
+    /// back into the queue to be read again, the reading in hand stopped. A profile the settings do not list is refused,
+    /// and nothing is changed.
     @discardableResult
     public func update(_ id: Int64, _ change: SearchTaskChange) async throws -> SearchTask {
         let prompt = try change.prompt.map(Self.prompt)
@@ -88,7 +94,9 @@ public struct SearchTaskActions: Sendable {
             var changed: [String] = []
             if let title = change.title.map(DocumentLabel.oneLine) {
                 let kept = title.isEmpty ? nil : DocumentLabel.shortened(title, to: config.maxTitleChars)
-                if kept != record.title { record.title = kept; changed.append("name") }
+                // The name the task goes by now, as a field left as it was gives it back, is no change: it neither
+                // becomes the user's in place of the model's, nor is recorded.
+                if kept != record.title, kept != SearchTaskStore.name(record, config: config) { record.title = kept; changed.append("name") }
             }
             var reread: [String] = []
             if let prompt, prompt != record.prompt {
@@ -106,6 +114,7 @@ public struct SearchTaskActions: Sendable {
             let requeued = !reread.isEmpty
             if requeued {
                 record.state = .queued
+                record.worker = nil
                 record.problem = nil
                 record.nextRunAt = now
                 changed += reread
@@ -113,7 +122,7 @@ public struct SearchTaskActions: Sendable {
             if let grouping = change.grouping {
                 let json: String? = switch grouping {
                 case .asAsked: nil
-                case let .by(kinds): JSON.string(kinds)
+                case let .by(kinds): try JSON.string(kinds)
                 }
                 if json != record.groupingJson { record.groupingJson = json; changed.append("arrangement") }
             }
@@ -126,7 +135,10 @@ public struct SearchTaskActions: Sendable {
                                     payload: TaskEventPayload(task: id, documents: nil, plan: nil))
             return requeued
         }
-        if requeued { await queue.wake() }
+        if requeued {
+            await queue.supersede(id)
+            await queue.wake()
+        }
         return try await task(id)
     }
 
@@ -176,12 +188,13 @@ public struct SearchTaskActions: Sendable {
         }
     }
 
-    /// Adds every document in the archive that has all these labels, as the sidebar narrows them down
+    /// Adds every document in the archive, its file there, that has all these labels, as the sidebar narrows them down
     /// (`DocumentFilter.labels`): at most `tasks.maxDocuments`, the newest by their own date, as a task finds them
     /// (`SearchPlanMatcher`). Returns the documents that were not in the set before.
     @discardableResult
     public func add(_ id: Int64, labelled labels: [DocumentLabel]) async throws -> [Int64] {
-        let documents = try await services.documents.list(DocumentFilter(statuses: DocumentStatus.inArchive, labels: labels),
+        let archive = services.archive
+        let documents = try await services.documents.list(DocumentFilter(statuses: DocumentStatus.inArchive, labels: labels, within: archive),
                                                           order: .documentDate, limit: config.maxDocuments)
         return try await add(id, documents: documents.compactMap(\.id))
     }
@@ -209,8 +222,9 @@ public struct SearchTaskActions: Sendable {
         }
     }
 
-    /// Removes the task with its set and the record of its exports. What it exported stays where it was put: the copies
-    /// are the user's. The queue no longer counts it among the tasks waiting.
+    /// Removes the task with its set, its conversation and the record of its exports. What it exported stays where it was
+    /// put: the copies are the user's. Its reading, or the answer to its question, in hand stops; the queue no longer
+    /// counts it among the tasks waiting.
     public func delete(_ id: Int64) async throws {
         let now = services.time.now()
         let config = config
@@ -220,7 +234,10 @@ public struct SearchTaskActions: Sendable {
             try HistoryStore.insert(db, .taskRemoved, at: now, actor: .user, summary: "Removed “\(SearchTaskStore.name(record, config: config))”",
                                     payload: TaskEventPayload(task: id, documents: nil, plan: record.plan))
         }
+        await queue.supersede(id)
+        await conversations.forget(task: id)
         await queue.wake()
+        await conversations.wake()
     }
 
     /// Copies the task's set into a new folder in `folder`, named after the task, in folders of folders as its set is
@@ -229,15 +246,14 @@ public struct SearchTaskActions: Sendable {
     public func export(_ id: Int64, to folder: URL, format: ExportFormat) async throws -> SearchTaskExport {
         guard let detail = try await store.detail(id: id) else { throw SearchTaskError.taskNotFound(id) }
         guard detail.tree.count > 0 else { throw SearchTaskError.nothingToExport(id) }
-        let settings = await services.settings.current
-        let exporter = SearchTaskExporter(naming: services.config.naming, tasks: config,
-                                          excluded: [settings.archiveURL, settings.incomingURL])
+        let incoming = await services.settings.current.incomingURL
+        let exporter = SearchTaskExporter(builder: services.filer.placer.builder, tasks: config, excluded: [services.archive, incoming])
         let (path, manifest) = try exporter.export(detail, into: folder, format: format)
         let now = services.time.now()
         let config = config
         return try await services.database.writer.write { db in
             guard let record = try SearchTaskRecord.fetchOne(db, key: id) else { throw SearchTaskError.taskNotFound(id) }
-            var export = SearchTaskExportRecord(id: nil, taskId: id, at: now, format: format, path: path.path, manifestJson: JSON.string(manifest))
+            var export = SearchTaskExportRecord(id: nil, taskId: id, at: now, format: format, path: path.path, manifestJson: try JSON.string(manifest))
             try export.insert(db)
             try HistoryStore.insert(db, .taskExported, at: now, actor: .user,
                                     summary: "Exported \(Format.count(manifest.files.count, "document")) of “\(SearchTaskStore.name(record, config: config))” "

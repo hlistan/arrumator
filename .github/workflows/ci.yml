@@ -1,4 +1,4 @@
-# Checks every pull request and every merge to main (release.yml calls this workflow). How much it builds follows
+# Checks every pull request and whatever release.yml is about to release. How much it builds follows
 # scripts/change-scope.sh: a change to code or to what builds and tests it is built and tested in full, and any other
 # change gets the static checks and the documentation check alone.
 name: CI
@@ -6,6 +6,15 @@ name: CI
 on:
   pull_request:
   workflow_call:
+    inputs:
+      base:
+        description: The commit the change is measured from; release.yml passes the last release's tag.
+        type: string
+        required: true
+      keep-release-build:
+        description: Keep what scripts/build-release.sh staged, as the artifact `release-build`, for release.yml to sign.
+        type: boolean
+        required: true
     outputs:
       scope:
         description: What the change needs, from scripts/change-scope.sh; release.yml releases only `release`.
@@ -16,13 +25,19 @@ permissions: {}
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  # A newer push to a pull request makes the older run moot; a merge to main is always checked in full.
+  # A newer push to a pull request makes the older run moot; a release's check is always finished.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # One toolchain for every macOS job, named by path on the runner image (docs/releasing.md › Tools and runners).
+  DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
+  HOMEBREW_NO_AUTO_UPDATE: "1"
 
 jobs:
   scope:
     name: Scope
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
     permissions:
       contents: read
     outputs:
@@ -37,32 +52,47 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           PR_BASE: ${{ github.event.pull_request.base.sha }}
-          BEFORE: ${{ github.event.before }}
+          CALLER_BASE: ${{ inputs.base }}
         run: |
-          # A run with nothing to compare with (a manual run, a new or rewritten branch) is checked in full.
+          # A run with nothing to compare with (a manual run, a first release) is checked in full.
           case $EVENT in
             pull_request) base=$PR_BASE ;;
-            push) base=$BEFORE ;;
-            *) base="" ;;
+            *) base=$CALLER_BASE ;;
           esac
-          if [ -n "$base" ]; then scope=$(scripts/change-scope.sh "$base" HEAD); else scope=release; fi
+          if [ -z "$base" ]; then
+            scope=release
+          else
+            # A pull request is scoped by main's copy of the script, never its own, so no change lowers its own checks.
+            # What release.yml checks is main itself, whose copy is the one main holds.
+            if [ "$EVENT" = pull_request ]; then
+              git show "$base:scripts/change-scope.sh" > "$RUNNER_TEMP/change-scope.sh"
+            else
+              cp scripts/change-scope.sh "$RUNNER_TEMP/change-scope.sh"
+            fi
+            scope=$(sh "$RUNNER_TEMP/change-scope.sh" "$base" HEAD)
+          fi
           echo "scope=$scope" >> "$GITHUB_OUTPUT"
-          echo "Scope: $scope" >> "$GITHUB_STEP_SUMMARY"
+          echo "Scope: $scope (from ${base:-nothing to compare with})" >> "$GITHUB_STEP_SUMMARY"
 
   lint:
     name: Static checks
-    runs-on: macos-26
+    runs-on: xcode-27
+    timeout-minutes: 20
     permissions:
       contents: read
     steps:
+      - name: The pinned Xcode is on the runner
+        run: |
+          if [ ! -d "$DEVELOPER_DIR" ]; then
+            echo "::error::$DEVELOPER_DIR is not on this runner image; choose an Xcode it has (docs/releasing.md › Tools and runners)."
+            exit 1
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # gitleaks reads every commit
           persist-credentials: false
-      - name: Install the tools in Brewfile
-        env:
-          HOMEBREW_NO_AUTO_UPDATE: "1"
-        run: brew bundle --file Brewfile
+      - name: Install the pinned tools
+        run: scripts/tools.sh
       - name: Lint, guideline gates and secrets
         env:
           GH_TOKEN: ${{ github.token }} # lets zizmor run its online audits
@@ -71,51 +101,66 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           PR_BASE: ${{ github.event.pull_request.base.sha }}
-          BEFORE: ${{ github.event.before }}
+          CALLER_BASE: ${{ inputs.base }}
         run: |
           case $EVENT in
             pull_request) scripts/check-secrets.sh --range "$PR_BASE..HEAD" ;;
-            push)
-              # A new branch has no previous head, and a rewritten one a previous head the clone does not have:
-              # both check everything they publish.
-              if [ -z "$BEFORE" ] || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
-                scripts/check-secrets.sh --range HEAD
+            *)
+              # Since the last release when there is one; everything on a first release or a manual run.
+              if [ -n "$CALLER_BASE" ] && git cat-file -e "$CALLER_BASE^{commit}" 2>/dev/null; then
+                scripts/check-secrets.sh --range "$CALLER_BASE..HEAD"
               else
-                scripts/check-secrets.sh --range "$BEFORE..HEAD"
+                scripts/check-secrets.sh --range HEAD
               fi
               ;;
-            *) echo "No new commits to check on $EVENT; the static checks scanned the whole history." ;;
           esac
 
   build:
     # The ruleset requires this check by name (docs/repository-settings.md), so it always reports: for a change scoped
     # `checks` it builds only the command the documentation check reads. Unless the scope is plainly `checks`, even
-    # when the Scope job failed, it builds and tests in full.
+    # when the Scope job failed, it builds and tests in full, the release build included.
     name: Build, test and look for unused code
     needs: scope
     if: ${{ !cancelled() }}
-    # Xcode 27 (Swift 6.4) is on its own image; macos-26 carries Xcode 26 only.
     runs-on: xcode-27
+    timeout-minutes: 90
     permissions:
       contents: read
     env:
       SCOPE: ${{ needs.scope.outputs.scope }}
     steps:
+      - name: The pinned Xcode is on the runner
+        run: |
+          if [ ! -d "$DEVELOPER_DIR" ]; then
+            echo "::error::$DEVELOPER_DIR is not on this runner image; choose an Xcode it has (docs/releasing.md › Tools and runners)."
+            exit 1
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0 # the release build's patch number counts the commits
           persist-credentials: false
       - name: Install XcodeGen and Periphery
         if: env.SCOPE != 'checks'
-        env:
-          HOMEBREW_NO_AUTO_UPDATE: "1"
-        run: brew install xcodegen periphery
+        run: scripts/tools.sh xcodegen periphery
       - name: Toolchain
         run: |
+          echo "Runner image $ImageOS $ImageVersion"
           xcodebuild -version
           swift --version
-      - name: Build, test, build the app, find unused code
+      - name: Build, test, build the release, find unused code
         if: env.SCOPE != 'checks'
         run: scripts/verify.sh --app --no-lint
       - name: The documentation check alone, as the change touches no code
         if: env.SCOPE == 'checks'
         run: scripts/verify.sh --checks-only --no-lint
+      - name: Keep the release build for signing
+        if: inputs.keep-release-build && env.SCOPE == 'release'
+        run: ditto -c -k build/Release/stage "$RUNNER_TEMP/release-build.zip"
+      - name: Hand the release build to release.yml
+        if: inputs.keep-release-build && env.SCOPE == 'release'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-build
+          path: ${{ runner.temp }}/release-build.zip
+          if-no-files-found: error
+          retention-days: 1

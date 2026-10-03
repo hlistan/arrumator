@@ -114,5 +114,37 @@ gh api repos/hlistan/arrumator/rules/branches/main --jq '.[].type'
 The first shows squash merging alone allowed and branch deletion on; the second lists `deletion`,
 `non_fast_forward`, `pull_request` and `required_status_checks`.
 
-The signing secrets for releases are set elsewhere, in the `release` environment, as
-[Continuous integration and releases](releasing.md#signing) describes.
+## The `release` environment
+
+The Sign and notarize job of a release is the only job that names the `release` environment, which holds the signing
+secrets and the variable `RELEASE_SIGNING` that says how a release is signed
+([Continuous integration and releases](releasing.md#signing)). A workflow on any branch can name an environment, so
+the environment admits `main` alone:
+
+| Setting | Value |
+|---|---|
+| Deployment branches and tags | Selected branches and tags: `main`. |
+| Variable `RELEASE_SIGNING` | `developer-id`, or `ad-hoc` while there is no Developer ID. Unset, every release stops. |
+| Secrets | The six that [Signing](releasing.md#signing) lists, when `RELEASE_SIGNING` is `developer-id`. |
+
+### Setting it from a terminal
+
+```bash
+gh api --method PUT repos/hlistan/arrumator/environments/release --input - <<'JSON'
+{"deployment_branch_policy": {"protected_branches": false, "custom_branch_policies": true}}
+JSON
+gh api --method POST repos/hlistan/arrumator/environments/release/deployment-branch-policies -f name=main -f type=branch
+gh variable set RELEASE_SIGNING --env release --body ad-hoc --repo hlistan/arrumator
+```
+
+The secrets are set in the browser, under Settings › Environments › `release`, or with
+`gh secret set <name> --env release --repo hlistan/arrumator`, which reads the value from the terminal.
+
+### Checking it
+
+```bash
+gh api repos/hlistan/arrumator/environments/release/deployment-branch-policies --jq '.branch_policies[].name'
+gh variable list --env release --repo hlistan/arrumator
+```
+
+The first lists `main` alone; the second shows `RELEASE_SIGNING`.

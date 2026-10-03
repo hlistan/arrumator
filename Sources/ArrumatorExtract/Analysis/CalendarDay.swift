@@ -16,12 +16,11 @@ public struct CalendarDay: Sendable, Hashable, Encodable, CustomStringConvertibl
         self.day = day
     }
 
-    /// The day `date` falls on in `calendar`'s time zone.
-    public init(date: Date, calendar: Calendar) {
-        let components = calendar.dateComponents([.year, .month, .day], from: date)
-        year = components.year ?? 0
-        month = components.month ?? 0
-        day = components.day ?? 0
+    /// A day a Gregorian calendar gave, which needs no check.
+    fileprivate init(reckoned year: Int, month: Int, day: Int) {
+        self.year = year
+        self.month = month
+        self.day = day
     }
 
     /// ISO `YYYY-MM-DD`.
@@ -40,6 +39,30 @@ public struct CalendarDay: Sendable, Hashable, Encodable, CustomStringConvertibl
     }
 
     private static let gregorian = Calendar(identifier: .gregorian)
+}
+
+/// The Gregorian calendar in one time zone, which every day extraction reads, weighs or writes is reckoned in. ISO 8601
+/// days, and the dates the model is shown and gives back, are Gregorian, whatever calendar the Mac shows: on a Mac set to
+/// the Buddhist calendar, the system's own calendar puts 2026 in 2569. The registry makes one for each file it reads,
+/// in the Mac's time zone at that moment.
+public struct GregorianCalendar: Sendable {
+    private let calendar: Calendar
+
+    public init(timeZone: TimeZone) {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        self.calendar = calendar
+    }
+
+    /// The day `date` falls on in this calendar's time zone.
+    public func day(of date: Date) -> CalendarDay {
+        CalendarDay(reckoned: year(of: date), month: calendar.component(.month, from: date),
+                    day: calendar.component(.day, from: date))
+    }
+
+    public func year(of date: Date) -> Int {
+        calendar.component(.year, from: date)
+    }
 }
 
 /// A date read from file metadata (EXIF, PDF info dictionary, media capture) rather than from the text.

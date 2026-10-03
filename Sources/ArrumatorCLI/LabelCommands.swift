@@ -60,12 +60,11 @@ struct Labels: AsyncParsableCommand {
             let runtime = try await options.runtime()
             let id = try await resolveDocument(document, runtime: runtime)
             if !(add.isEmpty && remove.isEmpty) {
-                let removed = Set(try remove.map(Labels.label).compactMap { DocumentLabel.normalized($0.value, kind: $0.kind) })
-                let current = try await runtime.services.documents.document(id: id)?.labels ?? []
-                try await runtime.review.edit(id, fileName: nil, labels: current.filter { !removed.contains($0) } + (try add.map(Labels.label)))
+                try await runtime.review.edit(id, fileName: nil,
+                                              labels: LabelEdit(adding: try add.map(Labels.label), removing: try remove.map(Labels.label)))
             }
             guard let row = try await Labels.rows([id], runtime: runtime).first else { return }
-            options.emit(row) {
+            try options.emit(row) {
                 let notYet = "Not labelled yet; `arrumatorcli review retry \(row.id)` reads it again."
                 guard let labels = row.labels else { return "\(row.path)\n\(notYet)" }
                 return row.path + "\n" + Terminal.labelTable(labels, indent: 2) + (row.labelled ? "" : "\n" + notYet)
@@ -85,7 +84,7 @@ struct Labels: AsyncParsableCommand {
             for id in ids { try await runtime.review.retry(id) }
             await runtime.coordinator.drain()
             let rows = try await Labels.rows(ids, runtime: runtime)
-            options.emit(rows) {
+            try options.emit(rows) {
                 (rows.map { "#\($0.id) \($0.path)\n    \(Terminal.labels($0.labels, labelled: $0.labelled))" }
                     + ["Labelled \(rows.filter(\.labelled).count) of \(Format.count(rows.count, "document"))"])
                     .joined(separator: "\n")
@@ -103,7 +102,7 @@ struct Labels: AsyncParsableCommand {
             let usage = try await runtime.services.labels.usage()
             let kinds = kind.map { [$0] } ?? LabelKind.allCases
             let listed = kinds.flatMap { usage[$0] ?? [] }
-            options.emit(listed) {
+            try options.emit(listed) {
                 listed.isEmpty ? "No labels yet." : Terminal.table(listed.map { [$0.label.kind.rawValue, Terminal.label($0.label),
                                                                                  Format.count($0.documents, "document")] })
             }
@@ -116,7 +115,7 @@ struct Labels: AsyncParsableCommand {
         @OptionGroup var options: GlobalOptions
         @Argument(help: "Labels, as kind=value, such as type=invoice sender=EDP; none lists every document and label.")
         var labels: [String] = []
-        @Option(help: "List only the labels written with this in them, as the sidebar's search does; the documents stay.")
+        @Option(help: "List only the labels written with this in them, as the sidebar's filter does; the documents stay.")
         var matching = ""
 
         struct Scope: Encodable {
@@ -140,7 +139,7 @@ struct Labels: AsyncParsableCommand {
             let scope = Scope(selection: selection,
                               documents: documents.compactMap { d in d.id.map { Row(d, id: $0) } },
                               labels: usage.listed(groupedByKind: grouped))
-            options.emit(scope) {
+            try options.emit(scope) {
                 guard !scope.documents.isEmpty else { return "No document has every one of these labels." }
                 return (scope.documents.map { "#\($0.id) \($0.path)\n    \(Terminal.labels($0.labels, labelled: $0.labelled))" }
                     + ["", Format.count(scope.documents.count, "document"), ""]
@@ -153,14 +152,15 @@ struct Labels: AsyncParsableCommand {
 
     struct Similar: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
-            abstract: "Labels written so alike they may be one, each with the label a merge would keep, the most alike first.")
+            abstract: "Labels written so alike, or with the same digits grouped otherwise, that they may be one, each with the label a merge would keep, the most alike first.")
         @OptionGroup var options: GlobalOptions
 
         func run() async throws {
             let suggestions = try await options.runtime().services.labels.suggestions()
-            options.emit(suggestions) {
+            try options.emit(suggestions) {
                 suggestions.isEmpty ? "No labels look alike." : Terminal.table(suggestions.map {
-                    [$0.kind.rawValue, "“\($0.value)”", "→ “\($0.into)”", String(format: "%.2f", $0.similarity)]
+                    [$0.kind.rawValue, "“\($0.value)”", "→ “\($0.into)”", String(format: "%.2f", $0.similarity),
+                     $0.reason == .sameDigitsGroupedOtherwise ? "same digits, grouped otherwise" : ""]
                 })
             }
         }
@@ -177,7 +177,7 @@ struct Labels: AsyncParsableCommand {
 
         func run() async throws {
             let outcome = try await options.runtime().labels.merge(try Labels.label(label), into: into)
-            options.emit(outcome) { Terminal.outcome(outcome) }
+            try options.emit(outcome) { Terminal.outcome(outcome) }
         }
     }
 
@@ -191,7 +191,7 @@ struct Labels: AsyncParsableCommand {
 
         func run() async throws {
             let outcome = try await options.runtime().labels.ignore(try Labels.label(label))
-            options.emit(outcome) { Terminal.outcome(outcome) }
+            try options.emit(outcome) { Terminal.outcome(outcome) }
         }
     }
 
@@ -206,7 +206,7 @@ struct Labels: AsyncParsableCommand {
 
         func run() async throws {
             let outcome = try await options.runtime().labels.keepApart(try Labels.label(label), from: from)
-            options.emit(outcome) { Terminal.outcome(outcome) }
+            try options.emit(outcome) { Terminal.outcome(outcome) }
         }
     }
 
@@ -216,7 +216,7 @@ struct Labels: AsyncParsableCommand {
 
         func run() async throws {
             let rules = try await options.runtime().services.labels.rules()
-            options.emit(rules) {
+            try options.emit(rules) {
                 rules.isEmpty ? "No rules about labels yet." : Terminal.table(rules.map { ["#\($0.id ?? 0)", $0.summary] })
             }
         }
@@ -230,7 +230,7 @@ struct Labels: AsyncParsableCommand {
 
         func run() async throws {
             let outcome = try await options.runtime().labels.forget(rule: rule)
-            options.emit(outcome) { "Forgot rule #\(rule): \(outcome.rule.summary)" }
+            try options.emit(outcome) { "Forgot rule #\(rule): \(outcome.rule.summary)" }
         }
     }
 }

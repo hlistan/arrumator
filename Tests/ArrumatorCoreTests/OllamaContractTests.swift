@@ -92,13 +92,13 @@ import Testing
         }
     }
 
-    @Test func thinkIsSentAsASwitchOrALevelAndLeftOutWhenUnset() {
+    @Test func thinkIsSentAsASwitchOrALevelAndLeftOutWhenUnset() throws {
         func body(_ think: OllamaThink?) -> String { OllamaChatRequest.sample(think: think).body.serialized() }
         #expect(body(false).contains(#""think":false"#), "a model is switched off as Ollama takes it, with false")
         #expect(body(true).contains(#""think":true"#), "and on with true")
         #expect(body("high").contains(#""think":"high""#), "a level goes by its name")
         #expect(!body(nil).contains(#""think""#), "nothing to send leaves the key out, so the model thinks as it does by default")
-        #expect(JSON.string([false, true, "high"] as [OllamaThink]) == #"[false,true,"high"]"#,
+        #expect(try JSON.string([false, true, "high"] as [OllamaThink]) == #"[false,true,"high"]"#,
                 "a trace records what was sent as the request carried it")
     }
 
@@ -147,7 +147,7 @@ import Testing
         ]
         var sofar: [OllamaChatResponse] = []
         for line in lines {
-            let chunk = try OllamaClient.chatChunk(line, model: "qwen3.5:9b")
+            let chunk = try OllamaClient.chatChunk(Data(line.utf8), model: "qwen3.5:9b")
             sofar.append(sofar.last.map { $0.continued(by: chunk) } ?? chunk)
         }
         #expect(sofar[1].message.thinking == "Sum them." && sofar[1].message.content.isEmpty && sofar[1].done == false,
@@ -158,33 +158,34 @@ import Testing
                 "and the last line ends it with its counters, which reach the trace")
         #expect(throws: OllamaError.answerFailed(model: "qwen3.5:9b", message: "model runner has unexpectedly stopped"),
                 "an error line ends the answer with it, named as such") {
-            try OllamaClient.chatChunk(#"{"error":"model runner has unexpectedly stopped"}"#, model: "qwen3.5:9b")
+            try OllamaClient.chatChunk(Data(#"{"error":"model runner has unexpectedly stopped"}"#.utf8), model: "qwen3.5:9b")
         }
         #expect(!OllamaError.answerFailed(model: "x", message: "y").isTransient, "and it is not asked again behind the user's back")
-        #expect(throws: OllamaError.self, "a line that is no answer is no answer") { try OllamaClient.chatChunk("not json", model: "m") }
+        #expect("a line that is no answer is no answer") { try OllamaClient.chatChunk(Data("not json".utf8), model: "m") } throws: { error in
+            if case .decoding = error as? OllamaError { true } else { false }
+        }
         var streamed = OllamaChatRequest.sample(think: nil)
         streamed.stream = true
         #expect(streamed.body.serialized().contains(#""stream":true"#), "a request streamed says so")
     }
 
     @Test func theGateStreamsTheAnswerAsItGrowsAndAgainFromItsStartWhenItIsAskedAgain() async throws {
-        let away = Mutex(true)
-        let mock = MockOllama { _ in
-            // The server is away the first time it is asked, and answers the next.
-            if away.withLock({ wasAway in defer { wasAway = false }; return wasAway }) { throw OllamaError.unreachable("not yet") }
-            return "Duas faturas somam 72 EUR"
-        }
+        let mock = MockOllama { _ in "Duas faturas somam 72 EUR" }
+        // The server goes away two words into the first answer, and answers the next whole.
+        await mock.failNextStream(afterWords: 2, with: OllamaError.unreachable("gone"))
         let gate = InferenceGate(api: mock, retryDelays: [1], time: TestTime(.advances))
         let seen = Mutex<[String]>([])
         let whole = try await gate.chat(.sample(think: nil)) { sofar in seen.withLock { $0.append(sofar.message.content) } }
         #expect(whole.message.content == "Duas faturas somam 72 EUR" && whole.done == true, "the whole answer comes back")
-        #expect(seen.withLock { $0 } == ["Duas ", "Duas faturas ", "Duas faturas somam ", "Duas faturas somam 72 ", "Duas faturas somam 72 EUR"],
-                "each time it grew, the answer so far was given")
-        #expect(await mock.chatCount == 2, "after the server came back, asked again from its start")
+        #expect(seen.withLock { $0 } == ["Duas ", "Duas faturas ",
+                                         "Duas ", "Duas faturas ", "Duas faturas somam ", "Duas faturas somam 72 ", "Duas faturas somam 72 EUR"],
+                "each time it grew, the answer so far was given, and once the server was back, from its start, never after what was lost")
+        #expect(await mock.chatCount == 2, "after the server came back, asked again")
     }
 
     /// A server that cannot be reached, whatever is asked of it.
     struct AwayServer: OllamaAPI {
+        var baseURL: URL { MockOllama.server }
         func version() async throws -> String { throw OllamaError.unreachable("Could not connect to the server.") }
         func tags() async throws -> [OllamaModelInfo] { throw OllamaError.unreachable("down") }
         func show(model: String) async throws -> OllamaShowResponse { throw OllamaError.unreachable("down") }
@@ -205,24 +206,47 @@ import Testing
         #expect(state.summary == "Ollama at 192.168.1.254 cannot be reached", "and that is what the app says")
     }
 
+    /// A server whose every request a stop cuts off, as `OllamaClient` throws for it.
+    struct CutOffServer: OllamaAPI {
+        var baseURL: URL { MockOllama.server }
+        func version() async throws -> String { throw CancellationError() }
+        func tags() async throws -> [OllamaModelInfo] { throw CancellationError() }
+        func show(model: String) async throws -> OllamaShowResponse { throw CancellationError() }
+        func chat(_ request: OllamaChatRequest, partial: (@Sendable (OllamaChatResponse) async -> Void)?) async throws -> OllamaChatResponse {
+            throw CancellationError()
+        }
+        func embed(_ request: OllamaEmbedRequest) async throws -> OllamaEmbedResponse { throw CancellationError() }
+        func pull(model: String) -> AsyncThrowingStream<OllamaPullProgress, any Error> { AsyncThrowingStream { $0.finish() } }
+    }
+
+    @Test func aCheckAStopCutsOffLearnsNothingOfTheServer() async throws {
+        let config = try PipelineConfig.bundledDefaults().ollama
+        let address = try #require(URL(string: "http://127.0.0.1:11434"))
+        let lifecycle = OllamaLifecycle(api: CutOffServer(), config: config, management: .external, binaryOverride: nil, address: address,
+                                        time: TestTime(.advances))
+        let before = await lifecycle.state
+        #expect(await lifecycle.check() == before && before == .unknown,
+                "a request the stop cut off says nothing of whether Ollama runs, so it is not said to be stopped, which would start it")
+    }
+
     @Test func aDownloadReportsProgressAndEndsOnTheErrorItStreams() throws {
-        let pulling = try OllamaClient.progress(#"{"status":"pulling 6a0746a1ec1a","digest":"6a0746a1ec1a","total":4000,"completed":1000}"#,
+        let pulling = try OllamaClient.progress(Data(#"{"status":"pulling 6a0746a1ec1a","digest":"6a0746a1ec1a","total":4000,"completed":1000}"#.utf8),
                                                 model: "bge-m3")
         #expect(pulling.fraction == 0.25, "Settings shows how far the download is")
         #expect(throws: OllamaError.pullFailed(model: "bge-m3", message: "pull model manifest: file does not exist"),
                 "an error line is a failed download, named as such, not a server error to retry") {
-            try OllamaClient.progress(#"{"error":"pull model manifest: file does not exist"}"#, model: "bge-m3")
+            try OllamaClient.progress(Data(#"{"error":"pull model manifest: file does not exist"}"#.utf8), model: "bge-m3")
         }
         #expect(!OllamaError.pullFailed(model: "x", message: "y").isTransient, "a failed download is not retried behind the user's back")
     }
 
     @Test func everyFailureBecomesTheErrorThePipelineActsOn() throws {
-        #expect(OllamaClient.failure(try response(200), body: "{}", model: "m") == nil, "success is no failure")
-        #expect(OllamaClient.failure(try response(404), body: #"{"error":"model 'm' not found"}"#, model: "m") == .modelNotFound("m"),
+        #expect(OllamaClient.failure(try response(200), body: "{}", endpoint: .chat, model: "m") == nil, "success is no failure")
+        #expect(OllamaClient.failure(try response(404), body: #"{"error":"model 'm' not found"}"#, endpoint: .chat, model: "m") == .modelNotFound("m"),
                 "a model Ollama does not have holds the document until it is downloaded")
-        let busy = OllamaClient.failure(try response(503), body: "busy", model: "m")
+        let busy = OllamaClient.failure(try response(503), body: "busy", endpoint: .chat, model: "m")
         #expect(busy == .http(status: 503, body: "busy") && busy?.isTransient == true, "a server error is retried with backoff")
-        let bad = OllamaClient.failure(try response(400), body: "bad", model: "m")
+        let bad = OllamaClient.failure(try response(400), body: "bad", endpoint: .chat, model: "m")
         #expect(bad == .http(status: 400, body: "bad") && bad?.isTransient == false, "a bad request is not")
         #expect(OllamaClient.map(URLError(.timedOut)) as? OllamaError == .timeout("request"), "a timeout keeps the document waiting")
         #expect(OllamaClient.map(URLError(.cannotConnectToHost)) as? OllamaError
@@ -246,7 +270,7 @@ import Testing
         #expect(await slow.chatCount == 2 + delays.count, "is asked again after each of ollama.retryDelays, as a server slow for a while may answer")
         let away = MockOllama { _ in throw OllamaError.unreachable("connection refused") }
         let waiting = InferenceGate(api: away, retryDelays: delays, time: TestTime(.advances))
-        await #expect(throws: OllamaError.self, "a server that cannot be reached") { try await waiting.chat(own) }
+        await #expect(throws: OllamaError.unreachable("connection refused"), "a server that cannot be reached") { try await waiting.chat(own) }
         #expect(await away.chatCount == 1 + delays.count, "is asked again whatever time the request has of its own")
         #expect(!timedOut.isTransient(asking: own) && timedOut.isTransient(asking: .sample(think: nil))
                     && OllamaError.unreachable("x").isTransient(asking: own), "which is what decides it, for the gate and the caller alike")

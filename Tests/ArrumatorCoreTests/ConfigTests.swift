@@ -30,9 +30,11 @@ import Testing
                                                           visionModel: inUse.visionModel, embedModel: inUse.embedModel)
                     && replay.profile == settings.profile,
                 "replay and eval read with another chat model in the profile in use, and change nothing else of it")
-        #expect(throws: ConfigError.self, "and never with a blank one, which no model answers to") {
+        let blank = #expect(throws: ConfigError.self, "and never with a blank one, which no model answers to") {
             try settings.reading(withChatModel: " ")
         }
+        #expect(blank?.localizedDescription == ConfigError.invalid(name: "settings", underlying: "modelProfiles.\(settings.profile).chatModel is empty")
+                    .localizedDescription, "saying which model is empty")
     }
 
     @Test func everyKeyOfTheDefaultsIsNeededSoNoneIsMissing() throws {
@@ -57,12 +59,12 @@ import Testing
         let config = try PipelineConfig.bundledDefaults()
         var settings = try AppSettings.bundledDefaults()
         settings.modelProfiles[settings.profile]?.visionModel = "an-image-model"
-        let vision = try #require(try config.extractionContext(settings: settings).vision, "images are described while enableVLM is on")
+        let vision = try #require(try config.extractionContext(settings: settings, whenOllamaIsAway: .wait).vision, "images are described while enableVLM is on")
         #expect(vision.model == "an-image-model", "by the vision model of the profile in use")
         #expect(vision.numCtx == config.analysis.numCtx && vision.keepAlive == config.ollama.keepAlive.chat,
                 "with the context and keep-alive documents are read with, so a model that does both is loaded once, not again for each image")
         settings.enableVLM = false
-        #expect(try config.extractionContext(settings: settings).vision == nil, "and none is described when the user turned it off")
+        #expect(try config.extractionContext(settings: settings, whenOllamaIsAway: .wait).vision == nil, "and none is described when the user turned it off")
     }
 
     @Test func everyFullTextColumnHasItsWeight() throws {
@@ -114,7 +116,12 @@ import Testing
                          #"{"conversation": {"efforts": {"medium": {"numPredict": 16384}}}}"#, #"{"conversation": {"contextChars": 0}}"#,
                          #"{"conversation": {"documentChars": 0}}"#, #"{"conversation": {"maxListed": -1}}"#,
                          #"{"conversation": {"historyChars": -1}}"#, #"{"conversation": {"maxQuestionChars": 0}}"#,
-                         #"{"conversation": {"maxSuggested": 0}}"#, #"{"conversation": {"efforts": {"extreme": {"think": false}}}}"#] {
+                         #"{"conversation": {"maxSuggested": 0}}"#, #"{"conversation": {"efforts": {"extreme": {"think": false}}}}"#,
+                         #"{"extraction": {"emailReadCapBytes": 0}}"#, #"{"extraction": {"emailBodyCapBytes": -1}}"#,
+                         #"{"extraction": {"image": {"maxPixels": 0}}}"#, #"{"extraction": {"pdf": {"ocrHeadPages": -1}}}"#,
+                         #"{"extraction": {"zipMaxEntries": 0}}"#,
+                         #"{"extraction": {"zipEntryCapBytes": -1}}"#, #"{"extraction": {"archiveMaxEntries": -1}}"#,
+                         #"{"extraction": {"xlsx": {"maxRows": -1}}}"#] {
             try Data(override.utf8).write(to: env.paths.pipelineOverrideURL)
             #expect(throws: ConfigError.self, "\(override) would crash or stall the pipeline, so it stops the app with the reason") {
                 try PipelineConfig.load(paths: env.paths, environment: TestEnvironment.isolated)
@@ -149,7 +156,9 @@ import Testing
                 "an effort that thinks gives the answer more room and time than one that does not: thinking counts toward both")
         config.tasks.efforts[.high] = nil
         #expect(config.problems.contains("tasks.efforts.high is missing"), "an effort without its preset stops the app with the reason")
-        #expect(throws: ConfigError.self, "and is never read with a guess") { try config.tasks.preset(.high) }
+        let guessed = #expect(throws: ConfigError.self, "and is never read with a guess") { try config.tasks.preset(.high) }
+        #expect(guessed?.localizedDescription == ConfigError.invalid(name: "pipeline", underlying: "tasks.efforts.high is missing").localizedDescription,
+                "saying which preset is missing")
     }
 
     @Test func everyEffortAnswersQuestionsWithItsPresetEachAtLeastAsMuchAsTheOneBelowItAndAllWithinTheContext() throws {
@@ -169,7 +178,10 @@ import Testing
                 "an answer is sampled as writing is, not decoded greedily as a document is read, with its effort's length")
         config.conversation.efforts[.low] = nil
         #expect(config.problems.contains("conversation.efforts.low is missing"), "an effort without its preset stops the app with the reason")
-        #expect(throws: ConfigError.self, "and is never answered with a guess") { try config.conversation.effort(.low) }
+        let guessed = #expect(throws: ConfigError.self, "and is never answered with a guess") { try config.conversation.effort(.low) }
+        #expect(guessed?.localizedDescription
+                    == ConfigError.invalid(name: "pipeline", underlying: "conversation.efforts.low is missing").localizedDescription,
+                "saying which preset is missing")
     }
 
     @Test func aListThatMayNotBeEmptyPicksItsValuesAndRefusesToBeEmpty() throws {
@@ -200,7 +212,7 @@ import Testing
         let saved = try JSON.decoder.decode(JSONValue.self, from: Data(contentsOf: env.paths.settingsURL))
         #expect(saved["renameFiles"] == .bool(false), "the changed setting is written")
         #expect(saved["transliterate"] == nil, "an unchanged setting is not, so a new default still reaches the user")
-        let reloaded = try SettingsStore(paths: env.paths)
+        let reloaded = try SettingsStore.opened(paths: env.paths)
         #expect(await reloaded.current.renameFiles == false, "the change survives a restart")
     }
 
@@ -235,9 +247,11 @@ import Testing
         try await actions.change(summary: "Ollama found again") { $0.ollamaBinaryPath = nil }
         #expect(JSON.decode([String: JSONValue].self, from: try await events().last?.payloadJson) == ["ollamaBinaryPath": .null],
                 "a setting taken away is recorded as null, so the payload says it changed")
-        await #expect(throws: ConfigError.self, "settings the next launch would refuse are refused") {
+        let refused = await #expect(throws: ConfigError.self, "settings the next launch would refuse are refused") {
             try await actions.change(summary: "A profile there is none of") { $0.profile = "lowMemory" }
         }
+        #expect(refused?.localizedDescription.contains("profile “lowMemory” is none of modelProfiles") == true,
+                "saying why: \(refused?.localizedDescription ?? "")")
         #expect(try await events().count == 3, "and recorded nowhere")
     }
 
@@ -263,9 +277,11 @@ import Testing
                 "a setting taken away is said to be null, and a value that is not text is written as settings.json writes it")
         try await actions.change { $0.renameFiles = false }
         #expect(try await summaries().count == 3, "a change that changes nothing records nothing")
-        await #expect(throws: ConfigError.self, "settings the next launch would refuse are refused, so the app shows why") {
+        let refused = await #expect(throws: ConfigError.self, "settings the next launch would refuse are refused, so the app shows why") {
             try await actions.change { $0.profile = "lowMemory" }
         }
+        #expect(refused?.localizedDescription.contains("profile “lowMemory” is none of modelProfiles") == true,
+                "which it says: \(refused?.localizedDescription ?? "")")
         #expect(try await summaries().count == 3, "and recorded nowhere")
     }
 
@@ -277,7 +293,7 @@ import Testing
         let changed = try JSON.decoder.decode(JSONValue.self, from: Data(contentsOf: env.paths.settingsURL))
         #expect(changed["modelProfiles"] == ["smart": ["chatModel": "gpt-oss:20b"]] && changed["profile"] == nil,
                 "the user's file holds the one field changed, so the profile's other models still follow the bundled ones")
-        #expect(try await SettingsStore(paths: env.paths).current.modelProfile("smart").chatModel == "gpt-oss:20b",
+        #expect(try await SettingsStore.opened(paths: env.paths).current.modelProfile("smart").chatModel == "gpt-oss:20b",
                 "and the change survives a restart")
         try await env.settings.update { $0.modelProfiles["smart"] = bundled }
         let reset = try JSON.decoder.decode(JSONValue.self, from: Data(contentsOf: env.paths.settingsURL))
@@ -297,12 +313,14 @@ import Testing
             ("modelProfiles.standard.embedModel", { $0.modelProfiles["standard"]?.embedModel = "\n" }),
             ("modelProfiles.mine.visionModel", { $0.modelProfiles["mine"] = mine }),
             ("modelProfiles.smart.name", { $0.modelProfiles["smart"]?.name = "fast" }),
+            ("traceRawRetentionDays", { $0.traceRawRetentionDays = AppSettings.traceRawRetentionDaysRange.lowerBound - 1 }),
+            ("traceRawRetentionDays", { $0.traceRawRetentionDays = AppSettings.traceRawRetentionDaysRange.upperBound + 1 }),
         ]
         for (key, change) in refused {
             await #expect("settings with \(key) the app cannot use are refused, with the reason that names the key") {
                 try await env.settings.update(change)
             } throws: { error in
-                guard case let ConfigError.invalid(name, underlying) = error else { return false }
+                guard let (name, underlying) = ConfigRefusal(error).map({ ($0.name, $0.underlying) }) else { return false }
                 return name == "settings" && underlying.hasPrefix(key + " ")
             }
             #expect(try Data(contentsOf: env.paths.settingsURL) == file, "\(key): nothing is written, so the next launch still starts")
@@ -310,7 +328,7 @@ import Testing
         }
         try Data(#"{"profile": "lowMemory"}"#.utf8).write(to: env.paths.settingsURL)
         #expect("a file naming a profile it does not list stops the load, naming the profile") {
-            try SettingsStore(paths: env.paths)
+            try SettingsStore.opened(paths: env.paths)
         } throws: { error in
             (error as? ConfigError)?.localizedDescription.contains("lowMemory") == true
         }
@@ -318,7 +336,7 @@ import Testing
 
     /// Whether `error` refuses the configuration `name` for each key of `paths`, which the app does not know.
     private func refuses(_ error: any Error, _ name: String, unknown paths: [String]) -> Bool {
-        guard case let ConfigError.invalid(refused, underlying) = error else { return false }
+        guard let (refused, underlying) = ConfigRefusal(error).map({ ($0.name, $0.underlying) }) else { return false }
         return refused == name && underlying == paths.map(ConfigLoader.unknownKey).joined(separator: "; ")
     }
 
@@ -338,11 +356,12 @@ import Testing
         defer { env.cleanup() }
         try Data(#"{"models": {"profile": "lowMemory"}, "renameFiles": false}"#.utf8).write(to: env.paths.settingsURL)
         #expect("a choice of profile an earlier version saved stops the app naming the key, rather than being read as another") {
-            try SettingsStore(paths: env.paths)
+            try SettingsStore.opened(paths: env.paths)
         } throws: { refuses($0, "settings", unknown: ["models"]) }
         let extra = env.root.appendingPathComponent("extra.json")
         let environment = RuntimeEnvironment(home: nil, ollamaURL: nil, logLevelName: nil, pipelineOverridePath: extra.path, trashPath: nil)
         for (override, unknown) in [(#"{"modelProfiles": {"standard": {"numCtx": 8192}}}"#, ["modelProfiles"]),
+                                    (#"{"search": {"debounceMilliseconds": 150}}"#, ["search.debounceMilliseconds"]),
                                     (#"{"tasks": {"efforts": {"low": {"model": "fast", "fallback": false, "repairAttempts": 1}}}}"#,
                                      ["tasks.efforts.low.fallback", "tasks.efforts.low.model"])] {
             try Data(override.utf8).write(to: env.paths.pipelineOverrideURL)
@@ -362,7 +381,7 @@ import Testing
                                         "embedModel": "bge-m3"},
                                "smart": {"chatModel": "gpt-oss:20b"}}}
             """#.utf8).write(to: env.paths.settingsURL)
-        let settings = try await SettingsStore(paths: env.paths).current
+        let settings = try await SettingsStore.opened(paths: env.paths).current
         #expect(settings.ollamaBinaryPath == "/opt/homebrew/bin/ollama" && settings.renameFiles,
                 "an optional setting loads, and a null one sets nothing")
         #expect(try settings.modelProfile().name == "Mine" && settings.modelProfiles["smart"]?.chatModel == "gpt-oss:20b",
@@ -377,34 +396,96 @@ import Testing
                     && config.tasks.efforts[.high]?.promptLabels[.object] == 5,
                 "keys of a dictionary the user fills, from either override, load: a variable for Ollama, a kind, an effort's labels")
     }
+}
+
+/// The Ollama server the app talks to: where it may be, how its address is written, and the bounds on its answers.
+extension ConfigTests {
+    @Test(arguments: ["http://127.0.0.1:11434", "http://localhost:11434", "http://[::1]:11434", "http://192.168.1.239:11434",
+                      "http://10.0.0.5:11434", "http://172.20.1.1:11434", "http://169.254.3.4:11434", "https://gpu-box.local:11434",
+                      "http://[fd12:3456::1]:11434", "http://[fe80::1]:11434", " http://192.168.1.239:11434 "])
+    func ollamaAnswersOnThisMacOrTheLocalNetwork(_ address: String) {
+        #expect(throws: Never.self, "\(address) is this Mac or the local network") { _ = try OllamaEndpoint.validated(address) }
+    }
+
+    @Test(arguments: [("http://8.8.8.8:11434", OllamaError.nonLocalHost("8.8.8.8")), ("http://172.32.0.1:11434", .nonLocalHost("172.32.0.1")),
+                      ("http://ollama.example.com:11434", .nonLocalHost("ollama.example.com")),
+                      ("http://[2001:db8::1]:11434", .nonLocalHost("2001:db8::1")), ("ftp://192.168.1.2", .invalidAddress(.scheme)),
+                      ("not a url", .invalidAddress(.scheme)), ("http://", .invalidAddress(.noHost)),
+                      ("192.168.1.239:11434", .invalidAddress(.unreadable))])
+    func anAddressBeyondTheLocalNetworkOrNoAddressIsRefusedSayingWhy(_ address: String, _ why: OllamaError) {
+        #expect(throws: why, "\(address) is refused, saying why") { _ = try OllamaEndpoint.validated(address) }
+    }
 
     @Test func ollamaAnswersOnThisMacOrTheLocalNetworkOnly() throws {
-        for address in ["http://127.0.0.1:11434", "http://localhost:11434", "http://[::1]:11434", "http://192.168.1.239:11434",
-                        "http://10.0.0.5:11434", "http://172.20.1.1:11434", "http://169.254.3.4:11434", "https://gpu-box.local:11434",
-                        "http://[fd12:3456::1]:11434", "http://[fe80::1]:11434", " http://192.168.1.239:11434 "] {
-            #expect(throws: Never.self, "\(address)") { _ = try OllamaEndpoint.validated(address) }
-        }
-        for address in ["http://8.8.8.8:11434", "http://172.32.0.1:11434", "http://ollama.example.com:11434", "http://[2001:db8::1]:11434",
-                        "ftp://192.168.1.2", "not a url", "http://", "192.168.1.239:11434"] {
-            #expect(throws: OllamaError.self, "\(address)") { _ = try OllamaEndpoint.validated(address) }
-        }
         #expect(OllamaEndpoint.isThisMac(try OllamaEndpoint.validated("http://localhost:11434")), "localhost is this Mac")
+        #expect(OllamaEndpoint.isThisMac(try OllamaEndpoint.validated("http://LOCALHOST:11434")), "however it is cased")
         #expect(!OllamaEndpoint.isThisMac(try OllamaEndpoint.validated("http://192.168.1.239:11434")), "an address on the local network is another machine")
         let config = try PipelineConfig.bundledDefaults().ollama
-        #expect(throws: OllamaError.self, "the client itself refuses a host beyond the local network") {
+        #expect(throws: OllamaError.nonLocalHost("example.com"), "the client itself refuses a host beyond the local network") {
             try OllamaClient(config: config, baseURL: try #require(URL(string: "http://example.com:11434")), time: TestTime(.advances))
         }
     }
 
-    @Test func networkGuardBlocksNonLocalRequests() async throws {
-        let config = try PipelineConfig.bundledDefaults().ollama
-        _ = try OllamaClient(config: config, baseURL: try OllamaEndpoint.validated("http://192.168.1.239:11434"), time: TestTime(.advances))
-        NetworkGuardProtocol.resetViolations()
-        let session = URLSession(configuration: NetworkGuardProtocol.guardedConfiguration())
-        await #expect(throws: (any Error).self, "a request beyond the local network fails") {
-            _ = try await session.data(from: URL(string: "https://example.com/")!)
+    /// An address names a scheme, a host, a port and a path. A user name and password would go into the log and History
+    /// with it, and a query or fragment means nothing to Ollama; a host written with escapes is one host when checked
+    /// and another when compared, so it is refused rather than read two ways.
+    @Test func anOllamaAddressNamesItsServerAndNothingElse() throws {
+        let refused: [(String, OllamaError)] = [
+            ("http://ollama:s3cret@192.168.1.239:11434", .invalidAddress(.userInfo)),
+            ("http://ollama@localhost:11434", .invalidAddress(.userInfo)),
+            ("http://127.0.0.1:11434/?model=x", .invalidAddress(.query)),
+            ("http://127.0.0.1:11434/#top", .invalidAddress(.fragment)),
+            ("http://127.0.0.%31:11434", .invalidAddress(.escapedHost)),
+            ("http://gpu%2Dbox.local:11434", .invalidAddress(.escapedHost)),
+            ("ftp://192.168.1.2", .invalidAddress(.scheme)),
+            ("http://", .invalidAddress(.noHost)),
+            ("http://ollama:s3cret@gpu box:11434", .invalidAddress(.unreadable)),
+        ]
+        for (address, error) in refused {
+            #expect(throws: error, "\(address)") { _ = try OllamaEndpoint.validated(address) }
         }
-        #expect(NetworkGuardProtocol.violations.contains { $0.contains("example.com") }, "and is recorded, so Doctor can report it")
+        let said = OllamaError.invalidAddress(.userInfo).localizedDescription
+        #expect(!said.contains("s3cret") && said.contains("a user name or password"), "what is refused is named, never the password: \(said)")
+        // Addresses that do not read as a URL at all, a space in the host or an unclosed IPv6 bracket, with a password.
+        for unreadable in ["http://ollama:s3cret@gpu box:11434", "http://ollama:s3cret@[fe80::1:11434"] {
+            do {
+                _ = try OllamaEndpoint.validated(unreadable)
+                Issue.record("\(unreadable) is refused")
+            } catch {
+                #expect(!error.localizedDescription.contains("s3cret"), "an address that does not read is never repeated: \(error.localizedDescription)")
+            }
+        }
+        #expect(try OllamaEndpoint.validated("http://192.168.1.239:11434/ollama").path() == "/ollama", "a path, as a proxy of the user's serves it, is kept")
+        let config = try PipelineConfig.bundledDefaults().ollama
+        #expect(throws: OllamaError.invalidAddress(.userInfo), "the client itself refuses one") {
+            try OllamaClient(config: config, baseURL: try #require(URL(string: "http://ollama:s3cret@127.0.0.1:11434")), time: TestTime(.advances))
+        }
+    }
+
+    @Test func ollamasTimeoutsAndAnswerSizeAreRefusedWhereTheyMakeNoSense() throws {
+        var config = try PipelineConfig.bundledDefaults()
+        #expect(config.ollama.maxResponseBytes > 1 << 20, "the bundled limit holds the largest answer the app asks for, an embedding batch")
+        config.ollama.timeouts.chat = -1
+        config.ollama.timeouts.resolve = 0
+        config.ollama.maxResponseBytes = 0
+        config.ollama.modelLocationMaxAge = -1
+        #expect(config.problems.contains("ollama.timeouts.chat cannot be negative: 0 is no timeout")
+                    && config.problems.contains("ollama.timeouts.resolve must be more than 0")
+                    && config.problems.contains("ollama.maxResponseBytes must be at least 1")
+                    && config.problems.contains("ollama.modelLocationMaxAge cannot be negative: 0 asks before every request"),
+                "\(config.problems)")
+    }
+
+    @Test func aPromptsRoomInItsContextIsRefusedWhereItHoldsNoRequestOrQuestion() throws {
+        var config = try PipelineConfig.bundledDefaults()
+        #expect(config.problems.isEmpty, "the bundled efforts leave room for a request and a question")
+        config.tasks.efforts[.high]?.numPredict = config.analysis.numCtx
+        config.conversation.maxQuestionChars = Int(Double(config.conversation.numCtx) * config.ollama.charsPerToken)
+        #expect(config.problems.contains("tasks.efforts.high.numPredict leaves no room in analysis.numCtx, which a request is read with")
+                    && config.problems.contains("conversation.efforts.low leaves less room in conversation.numCtx than a question of "
+                        + "conversation.maxQuestionChars takes at ollama.charsPerToken"), "\(config.problems)")
+        config.ollama.charsPerToken = 0
+        #expect(config.problems.contains("ollama.charsPerToken must be more than 0"), "\(config.problems)")
     }
 }
 

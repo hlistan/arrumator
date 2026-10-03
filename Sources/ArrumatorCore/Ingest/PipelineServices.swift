@@ -3,6 +3,9 @@ import Foundation
 /// Everything the pipeline needs, assembled by the composition root (app or CLI).
 public struct PipelineServices: Sendable {
     public var database: AppDatabase
+    /// The archive the pipeline files into, whose index `database` is: the runtime's own, whatever the settings name
+    /// once a switch has made them name another.
+    public var archive: URL
     public var config: PipelineConfig
     public var settings: SettingsStore
     public var extractor: any ContentExtracting
@@ -13,11 +16,23 @@ public struct PipelineServices: Sendable {
     /// Where an exact copy of a document in the archive goes once its original is read again in its place.
     public var trash: any Trashing
     public var time: any TimeSource
+    /// Which jobs the workers of this process hold, so that no job is worked on twice at once (`JobStore.nextDue`).
+    public var claims: JobClaims
+    /// The Mac's power as it is now (`PowerState.current`), which may keep the worker waiting (`PowerState.pauseReason`).
+    public var power: @Sendable () -> PowerState
+    /// The Ollama server, asked whether it answers at all when a request to it timed out.
+    public var ollama: any OllamaAPI
+    /// The Mac's time zone, which today is in when a request or a question is read.
+    public var timeZone: TimeZone
+    /// Which labels looked alike when last worked out, shared by every `LabelStore` this makes (`labels`).
+    public let lookAlikes = LookAlikeMemo()
 
-    public init(database: AppDatabase, config: PipelineConfig, settings: SettingsStore, extractor: any ContentExtracting,
+    public init(database: AppDatabase, archive: URL, config: PipelineConfig, settings: SettingsStore, extractor: any ContentExtracting,
                 analyzer: any DocumentAnalyzing, filer: DocumentFiler, traces: TraceRecorder, vectors: VectorIndex,
-                trash: any Trashing, time: any TimeSource) {
+                trash: any Trashing, time: any TimeSource, ollama: any OllamaAPI, timeZone: TimeZone, claims: JobClaims,
+                power: @escaping @Sendable () -> PowerState) {
         self.database = database
+        self.archive = archive.standardizedFileURL
         self.config = config
         self.settings = settings
         self.extractor = extractor
@@ -27,6 +42,10 @@ public struct PipelineServices: Sendable {
         self.vectors = vectors
         self.trash = trash
         self.time = time
+        self.claims = claims
+        self.power = power
+        self.ollama = ollama
+        self.timeZone = timeZone
     }
 
     public var documents: DocumentStore { DocumentStore(database: database, time: time) }
@@ -34,9 +53,22 @@ public struct PipelineServices: Sendable {
     public var history: HistoryStore { HistoryStore(database: database, time: time) }
     public var index: IndexStore { IndexStore(database: database, time: time) }
 
-    /// Where things are in the archive the settings name.
-    public func layout(_ settings: AppSettings) -> ArchiveLayout {
-        ArchiveLayout(root: settings.archiveURL, records: config.records, watcher: config.watcher)
+    /// Whether `document`'s file is in this pipeline's archive, whatever its status and however either path is spelled
+    /// (`URL.holds`): one left in Incoming, failed or held there, is not.
+    public func isInArchive(_ document: DocumentRecord) -> Bool {
+        archive.holds(document.path)
+    }
+
+    /// The document a file named to be filed is, as the queue takes it: the package that holds it when it is in one, at
+    /// its path as the disk spells it (`Packages.document(holding:incoming:)`). What the Incoming watcher never takes in is
+    /// refused, saying why (`IngestError.notTaken`): a link, which would file what it points to, wherever that is, a
+    /// hidden or temporary file, one of the app's own (`SkipRules`); and so is a package of more than
+    /// `watcher.maxPackageItems` items (`FileOperationError.tooManyItems`), before anything reads it whole.
+    public func arrival(_ named: URL, settings: AppSettings) throws -> URL {
+        let url = Packages.document(holding: named, incoming: settings.incomingURL)
+        if let reason = SkipRules(watcher: config.watcher).ignoreReason(url) { throw IngestError.notTaken(url.path, reason: reason) }
+        try Packages.check(url, holdsAtMost: config.watcher.maxPackageItems)
+        return url
     }
 
     /// Starts a trace stamped with the prompt version and the models of the profile in use. Settings that name no profile
@@ -48,7 +80,19 @@ public struct PipelineServices: Sendable {
                                            models: try? settings.modelProfile(), settings: settings))
     }
 
-    public var labels: LabelStore { LabelStore(database: database, config: config.labels) }
+    /// Whether `error` says Ollama is away, which work waits out spending nothing, as every queue decides it: it could not
+    /// be reached, or it did not answer in time and does not answer a probe for its version either, which a server busy
+    /// with one request it cannot finish does. A server that answers the probe is there, and the work fails or spends an
+    /// attempt.
+    public func ollamaIsAway(_ error: any Error) async -> Bool {
+        guard let error = error as? OllamaError else { return false }
+        if error.isAway { return true }
+        guard error.timedOut else { return false }
+        // A probe: its failure is the answer, whatever it is.
+        return (try? await ollama.version()) == nil
+    }
+
+    public var labels: LabelStore { LabelStore(database: database, config: config.labels, lookAlikes: lookAlikes) }
 
     /// The tags a file at `url` is given when it is queued (`GivenTag`): the name of the folder at the top of Incoming it is
     /// in (`IncomingFolders`), then those `given` with the command that files it, each once and at most
@@ -79,7 +123,7 @@ public struct PipelineServices: Sendable {
         let current = document.labels ?? []
         let had = current.filter(\.kind.isUsersOwn).map { GivenTag(label: $0, source: .document) }
         let added = GivenTag.distinct(had + ruled.tags, limit: config.labels.maxPerKind).filter(\.isNew).map(\.label)
-        if !added.isEmpty { try await index.saveLabels(current + added, docID: docID, labelled: document.isLabelled) }
+        if !added.isEmpty { try await index.addLabels(added, docID: docID) }
         return given.filter { !$0.isNew } + ruled.tags
     }
 
@@ -104,24 +148,28 @@ public struct PipelineServices: Sendable {
     /// or, for one outside it (back in Incoming), at the top of the archive. It keeps its tags, which its row in the
     /// queue shows, and one in a folder in Incoming is given that folder's too. With `content`, its text as read
     /// before, reading starts with the model; without it, its text is read from its file again too, as a file that
-    /// arrives is read. The job, or the one already queued for its file, which reads it as well.
+    /// arrives is read. One outside the archive, as one left in Incoming, or whose file is no longer as it was recorded
+    /// (`FileFingerprint.matches`) is read as an arrival: hashed again, so an exact copy is handed over to its original
+    /// (`IngestCoordinator`), and its text read from its file. The job, or the one already queued for its file, which
+    /// reads it as well.
     @discardableResult
     public func queueReadingAgain(_ document: DocumentRecord, content: ExtractedContent?, settings: AppSettings) async throws -> Int64? {
         guard let docID = document.id else { throw IngestError.documentNotPersisted }
         var doc = document
-        let inArchive = doc.path.hasPrefix(layout(settings).root.path + "/")
-        if [.undone, .held].contains(doc.status) {
-            doc.status = .processing
-            doc = try await documents.save(doc)
+        let inArchive = isInArchive(doc)
+        if !inArchive || [.undone, .held].contains(doc.status) {
+            doc = try await documents.update(docID) { $0.status = .processing }
         }
         // What earlier stages found of it goes with the job, so it starts at the first stage it lacks (`IngestCoordinator`).
         var payload = JobPayload()
-        payload.sha256 = doc.sha256
-        payload.content = content
+        if inArchive, doc.isAsRecorded {
+            payload.sha256 = doc.sha256
+            payload.content = content
+        }
         let kept = (doc.labels ?? []).filter(\.kind.isUsersOwn).map { GivenTag(label: $0, source: .document) }
         let tags = kept + (inArchive ? [] : self.tags(for: doc.url, given: [], settings: settings))
         payload.tags = tags.isEmpty ? nil : tags
-        return try await jobs.enqueue(path: doc.path, kind: inArchive ? .reanalyse : .ingest, docID: docID, payload: payload)
+        return try await jobs.enqueue(path: doc.path, kind: inArchive ? .reanalyse : .ingest, docID: docID, payload: payload).id
     }
 
     /// Asks the model about a document and keeps what it says: the labels on the document and in the search index
@@ -130,13 +178,16 @@ public struct PipelineServices: Sendable {
     /// the labels it had: its tags, or what an earlier reading gave it.
     public func analyse(docID: Int64, jobID: Int64?, content: ExtractedContent, given: [GivenTag], settings: AppSettings,
                         trace: TraceContext) async throws -> AnalysisOutcome {
-        let tags = try await documents.document(id: docID)?.labels?.filter(\.kind.isUsersOwn) ?? []
+        // The labels as the reading begins: a kind the user changes while the model reads stays as the user left it.
+        let before = try await documents.document(id: docID)?.labels ?? []
+        let tags = before.filter(\.kind.isUsersOwn)
         let reading = try await read(content, tags: tags, settings: settings, trace: trace)
-        let outcome = reading.outcome
+        var outcome = reading.outcome
         let sources = GivenTag.sources(of: reading.tags, given: given)
         let note = GivenTag.note(sources).map { "; " + $0 } ?? ""
         if let labels = outcome.labels {
-            try await index.saveLabels(labels, docID: docID, labelled: true)
+            // Where the user changed nothing since the reading began: what the user did meanwhile is kept.
+            outcome.labels = try await index.saveReading(labels, before: before, docID: docID)
             let read = labels.filter { !$0.kind.isUsersOwn }
             try await history.record(.analysed, doc: docID, job: jobID, trace: trace.traceID,
                                      summary: (read.isEmpty ? "Nothing worth a label" : read.map(\.value).joined(separator: " · ")) + note,

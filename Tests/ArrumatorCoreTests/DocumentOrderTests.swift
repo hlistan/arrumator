@@ -36,8 +36,8 @@ import Testing
     private func store() async throws -> DocumentStore {
         let store = DocumentStore(database: try AppDatabase.inMemory(), time: TestTime(.advances))
         for (offset, entry) in Self.corpus.enumerated() {
-            var document = SearchTaskTests.document(entry.id, entry.path, entry.labels ?? [])
-            document.labelsJson = entry.labels.map { JSON.string($0) }
+            var document = try SearchTaskTests.document(entry.id, entry.path, entry.labels ?? [])
+            document.labelsJson = try entry.labels.map { try JSON.string($0) }
             document.status = .filed
             document.filedAt = TestTime.start.addingTimeInterval(Double(offset) * 60)
             try await store.save(document)

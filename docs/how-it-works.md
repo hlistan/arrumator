@@ -9,7 +9,7 @@ covers the app and its settings. [Storage](storage.md) covers where everything i
 ```text
 new file in Incoming ──► wait until it stops changing ──► tagged by the folder in Incoming it is in, if any
    ──► hash (an exact copy of a document in the archive has that document read again instead: below)
-   ──► extract: PDFKit text, Apple Vision OCR, textutil (doc/docx/rtf/odt/html), CoreXLSX, PPTX, e-mail,
+   ──► extract: PDFKit text, Apple Vision OCR, textutil (doc/docx/rtf/odt/html), XLSX, PPTX, e-mail,
        archives, media metadata, Quick Look previews, local vision model for photos; language, dates, identifiers
    ──► analyse: the local model reads it once, with the app's own prompt and the archive's labels, picks out its
        signals, which become its labels, and names the file; your rules and the archive's vocabulary tidy the labels
@@ -32,21 +32,69 @@ document is filed at its top and found again by its labels, its words or its mea
 yours: the app reads files you put in it where they are, and never moves them out. A folder you put into Incoming is
 yours too, and gives what is in it a label of yours, a tag ([below](#folders-in-incoming-and-tags)).
 
+### What Incoming takes in
+
+A file is taken once it has stopped changing: unchanged for `watcher.stabilityRequiredPolls` looks
+`watcher.stabilityPollInterval` seconds apart, and one it can open, so a copy in progress is never read half (an empty
+file after `watcher.zeroByteWaitSeconds`). Hidden files, downloads in progress, Office's lock files and the app's own
+files are never taken (`watcher.ignoredNamePrefixes` and the keys beside it), and nothing in the archive is, when you
+keep the archive inside Incoming, nor anything that is no file, such as a named pipe. Incoming is watched as the disk
+spells it, and a file in it is known by its path as the disk spells it, whoever names it, so a path to it through a
+link, or written in another case than the disk's, names the same file: the watcher and `arrumatorcli ingest` queue it
+once, and a document undone into it is left there by the next rescan. `arrumatorcli ingest` refuses, saying why, what
+the watcher never takes: a link, which would file what it points to, wherever that is, and a hidden, temporary or
+app-managed file.
+
+- **A package**, a folder macOS shows as one document (an `.rtfd`, a Pages document), is one document, never the files
+  it holds one by one; `arrumatorcli ingest` given a file inside one takes the package. It is taken whole once nothing
+  in it has changed, its size is that of the files it holds, and it is known by a SHA-256 over everything it holds,
+  each item's path in it and its bytes, so a copy of it, under whatever name, is an [exact copy](#exact-copies). It is
+  moved whole. One that holds more than `watcher.maxPackageItems` items, as a photo library does, is no document: it is
+  walked no further, left where it is, and History says so, and `arrumatorcli ingest` refuses it, saying so.
+- **A file that cannot be opened**, as when its permissions do not let Arrumator read it, is waited for
+  `watcher.unopenableWaitSeconds` once it has stopped changing, then left where it is, and History says so. It is
+  taken once it can be opened or it changes, and said again at the next start while it still cannot be opened.
+- **Into an archive on another volume**, a file is copied, the copy checked against the file's SHA-256 and given its
+  dates, and only then does the file go to the Trash. One the Trash will not take, as on a volume without one, is not
+  tried again: it stays in Incoming, waiting for you in Needs You as not filed, with why, and its copy goes to the
+  Trash instead, so there is never a second one. When that Trash will not take the copy either, History and the
+  document say where the copy is. Its card offers **Read Again** and **Leave for Later**, never **Looks Right**, as it
+  is in no archive. A rescan leaves the file alone while it is that file, by its size, date and identity on the disk;
+  saved again, it is the same document arriving again. **Read Again** reads it as an arrival, from its file.
+  It is no document of the archive meanwhile: no copy is taken for one of it, and no search task finds it. Whether a
+  document is in the archive is told by where its file is, however the archive's folder is named, through a link or in
+  another case.
+- **A file changed after it was read**, between its hashing and its filing, is not filed as what was read of it: it is
+  read again from the start, as a new arrival, and History says it changed. What was read of it, its labels but its
+  tags, its text and its place in the search, goes; a file gone meanwhile ends its document as missing, and one that
+  changed into an exact copy of a document in the archive ends it as a copy does. That counts as one of its attempts
+  (`ingest.maxAttempts`), so a file that changes at every reading ends as any file that keeps failing does.
+- **When the archive's folder is not there**, as when it was renamed away or its disk is not attached, a file waits
+  to be filed, spending no attempt, and History says so once. The app never makes the archive's folder again where it
+  is gone; the file is filed once the folder is back.
+
 ### Documents in any language
 
 Nothing in reading a document is tied to a language. The extractor tells the language of the text among all that
 Apple's NaturalLanguage knows. Its dates are found with month names in every language the system has a calendar for,
 in each form it writes them (`15 мая 2024`, `3. März 2025`, `2025年3月5日`), and in numeric forms from day first to
-year first. OCR asks Vision for the document's own language first, then the hints in `extraction.ocrLanguages`, and
-lets Vision detect any other it reads. A script Vision does not read in images is still read from a PDF's text layer,
-an e-mail or a text file. The model reads the document as written and describes it in labels that do not depend on its
-language: names and numbers as the document writes them, topics, objects and jurisdictions in English, dates, amounts
-and
-languages in ISO forms. Documents in different languages are therefore found by the same labels. The file name's
-description is in the document's own language.
+year first, in the digits of any script (`٢٠/٠٥/٢٠٢٦`), each end of a range such as `01/03/2024-31/03/2024` too. Every
+date is a day of the Gregorian calendar, as ISO dates are, whatever calendar the Mac is set to (Buddhist, Japanese,
+Persian). A file's own dates, which have no zone, are the day they were in the Mac's time zone; a PDF's creation date,
+a recording's capture date and an e-mail's Date header are the day they write, in the zone they are written in, which
+is the day the writer's clock showed. Account and customer numbers, and
+policy and contract numbers, are those after the words `entities.accountLabels` and `entities.policyLabels` list, in
+each way they are written ([Configuration](using-arrumator.md#configuration)), which you can add to for another
+language. OCR asks Vision for the document's own language first, then the hints in
+`extraction.ocrLanguages`, and lets Vision detect any other it reads. A script Vision does not read in images is still
+read from a PDF's text layer, an e-mail or a text file. The model reads the document as written and describes it in
+labels that do not depend on its language: names and numbers as the document writes them, topics, objects and
+jurisdictions in English, dates, amounts and languages in ISO forms. Documents in different languages are therefore
+found by the same labels. The file name's description is in the document's own language.
 
 OCR runs on Vision's default device, the Neural Engine or GPU. When that fails, as it can when the Neural Engine's
-model does not compile, the page is read again on the CPU, and so is every later page until the app restarts. The
+model does not compile, the page is read again on the CPU; once the CPU has read a page the default device could not,
+so is every later page until the app restarts, while a page neither reads leaves the default device in use. The
 document's trace records which device read each page.
 
 ## Reading a document
@@ -68,8 +116,11 @@ that cannot be read, or leaves a list out, goes back to the model with what was 
 and one cut off at its length limit (`analysis.llmOptions.numPredict` tokens) goes back saying so. No other model is
 asked after it: a document it never answers validly waits for you ([below](#documents-that-wait-for-you)). The file name
 goes through the same cleaning every file name does: no path separators or other characters `naming.forbiddenCharacters`
-lists (one between words, as in "Fatura: julho", becomes " - ", one inside a word or number a "-"), bounded length,
-and, when Settings says so, transliterated.
+lists (one between words, as in "Fatura: julho", becomes " - ", one inside a word or number a "-"), no invisible
+characters but the joiners some scripts and emoji are written with, bounded length, and, when Settings says so,
+transliterated. A name cleaning leaves nothing of, as one of dots and dashes, is no name, and nor is one of the app's
+own files or one Incoming never takes in (a record file's `_….md`, a lock file's `~$…`): the document then keeps the
+name it has, the one it arrived with, or, read again in the archive, the one it has there.
 
 ## Labels
 
@@ -125,8 +176,9 @@ and writing its value; from a terminal, `arrumatorcli labels <document> --add se
 `--add tag="Taxes 2024"`. Your labels are kept as the model's are: a date must be a date and a type one of the list. A
 label of a kind the model gives labels a document the model has not labelled, so `labels unlabelled` no longer reads it;
 a tag does not. A document keeps one type and one
-date: on the card a new one replaces the old; from a terminal, remove the old one in the same command (`--remove
-type=invoice --add type=receipt`). Each correction is recorded in History. Renaming the document (on its card, or
+date: a new one replaces the old, on the card and from a terminal alike (`--add type=receipt`). A correction is made to
+the labels the document has when it is made, so two made one after the other, such as two labels taken off in quick
+succession, both hold. Each correction is recorded in History. Renaming the document (on its card, or
 `review rename`) renames the file where it is.
 
 ## Keeping labels one vocabulary
@@ -149,14 +201,29 @@ prompt, without retraining it, so what it learns stays in your archive and follo
 **Every label the model gives is tidied.** Your rules come first: a label you merged is written as you want it,
 following one merge into the next, and one you do not want is dropped. Then a label of a kind the vocabulary keeps
 (sender, party, topic, object, reference, jurisdiction) becomes the label the archive already uses when the two are
-written alike enough: `labels.vocabulary.kinds.<kind>.mergeSimilarity`. At 1, the default for names, objects and
-references, only labels written the same way but for case, accents, punctuation, spacing and word order are one
-(`EDP-Comercial, S.A.` is `EDP Comercial SA`); for topics and jurisdictions a typo is forgiven too (`electricty`). How
-alike two labels are written is their Jaro-Winkler similarity, the measure record linkage uses for names, over their
-words in sorted order; labels whose numbers differ are never alike. A label the archive already uses stays itself,
-unless more documents have it written another way. Only writing is compared, never meaning: that one label means
-another in other words is the model's judgment, or yours. What was changed, and by which rule, is in the document's
-trace (the `consolidate` step) and its History entry.
+written alike enough: `labels.vocabulary.kinds.<kind>.mergeSimilarity`. Labels whose numbers differ are never alike:
+numbers are compared first, each as it is written and in the order they are written, so `FT 1/23` is not `FT 12/3`,
+nor `Rua das Flores 12, 3` the same address as `Rua das Flores 3, 12`. A number is a run of digits that only spaces
+break: an identifier printed in groups is the one typed without them, so the IBAN `PT50 0002 0123 1234 5678 9015 4` is
+`PT50000201231234567890154` and the tax number `123 456 789` is `123456789`, while punctuation and letters end a
+number. The same digits in the same order, where one label's numbers end only where the other's do, and the other's
+end at more places, set by punctuation (`V/2026/532774` and `V2026532774`, `123.456.789` and `123456789`, `FT 1/23`
+and `FT 123`), may be one number written two ways, or two numbers: that is no degree of likeness but a relation of its
+own, so such labels are never merged on their own, whatever `mergeSimilarity`, and are offered under Look Alike for
+every kind, whatever its `suggestSimilarity`, as below. Numbers that end in different places, each where the other's
+does not (`FT 1/23` and `FT 12/3`), are neither merged nor offered. At 1, the default for names,
+objects and references, only labels written the same way but for case, accents, punctuation, spacing and word order
+are one (`EDP-Comercial, S.A.` is `EDP Comercial SA`); for topics and jurisdictions a typo is forgiven too
+(`electricty`). Words may change places, but only between two numbers, or between a number and the
+label's end, never across a number, nor may the letters and digits within a word: `EDP Comercial 12` is
+`Comercial EDP 12`, but `car AB12CD` is not `car CD12AB`, `car AA-12-BB` not `car BB-12-AA`, and `12 Rua das Flores`
+not the same writing as `Rua das Flores 12`, though it may look alike enough to be offered. A label without numbers
+keeps its words in any order. These come together: `account Santander PT50 0002 0123` is
+`Santander account PT5000020123`. How alike two labels are written is their Jaro-Winkler similarity, the measure record
+linkage uses for names, over their words so ordered. A label the archive already uses stays itself, unless more
+documents have it written another way. Only writing is compared, never meaning: that one label means another in other
+words is the model's judgment, or yours. What was changed, and by which rule, is in the document's trace (the
+`consolidate` step) and its History entry.
 
 **Your tags are your words.** A tag is never made another because one in use is written alike, nor offered under Look
 Alike: `Taxes-2024` stays `Taxes-2024` beside a `Taxes 2024` more documents have, until you merge the two. Only your
@@ -166,8 +233,11 @@ effort's `promptLabels`, saying so.
 
 **What is merely alike waits for you.** Labels in use written alike enough to be one
 (`labels.vocabulary.kinds.<kind>.suggestSimilarity`), but not enough to merge without asking, such as two names a
-letter apart, are listed under **Look Alike** on the Labels page, the most alike first, at most
-`labels.vocabulary.suggestionLimit`. The sidebar shows how many wait.
+letter apart, are listed under **Look Alike** on the Labels page, and so are labels with the same digits grouped
+otherwise, for every kind and whatever its `suggestSimilarity`, references included. They come the most alike first,
+those with the same digits grouped otherwise as alike as their writing but for where their numbers end, at most
+`labels.vocabulary.suggestionLimit`; `arrumatorcli labels similar` says which are which. The sidebar shows how many
+wait.
 
 What you decide becomes a rule, recorded in History and kept in the archive (`System/_labels.md`,
 [Storage](storage.md)):
@@ -178,6 +248,10 @@ What you decide becomes a rule, recorded in History and kept in the archive (`Sy
 - **Remove everywhere** (ignore) a label: it is taken off every document, and the model's answers lose it from then on.
 - **Keep apart** two alike labels: they are never merged and never offered to merge again.
 - **Forget** a rule: documents read from then on no longer follow it. Documents it already changed keep their labels.
+
+A rule is about a label however it is written, as above, so a rule made by an earlier version follows today's rule of
+sameness: one about `NIF 123 456 789` also covers `NIF 123456789`, and one about `car AA-12-BB` no longer covers
+`car BB-12-AA`, nor one about `V/2026/532774` the reference `V2026532774`.
 
 On the Labels page, open a label to merge it or remove it everywhere, open a pair under Look Alike to merge it either
 way or keep it apart, and forget a rule under What You Decided. A label's menu on a document's card opens it there, or
@@ -234,10 +308,19 @@ their card:
 A document that waits keeps its own name: what the model read of it is in doubt. Confirm one as it is
 (**Looks Right**), correct its name or labels, or have it read again. A file that keeps failing to be processed at all
 (`ingest.maxAttempts`) is parked in the archive the same way, with status failed, so Incoming stays clean and nothing
-is lost.
+is lost; one that cannot be moved into the archive either stays in Incoming, failed, saying why, and one that cannot be
+moved there because the archive's folder is not there waits for it to be.
 
-While Ollama cannot be reached a document waits where it stopped, and a missing model holds it until the model is
-downloaded; neither costs it an attempt.
+While Ollama cannot be reached a document waits where it stopped, an image whose text is too sparse to tell what it
+is included, which is described when Ollama is back rather than filed without its description; a document whose model
+is not installed waits in the Incoming queue, saying which model to download and how, and looks every
+`ingest.modelRecheckSeconds` whether Ollama lists it, until the model is downloaded, History saying it once; neither
+costs it an attempt. A server that answers, but with a failure (an error of its own or an empty reply) each time it is
+asked, as a model may for one image, costs an attempt each time,
+and so does a request that times out while the server still answers when asked for its version; a timeout while it
+answers nothing is Ollama away. Such a document is parked as failed after `ingest.maxAttempts`, with the reason, for
+you to read again, rather than tried again for ever. A description the vision model fails to give, an answer that is
+not one or an image the server refuses, is noted with the document, which is read without it.
 
 ## Exact copies
 
@@ -254,9 +337,9 @@ that document to be read again. This is how you have documents read with another
 - **It keeps its tags**, the folders' and those you gave it, and a copy put into a folder in Incoming, or given `--tag`,
   gives it those tags at once, before it is read; what the model gives replaces what it gave before.
 - **The copy goes to the Trash**, never deleted, as the archive holds the same bytes; take it back from there. A copy
-  the
-  Trash will not take, as on a volume without one, stays in Incoming, and the document is not read again: the copy is
-  tried again (`ingest.maxAttempts`) and then recorded as failed, saying why.
+  the Trash will not take, as on a volume without one, is not tried again: it stays in Incoming, waiting for you in
+  Needs You as not filed, saying why, a rescan leaves it alone, and the document is not read again. **Read Again** on
+  it, once the Trash takes it, hands it over as any copy: it becomes no second document.
 - **History records it once, under the document**: `bill.pdf is a copy of 2026-07-05 EDP Comercial - Fatura.pdf, which
   is read again; the copy is in the Trash; tagged “Taxes 2024” by its folder in Incoming`, with where the copy was and
   went. The trace of the copy's arrival (`hash`, `dedupe` with the document it copies, `tag`) is the event's; the
@@ -269,43 +352,78 @@ original again, not it.
 
 ## Your own changes
 
-Moving or renaming a document in Finder is followed: the app finds the file by the identifier it stores on it and
-records the move in History. A file you put into the archive yourself, at the top or in a folder of yours, is read and
-labelled where it is, under its own name. A file removed from the archive is marked missing. Nothing you do in Finder
-is undone by the app.
+Moving or renaming a document in Finder is followed: the app finds the file by the identifier it stores on it, and by
+the file itself, and records the move in History. A rename that changes only the case of a name, or of a folder's, is
+one too: on a volume that ignores case, as the Mac's does unless formatted otherwise, the old name still finds the file,
+which is the same file. It is a move only when the document's old place no longer holds that file: a copy made in Finder
+keeps the identifier, and is a document of its own, as is a file another archive filed, even when the original is moved
+at the same time, as the original keeps what tells a file on disk apart, its inode, and a copy has its own. A file you
+put into the archive yourself, at the top or in a folder of yours, is read and labelled where it is, under its own name,
+once it has stopped changing (`watcher.stabilityPollInterval`, `watcher.stabilityRequiredPolls`), as Incoming waits for
+one; it is given an identifier of its own. One that has not stopped changing after `watcher.stabilityMaxWaitSeconds`,
+such as a file copied slowly or a library an app keeps open, is said once in History to be taking long, is looked at
+every `watcher.awayPollSeconds` from then on, and is taken once it stops, also after the app was stopped and started
+again meanwhile; so is one in Incoming, but for a stop, after which it is taken at its next change. A folder you rename,
+or move or copy into the archive, is looked through, and a package, a folder macOS shows as one document (an `.rtfd`, a
+Pages document), is one
+document. A file removed from the archive, or in a folder removed, is marked missing; put back, anywhere in the archive,
+it is as it was, waiting for you or left for later if it was. Nothing you do in Finder is undone by the app.
+
+The app sees these changes as macOS reports them. A change it had not finished taking in when it quit, or crashed, is
+seen again at the next start, and so is one it could not take in, up to `ingest.maxAttempts` starts, after which it is
+given up; History says so when it first fails and when it is given up, naming where. When macOS says it lost track of
+changes in a folder, the app looks at that folder again. The archive's own folder renamed, removed or on a disk that
+went is away: nothing in it is marked missing, nothing is filed into it and nothing is made again where it was. Once it
+is back, the same folder, also on a disk attached again, the work goes on by itself, and the app looks at the whole
+archive again. Another folder put at its path is taken as the archive, which History says once, and is looked at whole:
+a document whose file is not in it is missing, and one recorded where another document's file now is, too. The earlier
+folder back is said to be back. Either way, what its record files hold is merged with what was kept meanwhile, never
+taken over it.
 
 Reading a document again (`review retry`, **Read Again**) labels and names it again where it is, from the text read of
-it
-before, keeping its tags; putting an exact copy of it into Incoming does the same, reading its text from its file again
-too ([exact copies](#exact-copies)). A document you undid is back in Incoming, held; read again, it is filed at the top
-of the archive.
+it before (from its file, when the file changed since it was read), keeping its tags; putting an exact copy of it into
+Incoming does the same, reading its text from its file again too ([exact copies](#exact-copies)). You win over a
+reading under way: a label you change while the model reads, of any kind, as a sender corrected or a tag given or taken
+away, stays as you left it, and the reading fills in only the kinds you did not touch. A reading that gives no name
+leaves it the name it has, and one that names it as it is named, but for case or the collision suffix
+(`naming.collisionFormat`) a taken name gave it, moves nothing. A document you undid is back in Incoming, held, and a
+rescan leaves it there while the file is that document; read again, it is filed at the top of the archive. Another file
+put in its place, as a scanner saving under the same name, is taken as a new arrival, and the one undone is missing. This
+is unlike a document left in Incoming as failed, whose file saved again is that document arriving again: a failed one
+is the app's attempt at the file there, which a new save of it takes up again, while one you undid or left for later is
+your decision about the file it was, which a file put in its place does not inherit, with its tags and its History.
 
 ## Search tasks
 
 Rather than choosing labels one at a time, you can ask for the documents you need in your own words, in any language:
 "electricity and water bills from 2025, by sender", "everything the tax authority sent about last year's return". The
 request becomes a **task**, which joins a queue of its own; the tasks in it are read one at a time, the oldest first (a
-task whose request was being read when you quit is read first at the next start), by the reading model of the task's
-profile, with a prompt of the app's own (`search-system.md`) and the task's effort
-([below](#profile-and-effort)). The model is shown the labels the archive already uses of the kinds the effort's
-`promptLabels` names, the most used first, so it asks for them as the archive writes them, and today's date, so "last
-year" and "this month" mean something. It answers in a fixed schema:
-the labels of each kind to look for, each with the words of the request that ask for it, words the text must contain
-for what no label says, the kinds to arrange what is found by, and a name for the task. The answer is untrusted input,
-checked as a document's answer is: each label must be a label of its kind (a date, period or deadline may be a year, a
-month, a day or a span of them), at most `tasks.maxValuesPerKind` of a kind and `tasks.maxWords` words. Every kind a
-task asks for leaves documents out, so a label nobody asked for, such as the country all your documents are from,
-would silently hide what you wanted: a label is kept only when every word the model quotes for it is a word of your
-request, but not when every one of them is already quoted by a label of another kind, as "Portugal" in "invoices from
-Portugal" asks for a country, not for documents written in Portuguese; and a word only when it is in your request and
-no label already asks for it. What is dropped, and why, is in
-the task's trace. An answer that cannot be read, or is left asking for nothing at all, goes back to the model with what
-was wrong, as often as the effort's `repairAttempts` says; no other model is asked in its place. A request the model
-never answers validly fails the task, with the reason, and so does an answer that takes longer than the effort's
-`timeout` ([below](#profile-and-effort)). While Ollama cannot be reached a task waits in the queue, as a
-document does. A task whose reading model is not installed fails, naming the model, until it is downloaded and the
-task's documents are found again (**Find Again**), and one given a profile the settings no longer list fails saying so
-until it is given another.
+task whose request was being read when you quit, or when a command reading it was killed, is read first at the next
+start, or once the app next looks), by the reading model of the task's profile, with a prompt of the app's own
+(`search-system.md`) and the task's effort ([below](#profile-and-effort)). The model is shown the labels the archive
+already uses of the kinds the effort's `promptLabels` names, the most used first, so it asks for them as the archive
+writes them, and today's date, so "last year" and "this month" mean something. The prompt must fit the model's context
+(`analysis.numCtx`) beside the answer's length, the effort's `numPredict`, as a longer one is not read whole: its length
+in tokens is estimated at `ollama.charsPerToken` characters a token, an estimate that fits text in Latin script and may
+not others. When it would not fit, the least used labels are left out first, and the trace says how many; it also keeps
+how many tokens Ollama counted the prompt took, and says when the context was full, as when the estimate was wrong. It
+answers in a fixed schema: the labels of each kind to look for, each with the words of the request that ask for it,
+words the text must contain for what no label says, the kinds to arrange what is found by, and a name for the task. The
+answer is untrusted input, checked as a document's answer is: each label must be a label of its kind (a date, period or
+deadline may be a year, a month, a day or a span of them), at most `tasks.maxValuesPerKind` of a kind and
+`tasks.maxWords` words. Every kind a task asks for leaves documents out, so a label nobody asked for, such as the
+country all your documents are from, would silently hide what you wanted: a label is kept only when every word the model
+quotes for it is a word of your request, but not when every one of them is already quoted by a label of another kind, as
+"Portugal" in "invoices from Portugal" asks for a country, not for documents written in Portuguese; and a word only when
+it is in your request and no label already asks for it. What is dropped, and why, is in the task's trace. An answer that
+cannot be read, or is left asking for nothing at all, goes back to the model with what was wrong, as often as the
+effort's `repairAttempts` says; no other model is asked in its place. A request the model never answers validly fails
+the task, with the reason, and so does an answer that takes longer than the effort's `timeout`
+([below](#profile-and-effort)). While Ollama cannot be reached, or does not answer in time and answers no probe either,
+a task waits in the queue, as a document does, spending nothing, its one trace taken up again by each attempt; a server
+that answers with a failure, or answers a probe but not the request in time, fails the task with the reason. A task
+whose reading model is not installed fails, naming the model, until it is downloaded and the task's documents are found
+again (**Find Again**), and one given a profile the settings no longer list fails saying so until it is given another.
 
 **What a task finds.** The documents in the archive (filed, waiting for you, parked after failing, or left for later;
 not the copies earlier versions filed beside other documents, nor those undone or missing) that have, for every kind of
@@ -328,7 +446,9 @@ an export copies them in that order.
 narrows documents down, every document that has all the labels chosen, at most `tasks.maxDocuments` of them, the newest
 by their own date, as a task finds them. Rename the task, arrange its set otherwise, or list it without arranging it.
 Give it another request and it finds its documents again; so does **Find Again**, such as after new documents were
-filed. Finding them again keeps the documents you added and leaves out those you took out.
+filed. Finding them again keeps the documents you added and leaves out those you took out. A change to its request,
+effort or profile while it is read, and removing it, stop that reading at once, and removing it stops the answer to its
+question too.
 
 **Exporting.** A task's set is copied into a new folder named after the task, in a folder you choose outside the
 archive and Incoming, with a folder for each group of the first kind it is arranged by, a folder inside it for each
@@ -337,8 +457,10 @@ names are written with composed accents ("João", not "Joa" and an accent), as o
 Documents are copied, never moved, and nothing already there is written over: a name that is taken gets the collision
 suffix (`naming.collisionFormat`). A folder is named after its label as a file name is cleaned, so a label can never
 place a file anywhere else, and the documents without a label of the level's kind go into `tasks.withoutLabelFolder`
-(`No sender`). Each export is kept with its task: when, as what, where, and where each document went inside it; a
-document whose file is not where the archive has it is left out, with the reason.
+(`No sender`); two groups whose folders would be named alike, however cased, each get a folder of their own, the second
+with the collision suffix. Each export is kept with its task: when, as what, where, and where each document went inside
+it; a document whose file is not where the archive has it, or that could not be copied or given its folder, is left
+out, with the reason, and the rest of the export is still kept.
 
 Every task, its set as you left it and its exports are kept in the archive (`System/_tasks.md`, [Storage](storage.md)),
 so a rebuild brings them back. Asking, what was found, each change, each export and removing a task are recorded in
@@ -364,30 +486,43 @@ local model's context holds the text of a few documents, not of a thousand, so a
 needs, as retrieval-augmented generation does ([sources](organizing-principles-sources.md#sources-for-conversations)):
 first the documents the last answer drew on, which a question such as "translate it" goes on about; then those the
 question concerns, those holding any of its words, the rarer a word the more it counts, fused with those alike to it in
-meaning, as search finds them; then the rest by their own date, the newest first. In that order each is shown with its
-text, its start and its end cut to `conversation.documentChars` as a document is read, while the text fits in
-`conversation.contextChars`; a document whose text does not fit, or has not been read yet, is listed by its name, date
-and labels, at most `conversation.maxListed`, and the answer is told how many more there are. A set the context holds
-is shown whole. The answer is also shown the conversation so far, the latest questions and answers up to
-`conversation.historyChars`, the latest cut to fit when it alone is longer, and today's date. It is never shown your
-tags. A question is at most `conversation.maxQuestionChars` long.
+meaning, as search finds them, in the app and from a terminal alike; then the rest by their own date, the newest first.
+In that order each is shown with its text, its start and its end cut to `conversation.documentChars` as a document is
+read, while the text fits in `conversation.contextChars`; a document whose text does not fit, or has not been read
+yet, is listed by its name, date and labels, at most `conversation.maxListed`. Once that many are listed, a document
+not read yet is passed over, and the first whose text is too long for the room left ends the choice; the answer is told
+how many more there are. The text of no more documents is read than are shown or listed, and one more, however large
+the set: which have a text is told without reading it. A set the context holds is shown whole. The
+answer is also shown the conversation so far, the latest questions and answers up to `conversation.historyChars`, the
+latest cut to fit when it alone is longer, and today's date. It is never shown your tags. A question is at most
+`conversation.maxQuestionChars` long. The whole prompt must fit the model's context (`conversation.numCtx`) beside the
+answer's length, the effort's `numPredict`, estimated as a request's is (above): when it would not, the exchanges
+before the latest are left out, then the last documents shown with their text are listed by name instead, then the
+latest exchange is left out, then the last names, and the trace says what was, with how many tokens the prompt took and
+whether the context was full; a question that would not fit even then fails, saying so. A repair, which sends back the
+answer that was not valid, sends back as much of it as fits, and the trace says how much was left out.
 
 **The answer** comes in a fixed schema: the answer, in Markdown, in the language of the question unless it asks for
 another, naming documents by their names, working out a total or a comparison the question asks for, and saying when
 documents disagree; the documents it draws on, by their numbers, which it is shown only for this; and, when you asked
-for more documents, a request for them, which it says it is looking for. It is
-untrusted input: a document it says it draws on is kept only when it is one it was shown, as a citation is checked
-against its sources, a number it writes in the answer for a document it was shown is given as that document's name, and
-an answer without words, or that cannot be read, goes back to the model with what was wrong, as often as the effort's
-`repairAttempts` says. It is shown as it is written: the card shows the answer as the model writes it, its paragraphs,
-headings, lists, quotes and code as such, **Thinking…** while a model that thinks has written nothing yet, that it waits
-for the model to begin while the model loads or reads documents first, and how long it has taken once that is more than
-a moment. An answer cut off at its length limit, the effort's `numPredict`, is kept as far as it came, saying it was cut
-off: ask for less, or ask again at a lower effort, which thinks less and so leaves more of the limit to the answer. An
-answer that takes longer than the effort's `timeout` fails the question, keeping what came of it. While Ollama cannot be
-reached a question waits in the queue, as a document does, saying so and when it is tried again, the last of
-`ingest.retryDelays` later, rather than being asked again meanwhile; a reading model that is not installed, or a profile
-the settings no longer list, fails it with the reason.
+for more documents, a request for them, which it says it is looking for. It is untrusted input: a document it says it
+draws on is kept only when it is one it was shown, as a citation is checked against its sources, a number it writes in
+the answer for a document it was shown is given as that document's name, in an answer cut off too, unless Markdown makes
+it a link, a reference or code of its own, and an answer without words, or that cannot be read, goes back to the model
+with what was wrong, as often as the effort's `repairAttempts` says. It is shown as it is written: the card shows the
+answer as the model writes it, its paragraphs, headings, lists, quotes and code as such, a table as its rows of plain
+text with the columns aligned, **Thinking…** while a model that thinks has written nothing yet, that it waits for the
+model to begin while the model loads or reads documents first, and how long it has taken once that is more than a
+moment. Nothing in an answer can act: a link shows as its words followed by its address, and an image as its words, so a
+document that asks the model to end its answer with a link that would carry the document's data elsewhere gets nothing
+clickable. An answer cut off at its length limit, the effort's `numPredict`, is kept as far as it came, saying it was
+cut off: ask for less, or ask again at a lower effort, which thinks less and so leaves more of the limit to the answer.
+An answer that takes longer than the effort's `timeout` fails the question, keeping what came of it. While Ollama cannot
+be reached, or does not answer in time and answers no probe either, a question waits in the queue, as a document does,
+saying so and when it is tried again, the last of `ingest.retryDelays` later, rather than being asked again meanwhile,
+its one trace taken up again by each attempt; a server that answers with a failure or answers a probe but not the
+request in time, a reading model that is not installed, or a profile the settings no longer list, fails it with the
+reason. A question being answered when a command answering it was killed is answered again in its place.
 
 **Finding more.** Ask for documents beyond the set, such as "find the contract these invoices are billed under", and the
 answer writes a request for them in your words, with what the documents told it: a sender, a reference, a period. That
@@ -405,7 +540,8 @@ the documents stay in the task.
 Every conversation is kept in the archive beside its task (`System/Conversations/_<task>.md`, [Storage](storage.md)),
 with the questions and answers written out below its data for people to read, so a rebuild brings it back; removing a
 task removes its conversation. Clearing a conversation is recorded in History. A question and its answer are kept in the
-conversation, and each answer is traced: what it was shown (the `context` step), its prompts and the model's answers
+conversation, and each answer is traced: what it was shown, and whether the question's meaning ordered the documents as
+well as its words or, when it could not, why (the `context` step), its prompts and the model's answers
 (`answer`), and a request for more documents as it was read and matched (`interpret` and `match`;
 `arrumatorcli tasks conversation <task> --full`). That a question is being answered, and by which model, is no
 decision, so History does not record it: the queue says it while it lasts, and the app shows it.

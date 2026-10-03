@@ -101,7 +101,9 @@ Support/Arrumator` or a running Arrumator of the user's.
    the window's elements (`tree`, `find`), presses buttons and menu items (`press`), clicks and double-clicks rows
    (`click`, `dclick`), types into fields (`set`, `type`), sends keys (`key return`, `key escape`, `key f cmd`), scrolls
    (`scroll`) and screenshots its window and no other (`shot`). The terminal it runs in needs Accessibility in System
-   Settings › Privacy & Security. It never reads the system's Apple menu, which lists the user's own recent files. The
+   Settings › Privacy & Security. It never reads the system's Apple menu, which lists the user's own recent files.
+   Its pointer events reach whatever window is under the pointer, so it refuses a click, hover or scroll at a point
+   where one of the process's windows is not the frontmost, and it refuses `shot` while a file panel is open. The
    screen must be unlocked: while it is locked, the accessibility API gives every window, any app's, as the application
    itself, `windows` lists none and `shot` makes no image, so wait for the user rather than read anything into it.
    A file panel (Choose…, Export) opens on the user's own folders: never read its elements, which list the user's files,
@@ -131,7 +133,7 @@ why.
 |---|---|---|---|
 | C1 | First run and onboarding, step by step, forward and back | Welcome, folders, background and notifications, Ollama and its server, profile and models, Ready | Ollama unreachable or slow, a server off the local network refused, models missing and their Download, the menu bar full, keyboard only (Return, Escape, Tab), closing the window part way |
 | C2 | Filing documents through Incoming and the queue | Drop files and folders, watch In Progress and Queued, a document filed and named | Every format of the corpus, non-Latin names, a folder in Incoming as a tag, nested folders, an exact copy, encrypted, blank, damaged and unsupported files, a large batch, pausing and resuming, quitting part way and starting again |
-| C3 | Processed and a document's card | Open a card, rename, add and remove labels, read again, undo filing, open the file and show it in Finder | Empty and very long names, names with `/` or `:`, a label of every kind, removing every label, undo twice, a file moved in Finder meanwhile |
+| C3 | Processed and a document's card | Open a card, rename, add and remove labels, read again, undo filing, open the file and show it in Finder | Empty and very long names, names with `/` or `:`, a label of every kind, removing every label, undo twice, a file moved, copied, or removed and put back in Finder meanwhile, a folder renamed in the archive, a package put into it |
 | C4 | Needs You | Confirm, read again, leave for later, undo | Each reason a document waits, a document read again that still fails, counts on the sidebar |
 | C5 | The sidebar's labels | Choose labels to narrow down, Clear, Filter Labels, group by kind, Show More | Labels in many scripts, filters that match nothing, accents and punctuation, choosing every label, a narrowed page with no documents |
 | C6 | The Labels page | Merge, keep apart, remove everywhere, forget a rule, suggestions of alike labels | Merging a label into itself, into one of another kind, a tag, undoing a rule, what a later reading does |

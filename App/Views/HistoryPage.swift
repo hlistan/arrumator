@@ -52,9 +52,9 @@ struct HistoryPage: View {
         }
         .task(id: "\(pages)|\(model.activity)") {
             let pages = pages
-            events = await model.load(Wording.loadHistoryAction) {
+            if let read = await model.load(Wording.loadHistoryAction, {
                 try await $0.services.history.events(limit: pages * $0.config.interface.pageSize)
-            } ?? []
+            }) { events = read }
         }
     }
 }

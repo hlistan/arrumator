@@ -27,13 +27,13 @@ enum Fixtures {
     /// A model answer reading the document as an EDP electricity bill to Maria Exemplo; the kind `omitting` names is left
     /// out of the answer, and `overrides` replaces the signals of a kind.
     static func answer(omitting omitted: LabelKind? = nil, _ overrides: [LabelKind: [String]] = [:],
-                       fileName: String = "2026-07-05 EDP Comercial - Fatura eletricidade julho") -> String {
+                       fileName: String = "2026-07-05 EDP Comercial - Fatura eletricidade julho") throws -> String {
         var fields: [String: JSONValue] = ["file_name": .string(fileName)]
         for kind in ClassificationSchema.answerOrder where kind != omitted {
             let values = overrides[kind] ?? edpSignals[kind] ?? []
             fields[ClassificationSchema.labelsKey(kind)] = .array(values.map(JSONValue.string))
         }
-        return JSON.string(fields)
+        return try JSON.string(fields)
     }
 
     /// What the model finds in the EDP bill, as it writes it.

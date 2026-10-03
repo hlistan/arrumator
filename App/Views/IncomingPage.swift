@@ -10,10 +10,12 @@ import SwiftUI
 struct IncomingPage: View {
     @Environment(AppModel.self) private var model
     @State private var jobs: [JobRecord] = []
-    @State private var recent: [DocumentRecord] = []
+    /// What was just processed, under the day it was, as the list shows it.
+    @State private var recent: [DocumentSection] = []
+    @State private var recentCount = 0
 
-    private var working: [JobRecord] { jobs.filter { model.ingest.progress(of: $0)?.isWorking == true } }
-    private var queued: [JobRecord] { jobs.filter { model.ingest.progress(of: $0)?.isWorking == false } }
+    private var working: [JobRecord] { jobs.filter { model.session.ingest.progress(of: $0)?.isWorking == true } }
+    private var queued: [JobRecord] { jobs.filter { model.session.ingest.progress(of: $0)?.isWorking == false } }
 
     var body: some View {
         Page(.incoming) {
@@ -21,8 +23,8 @@ struct IncomingPage: View {
                 Notice(text: attention, action: model.settings?.paused == true
                     ? (Wording.resume, { Task { await model.setPaused(false) } }) : nil)
             }
-            if model.ingest.reindexing > 0 {
-                Notice(text: Wording.reindexing(model.ingest.reindexing))
+            if model.session.ingest.reindexing > 0 {
+                Notice(text: Wording.reindexing(model.session.ingest.reindexing))
             }
             if jobs.isEmpty {
                 EmptyState(symbol: "tray", text: Wording.nothingWaiting) {
@@ -32,7 +34,7 @@ struct IncomingPage: View {
             if !working.isEmpty {
                 PageSection(Wording.inProgress) {
                     ForEach(working) { job in
-                        if let progress = model.ingest.progress(of: job), case let .working(stage) = progress {
+                        if let progress = model.session.ingest.progress(of: job), case let .working(stage) = progress {
                             ListRow(symbol: progress.symbol, tint: progress.tint, title: job.filename, detail: Wording.doing(stage),
                                     subtitle: Wording.labels(job.tags), subtitleKind: .tag, busy: true)
                         }
@@ -42,7 +44,7 @@ struct IncomingPage: View {
             if !queued.isEmpty {
                 PageSection(Wording.queuedHeading) {
                     ForEach(queued) { job in
-                        if let progress = model.ingest.progress(of: job) {
+                        if let progress = model.session.ingest.progress(of: job) {
                             ListRow(symbol: progress.symbol, tint: progress.tint, title: job.filename, detail: waiting(job, progress),
                                     subtitle: Wording.labels(job.tags), subtitleKind: .tag)
                         }
@@ -50,8 +52,8 @@ struct IncomingPage: View {
                 }
             }
             // What was just processed reads as it does on the Processed page, which holds the rest.
-            DocumentSections(documents: recent, heading: Wording.processedDay)
-            if let limit = model.runtime?.config.interface.recentlyProcessed, recent.count == limit {
+            DocumentSections(sections: recent)
+            if let limit = model.runtime?.config.interface.recentlyProcessed, recentCount == limit {
                 Button(Wording.showMoreInProcessed) { model.go(.processed) }.buttonStyle(.link)
             }
         }
@@ -69,7 +71,8 @@ struct IncomingPage: View {
             try await $0.services.documents.list(DocumentFilter(statuses: DocumentStatus.processed), order: .recentlyProcessed,
                                                  limit: $0.config.interface.recentlyProcessed)
         }) {
-            recent = processed
+            recentCount = processed.count
+            recent = DocumentSection.sections(of: model.listed(processed), heading: Wording.processedDay)
         }
     }
 

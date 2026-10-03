@@ -60,20 +60,57 @@ public struct DeadlineExceeded: Error, Sendable, Equatable {
     public init(seconds: Double) { self.seconds = seconds }
 }
 
+/// Work that a deadline, or its caller's cancellation, gave up waiting for and that still runs, as a parse PDFKit does
+/// not let be cancelled: how much of it there is, for the work it was done for, which a worker does not start again
+/// while any goes on, so abandoned runs of one file never stack up (`IngestCoordinator`). It is told of the work it
+/// stands for through the task that does it (`current`), so whatever bounds work by `Deadline.run` beneath it, a file's
+/// extraction or a model's reading, is counted without being handed it.
+public final class LeftRunning: Sendable {
+    /// The count for the work the current task does; nil where nothing counts it.
+    @TaskLocal public static var current: LeftRunning?
+
+    private let count = Mutex(0)
+    private let ended: @Sendable () -> Void
+
+    /// - Parameter ended: called each time a run left behind ends, as to wake the worker waiting for it.
+    public init(ended: @escaping @Sendable () -> Void) { self.ended = ended }
+
+    /// Whether any run left behind still goes on.
+    public var isRunning: Bool { count.withLock { $0 > 0 } }
+
+    func began() { count.withLock { $0 += 1 } }
+
+    func end() {
+        count.withLock { $0 -= 1 }
+        ended()
+    }
+}
+
 /// Bounds work by its total time. URLSession's request timeout counts only idle time, and a reply lost on the local
 /// network can leave a request waiting on a connection that stays open (seen with Ollama on another Mac over Wi-Fi),
-/// holding every request queued behind it; PDFKit, Vision and CoreXLSX do not notice cancellation at all. A reply that
+/// holding every request queued behind it; PDFKit, Vision and ZIPFoundation do not notice cancellation at all. A reply that
 /// is not streamed sends nothing before it is complete, so an exchange that would have succeeded is not cut short.
 public enum Deadline {
     /// Runs `operation` in a task of its own and returns its result, or throws `expired()` after `seconds` of `time`,
     /// without waiting for work that does not notice the cancellation it is then sent. `seconds` of 0 or less leaves it
-    /// unbounded. Cancelling the caller cancels the operation and throws `CancellationError`.
+    /// unbounded. Cancelling the caller cancels the operation and throws `CancellationError`. Work given up on while it
+    /// still runs is counted, until it ends, by the `LeftRunning` of the task that called this.
     public static func run<T: Sendable>(_ seconds: Double, time: any TimeSource, expired: @escaping @Sendable () -> any Error,
                                         _ operation: @escaping @Sendable () async throws -> T) async throws -> T {
         guard seconds > 0 else { return try await operation() }
         let outcome = OneShot<Result<T, any Error>>()
+        let leftRunning = LeftRunning.current
+        // Whether the work has ended, and whether it was given up on before it did, decided under one lock.
+        let state = Mutex((ended: false, givenUp: false))
         let work = Task { try await operation() }
-        Task { outcome.fire(await work.result) }
+        Task {
+            let result = await work.result
+            if state.withLock({ state in
+                state.ended = true
+                return state.givenUp
+            }) { leftRunning?.end() }
+            outcome.fire(result)
+        }
         let timer = Task {
             try await time.sleep(seconds: seconds)
             outcome.fire(.failure(expired()))
@@ -87,6 +124,11 @@ public enum Deadline {
         } onCancel: {
             outcome.fire(.failure(CancellationError()))
         }
+        if state.withLock({ state in
+            guard !state.ended else { return false }
+            state.givenUp = true
+            return true
+        }) { leftRunning?.began() }
         return try result.get()
     }
 }

@@ -5,9 +5,14 @@ public enum PromptError: Error, LocalizedError, Equatable {
     case unfilledPlaceholders(template: String, names: [String])
     /// Values given for placeholders the template does not have: the code and the template disagree.
     case unusedValues(template: String, names: [String])
+    /// What must be sent of a prompt, with all that could be left out left out, holds more characters than the model's
+    /// context holds beside its answer (`ollama.charsPerToken`).
+    case tooLong(template: String, chars: Int, room: Int)
 
     public var errorDescription: String? {
         switch self {
+        case let .tooLong(t, chars, room):
+            "Prompt \(t) needs \(chars) characters, more than the \(room) the model's context holds beside its answer: ask in fewer words"
         case let .missingTemplate(n): "Prompt template \(n).md is missing from the bundle"
         case let .unfilledPlaceholders(t, names): "Prompt \(t) has unfilled placeholders: \(names.joined(separator: ", "))"
         case let .unusedValues(t, names): "Prompt \(t) has no placeholders for: \(names.joined(separator: ", "))"

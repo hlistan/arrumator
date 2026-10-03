@@ -32,8 +32,9 @@ public struct DocumentAnalyzer: DocumentAnalyzing {
             await trace.record(.analyse, status: (answer?.calls.count ?? 0) > 1 ? .warn : .ok, startedAt: started, input: input,
                                output: AnalysisTrace(answer: answer?.answer, exchange: answer?.calls ?? []))
         } catch let error as ModelAnswerError {
-            await trace.record(.analyse, status: .error, startedAt: started, input: input,
+            await trace.record(.analyse, status: error.status, startedAt: started, input: input,
                                output: AnalysisTrace(answer: nil, exchange: error.calls), error: error.localizedDescription)
+            if let cause = error.cause { throw cause }
             Log.warning(.classify, "The model gave no valid answer", ["error": error.localizedDescription])
         }
 
@@ -67,6 +68,7 @@ public struct DocumentAnalyzer: DocumentAnalyzing {
         } catch let error as OllamaError where error.isTransient {
             throw error
         } catch {
+            try Cancellation.rethrow(error)
             await trace.record(.embed, status: .warn, startedAt: started, input: ["model": embedder.modelId],
                                error: error.localizedDescription)
             Log.warning(.classify, "Embedding unavailable; the document is found by its words only", ["error": error.localizedDescription])

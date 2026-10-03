@@ -280,7 +280,8 @@ public struct ExtractedContent: Sendable, Codable {
     public func hasWarning(_ code: WarningCode) -> Bool { warnings.contains { $0.code == code } }
 
     /// Excerpt for the prompt: the head and the tail of the text, at most `maxChars`, of which the tail gets
-    /// `1 / tailDivisor`.
+    /// `1 / tailDivisor`; the head alone when `maxChars` leaves no room for it beside the tail and the separator. The
+    /// configuration gives only a `maxChars` that holds a head (`excerptHasHead`).
     public func classificationExcerpt(maxChars: Int, tailDivisor: Int) -> String {
         var body = text
         if let visual {
@@ -288,10 +289,19 @@ public struct ExtractedContent: Sendable, Codable {
         }
         guard body.count > maxChars else { return body }
         // Head carries titles, parties and dates; the tail carries totals and signatures.
-        let separator = "\n…\n"
         let tailCount = maxChars / tailDivisor
-        let headCount = maxChars - tailCount - separator.count
-        return String(body.prefix(headCount)) + separator + String(body.suffix(tailCount))
+        let headCount = maxChars - tailCount - Self.excerptSeparator.count
+        guard headCount > 0 else { return String(body.prefix(max(0, maxChars))) }
+        return String(body.prefix(headCount)) + Self.excerptSeparator + String(body.suffix(tailCount))
+    }
+
+    /// What stands between the head and the tail of an excerpt.
+    static let excerptSeparator = "\n…\n"
+
+    /// Whether an excerpt of `maxChars`, of which the tail gets `1 / tailDivisor`, has room for its head beside the tail
+    /// and the separator.
+    static func excerptHasHead(maxChars: Int, tailDivisor: Int) -> Bool {
+        tailDivisor > 0 && maxChars - maxChars / tailDivisor - excerptSeparator.count >= 0
     }
 
     /// The text a document's embedding is made from: what it is, who sent it, its first `identifiersLimit` identifiers
@@ -334,12 +344,23 @@ public struct ExtractionContext: Sendable {
     public var config: ExtractionConfig
     public var entities: EntityConfig
     public var vision: VisionModelOptions?
+    public var whenOllamaIsAway: WhenOllamaIsAway
 
-    public init(config: ExtractionConfig, entities: EntityConfig, vision: VisionModelOptions?) {
+    public init(config: ExtractionConfig, entities: EntityConfig, vision: VisionModelOptions?, whenOllamaIsAway: WhenOllamaIsAway) {
         self.config = config
         self.entities = entities
         self.vision = vision
+        self.whenOllamaIsAway = whenOllamaIsAway
     }
+}
+
+/// What extraction does when Ollama cannot be reached to describe an image whose text is too sparse to tell what it is.
+public enum WhenOllamaIsAway: Sendable {
+    /// Throw Ollama's error, so the document's job waits for Ollama, as it does to be read, rather than being filed
+    /// without the description for good: the ingest pipeline.
+    case wait
+    /// Read the image without its description, and note why: `arrumatorcli extract`, which shows what is read now.
+    case note
 }
 
 public struct VisionModelOptions: Sendable {

@@ -23,42 +23,6 @@ import Testing
         LabelRule(id: id, kind: kind, value: value, action: action, target: target, createdAt: TestTime.start)
     }
 
-    // MARK: How alike labels are written
-
-    @Test func labelsWrittenTheSameButForCaseAccentsPunctuationAndWordOrderAreOne() {
-        #expect(LabelSimilarity.similarity("EDP-Comercial, S.A.", "edp comercial SA") == 1, "punctuation and case")
-        #expect(LabelSimilarity.similarity("Silva, Maria", "Maria Silva") == 1, "word order")
-        #expect(LabelSimilarity.similarity("Autoridade Tributária", "AUTORIDADE TRIBUTARIA") == 1, "accents")
-        #expect(LabelSimilarity.sameWriting("Ｅｄｐ", "EDP"), "full-width letters")
-        #expect(!LabelSimilarity.sameWriting("EDP", "EDP Comercial"), "a longer name is another writing")
-    }
-
-    @Test func labelsWhoseNumbersDifferAreNeverAlike() {
-        #expect(LabelSimilarity.similarity("invoice FT 2026/926804564", "invoice FT 2026/926804565") == 0, "two invoices a digit apart stay two")
-        #expect(LabelSimilarity.similarity("apartment Rua das Flores 12", "apartment Rua das Flores 14") == 0,
-                "a number tells one address, account or invoice from the next")
-    }
-
-    @Test func otherwiseTheyAreComparedByJaroWinklerAsPublished() {
-        // The examples in Winkler 1990, which defines the measure (docs/organizing-principles-sources.md).
-        #expect(abs(LabelSimilarity.similarity("MARTHA", "MARHTA") - 0.961) < 0.001, "Winkler's MARTHA/MARHTA is 0.961")
-        #expect(abs(LabelSimilarity.similarity("DWAYNE", "DUANE") - 0.840) < 0.001, "Winkler's DWAYNE/DUANE is 0.840")
-        #expect(abs(LabelSimilarity.similarity("DIXON", "DICKSONX") - 0.813) < 0.001, "Winkler's DIXON/DICKSONX is 0.813")
-        #expect(LabelSimilarity.similarity("electricity", "electricty") >= 0.96, "a typo is nearly the same label")
-        #expect(LabelSimilarity.similarity("income tax", "property tax") < 0.85, "a different subject is not")
-    }
-
-    @Test func theBoundFromLengthsIsNeverBelowTheSimilarity() {
-        let words = ["EDP", "EDP Comercial", "electricity", "electricty", "Maria Silva", "Mario Silva", "a", "income tax",
-                     "Autoridade Tributária", "tax"]
-        for a in words {
-            for b in words {
-                let (x, y) = (LabelSimilarity.Key(a), LabelSimilarity.Key(b))
-                #expect(LabelSimilarity.bound(x, y) >= LabelSimilarity.similarity(x, y) - 1e-9, "skipping \(a)/\(b) would lose a match")
-            }
-        }
-    }
-
     // MARK: What a reading keeps
 
     @Test func theUsersMergesAreFollowedOneIntoTheNext() throws {
@@ -129,7 +93,8 @@ import Testing
             (.reference, "invoice 1", 1), (.reference, "invoice 2", 1),
         ])
         let suggestions = c.suggestions()
-        #expect(suggestions.first == LabelSuggestion(kind: .sender, value: "autoridade tributaria", into: "Autoridade Tributária", similarity: 1),
+        #expect(suggestions.first == LabelSuggestion(kind: .sender, value: "autoridade tributaria", into: "Autoridade Tributária", similarity: 1,
+                                                       reason: .writtenAlike),
                 "the same label written two ways first")
         #expect(suggestions.contains { $0.kind == .party && $0.value == "Mario Silva" && $0.into == "Maria Silva" },
                 "names a letter apart are for the user to judge")
@@ -139,6 +104,86 @@ import Testing
                 "but not another subject sharing a word, nor a narrower topic, which the prompt asks for beside the broad one")
         #expect(!suggestions.contains { $0.kind == .reference }, "nor references, whose numbers differ")
         #expect(suggestions.map(\.similarity) == suggestions.map(\.similarity).sorted(by: >), "the surest suggestions come first")
+    }
+
+    /// Every pair of labels compared, as the suggestions were first worked out, each with its labels in sorted order as
+    /// `AlikeLabels` compares them: what comparing only the pairs that can be alike enough must give, in the same order,
+    /// of pairs as alike those written alike first (`sorted(by:)` is stable).
+    static func everyPairCompared(_ c: LabelConsolidator) -> [LabelSuggestion] {
+        var found: [LabelSuggestion] = []
+        for kind in LabelKind.allCases {
+            guard let policy = c.config.kinds[kind] else { continue }
+            let usages = c.vocabulary[kind] ?? []
+            for i in usages.indices {
+                for j in usages.indices where j > i {
+                    let (into, value) = (usages[i].label.value, usages[j].label.value)
+                    guard let alike = LabelSimilarity.lookAlike(LabelSimilarity.Key(min(into, value)), LabelSimilarity.Key(max(into, value)),
+                                                                atLeast: policy.suggestSimilarity),
+                          !c.rules.contains(where: { $0.keepsApart(into, value, kind: kind) }) else { continue }
+                    found.append(LabelSuggestion(kind: kind, value: value, into: into, similarity: alike.similarity, reason: alike.reason))
+                }
+            }
+        }
+        func order(_ s: LabelSuggestion) -> (Double, Int) { (s.similarity, s.reason == .writtenAlike ? 1 : 0) }
+        return Array(found.sorted { order($0) > order($1) }.prefix(c.config.suggestionLimit))
+    }
+
+    /// Labels of every kind the vocabulary keeps, written alike in every way a label can be: the same writing far apart in
+    /// length, the words in another order, a typo, a longer name, the same digits in other numbers, and the many labels
+    /// that are alike to none.
+    static let manyLabels: [(LabelKind, String, Int)] = {
+        let senders = ["EDP Comercial SA", "E.D.P. Comercial, S.A.", "Comercial EDP", "EDP Comercail", "EDP Comercial Energia", "edp comercial",
+                       "Autoridade Tributária", "Autoridade Tributaria e Aduaneira", "AUTORIDADE TRIBUTARIA", "Galp", "Galp Energia",
+                       "Águas do Porto", "Aguas do Porto EM", "MEO", "M.E.O.", "Vodafone", "Vodafone Portugal"]
+        let parties = ["Maria Silva", "Mario Silva", "Silva, Maria", "Maria Fernanda Silva", "João Exemplo", "Joao Exemplo", "Ana Costa"]
+        let topics = ["electricity", "electricty", "income tax", "incomes tax", "property tax", "property sale", "water", "waters",
+                      "telecommunications", "plumbing", "plumbing repair"]
+        let references = (1...12).map { "invoice FT 2026/\($0)" } + ["FT 1/23", "FT 12/3", "ft 1-23", "invoice 2026/11", "invoice 20/2611",
+                                                                   "Invoice 2026-11"]
+        let objects = ["Rua das Flores 12, 3", "Rua das Flores 3, 12", "12, 3 Rua das Flores", "car AA-12-BB", "AA-12-BB car",
+                       "car AB12CD", "car CD12AB", "account PT50 0002 0123 1234 5678 9015 4", "account PT50000201231234567890154",
+                       "contract V/2026/532774", "contract V2026532774", "contract V2026/532774 annex"]
+        let jurisdictions = ["Portugal", "Portgual", "Spain", "Espanha", "United Kingdom", "Kingdom, United"]
+        func kind(_ kind: LabelKind, _ values: [String]) -> [(LabelKind, String, Int)] {
+            values.enumerated().map { (kind, $1, 1 + ($0 * 7) % 5) }
+        }
+        return kind(.sender, senders) + kind(.party, parties) + kind(.topic, topics) + kind(.reference, references)
+            + kind(.object, objects) + kind(.jurisdiction, jurisdictions)
+    }()
+
+    @Test func comparingOnlyThePairsThatCanBeAlikeFindsWhatComparingEveryPairDoes() throws {
+        let rules = [Self.rule(1, .topic, "income tax", .keepApart, "incomes tax"), Self.rule(2, .sender, "Galp", .keepApart, "Galp Energia")]
+        let bundled = try Self.consolidator(rules: rules, vocabulary: Self.manyLabels)
+        func limited(to limit: Int) -> LabelConsolidator {
+            var config = bundled.config
+            config.suggestionLimit = limit
+            return LabelConsolidator(config: config, rules: rules, vocabulary: bundled.vocabulary)
+        }
+        let all = limited(to: Self.manyLabels.count * Self.manyLabels.count)
+        let found = all.suggestions()
+        #expect(found == Self.everyPairCompared(all), "every pair alike enough is found, in the same order: \(found)")
+        func offered(_ a: String, _ b: String) -> LabelSuggestion? {
+            found.first { Set([$0.value, $0.into]) == [a, b] }
+        }
+        #expect(offered("EDP Comercial SA", "E.D.P. Comercial, S.A.")?.similarity == 1,
+                "however far apart their lengths, labels written the same way are found")
+        #expect(!found.contains { $0.kind == .reference && $0.similarity < 1 }, "references are offered only when written the same way")
+        #expect(offered("Portugal", "Portgual") != nil, "and a typo, where a kind allows one")
+        let few = limited(to: 5)
+        #expect(found.count > 5 && few.suggestions() == Self.everyPairCompared(few), "and at most labels.vocabulary.suggestionLimit, the same ones")
+    }
+
+    @Test func theSuggestionsFollowEveryChangeToTheLabelsAndTheRules() async throws {
+        let h = try await Harness.make(analyzer: PerFileAnalyzer(labels: [
+            "maria.txt": [Self.label(.party, "Maria Silva")], "mario.txt": [Self.label(.party, "Mario Silva")],
+        ]))
+        defer { h.env.cleanup() }
+        let store = h.services.labels
+        #expect(try await store.suggestions().isEmpty, "no labels, nothing alike")
+        for name in ["maria.txt", "mario.txt"] { try await h.ingest(name, text: "A letter: \(name)") }
+        #expect(try await h.services.labels.suggestions().map(\.value) == ["Mario Silva"], "two names a letter apart, once both are in use")
+        try await h.labels.keepApart(Self.label(.party, "Maria Silva"), from: "Mario Silva")
+        #expect(try await h.services.labels.suggestions().isEmpty, "and not once the user kept them apart")
     }
 
     // MARK: The user's decisions
@@ -217,6 +262,32 @@ import Testing
                 "Statistics counts the rules and every label they and the vocabulary tidied, the earlier writing included")
     }
 
+    /// The labels in use as the documents' own labels count them, each once per document that has it.
+    private func counted(_ h: Harness) async throws -> [LabelKind: [LabelUsage]] {
+        let documents = try await h.services.documents.list(DocumentFilter(), limit: 50)
+        let labels = documents.flatMap { Set($0.labels ?? []) }
+        return Dictionary(grouping: Dictionary(grouping: labels, by: { $0 }).map { LabelUsage(label: $0.key, documents: $0.value.count) },
+                          by: \.label.kind).mapValues { $0.sorted { ($1.documents, $0.label.value) < ($0.documents, $1.label.value) } }
+    }
+
+    @Test func theLabelsInUseAreCountedFromAnIndexOfThemKeptInStepWithEveryChange() async throws {
+        let (h, ids) = try await archive()
+        defer { h.env.cleanup() }
+        let indexed = { try await h.env.database.reader.read { db in try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM document_labels") } }
+        #expect(try await h.services.labels.usage() == counted(h), "the labels documents were read with are counted as they have them")
+        _ = try await h.labels.merge(Self.label(.sender, "EDP Comercial"), into: "EDP")
+        _ = try await h.labels.ignore(Self.label(.jurisdiction, "Portugal"))
+        try await h.review.edit(try #require(ids["meo.txt"]), fileName: nil,
+                                labels: LabelEdit(adding: [Self.label(.tag, "Home")], removing: [Self.label(.sender, "MEO")]))
+        let usage = try await h.services.labels.usage()
+        #expect(usage == (try await counted(h)), "and after a merge, a label ignored and one edited by hand, as they have them then")
+        #expect(usage[.sender]?.map(\.label.value) == ["EDP"] && usage[.tag] == [LabelUsage(label: Self.label(.tag, "Home"), documents: 1)]
+                    && usage[.jurisdiction]?.contains { $0.label.value == "Portugal" } == false,
+                "the merged, the added and the ignored label each as the change left them: \(usage)")
+        #expect(try await indexed() == usage.values.joined().reduce(0) { $0 + $1.documents },
+                "the index of labels holds each label a document has once, and nothing else")
+    }
+
     @Test func ignoringALabelTakesItOffEveryDocument() async throws {
         let (h, ids) = try await archive()
         defer { h.env.cleanup() }
@@ -255,6 +326,19 @@ import Testing
         #expect(try await h.services.labels.rules().count(where: { $0.action == .keepApart }) == 1, "and is made once")
     }
 
+    @Test func aLabelWhoseWritingTheUserChoseCanBeMergedIntoAnother() async throws {
+        let (h, ids) = try await archive()
+        defer { h.env.cleanup() }
+        let actions = h.labels
+        // A rule both about the label merged and merged into it: one writing of it made another.
+        try await actions.merge(Self.label(.sender, "EDP comercial"), into: "EDP Comercial")
+        let outcome = try await actions.merge(Self.label(.sender, "EDP Comercial"), into: "EDP Energia")
+        #expect(try await h.services.labels.rules().map(\.summary) == ["sender “EDP Comercial” → “EDP Energia”"],
+                "the merge replaces the rule about the label it merges, which no longer has a writing of its own")
+        let edp = try [#require(ids["edp_july.txt"]), #require(ids["edp_august.txt"])].sorted()
+        #expect(outcome.documents == edp, "and relabels every document that had it")
+    }
+
     @Test func forgettingARuleStopsReadingsFollowingItAndLeavesDocumentsAsTheyAre() async throws {
         let (h, ids) = try await archive()
         defer { h.env.cleanup() }
@@ -267,17 +351,25 @@ import Testing
                 "documents keep the labels the rule gave them")
         #expect(try await h.services.history.events(limit: 5, kinds: [.labelRuleForgotten]).first?.summary
                 == "Forgot: sender “EDP Comercial” → “EDP”", "History says which rule was forgotten")
-        await #expect(throws: LabelError.self, "a rule that is not there") { try await actions.forget(rule: 999) }
+        await #expect(throws: LabelError.ruleNotFound(999), "a rule that is not there") { try await actions.forget(rule: 999) }
     }
 
     @Test func aDecisionMustBeAboutLabelsOfTheirKind() async throws {
         let (h, _) = try await archive()
         defer { h.env.cleanup() }
         let actions = h.labels
-        await #expect(throws: LabelError.self, "no date") { try await actions.merge(Self.label(.date, "yesterday"), into: "2026-07-05") }
-        await #expect(throws: LabelError.self, "nothing to merge") { try await actions.merge(Self.label(.sender, "EDP"), into: " EDP ") }
-        await #expect(throws: LabelError.self, "one label") { try await actions.keepApart(Self.label(.sender, "EDP"), from: "edp") }
-        await #expect(throws: LabelError.self, "no language") { try await actions.ignore(Self.label(.language, "Klingonese")) }
+        await #expect(throws: LabelError.notALabel(.date, "yesterday"), "no date") {
+            try await actions.merge(Self.label(.date, "yesterday"), into: "2026-07-05")
+        }
+        await #expect(throws: LabelError.sameLabel(.sender, "EDP"), "nothing to merge") {
+            try await actions.merge(Self.label(.sender, "EDP"), into: " EDP ")
+        }
+        await #expect(throws: LabelError.sameLabel(.sender, "EDP"), "one label, however it is cased") {
+            try await actions.keepApart(Self.label(.sender, "EDP"), from: "edp")
+        }
+        await #expect(throws: LabelError.notALabel(.language, "Klingonese"), "no language") {
+            try await actions.ignore(Self.label(.language, "Klingonese"))
+        }
         #expect(try await h.services.labels.rules().isEmpty, "a refused decision makes no rule")
         #expect(try await h.services.history.events(limit: 50, kinds: [.labelsMerged, .labelIgnored, .labelsKeptApart]).isEmpty,
                 "and leaves no trace")
@@ -288,10 +380,12 @@ import Testing
     @Test func theAppRefreshesOnEveryRecordedChange() async throws {
         let (h, _) = try await archive()
         defer { h.env.cleanup() }
-        var changes = h.env.database.activity().makeAsyncIterator()
-        let first = try #require(await changes.next(), "the stream reports the history's state instead of ending")
+        let changes = await Collected.reading(h.env.database.activity())
+        try #require(await Patience.until { await changes.all.count >= 1 }, "the stream reports the history's state instead of ending")
         try await h.labels.ignore(Self.label(.topic, "electricity"))
-        let next = try #require(await changes.next(), "a decision about labels refreshes the app")
+        try #require(await Patience.until { await changes.all.count >= 2 }, "a decision about labels refreshes the app")
+        let (first, next) = (await changes.all[0], await changes.all[1])
         #expect(next > first, "the stream moves on to the history's new state")
+        await changes.stop()
     }
 }

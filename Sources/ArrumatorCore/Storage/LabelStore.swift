@@ -53,10 +53,13 @@ public struct LabelRule: ArrumatorRecord, Identifiable, Hashable {
 public struct LabelStore: Sendable {
     public let database: AppDatabase
     public let config: LabelsConfig
+    /// Which labels looked alike when `suggestions()` was last asked, for each kind.
+    public let lookAlikes: LookAlikeMemo
 
-    public init(database: AppDatabase, config: LabelsConfig) {
+    public init(database: AppDatabase, config: LabelsConfig, lookAlikes: LookAlikeMemo) {
         self.database = database
         self.config = config
+        self.lookAlikes = lookAlikes
     }
 
     /// Every label in use, by kind, the most used first. With `selection`, only the documents that have every label of
@@ -65,12 +68,15 @@ public struct LabelStore: Sendable {
         try await database.reader.read { db in try Self.usage(db, within: DocumentFilter(labels: selection)) }
     }
 
+    /// Counted from the index of the labels documents have (`v24_documentLabels`), which answers it by its key, so asking
+    /// it for every reading and every change to History reads no document's labels; within a scope, of the documents in
+    /// it alone.
     static func usage(_ db: Database, within scope: DocumentFilter = DocumentFilter()) throws -> [LabelKind: [LabelUsage]] {
         let (conditions, args) = try scope.sql(db)
+        let labels = conditions.isEmpty ? "document_labels l" : "document_labels l JOIN documents d ON d.id = l.doc_id WHERE 1\(conditions)"
         let rows = try Row.fetchAll(db, sql: """
-            SELECT json_extract(l.value, '$.kind') AS kind, json_extract(l.value, '$.value') AS value, COUNT(DISTINCT d.id) AS documents
-            FROM documents d, json_each(d.labels_json) l WHERE d.labels_json IS NOT NULL\(conditions)
-            GROUP BY 1, 2 ORDER BY documents DESC, value
+            SELECT l.kind AS kind, l.value AS value, COUNT(*) AS documents FROM \(labels)
+            GROUP BY l.kind, l.value ORDER BY documents DESC, l.value
             """, arguments: args)
         var usage: [LabelKind: [LabelUsage]] = [:]
         for row in rows {
@@ -91,9 +97,24 @@ public struct LabelStore: Sendable {
         return LabelConsolidator(config: config.vocabulary, rules: rules, vocabulary: usage)
     }
 
-    /// Pairs of labels in use alike enough to be one, which the user has not decided about.
+    /// Pairs of labels in use alike enough to be one, which the user has not decided about. Which labels of a kind look
+    /// alike is brought up to date from when it was last asked, comparing only the labels added since (`LookAlikeMemo`);
+    /// one asking while another works it out waits for it. Stopping is thrown, the work done kept. How many there are is
+    /// told to every subscriber of `LookAlikeMemo.suggestionCounts()`.
     public func suggestions() async throws -> [LabelSuggestion] {
-        try await consolidator().suggestions()
+        let found = try await consolidator().suggestions(by: lookAlikes, comparing: LabelSimilarity.lookAlike(_:_:atLeast:))
+        lookAlikes.publish(suggestions: found.count)
+        return found
+    }
+
+    /// Works out which labels look alike, as `suggestions()` does, so that the first to ask for them seldom waits and
+    /// how many there are is told to those who count them: what the runtime does once the archive is open, and at every
+    /// change to it after. Stopping ends it, keeping what it has done; a failure is logged.
+    public func workOutLookAlikes() async {
+        do { _ = try await suggestions() } catch {
+            guard !(error is CancellationError || Task.isCancelled) else { return }
+            Log.error(.db, "Could not work out which labels look alike", ["error": error.localizedDescription])
+        }
     }
 
     /// What the model is shown of the archive: the labels it uses most, and the user's merges and unwanted labels, of the

@@ -17,7 +17,7 @@ public struct IndexStore: Sendable {
                            extractorVersion: String, labels: [DocumentLabel]) async throws {
         let kinds = LabelKind.allCases.map(\.rawValue)
         let columns = ["doc_id", "filename", "body", "summary", "metadata_json", "extractor_version"] + kinds
-        let values: [(any DatabaseValueConvertible)?] = [docID, filename, body, summary, JSON.string(metadata), extractorVersion]
+        let values: [(any DatabaseValueConvertible)?] = [docID, filename, body, summary, try JSON.string(metadata), extractorVersion]
             + LabelKind.allCases.map { DocumentLabel.searchText(labels, kind: $0) }
         let arguments = StatementArguments(values)
         try await database.writer.write { db in
@@ -28,22 +28,65 @@ public struct IndexStore: Sendable {
         }
     }
 
-    /// Makes a document's labels its own: on its row, which writes them into its record file, and in the full-text
-    /// index, in one transaction. `labelled` says whether they label it, as when the model read it; a document's tags
-    /// alone do not (`DocumentLabel.stored`).
-    public func saveLabels(_ labels: [DocumentLabel], docID: Int64, labelled: Bool) async throws {
+    /// Saves what the model read of a document, `read`, where the user has not changed it since the reading began: the
+    /// labels the document had then, `before`, are compared kind by kind with those it has when it is saved, read in the
+    /// same transaction, and a kind the user changed meanwhile, as a sender corrected or a tag given or taken away, stays
+    /// as the user left it. The user's own labels (tags) are always as the document has them. The reading fills in the
+    /// rest. The labels saved.
+    @discardableResult
+    public func saveReading(_ read: [DocumentLabel], before: [DocumentLabel], docID: Int64) async throws -> [DocumentLabel] {
         let now = time.now()
-        try await database.writer.write { db in try Self.saveLabels(db, labels, docID: docID, labelled: labelled, at: now) }
+        return try await database.writer.write { db in
+            guard let document = try DocumentRecord.fetchOne(db, key: docID) else { throw IngestError.documentNotFound(docID) }
+            let current = document.labels ?? []
+            let ofKind = { (labels: [DocumentLabel], kind: LabelKind) in Set(labels.filter { $0.kind == kind }) }
+            let users = Set(LabelKind.allCases.filter { $0.isUsersOwn || ofKind(before, $0) != ofKind(current, $0) })
+            let labels = (read.filter { !users.contains($0.kind) } + current.filter { users.contains($0.kind) }).distinct()
+            try Self.saveLabels(db, labels, docID: docID, labelled: true, at: now)
+            return labels
+        }
     }
 
-    /// Saves a document's labels inside an existing transaction, so a change to many documents commits as one.
+    /// Adds `added` to a document's labels, those it has not already, as they are when the transaction reads them, so
+    /// a change made meanwhile is kept.
+    public func addLabels(_ added: [DocumentLabel], docID: Int64) async throws {
+        let now = time.now()
+        try await database.writer.write { db in
+            guard let document = try DocumentRecord.fetchOne(db, key: docID) else { throw IngestError.documentNotFound(docID) }
+            let current = document.labels ?? []
+            let new = added.filter { !current.contains($0) }
+            guard !new.isEmpty else { return }
+            try Self.saveLabels(db, current + new, docID: docID, labelled: document.isLabelled, at: now)
+        }
+    }
+
+    /// Makes a document's labels its own, inside a transaction of the caller's that reads what it changes: on its row,
+    /// which writes them into its record file, and in the full-text index. `labelled` says whether they label it, as when
+    /// the model read it; a document's tags alone do not (`DocumentLabel.stored`).
     static func saveLabels(_ db: Database, _ labels: [DocumentLabel], docID: Int64, labelled: Bool, at now: Date) throws {
         let stored = DocumentLabel.stored(labels, labelled: labelled)
         let assignments = LabelKind.allCases.map { "\($0.rawValue) = ?" }.joined(separator: ", ")
         let values: [(any DatabaseValueConvertible)?] = LabelKind.allCases.map { DocumentLabel.searchText(labels, kind: $0) } + [docID]
         try db.execute(sql: "UPDATE documents SET labels_json = ?, tags_only = ?, updated_at = ? WHERE id = ?",
-                       arguments: [stored.labels.map { JSON.string($0) }, stored.tagsOnly, now.unixSeconds, docID])
+                       arguments: [try stored.labels.map { try JSON.string($0) }, stored.tagsOnly, now.unixSeconds, docID])
         try db.execute(sql: "UPDATE document_text SET \(assignments) WHERE doc_id = ?", arguments: StatementArguments(values))
+    }
+
+    /// Takes back everything a reading of a document gave it, as when its file changed after it was read and it is read
+    /// again as a new arrival: the model's labels (its tags, the user's, stay), what the model said of it, its stored
+    /// text and its entries in the full-text and meaning indexes, in one transaction. It is being processed again.
+    public func forgetReading(docID: Int64) async throws {
+        let now = time.now()
+        try await database.writer.write { db in
+            guard let document = try DocumentRecord.fetchOne(db, key: docID) else { throw IngestError.documentNotFound(docID) }
+            try Self.saveLabels(db, (document.labels ?? []).filter(\.kind.isUsersOwn), docID: docID, labelled: false, at: now)
+            try db.execute(sql: """
+                UPDATE documents SET analysis_json = NULL, content_json = NULL, page_count = NULL, extracted_at = NULL,
+                embedded_at = NULL, status = ?, updated_at = ? WHERE id = ?
+                """, arguments: [DocumentStatus.processing.rawValue, now.unixSeconds, docID])
+            try db.execute(sql: "DELETE FROM document_text WHERE doc_id = ?", arguments: [docID])
+            try db.execute(sql: "DELETE FROM embeddings WHERE doc_id = ?", arguments: [docID])
+        }
     }
 
     /// Updates the searchable file name after a rename, keeping the rest.

@@ -32,9 +32,14 @@ struct MIMEPart {
         HeaderDecoding.parameters(header("Content-Type") ?? "").parameters
     }
 
+    /// A part sent as an attachment: so disposed, or with a name and no disposition. One disposed inline is shown in the
+    /// body, whatever its name (RFC 2183 §2.1), and is still listed among the attachments when it is not the body.
     var isAttachment: Bool {
-        let disposition = HeaderDecoding.parameters(header("Content-Disposition") ?? "").value.lowercased()
-        return disposition == "attachment" || filename != nil
+        switch HeaderDecoding.parameters(header("Content-Disposition") ?? "").value.lowercased() {
+        case "attachment": true
+        case "inline": false
+        default: filename != nil
+        }
     }
 
     /// Attachment filename from `Content-Disposition` or the `name` parameter of `Content-Type`.
@@ -44,8 +49,8 @@ struct MIMEPart {
         return HeaderDecoding.decode(name)
     }
 
-    /// Body bytes after undoing the transfer encoding, at most `cap` bytes.
-    func decodedBody(cap: Int) -> Data {
+    /// Body bytes after undoing the transfer encoding, at most `cap` of them, and whether there were more.
+    func decodedBody(cap: Int) -> (bytes: Data, truncated: Bool) {
         let encoding = (header("Content-Transfer-Encoding") ?? "").trimmingCharacters(in: .whitespaces).lowercased()
         let bytes: Data = switch encoding {
         case "base64":
@@ -55,22 +60,34 @@ struct MIMEPart {
         default:
             Data(body.unicodeScalars.map { UInt8(truncatingIfNeeded: $0.value) })
         }
-        return bytes.count > cap ? bytes.prefix(cap) : bytes
+        return bytes.count > cap ? (bytes.prefix(cap), true) : (bytes, false)
     }
 
-    /// Body as text in the declared charset (UTF-8, then Latin-1 when undeclared or unknown).
-    func decodedText(cap: Int) -> String {
-        let bytes = decodedBody(cap: cap)
+    /// Body as text in the declared charset (UTF-8, then Latin-1 when undeclared or unknown), from at most `cap` bytes,
+    /// and whether there were more. A character the cap cuts in two is left out, so a cut body stays in its own charset.
+    func decodedText(cap: Int) -> (text: String, truncated: Bool) {
+        let (bytes, truncated) = decodedBody(cap: cap)
         if let charset = contentTypeParameters["charset"], let encoding = HeaderDecoding.encoding(ianaName: charset),
-           let text = String(data: bytes, encoding: encoding) {
-            return text
+           let text = TextEncodingDetector.decode(bytes, as: encoding, allowCutTail: truncated) {
+            return (text, truncated)
         }
-        return String(validating: bytes, as: UTF8.self) ?? String(data: bytes, encoding: .isoLatin1) ?? ""
+        let text = TextEncodingDetector.strictUTF8(bytes, allowCutTail: truncated)
+            ?? String(data: bytes, encoding: .isoLatin1) ?? ""
+        return (text, truncated)
     }
 
-    /// All leaf parts, depth first.
+    /// All leaf parts, depth first. A message within the message (`message/rfc822`, one forwarded as an attachment) is
+    /// one leaf: its body is not the message's, nor are its attachments (`attachedMessage`).
     var leaves: [MIMEPart] {
         children.isEmpty ? [self] : children.flatMap(\.leaves)
+    }
+
+    /// Whether this part is a message of its own, attached to the one it is part of.
+    var isMessage: Bool { mediaType == "message/rfc822" }
+
+    /// The message this part holds, read from at most `cap` of its bytes, when it is one (`isMessage`).
+    func attachedMessage(cap: Int, maxDepth: Int) -> MIMEPart? {
+        isMessage ? Self.parse(decodedBody(cap: cap).bytes, maxDepth: maxDepth) : nil
     }
 
     // MARK: Parsing
@@ -83,8 +100,6 @@ struct MIMEPart {
         guard depth < maxDepth else { return part }
         if part.mediaType.hasPrefix("multipart/"), let boundary = part.contentTypeParameters["boundary"], !boundary.isEmpty {
             part.children = splitMultipart(body, boundary: boundary).map { parse($0, depth: depth + 1, maxDepth: maxDepth) }
-        } else if part.mediaType == "message/rfc822" {
-            part.children = [parse(body, depth: depth + 1, maxDepth: maxDepth)]
         }
         return part
     }

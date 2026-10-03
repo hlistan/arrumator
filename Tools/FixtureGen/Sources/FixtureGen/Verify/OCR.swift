@@ -1,4 +1,6 @@
+import AppKit
 import CoreGraphics
+import CoreText
 import Foundation
 import ImageIO
 import Vision
@@ -13,6 +15,30 @@ struct OCREngine {
         request.recognitionLanguages = OCREngine.languages(primary: primary)
         let observations = try await request.perform(on: image)
         return observations.compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")
+    }
+
+    /// Whether Vision can read text on this machine at all, asked with a word drawn large and black on white.
+    /// GitHub's runners are virtual Macs where every text recognition throws (`TextRecognition.CRImageReaderError`
+    /// 9), as the extractor tests' `VisionOCR` probe finds; there the OCR checks are skipped, saying why, and they run
+    /// on every physical Mac.
+    static func isAvailable() async -> Bool {
+        let context = Raster.canvas(width: Probe.width, height: Probe.height, gray: true)
+        context.setFillColor(gray: 1, alpha: 1)
+        context.fill(CGRect(x: 0, y: 0, width: Probe.width, height: Probe.height))
+        guard let font = CTFontCreateUIFontForLanguage(.system, Probe.fontSize, nil) else { return false }
+        let line = CTLineCreateWithAttributedString(NSAttributedString(string: Probe.word, attributes: [.font: font]))
+        context.textPosition = CGPoint(x: Probe.fontSize, y: Probe.fontSize)
+        CTLineDraw(line, context)
+        guard let image = context.makeImage(),
+              let text = try? await OCREngine().recognize(image, primary: .en) else { return false }
+        return !text.isEmpty
+    }
+
+    private enum Probe {
+        static let word = "Arrumator"
+        static let width = 800
+        static let height = 200
+        static let fontSize: CGFloat = 60
     }
 
     /// The fixture's own language first, like the app orders its guesses.

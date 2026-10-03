@@ -1,8 +1,11 @@
 // swift-tools-version: 6.2
 import PackageDescription
 
+// Every first-party target: `any` written out, and no warning left standing (AGENTS.md §3, "no new compiler warnings").
+// SwiftPM applies these to this package's own targets only, never to its dependencies.
 let strict: [SwiftSetting] = [
     .enableUpcomingFeature("ExistentialAny"),
+    .treatAllWarnings(as: .error),
 ]
 
 let package = Package(
@@ -19,7 +22,6 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.11.0"),
         .package(url: "https://github.com/jpsim/Yams.git", from: "6.2.0"),
-        .package(url: "https://github.com/CoreOffice/CoreXLSX.git", from: "0.14.2"),
         .package(url: "https://github.com/weichsel/ZIPFoundation.git", from: "0.9.19"),
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.8.0"),
     ],
@@ -37,10 +39,9 @@ let package = Package(
             name: "ArrumatorExtract",
             dependencies: [
                 "ArrumatorCore",
-                .product(name: "CoreXLSX", package: "CoreXLSX"),
                 .product(name: "ZIPFoundation", package: "ZIPFoundation"),
             ],
-            resources: [.copy("Prompts")],
+            resources: [.copy("Prompts"), .copy("Entities")],
             swiftSettings: strict
         ),
         .target(
@@ -63,15 +64,17 @@ let package = Package(
             swiftSettings: strict
         ),
         .target(name: "ArrumatorTesting", dependencies: ["ArrumatorCore"], path: "Tests/Support", swiftSettings: strict),
-        .testTarget(name: "ArrumatorCoreTests", dependencies: ["ArrumatorCore", "ArrumatorTesting"], swiftSettings: strict),
-        .testTarget(name: "ArrumatorExtractTests", dependencies: ["ArrumatorExtract", "ArrumatorCore", "ArrumatorTesting"],
+        .testTarget(name: "ArrumatorCoreTests",
+                    dependencies: ["ArrumatorCore", "ArrumatorTesting", .product(name: "GRDB", package: "GRDB.swift")],
                     swiftSettings: strict),
+        .testTarget(name: "ArrumatorExtractTests", dependencies: ["ArrumatorExtract", "ArrumatorCore", "ArrumatorTesting"],
+                    resources: [.copy("Resources")], swiftSettings: strict),
         .testTarget(name: "ArrumatorClassifyTests", dependencies: ["ArrumatorClassify", "ArrumatorCore", "ArrumatorTesting"],
                     swiftSettings: strict),
-        .testTarget(name: "ArrumatorRuntimeTests", dependencies: ["ArrumatorRuntime", "ArrumatorCore", "ArrumatorTesting"],
+        .testTarget(name: "ArrumatorRuntimeTests", dependencies: ["ArrumatorRuntime", "ArrumatorCore", "ArrumatorTesting", .product(name: "GRDB", package: "GRDB.swift")],
                     swiftSettings: strict),
         // Runs the built command itself, so it depends on it to have it built beside the tests.
-        .testTarget(name: "ArrumatorCLITests", dependencies: ["ArrumatorCLI", "ArrumatorCore"], swiftSettings: strict),
+        .testTarget(name: "ArrumatorCLITests", dependencies: ["ArrumatorCLI", "ArrumatorCore", "ArrumatorTesting", .product(name: "GRDB", package: "GRDB.swift")], swiftSettings: strict),
     ],
     swiftLanguageModes: [.v6]
 )

@@ -61,6 +61,31 @@ extension URL {
     public var canonicalFolderPath: String? {
         try? resolvingSymlinksInPath().resourceValues(forKeys: [.canonicalPathKey]).canonicalPath
     }
+
+    /// `canonicalFolderPath` of the folder, or, when it is not there, of where it would be: the canonical path of the
+    /// nearest folder above it that is there, with the rest as given. The same as the folder's own once it is made.
+    public var canonicalPlacePath: String {
+        let (base, rest) = canonicalPlaceParts
+        return rest.reduce(URL(fileURLWithPath: base, isDirectory: true)) { $0.appendingPathComponent($1, isDirectory: true) }.path
+    }
+
+    /// The folder spelled as the file system spells it, as `canonicalPlacePath` finds it, and standardized as every path
+    /// the app keeps is (`/var` for `/private/var`), whether it is there yet or not.
+    public var canonicalPlace: URL {
+        let (base, rest) = canonicalPlaceParts
+        return rest.reduce(URL(fileURLWithPath: base, isDirectory: true).standardizedFileURL) { $0.appendingPathComponent($1, isDirectory: true) }
+    }
+
+    /// The canonical path of the nearest folder of this URL, or above it, that is there, and the names below it.
+    private var canonicalPlaceParts: (base: String, rest: [String]) {
+        var place = standardizedFileURL
+        var rest: [String] = []
+        while place.canonicalFolderPath == nil, place.path != "/" {
+            rest.insert(place.lastPathComponent, at: 0)
+            place = place.deletingLastPathComponent()
+        }
+        return (place.canonicalFolderPath ?? place.path, rest)
+    }
 }
 
 /// Filesystem locations of app state.
@@ -87,11 +112,12 @@ public struct AppPaths: Sendable {
     }
 
     /// Every archive has an index of its own, so switching archives never mixes the documents, labels or history of one
-    /// with another (docs/storage.md). It is named after the canonical path of the archive's folder, which must
-    /// exist: two spellings of one folder, such as `/tmp` and `/private/tmp` or another case, name one index.
-    public func indexURL(for archive: URL) throws -> URL {
-        guard let path = archive.canonicalFolderPath else { throw ConfigError.archiveFolderMissing(archive.path) }
-        let digest = SHA256.hash(data: Data(path.utf8)).prefix(Self.indexNameBytes)
+    /// with another (docs/storage.md). It is named after the canonical path of the archive's folder, or of where it
+    /// would be when it is not there (`canonicalPlacePath`): two spellings of one folder, such as `/tmp` and
+    /// `/private/tmp` or another case, name one index, and an archive whose folder is away, as on a disk not connected,
+    /// still names its own.
+    public func indexURL(for archive: URL) -> URL {
+        let digest = SHA256.hash(data: Data(archive.canonicalPlacePath.utf8)).prefix(Self.indexNameBytes)
         return indexesDirectory.appendingPathComponent(digest.map { String(format: "%02x", $0) }.joined() + "." + Self.indexExtension)
     }
 
@@ -106,12 +132,14 @@ public struct AppPaths: Sendable {
     var singleIndexURL: URL { supportDirectory.appendingPathComponent("arrumator.sqlite") }
 
     /// Moves the one database of earlier versions into place as the index of the archive the settings name, unless
-    /// that archive has an index already. Returns whether it moved.
+    /// that archive has an index already. Returns whether it moved. Its write-ahead log is written into it first: the
+    /// files are moved one at a time, and a stop between two would otherwise leave its last changes behind.
     @discardableResult
     public func moveSingleIndex(to index: URL) throws -> Bool {
         let fm = FileManager.default
         guard fm.fileExists(atPath: singleIndexURL.path), !fm.fileExists(atPath: index.path) else { return false }
         try fm.createDirectory(at: indexesDirectory, withIntermediateDirectories: true)
+        try AppDatabase.checkpoint(singleIndexURL)
         for suffix in [""] + AppDatabase.companionSuffixes where fm.fileExists(atPath: singleIndexURL.path + suffix) {
             try fm.moveItem(atPath: singleIndexURL.path + suffix, toPath: index.path + suffix)
         }

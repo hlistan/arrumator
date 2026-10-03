@@ -65,8 +65,9 @@ public struct LabelConsolidator: Sendable {
         return (current, applied)
     }
 
-    /// The label in use most like `label` and alike enough to be it, the most used of equals. A label the archive already
-    /// uses stays itself, unless more documents have it written another way.
+    /// The label in use most like `label` and alike enough to be it, the most used of equals: never one 0 alike, as labels
+    /// whose numbers differ are, the same digits grouped otherwise among them, whatever the threshold. A label the archive
+    /// already uses stays itself, unless more documents have it written another way.
     private func alike(_ label: DocumentLabel) -> (DocumentLabel, Double)? {
         guard let policy = config.kinds[label.kind] else { return nil }
         let usages = vocabulary[label.kind] ?? []
@@ -75,11 +76,8 @@ public struct LabelConsolidator: Sendable {
         let key = LabelSimilarity.Key(label.value)
         var best: (label: DocumentLabel, similarity: Double)?
         for usage in usages where usage.label.value != label.value && usage.documents > (own ?? 0) {
-            let other = LabelSimilarity.Key(usage.label.value)
-            guard key.isSameWriting(as: other) || LabelSimilarity.bound(key, other) >= threshold else { continue }
-            let similarity = LabelSimilarity.similarity(key, other)
-            guard similarity >= threshold, similarity > (best?.similarity ?? 0),
-                  !keptApart(label.value, usage.label.value, kind: label.kind) else { continue }
+            guard let similarity = LabelSimilarity.similarity(key, LabelSimilarity.Key(usage.label.value), atLeast: threshold),
+                  similarity > (best?.similarity ?? 0), !keptApart(label.value, usage.label.value, kind: label.kind) else { continue }
             best = (usage.label, similarity)
         }
         return best
@@ -89,27 +87,53 @@ public struct LabelConsolidator: Sendable {
         rules.contains { $0.keepsApart(a, b, kind: kind) }
     }
 
-    /// Pairs of labels in use that are alike enough to be one (`KindVocabularyConfig.suggestSimilarity`) and that the
-    /// user has not kept apart, the most alike first, at most `suggestionLimit`. Each is to be merged into the one more
-    /// documents have.
+    /// Pairs of labels in use that the user has not kept apart and that are alike enough to be one
+    /// (`KindVocabularyConfig.suggestSimilarity`), or that hold the same digits grouped otherwise, which every kind offers
+    /// whatever its thresholds, each saying why (`LabelSuggestion.Reason`). The most alike come first, at most
+    /// `suggestionLimit`; of pairs as alike, those written alike, then those of the kind listed first, then of the labels
+    /// more documents have. Each is to be merged into the one more documents have.
     public func suggestions() -> [LabelSuggestion] {
-        var found: [LabelSuggestion] = []
-        for kind in LabelKind.allCases {
-            guard let policy = config.kinds[kind] else { continue }
+        suggestions(alike: Dictionary(uniqueKeysWithValues: config.kinds.map { kind, policy in
+            (kind, AlikeLabels(threshold: policy.suggestSimilarity).updated(to: labels(of: kind), comparing: LabelSimilarity.lookAlike(_:_:atLeast:)) {
+                false
+            })
+        }))
+    }
+
+    /// `suggestions()`, which labels of each kind look alike brought up to date by `memo` from what it last worked out
+    /// (`LookAlikeMemo.alike`), comparing labels with `comparing`. Throws `CancellationError` when stopped part way.
+    func suggestions(by memo: LookAlikeMemo, comparing: @escaping AlikeLabels.Comparing) async throws -> [LabelSuggestion] {
+        var alike: [LabelKind: AlikeLabels] = [:]
+        for (kind, policy) in config.kinds {
+            alike[kind] = try await memo.alike(kind, labels: labels(of: kind), threshold: policy.suggestSimilarity, comparing: comparing)
+        }
+        return suggestions(alike: alike)
+    }
+
+    /// The labels of `kind` in use.
+    private func labels(of kind: LabelKind) -> [String] {
+        (vocabulary[kind] ?? []).map(\.label.value)
+    }
+
+    /// `suggestions()`, with which labels of each kind look alike given by `alike`, a kind it does not name offering none.
+    private func suggestions(alike: [LabelKind: AlikeLabels]) -> [LabelSuggestion] {
+        var found: [(order: (reason: Int, kind: Int, first: Int, second: Int), suggestion: LabelSuggestion)] = []
+        for (place, kind) in LabelKind.allCases.enumerated() {
+            guard let pairs = alike[kind]?.pairs else { continue }
             let usages = vocabulary[kind] ?? []
-            let keys = usages.map { LabelSimilarity.Key($0.label.value) }
-            for i in usages.indices {
-                for j in usages.indices where j > i {
-                    guard LabelSimilarity.bound(keys[i], keys[j]) >= policy.suggestSimilarity || keys[i].isSameWriting(as: keys[j]) else {
-                        continue
-                    }
-                    let similarity = LabelSimilarity.similarity(keys[i], keys[j])
-                    let (into, value) = (usages[i].label.value, usages[j].label.value)
-                    guard similarity >= policy.suggestSimilarity, !keptApart(into, value, kind: kind) else { continue }
-                    found.append(LabelSuggestion(kind: kind, value: value, into: into, similarity: similarity))
-                }
+            let rank = Dictionary(usages.enumerated().map { ($1.label.value, $0) }, uniquingKeysWith: min)
+            for (pair, look) in pairs {
+                guard let a = rank[pair.first], let b = rank[pair.second], !keptApart(pair.first, pair.second, kind: kind) else { continue }
+                let (first, second) = (min(a, b), max(a, b))
+                found.append(((look.reason == .writtenAlike ? 0 : 1, place, first, second),
+                              LabelSuggestion(kind: kind, value: usages[second].label.value, into: usages[first].label.value,
+                                              similarity: look.similarity, reason: look.reason)))
             }
         }
-        return Array(found.sorted { $0.similarity > $1.similarity }.prefix(config.suggestionLimit))
+        let ordered = found.sorted { a, b in
+            guard a.suggestion.similarity == b.suggestion.similarity else { return a.suggestion.similarity > b.suggestion.similarity }
+            return (a.order.reason, a.order.kind, a.order.first, a.order.second) < (b.order.reason, b.order.kind, b.order.first, b.order.second)
+        }
+        return Array(ordered.prefix(config.suggestionLimit).map(\.suggestion))
     }
 }

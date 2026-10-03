@@ -28,7 +28,7 @@ struct SettingsView: View {
 /// Binding into the settings in force that saves on change. `loaded` is what the page was opened with, which the
 /// settings never go back from being, so the binding has a value without making one up.
 @MainActor
-func setting<T: Sendable>(_ model: AppModel, _ loaded: AppSettings, _ keyPath: WritableKeyPath<AppSettings, T> & Sendable) -> Binding<T> {
+func setting<T: Sendable>(_ model: AppModel, _ loaded: AppSettings, _ keyPath: any WritableKeyPath<AppSettings, T> & Sendable) -> Binding<T> {
     Binding(get: { (model.settings ?? loaded)[keyPath: keyPath] },
             set: { newValue in Task { await model.update { $0[keyPath: keyPath] = newValue } } })
 }
@@ -43,7 +43,7 @@ struct GeneralSettings: View {
         Form {
             Section {
                 pathRow(Wording.incomingFolder, path: model.settings?.incomingPath) { path in await model.update { $0.incomingPath = path } }
-                pathRow(Wording.archiveFolder, path: model.settings?.archivePath, busy: model.switchingArchive) { path in
+                pathRow(Wording.archiveFolder, path: model.archive?.path, busy: model.switchingArchive) { path in
                     await model.switchArchive(to: path)
                 }
             } header: {
@@ -143,7 +143,7 @@ struct ModelSettingsView: View {
     var body: some View {
         Form {
             Section(Wording.ollama) {
-                LabeledContent(Wording.status, value: model.ollama.summary)
+                LabeledContent(Wording.status, value: model.session.ollama.summary)
                 HStack {
                     TextField(Wording.server, text: $server).onSubmit { connect() }
                     Button(Wording.useServer) { connect() }.disabled(server == model.runtime?.ollama.baseURL.absoluteString)
@@ -152,6 +152,10 @@ struct ModelSettingsView: View {
                 if let serverError { Text(serverError).font(.caption).foregroundStyle(Palette.attention) }
                 Text(serverFromEnvironment ? Wording.serverFromEnvironment(RuntimeEnvironment.ollamaURLVariable) : Wording.ollamaServerNote)
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                // What the user is told of the server in use: plain HTTP across the network, a name trusted as local.
+                ForEach(model.runtime.map { OllamaEndpoint.cautions(for: $0.ollama.baseURL) } ?? [], id: \.self) { caution in
+                    Text(caution.summary).font(.caption).foregroundStyle(Palette.attention).fixedSize(horizontal: false, vertical: true)
+                }
                 Picker(Wording.management, selection: setting(model, loaded, \.ollamaManagement)) {
                     Text(Wording.launchOllamaApp).tag(OllamaManagement.launchApp)
                     Text(Wording.spawnServe).tag(OllamaManagement.spawnServe)
@@ -172,7 +176,7 @@ struct ModelSettingsView: View {
                         LabeledContent(Wording.role(role)) {
                             HStack(spacing: Style.inlineControlSpacing) {
                                 Text(name).textSelection(.enabled)
-                                ModelAvailability(name: name, installed: status.first { $0.name == name }?.installed, downloads: downloads)
+                                ModelAvailability(name: name, status: status.first { $0.name == name }, downloads: downloads)
                             }
                         }
                     }
@@ -186,8 +190,8 @@ struct ModelSettingsView: View {
         .formStyle(.grouped)
         .task(id: model.settings) { await loadProfiles() }
         // Asked again when the models change, once Ollama answers, and when a download ends.
-        .task(id: [inUse, model.ollama.isReady, downloads.finished] as [AnyHashable]) { await loadStatus() }
-        .task(id: [model.ollama.isReady, downloads.finished] as [AnyHashable]) { await loadInstalled() }
+        .task(id: [inUse, model.session.ollama.isReady, downloads.finished] as [AnyHashable]) { await loadStatus() }
+        .task(id: [model.session.ollama.isReady, downloads.finished] as [AnyHashable]) { await loadInstalled() }
         .onAppear { server = model.runtime?.ollama.baseURL.absoluteString ?? "" }
     }
 
@@ -215,13 +219,13 @@ struct ModelSettingsView: View {
     }
 
     private func loadStatus() async {
-        guard model.ollama.isReady, let profile = inUse else { return }
-        status = await model.load(Wording.checkModelsAction) { try await $0.models.status(for: profile) } ?? status
+        guard model.session.ollama.isReady, let profile = inUse else { return }
+        if let checked = await model.load(Wording.checkModelsAction, { try await $0.models.status(for: profile) }) { status = checked }
     }
 
     private func loadInstalled() async {
-        guard editsProfiles, model.ollama.isReady else { return }
-        installed = await model.load(Wording.checkModelsAction) { try await $0.models.installed() } ?? installed
+        guard editsProfiles, model.session.ollama.isReady else { return }
+        if let listed = await model.load(Wording.checkModelsAction, { try await $0.models.installed() }) { installed = listed }
     }
 }
 
@@ -240,8 +244,9 @@ struct AdvancedSettings: View {
                     ForEach(LogLevel.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                 }
                 Stepper(Wording.keepPrompts(days: (model.settings ?? loaded).traceRawRetentionDays),
-                        value: setting(model, loaded, \.traceRawRetentionDays), in: Style.retentionDays, step: Style.retentionDaysStep)
+                        value: setting(model, loaded, \.traceRawRetentionDays), in: AppSettings.traceRawRetentionDaysRange, step: Style.retentionDaysStep)
                 NamedToggle(Wording.includeText, isOn: $includeText)
+                Text(Wording.includeTextNote).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 Button(Wording.exportDiagnostics) { Task { await export() } }
                 if let exportMessage { Text(exportMessage).font(.caption) }
             }
@@ -267,7 +272,7 @@ struct AdvancedSettings: View {
     }
 
     private func rebuild() async {
-        let summary = await model.load(Wording.rebuildIndexAction) { try await $0.records.rebuildIndex() }
+        let summary = await model.load(Wording.rebuildIndexAction) { try await $0.rebuildIndex() }
         rebuildMessage = summary.map { Wording.rebuilt($0.summary, queued: $0.queued) }
     }
 

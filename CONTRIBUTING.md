@@ -16,7 +16,8 @@ cd arrumator
 scripts/bootstrap.sh
 ```
 
-`scripts/bootstrap.sh` installs the tools in [`Brewfile`](Brewfile) and turns on the Git hooks in `.githooks`:
+`scripts/bootstrap.sh` installs Node.js from [`Brewfile`](Brewfile), installs the tools the checks use, each at the
+version and checksum `scripts/tools.sh` pins, into `.tools/`, and turns on the Git hooks in `.githooks`:
 
 - **pre-commit** refuses any commit on `main`: start every change on a branch named for it (`git switch -c fix/…`).
   It then runs `scripts/check-secrets.sh --staged`, refusing a commit that adds a secret, signing material
@@ -50,15 +51,17 @@ needs only `scripts/verify.sh --checks-only`: `scripts/change-scope.sh main` tel
 
 | Script | What it checks |
 |---|---|
-| `scripts/verify.sh [--app \| --checks-only] [--no-lint]` | Everything below, then `swift build`, the documentation check, `swift test`, and with `--app` the app build and the unused-code search. With `--checks-only`, the static checks and the documentation check alone, building only `arrumatorcli`. |
-| `scripts/change-scope.sh <base> [<head>]` | Which scope a change falls in, from the files it touches (without `<head>`, uncommitted ones too): `release` (code), `build` (what builds and tests it) or `checks` (anything else). CI builds, tests and releases by it. |
-| `scripts/lint.sh` | Static checks that build nothing: the guideline gates from AGENTS.md (environment, network, crash, quit, trash, debt, icon), secrets, [SwiftLint](https://realm.github.io/SwiftLint/) (`.swiftlint.yml`), [ShellCheck](https://www.shellcheck.net), [actionlint](https://github.com/rhysd/actionlint) and [zizmor](https://docs.zizmor.sh) for the workflows, [markdownlint](https://github.com/DavidAnson/markdownlint-cli2) (`.markdownlint-cli2.jsonc`) and [lychee](https://lychee.cli.rs) for links between documents. |
+| `scripts/verify.sh [--app \| --checks-only] [--no-lint]` | Everything below, then `swift build`, the documentation check, `swift test` and `fixturegen --verify` on the corpus, and with `--app` the release build (`scripts/build-release.sh`) and the unused-code search. Every build uses the versions in `Package.resolved` alone, and a warning in Arrumator's own code fails it. With `--checks-only`, the static checks and the documentation check alone, building only `arrumatorcli`. |
+| `scripts/change-scope.sh <base> [<head>]` | Which scope a change falls in, from the files it touches (without `<head>`, uncommitted ones too): `release` (code), `build` (what builds, tests, checks or releases it) or `checks` (anything else). CI builds, tests and releases by it, scoping a pull request with `main`'s copy. |
+| `scripts/lint.sh` | Static checks that build nothing: the guideline gates from AGENTS.md (environment, network, crash, quit, trash, delete, rows, calendar, test-sleeps, archive, debt, icon), each of which first proves it refuses a sample and fails when its search cannot run; the imports check, which refuses an `import` of a module of the package or its dependencies that the importing target does not declare (`Package.swift`, or `project.yml` for the app); that the tools are the pinned ones; secrets, [SwiftLint](https://realm.github.io/SwiftLint/) (`.swiftlint.yml`), [ShellCheck](https://www.shellcheck.net), [actionlint](https://github.com/rhysd/actionlint) and [zizmor](https://docs.zizmor.sh) for the workflows, [markdownlint](https://github.com/DavidAnson/markdownlint-cli2) (`.markdownlint-cli2.jsonc`) and [lychee](https://lychee.cli.rs) for links between documents. |
 | `scripts/check-secrets.sh [--staged \| --range <revs>…]` | [gitleaks](https://github.com/gitleaks/gitleaks) with `.gitleaks.toml` over every commit, the index, the working tree and untracked files; real documents; with `--range`, commit identities. |
 | `scripts/check-docs.sh <arrumatorcli>` | Every command and option in [docs/cli.md](docs/cli.md), and no option in a command's synopsis there that it does not take, every `ARRUMATOR_*` variable in [docs/using-arrumator.md](docs/using-arrumator.md), every `pipeline.json` key the docs name, and every script here. |
 | `scripts/deadcode.sh` | Unused code across the package, its tests, the command and the app, with [Periphery](https://github.com/peripheryapp/periphery) (`.periphery.yml`). |
 | `scripts/bootstrap.sh` | Installs the tools and enables the hooks (see above). |
-| `scripts/release.sh` | Builds a release into `dist/`; see [Continuous integration and releases](docs/releasing.md). |
-| `scripts/qa-drive.sh <command> <pid> [arguments]` | Drives one running Arrumator, by its process number, through the macOS accessibility API, as the [QA protocol](docs/qa/protocol.md) does: reads its window's elements, presses, clicks, types, sends keys, scrolls, resizes and screenshots its windows and no other. It never reads the system's Apple menu or an open file panel, which list the user's own files. It builds `scripts/qa-drive.swift` into `build/qa-drive` the first time and whenever that changed; `help` lists the commands. The terminal it runs in needs Accessibility in System Settings › Privacy & Security. |
+| `scripts/tools.sh [install \| check] [<tool>…]` | Installs the tools the checks and the build use, each at the version it pins and refused unless its download's checksum is the pinned one, into `.tools/`; `check` fails when one is not installed so. See [Tools and runners](docs/releasing.md#tools-and-runners). |
+| `scripts/build-release.sh` | Builds what a release ships into `build/Release/stage`, not yet signed for distribution: the app for Apple silicon and Intel in the Release configuration, the same app for Apple silicon alone, and the command, each with the licence notices of the code it carries. `scripts/verify.sh --app` runs it. |
+| `scripts/release.sh [<stage>]` | Signs, notarizes and packages a release into `dist/`, as `RELEASE_SIGNING` says; see [Continuous integration and releases](docs/releasing.md). |
+| `scripts/qa-drive.sh <command> <pid> [arguments]` | Drives one running Arrumator, by its process number, through the macOS accessibility API, as the [QA protocol](docs/qa/protocol.md) does: reads its window's elements, presses, clicks, types, sends keys, scrolls, resizes and screenshots its windows and no other: a click, hover or scroll is refused unless one of its windows is frontmost at that point. It never reads the system's Apple menu or an open file panel, which list the user's own files, and takes no screenshot while a file panel is open. It builds `scripts/qa-drive.swift` into `build/qa-drive` the first time and whenever that changed; `help` lists the commands. The terminal it runs in needs Accessibility in System Settings › Privacy & Security. |
 | `scripts/app-icon.sh [<folder>]` | Draws the app icon into `App/Assets.xcassets/AppIcon.appiconset`, every size macOS asks for: a page arriving in a tray, drawn by `scripts/app-icon.swift` in the Incoming list's colour, which it reads from `Palette.incomingList` and stops when it cannot. The drawing is the project's own, made of paths with no SF Symbol, image, font or text, as Apple's licence does not allow symbols, or glyphs like them, in an app icon; the icon gate in `scripts/lint.sh` checks it. The images are build inputs and are committed: run it after changing that colour or the drawing, and never edit them by hand. With `<folder>` it writes the set there instead, to look at first. |
 
 A change to how documents are read (the prompt, the answer schema and its validation, the label kinds, the `analysis`
@@ -82,6 +85,9 @@ document:
 | [docs/releasing.md](docs/releasing.md) | CI, releases, versions, signing. |
 | [docs/repository-settings.md](docs/repository-settings.md) | The GitHub repository's security settings and the rules that enforce the push protocol. |
 | [docs/qa/protocol.md](docs/qa/protocol.md) | How the app is tested as a user meets it: the method, environment, charters, severity and report. A run's findings go into `docs/qa/reports/`, which Git ignores. |
+| [docs/architecture.md](docs/architecture.md) | How the code is arranged: the modules and what each folder of Core owns, what happens at run time, the concurrency model, the decisions and the checks that keep them. |
+| [docs/review/code-review.md](docs/review/code-review.md) | How a change, and the whole project, is reviewed: the order, what to look for by area, how a finding is written and proved. A full review's findings go into `docs/review/reports/`, which Git ignores. |
+| [docs/review/swift-apple.md](docs/review/swift-apple.md) | What to check in Swift and on Apple's platforms that the compiler and the linters do not settle. |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | This file: setting up, checking, the scripts. |
 
 `scripts/check-docs.sh` catches a command, option, variable, configuration key or script that the documents miss or
@@ -94,11 +100,12 @@ that changes code is released:
 
 1. **Green gates locally.** Work on a branch named for the change (`fix/…`, `feat/…`, `docs/…`, …), never on `main`.
    Start a fix or a feature with a test that fails for the stated reason, then make it pass (AGENTS.md §2 and §3).
-   Push only when the verify command the change's scope calls for (`scripts/change-scope.sh main`) ends with
-   `All checks passed`.
+   Review your own diff by [the code review guidelines](docs/review/code-review.md). Push only when the verify
+   command the change's scope calls for (`scripts/change-scope.sh main`) ends with `All checks passed`.
 2. **Push the branch and get it green on the remote runners.** `git push -u origin <branch>`, open a pull request to
    `main` with the template filled in (`gh pr create`), and wait for CI (`gh pr checks --watch`). Fix any failure on
-   the same branch and push again. A red pull request is never merged.
+   the same branch and push again. A red pull request is never merged. Have the change reviewed by someone who did
+   not write it, as [the code review guidelines](docs/review/code-review.md) describe.
 3. **Squash-merge to `main` and remove the branch.** `gh pr merge --squash --delete-branch`, then
    `git switch main && git pull --ff-only`.
 4. **Release only code.** The merge is released only when its scope is `release`. Any other merge is checked and

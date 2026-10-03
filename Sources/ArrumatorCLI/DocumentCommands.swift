@@ -24,48 +24,82 @@ struct Ingest: AsyncParsableCommand {
         guard tag.count <= runtime.config.labels.maxPerKind else {
             throw ValidationError("--tag is given at most \(runtime.config.labels.maxPerKind) times (labels.maxPerKind)")
         }
+        // Each file as the queue takes it, the package a path inside one names; one Incoming never takes in, as a link or
+        // a package of too many items, is refused with why before anything is read.
+        let urls = try files.map { try runtime.services.arrival(URL(fileURLWithPath: $0.expandingTilde), settings: settings) }
         _ = await runtime.lifecycle.ensureRunning()
-        var jobs: [Int64] = []
-        for path in files {
-            let url = URL(fileURLWithPath: path.expandingTilde).standardizedFileURL
-            if dryRun {
+        let failed = dryRun ? try await preview(urls, runtime: runtime, settings: settings) : try await ingest(urls, runtime: runtime)
+        // Each file that failed was named on standard error; what the others came to is shown all the same.
+        for (url, reason) in failed { FileHandle.standardError.write(Data("\(url.path): \(reason)\n".utf8)) }
+        if !failed.isEmpty { throw ExitCode.failure }
+    }
+
+    /// Files each file, and shows the documents they became, in one list; the files that failed, each with why.
+    private func ingest(_ urls: [URL], runtime: ArrumatorRuntime) async throws -> [(URL, String)] {
+        var jobs: [(URL, Int64)] = []
+        var failed: [(URL, String)] = []
+        for url in urls {
+            if let job = await runtime.coordinator.enqueue(url, tags: tag) {
+                jobs.append((url, job))
+            } else {
+                failed.append((url, "not queued: it is held or undone in the archive, or the queue could not be written (see the log)"))
+            }
+        }
+        await runtime.coordinator.drain()
+        try Task.checkCancellation()
+        // The documents these files became, whatever else the archive holds; for an exact copy of a document in the
+        // archive, that document, read again in its place.
+        var docs: [DocumentRecord] = []
+        for (url, id) in jobs {
+            let job = try await runtime.services.jobs.job(id: id)
+            if let doc = job?.docId ?? (try? job?.payload)?.copyOf, let document = try await runtime.services.documents.document(id: doc) {
+                docs.append(document)
+                if job?.state == .failed { failed.append((url, job?.lastError ?? "it could not be filed")) }
+            } else {
+                failed.append((url, job?.lastError ?? "it became no document"))
+            }
+        }
+        try options.emit(docs) {
+            docs.map { document in
+                "\(document.status.rawValue.padding(toLength: 11, withPad: " ", startingAt: 0)) \(document.path)"
+                    + (document.labels(.tag).isEmpty ? "" : "\n            tags: " + document.labels(.tag).joined(separator: " · "))
+            }.joined(separator: "\n")
+        }
+        return failed
+    }
+
+    /// Reads and labels each file without moving it or recording anything, and shows what came of them in one list; the
+    /// files that could not be read, each with why.
+    private func preview(_ urls: [URL], runtime: ArrumatorRuntime, settings: AppSettings) async throws -> [(URL, String)] {
+        var runs: [DryRun] = []
+        var texts: [String] = []
+        var failed: [(URL, String)] = []
+        for url in urls {
+            try Task.checkCancellation()
+            do {
                 let sink = MemoryTraceSink()
                 let trace = TraceContext(traceID: 0, sink: sink)
                 let tags = runtime.services.tags(for: url, given: tag, settings: settings)
-                let content = try await runtime.services.extractor.extract(
-                    url, sha256: try HashService.sha256(of: url), context: try runtime.config.extractionContext(settings: settings),
-                    trace: trace)
+                let context = try runtime.config.extractionContext(settings: settings, whenOllamaIsAway: .wait)
+                let content = try await runtime.services.extractor.extract(url, sha256: try HashService.sha256(of: url), context: context,
+                                                                           trace: trace)
                 let reading = try await runtime.services.read(content, tags: tags.map(\.label), settings: settings, trace: trace)
                 let steps = await sink.steps
-                options.emit(DryRun(content: content, analysis: reading.outcome.analysis, labels: reading.outcome.labels, tags: tags,
-                                    changes: reading.changes, steps: steps)) {
-                    describe(reading, tags: tags, content: content, steps: steps)
-                }
-            } else if let job = await runtime.coordinator.enqueue(url, tags: tag) {
-                jobs.append(job)
+                runs.append(DryRun(file: url.path, content: content, analysis: reading.outcome.analysis, labels: reading.outcome.labels,
+                                   tags: tags, changes: reading.changes, steps: steps))
+                texts.append(describe(reading, tags: tags, content: content, steps: steps))
+            } catch {
+                if error is CancellationError || Task.isCancelled { throw error }
+                failed.append((url, error.localizedDescription))
             }
         }
-        if !dryRun {
-            await runtime.coordinator.drain()
-            // The documents these files became, whatever else the archive holds; for an exact copy of a document in the
-            // archive, that document, read again in its place.
-            var docs: [DocumentRecord] = []
-            for id in jobs {
-                let job = try await runtime.services.jobs.job(id: id)
-                if let doc = job?.docId ?? job?.payload.copyOf, let document = try await runtime.services.documents.document(id: doc) {
-                    docs.append(document)
-                }
-            }
-            options.emit(docs) {
-                docs.map { document in
-                    "\(document.status.rawValue.padding(toLength: 11, withPad: " ", startingAt: 0)) \(document.path)"
-                        + (document.labels(.tag).isEmpty ? "" : "\n            tags: " + document.labels(.tag).joined(separator: " · "))
-                }.joined(separator: "\n")
-            }
-        }
+        try options.emit(runs) { texts.joined(separator: "\n") }
+        return failed
     }
 
     struct DryRun: Encodable {
+        /// The file read, as given.
+        var file: String
         var content: ExtractedContent
         var analysis: DocumentAnalysis
         /// The model's labels, tidied, and the tags after them; nil when the model gave no valid answer.
@@ -100,11 +134,12 @@ struct Extract: AsyncParsableCommand {
         let runtime = try await options.runtime()
         let settings = await runtime.settings.current
         let url = URL(fileURLWithPath: file.expandingTilde)
-        let content = try await runtime.services.extractor.extract(
-            url, sha256: try HashService.sha256(of: url), context: try runtime.config.extractionContext(settings: settings),
-            trace: .disabled)
+        // What is read now: an image Ollama is away to describe is shown without its description, noted.
+        let context = try runtime.config.extractionContext(settings: settings, whenOllamaIsAway: .note)
+        let content = try await runtime.services.extractor.extract(url, sha256: try HashService.sha256(of: url), context: context,
+                                                                   trace: .disabled)
         let preview = runtime.config.interface.extractPreviewChars
-        options.emit(content) {
+        try options.emit(content) {
             """
             \(content.source.originalFilename) — \(content.source.utType), \(content.source.byteSize) bytes
             kind \(content.kind.rawValue), text \(content.textOrigin.rawValue), \(content.text.count) chars, pages \(content.pageCount.map(String.init) ?? "—")
@@ -127,9 +162,8 @@ struct Search: AsyncParsableCommand {
 
     func run() async throws {
         let runtime = try await options.runtime()
-        try await runtime.prepareSearch(await runtime.settings.current)
         let results = try await runtime.search.search(SearchQuery(text: query.joined(separator: " "), semantic: !noSemantic))
-        options.emit(results.hits.map { SearchRow(id: $0.id, path: $0.document.path, score: $0.score, snippet: SearchHighlight.plain($0.snippet),
+        try options.emit(results.hits.map { SearchRow(id: $0.id, path: $0.document.path, score: $0.score, snippet: SearchHighlight.plain($0.snippet),
                                                    sources: $0.sources.map(\.rawValue).sorted(), labels: $0.document.labels,
                                                    labelled: $0.document.isLabelled) }) {
             var lines = results.hits.map { hit in
@@ -163,7 +197,7 @@ struct History: AsyncParsableCommand {
     func run() async throws {
         let runtime = try await options.runtime()
         let events = try await runtime.services.history.events(limit: limit ?? runtime.config.interface.pageSize, docID: doc)
-        options.emit(events) {
+        try options.emit(events) {
             Terminal.table(events.reversed().map { [Format.date($0.at), $0.kind.rawValue, $0.actor.rawValue,
                                                   $0.docId.map { "#\($0)" } ?? "", $0.summary] })
         }
@@ -171,9 +205,10 @@ struct History: AsyncParsableCommand {
 }
 
 struct Trace: AsyncParsableCommand {
-    static let configuration = CommandConfiguration(abstract: "Show how a document was processed: every stage, its inputs, outputs and timing.")
+    static let configuration = CommandConfiguration(
+        abstract: "Show how a document was processed: every stage, its status and timing, and with --full its inputs and outputs.")
     @OptionGroup var options: GlobalOptions
-    @Flag(help: "Include full stage inputs and outputs (prompts, raw model responses).") var full = false
+    @Flag(help: "Include each stage's inputs, outputs and errors (the document's text, prompts, raw model responses).") var full = false
     @Argument(help: "Document id or file path.") var document: String
 
     func run() async throws {
@@ -183,11 +218,17 @@ struct Trace: AsyncParsableCommand {
               let (trace, steps) = try await runtime.traces.trace(id: id) else {
             throw ValidationError("No trace recorded for document \(docID)")
         }
-        options.emit(TraceExport(trace: trace, steps: steps)) {
+        // Without --full nothing of the document is shown, so the output can go into a bug report.
+        let shown = DiagnosticsExporter.shareable(steps, includeDocumentText: full)
+        try options.emit(TraceExport(trace: full ? trace : DiagnosticsExporter.shareable(trace), steps: shown)) {
             "Trace #\(id) · \(trace.source) · \(trace.outcome ?? "running") · \(Int(trace.totalMs ?? 0)) ms · "
-                + "models \(trace.modelChat ?? "—") / \(trace.modelEmbed ?? "—")\n" + Terminal.steps(steps, full: full)
+                + "models \(trace.modelChat ?? "—") / \(trace.modelEmbed ?? "—")\n" + Terminal.steps(shown, full: full)
+                + (full ? "" : "\n" + Self.fullHint)
         }
     }
+
+    /// What the output without --full says of what it leaves out.
+    static let fullHint = "Each stage's inputs, outputs and errors hold the document's text and name; --full shows them."
 }
 
 struct Replay: AsyncParsableCommand {
@@ -214,7 +255,7 @@ struct Replay: AsyncParsableCommand {
         await runtime.traces.finish(trace, outcome: "replay", docID: docID)
         let original = Reading(analysis: stored.analysis, labels: stored.labels)
         let replay = Reading(analysis: outcome.analysis, labels: outcome.labels)
-        options.emit(["original": original, "replay": replay]) {
+        try options.emit(["original": original, "replay": replay]) {
             """
             original: \(original.analysis?.fileName ?? "—") · \(Terminal.labels(original.labels, labelled: stored.isLabelled))
             replay:   \(replay.analysis?.fileName ?? "—") · \(Terminal.labels(replay.labels)) (\(replay.analysis?.model ?? "no answer"))
@@ -231,8 +272,13 @@ struct Replay: AsyncParsableCommand {
 
 func resolveDocument(_ reference: String, runtime: ArrumatorRuntime) async throws -> Int64 {
     if let id = Int64(reference) { return id }
-    let path = URL(fileURLWithPath: reference.expandingTilde).standardizedFileURL.path
-    guard let id = try await runtime.services.documents.document(path: path)?.id else {
+    // A document in Incoming is recorded as the file system spells its path (`URL.spelledOnDisk`), one in the archive
+    // as its settings spell it.
+    let named = URL(fileURLWithPath: reference.expandingTilde)
+    let path = named.standardizedFileURL.path
+    var found = try await runtime.services.documents.document(path: named.spelledOnDisk.path)
+    if found == nil { found = try await runtime.services.documents.document(path: path) }
+    guard let id = found?.id else {
         throw ValidationError("No document at \(path)")
     }
     return id

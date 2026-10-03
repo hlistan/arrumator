@@ -30,7 +30,7 @@ struct Tasks: AsyncParsableCommand {
             let runtime = try await options.runtime()
             let tasks = try await runtime.searchTasks.store.tasks()
             let settings = await runtime.settings.current
-            options.emit(tasks) {
+            try options.emit(tasks) {
                 tasks.isEmpty ? "No search tasks yet; `arrumatorcli tasks new <what you need>` asks for documents."
                     : Terminal.table(tasks.map { Terminal.taskRow($0, settings: settings) })
             }
@@ -54,7 +54,7 @@ struct Tasks: AsyncParsableCommand {
             if !queueOnly { await Tasks.runQueue(runtime) }
             let detail = try await Tasks.detail(task.id, runtime: runtime)
             let settings = await runtime.settings.current
-            options.emit(detail) { Terminal.detail(detail, settings: settings) }
+            try options.emit(detail) { Terminal.detail(detail, settings: settings) }
         }
     }
 
@@ -70,12 +70,12 @@ struct Tasks: AsyncParsableCommand {
             let detail = try await Tasks.detail(task, runtime: runtime)
             let settings = await runtime.settings.current
             guard full else {
-                options.emit(detail) { Terminal.detail(detail, settings: settings) }
+                try options.emit(detail) { Terminal.detail(detail, settings: settings) }
                 return
             }
             var trace: (TraceRecord, [TraceStepRecord])?
             if let id = detail.task.lastTrace { trace = try await runtime.traces.trace(id: id) }
-            options.emit(Full(detail: detail, trace: trace.map { TraceExport(trace: $0.0, steps: $0.1) })) {
+            try options.emit(Full(detail: detail, trace: trace.map { TraceExport(trace: $0.0, steps: $0.1) })) {
                 Terminal.detail(detail, settings: settings) + "\n\n"
                     + (trace.map { Terminal.steps($0.1, full: true) } ?? "The request has not been read yet.")
             }
@@ -96,7 +96,7 @@ struct Tasks: AsyncParsableCommand {
             await Tasks.runQueue(runtime)
             let tasks = try await runtime.searchTasks.store.tasks()
             let settings = await runtime.settings.current
-            options.emit(tasks) { tasks.isEmpty ? "No search tasks yet." : Terminal.table(tasks.map { Terminal.taskRow($0, settings: settings) }) }
+            try options.emit(tasks) { tasks.isEmpty ? "No search tasks yet." : Terminal.table(tasks.map { Terminal.taskRow($0, settings: settings) }) }
         }
     }
 
@@ -129,7 +129,7 @@ struct Tasks: AsyncParsableCommand {
             if updated.state.isActive && !queueOnly { await Tasks.runQueue(runtime) }
             let detail = try await Tasks.detail(task, runtime: runtime)
             let settings = await runtime.settings.current
-            options.emit(detail) { Terminal.detail(detail, settings: settings) }
+            try options.emit(detail) { Terminal.detail(detail, settings: settings) }
         }
     }
 
@@ -162,7 +162,7 @@ struct Tasks: AsyncParsableCommand {
             if !queueOnly { await Tasks.runQueue(runtime) }
             let detail = try await Tasks.detail(task, runtime: runtime)
             let settings = await runtime.settings.current
-            options.emit(detail) { Terminal.detail(detail, settings: settings) }
+            try options.emit(detail) { Terminal.detail(detail, settings: settings) }
         }
     }
 
@@ -188,7 +188,7 @@ struct Tasks: AsyncParsableCommand {
             if !label.isEmpty { added += try await runtime.searchTasks.add(task, labelled: try label.map(Labels.label)) }
             let detail = try await Tasks.detail(task, runtime: runtime)
             let settings = await runtime.settings.current
-            options.emit(detail) { "Added \(Format.count(added.count, "document"))\n\n" + Terminal.detail(detail, settings: settings) }
+            try options.emit(detail) { "Added \(Format.count(added.count, "document"))\n\n" + Terminal.detail(detail, settings: settings) }
         }
     }
 
@@ -206,7 +206,7 @@ struct Tasks: AsyncParsableCommand {
             let removed = try await runtime.searchTasks.remove(task, documents: ids)
             let detail = try await Tasks.detail(task, runtime: runtime)
             let settings = await runtime.settings.current
-            options.emit(detail) { "Took out \(Format.count(removed.count, "document"))\n\n" + Terminal.detail(detail, settings: settings) }
+            try options.emit(detail) { "Took out \(Format.count(removed.count, "document"))\n\n" + Terminal.detail(detail, settings: settings) }
         }
     }
 
@@ -222,7 +222,7 @@ struct Tasks: AsyncParsableCommand {
             let runtime = try await options.runtime()
             let folder = URL(fileURLWithPath: to.expandingTilde, isDirectory: true).standardizedFileURL
             let export = try await runtime.searchTasks.export(task, to: folder, format: zip ? .zip : .folder)
-            options.emit(export) { Terminal.export(export) }
+            try options.emit(export) { Terminal.export(export) }
         }
     }
 
@@ -236,7 +236,7 @@ struct Tasks: AsyncParsableCommand {
             let runtime = try await options.runtime()
             guard let removed = try await runtime.searchTasks.store.task(id: task) else { throw SearchTaskError.taskNotFound(task) }
             try await runtime.searchTasks.delete(task)
-            options.emit(removed) { "Removed task #\(removed.id) “\(removed.name)”" }
+            try options.emit(removed) { "Removed task #\(removed.id) “\(removed.name)”" }
         }
     }
 }
@@ -302,7 +302,9 @@ extension Terminal {
             + export.skipped.map { "\n  #\($0.document) not copied: \($0.reason)" }.joined()
     }
 
-    /// A trace's steps, one per line, with their inputs and outputs when `full`.
+    /// A trace's steps, one per line: its place, stage, status and duration. With `full`, also what each was given,
+    /// what it gave and why it failed, which hold the document's text, name, identifiers and labels; without, nothing
+    /// of the document, so the lines can be pasted into a bug report (`DiagnosticsExporter.shareable`).
     static func steps(_ steps: [TraceStepRecord], full: Bool) -> String {
         var lines: [String] = []
         for s in steps {
@@ -310,13 +312,10 @@ extension Terminal {
             let stage = s.stage.padding(toLength: 13, withPad: " ", startingAt: 0)
             let status = s.status.rawValue.padding(toLength: 7, withPad: " ", startingAt: 0)
             lines.append("\(seq) \(stage) \(status) \(Int(s.durationMs)) ms")
+            guard full else { continue }
             if let e = s.error { lines.append("      error: \(e)") }
-            if full {
-                if let i = s.inputJson { lines.append("      in:  \(i)") }
-                if let o = s.outputJson { lines.append("      out: \(o)") }
-            } else if let o = s.outputJson {
-                lines.append("      \(o.prefix(240))")
-            }
+            if let i = s.inputJson { lines.append("      in:  \(i)") }
+            if let o = s.outputJson { lines.append("      out: \(o)") }
         }
         return lines.joined(separator: "\n")
     }

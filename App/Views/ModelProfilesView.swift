@@ -64,7 +64,7 @@ struct ModelProfilesView: View {
     private func add() {
         let name = newName
         guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        Task {
+        Task<Void, Never> {
             guard let added = await model.changeSettings(Wording.addProfileAction, { try await $0.profiles.add(name: name) }) else { return }
             stopAdding()
             withAnimation(.snappy) { open = added.id }
@@ -151,14 +151,14 @@ private struct ProfileCard: View {
         // not yet saved is saved rather than dropped.
         .onDisappear { save(typed) }
         // Asked again when the profile's models change, once Ollama answers, and when a download ends.
-        .task(id: [listing.profile, model.ollama.isReady, downloads.finished] as [AnyHashable]) { await loadStatus() }
+        .task(id: [listing.profile, model.session.ollama.isReady, downloads.finished] as [AnyHashable]) { await loadStatus() }
         .onChange(of: editing) { left, _ in
             if let left { save(left) }
         }
         .confirmationDialog(Wording.removeProfileQuestion(listing.profile.name), isPresented: $confirmingRemoval) {
             Button(Wording.removeProfileConfirm, role: .destructive) {
                 let id = listing.id
-                Task { if await model.changeSettings(Wording.removeProfileAction, { try await $0.profiles.remove(id) }) != nil { onClose() } }
+                Task<Void, Never> { if await model.changeSettings(Wording.removeProfileAction, { try await $0.profiles.remove(id) }) != nil { onClose() } }
             }
         } message: {
             Text(Wording.removeProfileNote)
@@ -181,6 +181,7 @@ private struct ProfileCard: View {
             Spacer(minLength: 0)
             Button(action: onClose) { Image(systemName: "xmark") }
                 .buttonStyle(.borderless).foregroundStyle(.secondary).help(Wording.close)
+                .accessibilityLabel(Wording.closeNamed(listing.profile.name))
         }
     }
 
@@ -207,8 +208,9 @@ private struct ProfileCard: View {
                     Image(systemName: "chevron.down")
                 }
                 .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help(Wording.chooseInstalledModel)
+                .accessibilityLabel(Wording.chooseInstalledModel)
             }
-            ModelAvailability(name: saved, installed: status.first { $0.name == saved }?.installed, downloads: downloads)
+            ModelAvailability(name: saved, status: status.first { $0.name == saved }, downloads: downloads)
         }
     }
 
@@ -217,7 +219,7 @@ private struct ProfileCard: View {
             if canReset {
                 Button(Wording.resetProfile) {
                     let id = listing.id
-                    Task { await model.changeSettings(Wording.resetProfileAction) { try await $0.profiles.reset(id) } }
+                    Task<Void, Never> { await model.changeSettings(Wording.resetProfileAction) { try await $0.profiles.reset(id) } }
                 }
                 .help(Wording.resetProfileHelp)
             }
@@ -266,16 +268,16 @@ private struct ProfileCard: View {
     private func save(_ change: ModelProfileChange) {
         guard !change.isEmpty else { return }
         let (id, before) = (listing.id, listing)
-        Task {
+        Task<Void, Never> {
             let saved = await model.changeSettings(Wording.changeProfileAction) { try await $0.profiles.update(id, change) }
             show(saved ?? before)
         }
     }
 
     private func loadStatus() async {
-        guard model.ollama.isReady else { return }
+        guard model.session.ollama.isReady else { return }
         let profile = listing.profile
-        status = await model.load(Wording.checkModelsAction) { try await $0.models.status(for: profile) } ?? status
+        if let checked = await model.load(Wording.checkModelsAction, { try await $0.models.status(for: profile) }) { status = checked }
     }
 }
 
@@ -293,7 +295,7 @@ struct ProfileInUsePicker: View {
 
     var body: some View {
         Picker(Wording.profile, selection: Binding(get: { inUse }, set: { id in
-            Task { await model.changeSettings(Wording.useProfileAction) { try await $0.profiles.use(id) } }
+            Task<Void, Never> { await model.changeSettings(Wording.useProfileAction) { try await $0.profiles.use(id) } }
         })) {
             ForEach(profiles) { Text($0.profile.name).tag($0.id) }
         }
@@ -342,14 +344,18 @@ final class ModelDownloads {
 struct ModelAvailability: View {
     @Environment(AppModel.self) private var model
     let name: String
-    /// nil until Ollama has said.
-    let installed: Bool?
+    /// What Ollama says of the model; nil until it has said.
+    let status: ModelStatus?
     let downloads: ModelDownloads
 
     var body: some View {
-        if installed == true {
+        if let host = status?.remoteHost {
+            Label(Wording.modelRunsElsewhere(at: host), systemImage: "exclamationmark.triangle.fill")
+                .labelStyle(.titleAndIcon).font(.caption).foregroundStyle(Palette.attention).help(Wording.modelRunsElsewhereHelp)
+        } else if status?.installed == true {
             Image(systemName: "checkmark.circle.fill").foregroundStyle(Palette.fine).help(Wording.modelInstalled)
-        } else if installed == false {
+                .accessibilityLabel(Wording.modelInstalled)
+        } else if status?.installed == false {
             Button(downloads.busy && downloads.model == name ? Wording.downloading : Wording.download) {
                 guard let runtime = model.runtime else { return }
                 Task { await downloads.pull(name, with: runtime) }

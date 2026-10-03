@@ -149,6 +149,8 @@ together; [docs/cli.md](docs/cli.md) explains how to use it. To build from sourc
 | [Sources](docs/organizing-principles-sources.md) | The research behind the kinds of label and how the model is asked. |
 | [Continuous integration and releases](docs/releasing.md) | How changes are checked and released, and how to sign releases. |
 | [QA protocol](docs/qa/protocol.md) | How the app is tested end to end, as a user meets it. |
+| [Architecture](docs/architecture.md) | How the code is arranged: modules, what happens at run time, concurrency, and the decisions behind them. |
+| [Code review](docs/review/code-review.md) | How a change is reviewed, with [what to check in Swift and on Apple's platforms](docs/review/swift-apple.md). |
 
 ## Contributing
 
@@ -160,3 +162,6 @@ privately, as [SECURITY.md](SECURITY.md) describes.
 ## License
 
 [MIT](LICENSE)
+
+Arrumator includes open-source packages under the MIT and Apache 2.0 licences. Their licence texts ship with every
+download, in `NOTICES.txt`: inside the app (`Arrumator.app/Contents/Resources`) and beside `arrumatorcli`.

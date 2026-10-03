@@ -47,7 +47,7 @@ private struct StatisticsPage: View {
                     if let selected, let step = funnel.steps.first(where: { $0.id == selected }) {
                         StepDetail(step: step, insights: insights)
                     }
-                    EndedUp(steps: funnel.steps, documents: funnel.documents)
+                    EndedUp(outcomes: funnel.outcomes, documents: funnel.documents)
                 }
             } else {
                 ProgressView().frame(maxWidth: .infinity).padding(Style.statsPlaceholderPadding)
@@ -55,8 +55,8 @@ private struct StatisticsPage: View {
         }
         .task(id: "\(days)|\(model.activity)") {
             let days = days
-            funnel = await model.load(Wording.loadStatisticsAction) { try await $0.stats.funnel(days: days) }
-            insights = await model.load(Wording.loadStatisticsAction) { try await $0.stats.insights() }
+            if let read = await model.load(Wording.loadStatisticsAction, { try await $0.stats.funnel(days: days) }) { funnel = read }
+            if let read = await model.load(Wording.loadStatisticsAction, { try await $0.stats.insights() }) { insights = read }
         }
     }
 
@@ -153,9 +153,7 @@ private struct FunnelSteps: View {
 
     /// Red is kept for things that actually went wrong; a duplicate leaving early is the pipeline working.
     private static func stopColour(_ step: FunnelStepStats) -> Color {
-        if step.stoppedHere.contains(where: { $0.severity == .problem }) { return Palette.problem }
-        if step.stoppedHere.contains(where: { $0.severity == .attention }) { return Palette.attention }
-        return Palette.expected
+        Palette.severity(step.stopSeverity ?? .expected)
     }
 
     private func cell(_ text: String, width: CGFloat, colour: Color = .primary) -> some View {
@@ -163,37 +161,14 @@ private struct FunnelSteps: View {
     }
 }
 
-/// Where everything ended up, as one bar: constant height means each file takes the same area wherever it is.
+/// Where everything ended up, as one bar: constant height means each file takes the same area wherever it is. Each
+/// outcome once, as Core counts them (`ProcessingFunnel.outcomes`).
 private struct EndedUp: View {
-    let steps: [FunnelStepStats]
+    let outcomes: [FunnelOutcome]
     let documents: Int
 
-    private struct Slice: Identifiable {
-        let id: String
-        let count: Int
-        let colour: Color
-    }
-
-    private var slices: [Slice] {
-        var totals: [String: (count: Int, severity: FunnelSeverity)] = [:]
-        for step in steps {
-            for stop in step.stoppedHere {
-                totals[stop.reason] = ((totals[stop.reason]?.count ?? 0) + stop.count, stop.severity)
-            }
-        }
-        let stopped = totals.values.reduce(0) { $0 + $1.count }
-        var all = totals.map { Slice(id: $0.key, count: $0.value.count, colour: Self.colour($0.value.severity)) }
-            .sorted { $0.count > $1.count }
-        all.insert(Slice(id: Wording.filedSlice, count: max(0, documents - stopped), colour: Palette.progress), at: 0)
-        return all.filter { $0.count > 0 }
-    }
-
-    private static func colour(_ severity: FunnelSeverity) -> Color {
-        switch severity {
-        case .expected: Palette.expected
-        case .attention: Palette.attention
-        case .problem: Palette.problem
-        }
+    private static func colour(_ outcome: FunnelOutcome) -> Color {
+        outcome.isFiled ? Palette.progress : Palette.severity(outcome.severity)
     }
 
     var body: some View {
@@ -201,8 +176,8 @@ private struct EndedUp: View {
             Text(Wording.whereFilesEndedUp).font(.headline)
             GeometryReader { geo in
                 HStack(spacing: Style.sliceGap) {
-                    ForEach(slices) { slice in
-                        Rectangle().fill(slice.colour)
+                    ForEach(outcomes) { slice in
+                        Rectangle().fill(Self.colour(slice))
                             .frame(width: max(Style.sliceMinWidth, geo.size.width * CGFloat(slice.count) / CGFloat(max(1, documents))))
                     }
                     Spacer(minLength: 0)
@@ -210,11 +185,12 @@ private struct EndedUp: View {
                 .clipShape(.rect(cornerRadius: Style.statsBarCornerRadius))
             }
             .frame(height: Style.endedUpBarHeight)
-            ForEach(slices) { slice in
+            .accessibilityHidden(true)
+            ForEach(outcomes) { slice in
                 HStack(spacing: Style.legendSpacing) {
-                    RoundedRectangle(cornerRadius: Style.swatchCornerRadius).fill(slice.colour)
+                    RoundedRectangle(cornerRadius: Style.swatchCornerRadius).fill(Self.colour(slice))
                         .frame(width: Style.swatchSize.width, height: Style.swatchSize.height)
-                    Text(slice.id).lineLimit(1)
+                    Text(slice.reason).lineLimit(1)
                     Spacer()
                     Text("\(slice.count)").monospacedDigit().foregroundStyle(.secondary)
                 }

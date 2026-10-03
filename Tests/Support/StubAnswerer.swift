@@ -58,11 +58,17 @@ public struct StubAnswerer: TaskQuestionAnswering {
         if let error { throw error }
         let reply = replies[question] ?? fallback
         var written = ""
-        for (index, word) in reply.text.split(separator: " ").enumerated() {
-            written += (index == 0 ? "" : " ") + word
-            await progress(AnswerProgress(text: written, thinking: false))
-            if index == 0 { try await during?(question) }
-            try Task.checkCancellation()
+        do {
+            for (index, word) in reply.text.split(separator: " ").enumerated() {
+                written += (index == 0 ? "" : " ") + word
+                await progress(AnswerProgress(text: written, thinking: false))
+                if index == 0 { try await during?(question) }
+                try Task.checkCancellation()
+            }
+        } catch {
+            // As the model's answerer traces the calls a stop cut off.
+            await trace.record(.answer, status: .warn, startedAt: TestTime.start, output: written, error: error.localizedDescription)
+            throw error
         }
         await trace.record(.answer, startedAt: TestTime.start, output: reply.text)
         return TaskAnswer(text: reply.text, sources: reply.sources, find: reply.find, model: profile.chatModel, problem: reply.problem)

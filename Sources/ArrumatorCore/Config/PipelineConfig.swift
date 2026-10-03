@@ -21,10 +21,14 @@ public struct PipelineConfig: Sendable, Codable, Hashable, ValidatedConfiguratio
     public var interface: InterfaceConfig
     public var maintenance: MaintenanceConfig
     public var database: DatabaseConfig
+    public var settingsLock: SettingsLockConfig
 
     public var problems: [String] {
         var problems: [String] = []
         if ingest.maxAttempts < 1 { problems.append("ingest.maxAttempts must be at least 1") }
+        if !(ingest.modelRecheckSeconds > 0) { problems.append("ingest.modelRecheckSeconds must be more than 0") }
+        if !(ingest.abandonedWorkSeconds > 0) { problems.append("ingest.abandonedWorkSeconds must be more than 0") }
+        if !(ingest.heldElsewhereRecheckSeconds > 0) { problems.append("ingest.heldElsewhereRecheckSeconds must be more than 0") }
         if analysis.repairAttempts < 0 { problems.append("analysis.repairAttempts cannot be negative") }
         if analysis.excerptTailDivisor < 2 { problems.append("analysis.excerptTailDivisor must be at least 2, so the head keeps the most") }
         if labels.maxPerKind < 1 { problems.append("labels.maxPerKind must be at least 1") }
@@ -38,18 +42,39 @@ public struct PipelineConfig: Sendable, Codable, Hashable, ValidatedConfiguratio
         for kind in labels.vocabulary.kinds.keys where kind.isUsersOwn {
             problems.append("labels.vocabulary.kinds.\(kind.rawValue): the user's own labels are never kept one vocabulary; remove it")
         }
+        problems += ollama.problems
+        problems += watcher.problems
+        problems += extraction.problems
+        problems += entities.problems
+        if database.observationRetry <= 0 { problems.append("database.observationRetry must be more than 0") }
         problems += tasks.problems
         problems += conversation.problems
+        problems += limitProblems
+        problems += promptRoomProblems
         return problems
     }
 
     public static func load(paths: AppPaths, environment: RuntimeEnvironment) throws -> PipelineConfig {
         var overrides: [JSONValue] = []
-        if let user = try ConfigLoader.overrideValue(at: paths.pipelineOverrideURL) { overrides.append(user) }
-        if let path = environment.pipelineOverridePath,
-           let extra = try ConfigLoader.overrideValue(at: URL(fileURLWithPath: path)) { overrides.append(extra) }
-        return try ConfigLoader.load(PipelineConfig.self, defaults: "pipeline", overrides: overrides)
+        var files: [URL] = []
+        for url in [paths.pipelineOverrideURL] + (environment.pipelineOverridePath.map { [URL(fileURLWithPath: $0)] } ?? []) {
+            let value: JSONValue?
+            do { value = try ConfigLoader.overrideValue(at: url) } catch {
+                throw ConfigError.invalidFile(name: "pipeline", paths: [url.path], underlying: error.localizedDescription, mend: Self.mend)
+            }
+            guard let value else { continue }
+            files.append(url)
+            overrides.append(value)
+        }
+        do {
+            return try ConfigLoader.load(PipelineConfig.self, defaults: "pipeline", overrides: overrides)
+        } catch let refused as ConfigError {
+            throw refused.naming(files, mend: Self.mend)
+        }
     }
+
+    /// How a refused `pipeline.json` is mended, as its refusal says.
+    static let mend = "Correct the key in that file, or take it out to use the value the app comes with"
 
     public static func bundledDefaults() throws -> PipelineConfig {
         try ConfigLoader.load(PipelineConfig.self, defaults: "pipeline")
@@ -57,13 +82,17 @@ public struct PipelineConfig: Sendable, Codable, Hashable, ValidatedConfiguratio
 }
 
 public struct OllamaConfig: Sendable, Codable, Hashable {
+    /// Seconds a request may take: how long it may wait for more of the answer and, but for a download, how long the
+    /// whole answer may take. 0 is no timeout.
     public struct Timeouts: Sendable, Codable, Hashable {
         public var meta: Double
         public var version: Double
         public var chat: Double
         public var embed: Double
-        /// 0 = no timeout.
         public var pull: Double
+        /// Seconds a `.local` name of the server may take to be looked up (`OllamaEndpoint.resolved`), after which it is
+        /// taken as not resolving; more than 0, as a lookup with no limit could hold what waits on it for ever.
+        public var resolve: Double
     }
     public var appBundleIdentifier: String
     public var appBinarySubpath: String
@@ -79,6 +108,17 @@ public struct OllamaConfig: Sendable, Codable, Hashable {
     public var maxRestartsPerHour: Int
     public var requiredFreeDiskGBAfterPull: Double
     public var keepAlive: KeepAlive
+    /// The most bytes one answer of Ollama's may hold: a reply, or every line of an answer it streams together; a line
+    /// of a download's progress may hold as many. A server that sends more is refused (`OllamaError.responseTooLarge`).
+    public var maxResponseBytes: Int
+    /// Seconds what the server said of where a model runs (`ModelLocation`) is trusted before it is asked again; 0 asks
+    /// before every request. A model the server is told to run elsewhere meanwhile is sent nothing once this has passed.
+    public var modelLocationMaxAge: Double
+    /// How many characters of a prompt a token of a model's context is reckoned to hold, which ties a search task's and
+    /// a question's prompt, written in characters, to the context it is read in (`num_ctx`, in tokens), so one that would
+    /// not fit is cut to fit first (`PromptBudget`). An estimate, not a measurement: it fits text in Latin script and may
+    /// not others, and the trace keeps how many tokens Ollama counted and says when the context was full.
+    public var charsPerToken: Double
 
     /// How long Ollama keeps a model loaded after its last request (`keep_alive`), so the next document does not wait
     /// for it to load again.
@@ -88,23 +128,6 @@ public struct OllamaConfig: Sendable, Codable, Hashable {
         /// The model that makes the vectors search by meaning uses; search asks it at any time.
         public var embed: String
     }
-}
-
-public struct WatcherConfig: Sendable, Codable, Hashable {
-    public var fsEventsLatency: Double
-    public var stabilityPollInterval: Double
-    public var stabilityRequiredPolls: Int
-    public var zeroByteWaitSeconds: Double
-    public var ignoredNamePrefixes: [String]
-    public var ignoredNames: [String]
-    public var ignoredExtensions: [String]
-    public var ignoredNameSubstrings: [String]
-    /// Prefix + extension of the archive's record files (`_documents.md`, `_labels.md`, history files), and of those
-    /// earlier versions left, which are never read as documents.
-    public var managedFilePrefix: String
-    public var managedFileExtension: String
-    /// How long the app's own file operations are ignored by the archive watcher (must exceed FSEvents latency).
-    public var selfChangeTTLSeconds: Double
 }
 
 /// The archive's own files: a `_documents.md` beside the documents of each directory, and the `System` folder
@@ -125,13 +148,26 @@ public struct RecordsConfig: Sendable, Codable, Hashable {
     public var conversationsFolderName: String
     /// Added to the name of a database that could not be opened when it is moved aside.
     public var setAsideSuffix: String
+    /// Minutes since it was last written after which a record file's staged text (`StagedRecordFile`) is taken for one a
+    /// crash left and removed: one younger may be another process's, about to take its record file's place.
+    public var stagedLeftoverMinutes: Double
 }
 
 public struct IngestConfig: Sendable, Codable, Hashable {
+    /// How many times a stage of a job is tried before the job fails; also how many starts a change in the archive that
+    /// cannot be applied is tried at before it is given up (`ArchiveReconciler`).
     public var maxAttempts: Int
     /// Seconds before each retry of a failed job, the last one for every retry after; also how long a job waits for
     /// Ollama to come back.
     public var retryDelays: NonEmpty<Double>
+    /// Seconds a job whose model is not installed waits before it looks again whether it is, spending no attempt.
+    public var modelRecheckSeconds: Double
+    /// Seconds a job waits for work a deadline gave up on, which does not notice cancellation, to end before the job
+    /// fails rather than being worked on again beside it.
+    public var abandonedWorkSeconds: Double
+    /// Seconds an idle worker, of the ingest queue or the queues of tasks and questions, waits at most while another
+    /// process holds items of its queue, before it looks again whether that process still runs (`IdleWait`).
+    public var heldElsewhereRecheckSeconds: Double
     /// Seconds the app, when it quits, waits for its work to stop, so the document in hand and the request being read
     /// stop where they carry on at the next start. A stop that takes longer goes on while the app quits.
     public var quitTimeout: Double
@@ -169,6 +205,8 @@ public struct ExtractionConfig: Sendable, Codable, Hashable {
         public var sparseWords: Int
         public var lowConfidence: Double
         public var vlmTimeout: Double
+        /// Most pixels (width × height) an image may declare to be decoded; a larger one gives its metadata alone.
+        public var maxPixels: Int
     }
     public struct OCR: Sendable, Codable, Hashable {
         public var lowConfidenceLine: Double
@@ -201,6 +239,8 @@ public struct ExtractionConfig: Sendable, Codable, Hashable {
     public var pptxMaxSlides: Int
     public var archiveMaxEntries: Int
     public var emailBodyCapBytes: Int
+    /// Maximum bytes of an e-mail file read, its parts and their names among them; the rest is left, with a warning.
+    public var emailReadCapBytes: Int
     public var quickLookPixel: Int
     public var tableSnippetChars: Int
     public var maxTables: Int
@@ -212,34 +252,14 @@ public struct ExtractionConfig: Sendable, Codable, Hashable {
     public var toolKillGrace: Double
     /// Maximum decompressed bytes read from one ZIP entry (OOXML parts).
     public var zipEntryCapBytes: Int
+    /// Most entries a ZIP file (an archive or an Office document) may list; one with more is not opened.
+    public var zipMaxEntries: Int
     /// Maximum MIME multipart nesting depth parsed in e-mails.
     public var emailMaxPartDepth: Int
+    /// How many messages deep an e-mail with no text of its own is read through the messages it forwards.
+    public var emailForwardsRead: Int
     /// Maximum characters of text previews and metadata values written to trace steps.
     public var tracePreviewChars: Int
-}
-
-public struct EntityConfig: Sendable, Codable, Hashable {
-    public struct Scores: Sendable, Codable, Hashable {
-        public var label: Double
-        public var firstPortion: Double
-        public var plausibleYear: Double
-        public var dueLabel: Double
-        public var birthLabel: Double
-        public var crowdedLine: Double
-        public var matchesMetadata: Double
-    }
-    public var dateLabels: [String]
-    public var dueLabels: [String]
-    public var birthLabels: [String]
-    public var labelWindowChars: Int
-    public var yearsBack: Int
-    public var yearsForward: Int
-    public var scores: Scores
-    public var firstPortionShare: Double
-    /// Number of dates on one line from which the line counts as crowded (tables, statements).
-    public var crowdedLineDates: Int
-    /// Minimum score for a date found in the text to be chosen over metadata dates.
-    public var minTextDateScore: Double
 }
 
 /// Reading a document with the local model: what it sees of it, how it is asked, and what its answer may be.
@@ -326,7 +346,6 @@ public struct SearchConfig: Sendable, Codable, Hashable {
     /// `LabelKind`, the user's tags last.
     public var bm25Weights: [Double]
     public var snippetTokens: Int
-    public var debounceMilliseconds: Int
     public var vectorSnippetChars: Int
 }
 
@@ -368,32 +387,6 @@ public struct TasksConfig: Sendable, Codable, Hashable {
             throw ConfigError.invalid(name: "pipeline", underlying: "tasks.efforts.\(effort.rawValue) is missing")
         }
         return preset
-    }
-
-    var problems: [String] {
-        var problems: [String] = []
-        for effort in TaskEffort.allCases {
-            guard let preset = efforts[effort] else {
-                problems.append("tasks.efforts.\(effort.rawValue) is missing")
-                continue
-            }
-            if preset.repairAttempts < 0 { problems.append("tasks.efforts.\(effort.rawValue).repairAttempts cannot be negative") }
-            if preset.numPredict < 1 { problems.append("tasks.efforts.\(effort.rawValue).numPredict must be at least 1") }
-            if preset.timeout <= 0 { problems.append("tasks.efforts.\(effort.rawValue).timeout must be more than 0") }
-            for kind in preset.promptLabels.keys where kind.isUsersOwn {
-                problems.append("tasks.efforts.\(effort.rawValue).promptLabels.\(kind.rawValue): the model is never shown the user's own labels; remove it")
-            }
-        }
-        if maxValuesPerKind < 1 { problems.append("tasks.maxValuesPerKind must be at least 1") }
-        if maxWords < 0 { problems.append("tasks.maxWords cannot be negative") }
-        if maxGroupingDepth < 1 { problems.append("tasks.maxGroupingDepth must be at least 1") }
-        if defaultGrouping.count > maxGroupingDepth { problems.append("tasks.defaultGrouping is deeper than tasks.maxGroupingDepth") }
-        if maxTitleChars < 1 { problems.append("tasks.maxTitleChars must be at least 1") }
-        if maxDocuments < 1 { problems.append("tasks.maxDocuments must be at least 1") }
-        do { _ = try withoutLabelFolder(.sender) } catch {
-            problems.append("tasks.withoutLabelFolder: \(error.localizedDescription)")
-        }
-        return problems
     }
 }
 
@@ -591,6 +584,17 @@ public struct MaintenanceConfig: Sendable, Codable, Hashable {
 public struct DatabaseConfig: Sendable, Codable, Hashable {
     /// Seconds a write waits for another process holding the index, the app or `arrumatorcli`, before it fails.
     public var busyTimeout: Double
+    /// Seconds before the app watches the index again after watching it failed (`AppDatabase.activity()`,
+    /// `pendingRecords()`): its lists, and the writer of the record files, hear of changes again after that.
+    public var observationRetry: Double
+}
+
+/// How a change of `settings.json` waits for one another process is making (`SettingsLock`).
+public struct SettingsLockConfig: Sendable, Codable, Hashable {
+    /// Seconds a change waits for another process changing the settings before it fails, saying so.
+    public var timeout: Double
+    /// Seconds between asking again whether the other process is done.
+    public var pollInterval: Double
 }
 
 /// One step of the processing funnel: the trace stages it covers, and how it is described to the user.
@@ -609,22 +613,4 @@ public struct FunnelConfig: Sendable, Codable, Hashable {
     /// Below this many documents in the window, percentages are noise, so only counts are shown.
     public var minimumForShares: Int
     public var steps: [FunnelStepConfig]
-}
-
-extension PipelineConfig {
-    /// What extraction is given for a file under `settings`: its tunables, and the vision model of the profile in use when
-    /// images may be described. The ingest pipeline and `arrumatorcli ingest --dry-run` extract alike with it.
-    public func extractionContext(settings: AppSettings) throws -> ExtractionContext {
-        ExtractionContext(config: extraction, entities: entities, vision: settings.enableVLM ? try visionOptions(settings: settings) : nil)
-    }
-
-    /// Images are described with the context and keep-alive documents are read with (`analysis.numCtx`,
-    /// `ollama.keepAlive.chat`): a profile that reads and describes images with one model keeps it loaded once, rather
-    /// than Ollama loading it again with another context for every image. The model thinks as it does reading a
-    /// document (`analysis.think`).
-    private func visionOptions(settings: AppSettings) throws -> VisionModelOptions {
-        VisionModelOptions(model: try settings.modelProfile().visionModel, keepAlive: ollama.keepAlive.chat,
-                           numPredict: analysis.vlmNumPredict, numCtx: analysis.numCtx, options: analysis.llmOptions,
-                           think: analysis.think)
-    }
 }

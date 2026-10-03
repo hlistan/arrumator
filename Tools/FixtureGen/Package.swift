@@ -10,7 +10,7 @@ let package = Package(
         .executableTarget(
             name: "fixturegen",
             path: "Sources/FixtureGen",
-            swiftSettings: [.enableUpcomingFeature("ExistentialAny")]
+            swiftSettings: [.enableUpcomingFeature("ExistentialAny"), .treatAllWarnings(as: .error)]
         ),
     ],
     swiftLanguageModes: [.v6]

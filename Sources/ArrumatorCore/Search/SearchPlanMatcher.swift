@@ -1,7 +1,8 @@
 import Foundation
 import GRDB
 
-/// Finds the documents a search task's plan asks for among those in the archive (`DocumentStatus.inArchive`): those
+/// Finds the documents a search task's plan asks for among those in the archive (`DocumentStatus.inArchive`, and their
+/// files in the archive at `archive`, so a document left in Incoming is none): those
 /// whose labels match every kind the plan gives (`SearchPlan.matches`) and that contain every one of its words, each as
 /// a phrase, in the full-text index. Labels are matched on the documents' own labels, so a document is found by them
 /// even before its text has been read again after a rebuild. They come by their own date, the newest first and the
@@ -9,10 +10,12 @@ import GRDB
 /// for nothing finds nothing.
 public struct SearchPlanMatcher: Sendable {
     public let database: AppDatabase
+    public let archive: URL
     public let limit: Int
 
-    public init(database: AppDatabase, limit: Int) {
+    public init(database: AppDatabase, archive: URL, limit: Int) {
         self.database = database
+        self.archive = archive
         self.limit = limit
     }
 
@@ -20,14 +23,17 @@ public struct SearchPlanMatcher: Sendable {
         guard !plan.isEmpty else { return [] }
         let match = Self.phrases(plan.words)
         let statuses = DocumentStatus.inArchive.map(\.rawValue).sorted()
+        let (within, inArchive) = DocumentFilter.pathCondition(within: archive)
         let limit = limit
         return try await database.reader.read { db in
             let rows = try Row.fetchAll(db, sql: """
-                SELECT d.id, d.labels_json FROM documents d WHERE d.status IN (\(databaseQuestionMarks(count: statuses.count)))
+                SELECT d.id, d.path, d.labels_json FROM documents d WHERE d.status IN (\(databaseQuestionMarks(count: statuses.count)))\(within)
                 ORDER BY \(DocumentOrder.documentDate.sql)
-                """, arguments: StatementArguments(statuses))
+                """, arguments: StatementArguments(statuses) + inArchive)
+            let archive = archive
             var found = rows.compactMap { row -> Int64? in
-                plan.matches(JSON.decode([DocumentLabel].self, from: row["labels_json"]) ?? []) ? row["id"] : nil
+                guard archive.holds(row["path"]) else { return nil }
+                return plan.matches(JSON.decode([DocumentLabel].self, from: row["labels_json"]) ?? []) ? row["id"] : nil
             }
             if let match {
                 let withWords = Set(try Int64.fetchAll(db, sql: "SELECT rowid FROM document_fts WHERE document_fts MATCH ?", arguments: [match]))

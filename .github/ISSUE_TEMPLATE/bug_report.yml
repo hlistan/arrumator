@@ -19,8 +19,10 @@ body:
     attributes:
       label: How it was decided
       description: >
-        For how a document was read, the output of `arrumatorcli trace <document>` (without --full, which contains document
-        text) helps most.
+        For how a document was read, the output of `arrumatorcli trace <document>` helps most: each step's stage, status
+        and duration, and nothing of the document. Never paste `--full`, which shows the document's text, name and
+        identifiers. A diagnostics export (`arrumatorcli diagnostics <zip>`, or Settings › Advanced) holds nothing of a
+        document either, unless "Include documents' text, names and labels in diagnostics" is on.
       render: text
   - type: input
     id: version

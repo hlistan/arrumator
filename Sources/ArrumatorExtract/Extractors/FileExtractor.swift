@@ -11,8 +11,8 @@ protocol FileExtractor: Sendable {
     var version: Int { get }
     /// Types handled by this extractor. The registry prefers an exact match, then the most specific conformance.
     var supportedTypes: [UTType] { get }
-    /// Extracts content. Soft problems become warnings on the draft; only `ExtractionError` and
-    /// `CancellationError` are thrown.
+    /// Extracts content. Soft problems become warnings on the draft; only `ExtractionError`, `CancellationError`
+    /// and, from the vision model, an `OllamaError` that passes are thrown.
     func extract(_ job: ExtractionJob) async throws -> ExtractionDraft
 }
 
@@ -25,8 +25,30 @@ struct ExtractionJob: Sendable {
     let trace: TraceContext
     /// What deadlines are measured by.
     let time: any TimeSource
+    /// What the day of a date the file holds is reckoned in: the Mac's time zone, in the Gregorian calendar.
+    let calendar: GregorianCalendar
 
     var config: ExtractionConfig { context.config }
+
+    /// The first `cap` bytes of the file, and whether it goes on past them; a file that cannot be read fails the stage.
+    func head(upTo cap: Int) throws -> (data: Data, truncated: Bool) {
+        let data: Data
+        do {
+            let handle = try FileHandle(forReadingFrom: url)
+            defer { try? handle.close() }
+            data = try handle.read(upToCount: cap) ?? Data()
+        } catch {
+            throw ExtractionError.fileUnreadable(path: url.path, underlying: error.localizedDescription)
+        }
+        return (data, source.byteSize > Int64(data.count))
+    }
+}
+
+extension ExtractionWarning {
+    /// Only the first `read` bytes of a file of `size` were read.
+    static func headRead(_ read: Int, of size: Int64) -> ExtractionWarning {
+        ExtractionWarning(.textTruncated, "read the first \(read) of \(size) bytes")
+    }
 }
 
 /// What a per-type extractor found. The registry normalises and caps the text, then adds language and entities.

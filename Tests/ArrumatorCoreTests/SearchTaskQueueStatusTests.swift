@@ -98,8 +98,9 @@ import Testing
         #expect(await Patience.until { await witness.sights.count == 1 }, "the running queue takes the task, and the model reads it")
         #expect(await queue.status.reading?.task == id, "the queue says which task it reads")
         await queue.stop()
-        #expect(await queue.status == .idle, "a stopped queue reads nothing and waits for nothing")
-        #expect(try await suite.task(tasks, id).state == .interpreting, "the task it was reading is taken up at the next start")
+        #expect(await queue.status == SearchTaskQueueStatus(reading: nil, queued: 1, waitingForOllama: false),
+                "a stopped queue reads nothing and waits for nothing, the task it was reading counted among those waiting")
+        #expect(try await suite.task(tasks, id).state == .queued, "the task it was reading is back in the queue, taken up at the next start")
         await queue.start()
         #expect(try await Patience.until {
             let ready = try await tasks.store.task(id: id)?.state == .ready
@@ -137,6 +138,24 @@ import Testing
         #expect(readingFirst.progress(of: done) == nil, "a task that is ready is no longer in the queue, whatever a status not yet updated says")
         done.state = .failed
         #expect(readingFirst.progress(of: done) == nil, "nor one that failed")
+    }
+
+    @Test func startingTheQueueAgainWhileItReadsARequestLeavesThatRequestBeingRead() async throws {
+        let h = try await Harness.make()
+        defer { h.env.cleanup() }
+        let reading = Signal()
+        let (queue, tasks) = h.searchTasks(StubInterpreter(plans: Self.plans) { _ in
+            reading.fire()
+            try await TestTime(.blocks).sleep(seconds: 1)
+        })
+        let id = try await tasks.create(prompt: SearchTaskTests.prompt).id
+        await queue.start()
+        try #require(await Patience.until { reading.fired }, "the queue reads the request")
+        await queue.start()
+        #expect(try await tasks.store.task(id: id)?.state == .interpreting,
+                "a second start does not put back in the queue the request being read, as if it had been stopped")
+        #expect(await queue.status.reading?.task == id, "which the queue goes on reading")
+        await queue.stop()
     }
 }
 

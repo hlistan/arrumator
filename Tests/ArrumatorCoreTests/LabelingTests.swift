@@ -58,7 +58,7 @@ import Testing
         let coordinator = IngestCoordinator(services: services)
         try await ReviewActions(services: services, coordinator: coordinator).retry(id)
         let queued = try await services.jobs.active()
-        #expect(queued.map(\.state) == [.pending] && queued.first?.payload.content != nil,
+        #expect(try queued.map(\.state) == [.pending] && queued.first?.payload.content != nil,
                 "it waits its turn with the text it arrived with, to be read again from it")
         await coordinator.drain()
         let read = try #require(try await services.documents.document(id: id))

@@ -1,65 +1,16 @@
 @testable import ArrumatorCore
+import ArrumatorTesting
+import CoreGraphics
 import Foundation
+import GRDB
+import ImageIO
 import Testing
+import UniformTypeIdentifiers
 
 /// `arrumatorcli` as scripts and agents run it (AGENTS.md §4.6): the built command, in a scratch home whose settings
 /// name scratch folders (§4.3) and an address where no Ollama answers, so nothing needs a model and nothing reaches the
 /// user's archive. Every command's `--json` output is decoded as the contract it is.
 @Suite struct CommandLineTests {
-    /// Finds the built command beside this test bundle, as SwiftPM builds both into one products folder.
-    private final class Marker: NSObject {}
-
-    private struct Home {
-        let root: URL
-        var support: URL { root.appendingPathComponent("support", isDirectory: true) }
-        var archive: URL { root.appendingPathComponent("Archive", isDirectory: true) }
-
-        static func make() throws -> Home {
-            let root = FileManager.default.temporaryDirectory.appendingPathComponent("arrumator-cli-\(UUID().uuidString)", isDirectory: true)
-            let home = Home(root: root)
-            try FileManager.default.createDirectory(at: home.support, withIntermediateDirectories: true)
-            // Port 9 is the discard service: nothing answers there, so every model check sees Ollama as not running.
-            let settings: [String: String] = ["incomingPath": root.appendingPathComponent("Incoming").path,
-                                              "archivePath": home.archive.path,
-                                              "ollamaURL": "http://127.0.0.1:9", "ollamaManagement": "external"]
-            try JSONEncoder().encode(settings).write(to: home.support.appendingPathComponent("settings.json"))
-            return home
-        }
-
-        func cleanup() { try? FileManager.default.removeItem(at: root) }
-    }
-
-    private struct Result {
-        let status: Int32
-        let stdout: Data
-        let stderr: String
-        var text: String { String(decoding: stdout, as: UTF8.self) }
-    }
-
-    private func run(_ home: Home, _ arguments: [String]) throws -> Result {
-        let command = Bundle(for: Marker.self).bundleURL.deletingLastPathComponent().appendingPathComponent("arrumatorcli")
-        guard FileManager.default.isExecutableFile(atPath: command.path) else { throw CocoaError(.fileNoSuchFile) }
-        let process = Process()
-        process.executableURL = command
-        process.arguments = arguments
-        // Only what the command needs: its scratch home and Trash, and a home folder for the disk-space check.
-        process.environment = ["ARRUMATOR_HOME": home.support.path, "ARRUMATOR_TRASH": home.root.appendingPathComponent("Trash").path,
-                               "HOME": FileManager.default.homeDirectoryForCurrentUser.path]
-        let out = Pipe()
-        let err = Pipe()
-        process.standardOutput = out
-        process.standardError = err
-        try process.run()
-        let stdout = out.fileHandleForReading.readDataToEndOfFile()
-        let stderr = err.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        return Result(status: process.terminationStatus, stdout: stdout, stderr: String(decoding: stderr, as: UTF8.self))
-    }
-
-    private func settings(_ home: Home) throws -> AppSettings {
-        try JSON.decoder.decode(AppSettings.self, from: try run(home, ["settings", "--json"]).stdout)
-    }
-
     @Test func doctorReportsAHealthyIndexAndExitsAsItsReportSays() throws {
         let home = try Home.make()
         defer { home.cleanup() }
@@ -106,11 +57,6 @@ import Testing
                 "the command stops naming the key to remove, rather than reading the profile chosen before as another: \(result.stderr)")
         #expect(result.stderr.contains(ConfigLoader.unknownKey("duplicateAction")),
                 "and so does what copies were done with, now that a copy always has its original read again: \(result.stderr)")
-    }
-
-    /// The settings changes in the scratch archive's History.
-    private func settingsEvents(_ home: Home) throws -> [EventRecord] {
-        try JSON.decoder.decode([EventRecord].self, from: try run(home, ["history", "--json"]).stdout).filter { $0.kind == .settingsChanged }
     }
 
     @Test func everySettingTheAppChangesCanBeChangedFromTheCommandLine() throws {
@@ -224,6 +170,50 @@ import Testing
         #expect(funnel?["windowDays"] as? Int == 30, "the period is stats.defaultWindowDays unless --days says otherwise")
     }
 
+    @Test func rebuildFindsTheArchivesDocumentsWhereverTheyAreAndAnswersInJSON() throws {
+        let home = try Home.make()
+        defer { home.cleanup() }
+        let ids = try file(home, [("bill.txt", [DocumentLabel(kind: .type, value: "invoice")]), ("letter.txt", [])])
+        #expect(try run(home, ["archive", "show"]).status == 0, "a first command makes the archive's index")
+        // Moved in Finder since, keeping the identifier on it.
+        let moved = home.archive.appendingPathComponent("Old/bill.txt")
+        try FileManager.default.createDirectory(at: moved.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.moveItem(at: home.archive.appendingPathComponent("bill.txt"), to: moved)
+        let rebuilt = try run(home, ["rebuild", "--json"])
+        #expect(rebuilt.status == 0, "the index is rebuilt from the archive's record files: \(rebuilt.stderr)")
+        let summary = try JSON.decoder.decode(RebuildSummary.self, from: rebuilt.stdout)
+        #expect(summary.documents == ids.count && summary.relocated == 1 && summary.missing == 0,
+                "every document is found, the one moved where it is now, as one JSON object: \(rebuilt.text)")
+        let found = try JSONSerialization.jsonObject(with: try run(home, ["labels", "browse", "--json", "type=invoice"]).stdout) as? [String: Any]
+        let paths = (found?["documents"] as? [[String: Any]])?.compactMap { $0["path"] as? String }
+        #expect(paths == [moved.path], "and the document is where it was moved to: \(String(describing: found))")
+    }
+
+    @Test func modelsAndReplayAnswerInJSONFromTheServerTheSettingsName() async throws {
+        let ollama = try LoopbackOllama()
+        defer { ollama.stop() }
+        try #require(await Patience.until { ollama.address != nil }, "the stand-in Ollama listens on the loopback address")
+        let home = try Home.make(ollamaURL: try #require(ollama.address))
+        defer { home.cleanup() }
+        let listed = try run(home, ["models", "list", "--json"])
+        #expect(try JSON.decoder.decode([InstalledModel].self, from: listed.stdout).isEmpty,
+                "the models the server has, one JSON list, empty as it lists none: \(listed.text) \(listed.stderr)")
+        let status = try JSONSerialization.jsonObject(with: try run(home, ["models", "--json"]).stdout) as? [String: Any]
+        let roles = (status?["models"] as? [[String: Any]])?.compactMap { $0["role"] as? String }
+        #expect(status?["profile"] as? String == (try settings(home)).profile && roles == ModelRole.allCases.map(\.rawValue),
+                "the profile in use and each of its models in its role: \(String(describing: status))")
+
+        let note = home.root.appendingPathComponent("note.txt")
+        try Data("A note to read again".utf8).write(to: note)
+        let document = try #require(try JSON.decoder.decode([DocumentRecord].self, from: try run(home, ["ingest", "--json", note.path]).stdout).first)
+        let replayed = try run(home, ["replay", "--json", String(try #require(document.id))])
+        #expect(replayed.status == 0, "a stored document is read again without touching its file: \(replayed.stderr)")
+        let readings = try JSONSerialization.jsonObject(with: replayed.stdout) as? [String: Any]
+        #expect(readings?["original"] is [String: Any] && readings?["replay"] is [String: Any],
+                "what it was read as and what it is read as now, side by side, as one JSON object: \(replayed.text)")
+        #expect(FileManager.default.fileExists(atPath: document.path), "and the file stays where it is")
+    }
+
     @Test func browsingLabelsTakesTheSidebarsSearchAndAnswersInJSON() throws {
         let home = try Home.make()
         defer { home.cleanup() }
@@ -232,30 +222,6 @@ import Testing
         let scope = try JSONSerialization.jsonObject(with: result.stdout) as? [String: Any]
         #expect(scope?["labels"] is [Any] && scope?["documents"] is [Any],
                 "the scope lists its documents and the labels to narrow them by, as before: \(result.text)")
-    }
-
-    /// Puts documents into the scratch archive as an earlier run filed them, one a minute after the other, each labelled
-    /// as given: the files, each with the identifier Arrumator keeps on it, and the archive's record of them, which the
-    /// command's new index is rebuilt from. Returns their numbers, in the order given.
-    private func file(_ home: Home, _ documents: [(name: String, labels: [DocumentLabel])]) throws -> [Int64] {
-        try FileManager.default.createDirectory(at: home.archive, withIntermediateDirectories: true)
-        var entries: [DocumentEntry] = []
-        for (offset, document) in documents.enumerated() {
-            let url = home.archive.appendingPathComponent(document.name)
-            let text = Data("A document: \(document.name)".utf8)
-            try text.write(to: url)
-            var record = DocumentRecord.arrived(path: url.path, sha256: try HashService.sha256(of: url), size: Int64(text.count),
-                                                uttype: "public.plain-text", inode: nil, modified: nil, now: Date())
-            record.id = Int64(offset + 1)
-            record.status = .filed
-            record.filedAt = record.addedAt.addingTimeInterval(Double(offset) * 60)
-            record.labelsJson = JSON.string(document.labels)
-            try Xattr.set(Xattr.documentID, record.uid, on: url)
-            entries.append(try #require(DocumentEntry(record)))
-        }
-        let records = home.archive.appendingPathComponent(try PipelineConfig.bundledDefaults().records.documentsFileName)
-        try FrontMatter.compose(RecordList(entries), body: "").write(to: records, atomically: true, encoding: .utf8)
-        return entries.map(\.id)
     }
 
     @Test func browsingLabelsListsTheDocumentsByTheirOwnDateNewestFirstAsTheAppDoes() throws {
@@ -324,6 +290,10 @@ import Testing
         let labels = try JSON.decoder.decode([DocumentLabel].self, from: JSONSerialization.data(withJSONObject: row?["labels"] ?? []))
         #expect(labels == [invoice, taxes, mine] && row?["labelled"] as? Bool == true,
                 "a tag is added by hand as any label, as written, and the document labelled stays so: \(added.text) \(added.stderr)")
+        let retyped = try JSONSerialization.jsonObject(with: try run(home, ["labels", String(ids[1]), "--json", "--add", "type=receipt"]).stdout)
+        let types = try JSON.decoder.decode([DocumentLabel].self, from: JSONSerialization.data(withJSONObject: (retyped as? [String: Any])?["labels"] ?? []))
+            .filter { $0.kind == .type }
+        #expect(types == [receipt], "a type added takes the place of the one there, as on a document's card: \(types)")
         let browsed = try run(home, ["labels", "browse", "--json", "tag=taxes 2024"])
         #expect(try documentIDs(browsed.stdout, under: "documents") == ids, "every document with the tag, however it is cased: \(browsed.text)")
         let stats = try JSONSerialization.jsonObject(with: try run(home, ["stats", "--json"]).stdout) as? [String: Any]
@@ -447,5 +417,203 @@ import Testing
         for line in lines {
             #expect((try? JSONSerialization.jsonObject(with: Data(line.utf8))) is [String: Any], "every line is a JSON object: \(line)")
         }
+    }
+}
+
+/// What `extract` shows of a file.
+extension CommandLineTests {
+    /// Whether to wait for Ollama is the pipeline's decision; `extract` shows what is read now.
+    @Test func extractReadsAnImageWithoutItsDescriptionWhileOllamaIsAway() throws {
+        let home = try Home.make()
+        defer { home.cleanup() }
+        // A blank page: no text for OCR to read, so the vision model is asked to describe it.
+        let image = home.root.appendingPathComponent("blank.png")
+        let context = try #require(CGContext(data: nil, width: 400, height: 300, bitsPerComponent: 8, bytesPerRow: 0,
+                                             space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue))
+        context.setFillColor(gray: 1, alpha: 1)
+        context.fill(CGRect(x: 0, y: 0, width: 400, height: 300))
+        let destination = try #require(CGImageDestinationCreateWithURL(image as CFURL, UTType.png.identifier as CFString, 1, nil))
+        CGImageDestinationAddImage(destination, try #require(context.makeImage()), nil)
+        #expect(CGImageDestinationFinalize(destination), "the fixture writes a PNG")
+
+        let result = try run(home, ["extract", "--json", image.path])
+        #expect(result.status == 0, "extract shows what it read, though Ollama is away: \(result.stderr)")
+        let content = try JSON.decoder.decode(ExtractedContent.self, from: result.stdout)
+        #expect(content.warnings.contains { $0.code == .vlmFailed && $0.detail.hasPrefix("Ollama is away") },
+                "and notes that the image could not be described: \(content.warnings)")
+    }
+}
+
+/// What may be pasted into a public bug report.
+extension CommandLineTests {
+    /// What a bug report asks for, a trace without --full and diagnostics without consent, holds nothing of a document
+    /// read by the real extractor: neither its text nor its name nor the identifier read from it (AGENTS.md §4.1).
+    @Test func aTraceAndDiagnosticsHoldNothingOfTheDocumentUnlessAskedFor() throws {
+        let home = try Home.make()
+        defer { home.cleanup() }
+        let file = home.root.appendingPathComponent("Incoming/Fatura-Exemplo.txt")
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("Cliente Maria Exemplo, NIF 503504564, fatura de julho".utf8).write(to: file)
+        let sentinels = ["Maria Exemplo", "503504564", "Fatura-Exemplo"]
+        // No model answers here: the file is extracted and waits to be read, and its trace says so.
+        let ingested = try run(home, ["ingest", "--json", file.path])
+        let id = try #require(try JSON.decoder.decode([DocumentRecord].self, from: ingested.stdout).first?.id, "\(ingested.text) \(ingested.stderr)")
+
+        let full = try run(home, ["trace", String(id), "--full"])
+        #expect(full.status == 0 && full.text.contains("Maria Exemplo"), "with --full, the trace shows what was read: \(full.text) \(full.stderr)")
+        let plain = try run(home, ["trace", String(id)])
+        #expect(plain.status == 0 && plain.text.contains("extract") && plain.text.contains("--full"),
+                "without it, the steps and how to see the rest: \(plain.text) \(plain.stderr)")
+        #expect(sentinels.filter { plain.text.contains($0) }.isEmpty, "and nothing of the document: \(plain.text)")
+        let json = try run(home, ["trace", String(id), "--json"])
+        let exported = try JSON.decoder.decode(TraceExport.self, from: json.stdout)
+        #expect(!exported.steps.isEmpty && exported.steps.allSatisfy { $0.inputJson == nil && $0.outputJson == nil && $0.error == nil },
+                "its JSON keeps each step's stage, status and timing alone: \(json.text)")
+
+        for consent in [false, true] {
+            let zip = home.root.appendingPathComponent("diagnostics-\(consent).zip")
+            let exportedZip = try run(home, ["diagnostics", zip.path] + (consent ? ["--include-document-text"] : []))
+            #expect(exportedZip.status == 0, "\(exportedZip.stderr)")
+            let files = try unzipped(zip, into: home.root.appendingPathComponent("unzipped-\(consent)", isDirectory: true))
+            #expect(files.contains { $0.key.contains("/logs/") }, "the export holds the log of what was done: \(files.keys.sorted())")
+            for sentinel in sentinels {
+                let holding = files.filter { String(decoding: $0.value, as: UTF8.self).contains(sentinel) }.keys.sorted()
+                #expect(holding.isEmpty != consent,
+                        consent ? "with consent, \(sentinel) is shared" : "without consent, \(sentinel) is in no file of the export: \(holding)")
+            }
+        }
+    }
+
+    /// Every file `zip` holds, by its path in the zip, unzipped into `folder` with macOS's archiver.
+    private func unzipped(_ zip: URL, into folder: URL) throws -> [String: Data] {
+        let ditto = Process()
+        ditto.executableURL = URL(fileURLWithPath: DiagnosticsExporter.dittoPath)
+        ditto.arguments = ["-x", "-k", zip.path, folder.path]
+        try ditto.run()
+        ditto.waitUntilExit()
+        try #require(ditto.terminationStatus == 0, "the export is a zip")
+        let found = FileManager.default.enumerator(at: folder, includingPropertiesForKeys: [.isRegularFileKey])?.allObjects ?? []
+        var files: [String: Data] = [:]
+        for case let url as URL in found where (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true {
+            files[String(url.standardizedFileURL.path.dropFirst(folder.standardizedFileURL.path.count))] = try Data(contentsOf: url)
+        }
+        return files
+    }
+}
+
+/// The Ollama server, as the command line gives it.
+extension CommandLineTests {
+    /// An address an earlier version saved that this one refuses stops every command, saying where it is saved and how
+    /// to give another; giving another is the one command that never opens the archive with the old one first.
+    @Test func anOllamaAddressThatCannotBeUsedIsNamedAndMendedFromTheCommandLine() throws {
+        let home = try Home.make(ollamaURL: "http://ollama:s3cret@127.0.0.1:9")
+        defer { home.cleanup() }
+        let stopped = try run(home, ["labels", "browse", "--json"])
+        #expect(stopped.status != 0 && stopped.stderr.contains("ollamaURL") && stopped.stderr.contains("settings --ollama-url")
+                    && !stopped.stderr.contains("s3cret"),
+                "a command stops naming the setting and how to give another, never the password: \(stopped.stderr)")
+        let elsewhere = try run(home, ["settings", "--ollama-url", "http://ollama.example.com:11434"])
+        #expect(elsewhere.status != 0 && elsewhere.stderr.contains("ollama.example.com"), "an address it refuses mends nothing: \(elsewhere.stderr)")
+        let unreadable = try run(home, ["settings", "--ollama-url", "http://ollama:s3cret@gpu box:11434"])
+        #expect(unreadable.status != 0 && unreadable.stderr.contains("does not read as an address") && !unreadable.stderr.contains("s3cret"),
+                "nor does one that does not read as an address, which is never repeated: \(unreadable.stderr)")
+        let mended = try run(home, ["settings", "--json", "--ollama-url", Home.nowhere])
+        #expect(mended.status == 0, "a good address is taken in its place: \(mended.stderr)")
+        #expect(try settings(home).ollamaURL == Home.nowhere, "and saved, so every command runs again")
+        let events = try JSON.decoder.decode([EventRecord].self, from: try run(home, ["history", "--json"]).stdout)
+        #expect(events.map(\.summary) == ["Ollama at \(Home.nowhere)"], "and the change is in History once: \(events.map(\.summary))")
+    }
+}
+
+/// The archive's record files as commands leave them (docs/storage.md).
+extension CommandLineTests {
+    @Test func aCommandThatChangesTheIndexWritesTheRecordFilesBeforeItExits() throws {
+        let home = try Home.make()
+        defer { home.cleanup() }
+        _ = try file(home, [("a.txt", [DocumentLabel(kind: .sender, value: "EDP Comercial")])])
+        let config = try PipelineConfig.bundledDefaults()
+        let layout = ArchiveLayout(root: home.archive, records: config.records, watcher: config.watcher)
+        let merged = try run(home, ["labels", "merge", "sender=EDP Comercial", "--into", "EDP"])
+        #expect(merged.status == 0, "the label is merged: \(merged.stderr)")
+        // Read straight after the command, with no other command, nor the app, to write them since.
+        let rules = try String(contentsOf: layout.labelRules, encoding: .utf8)
+        #expect(rules.contains("action: merge") && rules.contains("target: EDP"), "the rule is in the archive when the command exits: \(rules)")
+        let listing = try String(contentsOf: home.archive.appendingPathComponent(config.records.documentsFileName), encoding: .utf8)
+        #expect(listing.contains("value: EDP\n") && !listing.contains("value: EDP Comercial"), "and so is the label it changed: \(listing)")
+    }
+
+    @Test func aRecordFileThatCannotBeReadStopsNoCommandOnTheIndexButStopsItsRebuildNamingIt() throws {
+        let home = try Home.make()
+        defer { home.cleanup() }
+        _ = try file(home, [("a.txt", [DocumentLabel(kind: .type, value: "invoice")])])
+        #expect(try run(home, ["history", "--json"]).status == 0, "the index is made and rebuilt from the archive")
+        // A list of a folder of the user's, broken by hand: its front matter is no longer valid YAML.
+        let broken = TestRecordFiles.brokenList
+        let listing = try writeList(broken, in: home.archive.appendingPathComponent("Kept", isDirectory: true))
+        let history = try run(home, ["history", "--json"])
+        #expect(history.status == 0, "on an index that holds the archive, every command still runs: \(history.stderr)")
+        let doctor = try run(home, ["doctor", "--json"])
+        let report = try JSON.decoder.decode(DoctorReport.self, from: doctor.stdout)
+        let check = try #require(report.checks.first { $0.name == "Record file" }, "the doctor names the file: \(report.checks)")
+        #expect(check.status == .error && check.detail.contains("Kept/") && check.detail.contains("line"),
+                "with where it breaks, so the user can correct it: \(check.detail)")
+        #expect(doctor.status == 1, "and fails until it reads again")
+
+        // The index is lost: a new one cannot be rebuilt without the file.
+        try FileManager.default.removeItem(at: home.support.appendingPathComponent("Indexes"))
+        for round in 1...2 {
+            let refused = try run(home, ["history", "--json"])
+            #expect(refused.status == 1 && refused.stderr.contains(listing.path) && refused.stderr.contains("line") && refused.stderr.contains("Correct"),
+                    "every command stops, naming the file, where it breaks and what to do (\(round)): \(refused.stderr)")
+        }
+        #expect(try String(contentsOf: listing, encoding: .utf8) == broken, "the file is left as the user left it")
+        try TestRecordFiles.emptyList.write(to: listing, atomically: true, encoding: .utf8)
+        let corrected = try run(home, ["history", "--json"])
+        let events = try JSON.decoder.decode([EventRecord].self, from: corrected.stdout)
+        #expect(corrected.status == 0 && events.contains { $0.kind == .rebuilt }, "once it is corrected, the index is rebuilt: \(corrected.stderr)")
+    }
+
+    @Test func aCommandThatFailsPartWayWritesWhatItChangedBeforeItExits() throws {
+        let home = try Home.make()
+        defer { home.cleanup() }
+        let config = try PipelineConfig.bundledDefaults()
+        let layout = ArchiveLayout(root: home.archive, records: config.records, watcher: config.watcher)
+        func paused() throws -> Int {
+            let months = try FileManager.default.contentsOfDirectory(at: layout.history, includingPropertiesForKeys: nil)
+            // Each event once, in the data the app reads back; the list below it says it again.
+            return try months.map { try String(contentsOf: $0, encoding: .utf8) }.joined().components(separatedBy: "summary: Processing paused").count - 1
+        }
+        #expect(try run(home, ["history", "--json"]).status == 0, "the archive's index is made")
+        // The index then refuses the new server's event, so the command pauses, records it, and fails at the server.
+        let index = try #require(try FileManager.default.contentsOfDirectory(at: home.support.appendingPathComponent("Indexes"),
+                                                                           includingPropertiesForKeys: nil).first { $0.pathExtension == "sqlite" })
+        let queue = try DatabaseQueue(path: index.path)
+        try queue.write { db in
+            try db.execute(sql: "CREATE TRIGGER refuse_server BEFORE INSERT ON events WHEN NEW.summary LIKE 'Ollama at %' BEGIN SELECT RAISE(ABORT, 'refused'); END")
+        }
+        try queue.close()
+        let result = try run(home, ["settings", "--paused", "true", "--ollama-url", "http://127.0.0.1:10"])
+        #expect(result.status == 1 && result.stderr.contains("refused"), "the command fails with the reason: \(result.stderr)")
+        #expect(try paused() == 1, "what it changed before it failed is in the archive's history when it exits")
+    }
+}
+
+/// What the command line says of labels that look alike.
+extension CommandLineTests {
+    @Test func labelsThatLookAlikeAreListedSayingWhy() throws {
+        let home = try Home.make()
+        defer { home.cleanup() }
+        let (sender, object) = ({ DocumentLabel(kind: .sender, value: $0) }, { DocumentLabel(kind: .object, value: $0) })
+        _ = try file(home, [("a.txt", [sender("EDP Comercial"), object("contract V/2026/532774")]),
+                            ("b.txt", [sender("EDP Comercail"), object("contract V2026532774")]), ("c.txt", [sender("EDP Comercial")])])
+        let result = try run(home, ["labels", "similar", "--json"])
+        let rows = try JSONSerialization.jsonObject(with: result.stdout) as? [[String: Any]] ?? []
+        let listed = rows.map { [$0["kind"] as? String, $0["value"] as? String, $0["into"] as? String, $0["reason"] as? String] }
+        #expect(listed.contains(["object", "contract V2026532774", "contract V/2026/532774", "sameDigitsGroupedOtherwise"])
+                && listed.contains(["sender", "EDP Comercail", "EDP Comercial", "writtenAlike"]) && listed.count == 2,
+                "the same digits grouped otherwise and a typo, each with why it is offered: \(result.text) \(result.stderr)")
+        let lines = try run(home, ["labels", "similar"]).text.split(separator: "\n")
+        #expect(lines.count == 2 && lines.contains { $0.contains("V2026532774") && $0.contains("same digits, grouped otherwise") }
+                && lines.contains { $0.contains("EDP Comercail") && !$0.contains("same digits") }, "and so does the text: \(lines)")
     }
 }

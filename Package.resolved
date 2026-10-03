@@ -1,15 +1,6 @@
 {
-  "originHash" : "87a4c967b9e51b5885c78fd8739b1cd24b4527fc09af919c6f5689ebe0bbcdeb",
+  "originHash" : "d3782136e5e2956c772e2538da85266fe607dc7ff9b096357b80805a77abb3fa",
   "pins" : [
-    {
-      "identity" : "corexlsx",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/CoreOffice/CoreXLSX.git",
-      "state" : {
-        "revision" : "1391f3832ea2eeee5186ea8abb81ea49ed0609cc",
-        "version" : "0.14.2"
-      }
-    },
     {
       "identity" : "grdb.swift",
       "kind" : "remoteSourceControl",
@@ -26,15 +17,6 @@
       "state" : {
         "revision" : "6a52f3251125d74daf04fcbd5e6f08a75d074382",
         "version" : "1.8.2"
-      }
-    },
-    {
-      "identity" : "xmlcoder",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/maxdesiatov/XMLCoder.git",
-      "state" : {
-        "revision" : "ca932442d7481700f5434a7b138c47dd42d9902b",
-        "version" : "0.14.0"
       }
     },
     {

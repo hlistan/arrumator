@@ -29,7 +29,7 @@ import Testing
     }
 
     @Test func eachKindIsTidiedToOneLineWithoutRepeatsAndCappedMostSignificantFirst() throws {
-        let answer = Fixtures.answer([
+        let answer = try Fixtures.answer([
             .party: ["  Maria\n  Exemplo ", "MARIA EXEMPLO", "Mária Exemplo", "", "João Silva", "Ana Costa", "Rui Sá"],
             .object: ["apartment Rua das Flores 12, Porto, with garage and storage room",
                       "PT0002000012345678PT0002000012345678PT0002000012345678"],
@@ -43,7 +43,7 @@ import Testing
     }
 
     @Test func eachKindKeepsOnlyWhatIsALabelOfThatKind() throws {
-        let answer = Fixtures.answer([
+        let answer = try Fixtures.answer([
             .type: ["invoice", "receipt"], .date: ["yesterday"], .deadline: ["31.07.2026", "soon"],
             .period: ["2025", "2026-06/2026-07", "2026-13", "Q3"], .amount: ["54.21 EUR", "free", "EUR 12.00", "25000.00: cny", "1.5 ABC"],
             .reference: ["invoice 2026/17", "tax assessment for 2025", "the customer's"],
@@ -108,7 +108,7 @@ import Testing
                 "a list of tags in an answer is no list the app reads, and none is asked for when it is left out")
 
         // The archive has tags, and rules about them: what the model is told of the archive stays as it was without them.
-        let h = try await ClassifyHarness.make { _ in Fixtures.answer() }
+        let h = try await ClassifyHarness.make { _ in try Fixtures.answer() }
         defer { h.env.cleanup() }
         let store = DocumentStore(database: h.env.database, time: h.env.time)
         for (offset, labels) in [StubAnalyzer.edpBill, StubAnalyzer.edpBill + [DocumentLabel(kind: .tag, value: "Taxes 2024")],
@@ -116,13 +116,13 @@ import Testing
             var record = DocumentRecord.arrived(path: "/archive/\(offset).pdf", sha256: "\(offset)", size: 1, uttype: "com.adobe.pdf", inode: nil,
                                                 modified: nil, now: h.env.time.now())
             record.status = .filed
-            record.labelsJson = JSON.string(labels)
+            record.labelsJson = try JSON.string(labels)
             try await store.save(record)
         }
         let actions = LabelActions(database: h.env.database, time: h.env.time)
         try await actions.merge(DocumentLabel(kind: .tag, value: "Taxes 2024"), into: "Taxes")
         try await actions.ignore(DocumentLabel(kind: .tag, value: "Receipts"))
-        let guidance = try await LabelStore(database: h.env.database, config: h.env.config.labels).guidance()
+        let guidance = try await LabelStore(database: h.env.database, config: h.env.config.labels, lookAlikes: LookAlikeMemo()).guidance()
         _ = try await h.analyse(Fixtures.content("fatura.pdf", text: Fixtures.edpText), guidance: guidance)
         let request = try #require(await h.mock.chatRequests.first)
         let prompt = request.messages.map(\.content).joined(separator: "\n")
@@ -134,7 +134,7 @@ import Testing
     // MARK: Asking the model
 
     @Test func theModelReadsTheDocumentWithTheAppsOwnPrompt() async throws {
-        let h = try await ClassifyHarness.make { _ in Fixtures.answer() }
+        let h = try await ClassifyHarness.make { _ in try Fixtures.answer() }
         defer { h.env.cleanup() }
         let outcome = try await h.analyse(Fixtures.content("fatura.pdf", text: Fixtures.edpText))
         #expect(outcome.labels == Fixtures.edpLabels, "the document is described by the labels the model gave")
@@ -166,7 +166,7 @@ import Testing
     }
 
     @Test func aModelThatCanThinkReadsADocumentWithoutAndTheTraceSaysSo() async throws {
-        let h = try await ClassifyHarness.make(thinking: .switches) { _ in Fixtures.answer() }
+        let h = try await ClassifyHarness.make(thinking: .switches) { _ in try Fixtures.answer() }
         defer { h.env.cleanup() }
         _ = try await h.analyse(Fixtures.content("fatura.pdf", text: Fixtures.edpText))
         #expect(await h.mock.chatRequests.map(\.think) == [false],
@@ -176,7 +176,7 @@ import Testing
     }
 
     @Test func aDocumentQuotingATemplatePlaceholderIsReadAsWritten() async throws {
-        let h = try await ClassifyHarness.make { _ in Fixtures.answer() }
+        let h = try await ClassifyHarness.make { _ in try Fixtures.answer() }
         defer { h.env.cleanup() }
         let newsletter = "Dear {{first_name}}, your {{document}} and {{archive}} are ready.\n" + Fixtures.edpText
         let outcome = try await h.analyse(Fixtures.content("newsletter.eml", text: newsletter))
@@ -188,7 +188,7 @@ import Testing
     }
 
     @Test func theModelIsToldTheArchivesLabelsAndTheUsersDecisions() async throws {
-        let h = try await ClassifyHarness.make { _ in Fixtures.answer() }
+        let h = try await ClassifyHarness.make { _ in try Fixtures.answer() }
         defer { h.env.cleanup() }
         let guidance = LabelGuidance(
             used: [.sender: ["EDP", "MEO"], .topic: ["electricity"]],
@@ -211,7 +211,7 @@ import Testing
 
     @Test func anInvalidAnswerIsRepairedByTheModel() async throws {
         let h = try await ClassifyHarness.make { request in
-            request.messages.count > 2 ? Fixtures.answer() : Fixtures.answer(omitting: .language)
+            request.messages.count > 2 ? try Fixtures.answer() : try Fixtures.answer(omitting: .language)
         }
         defer { h.env.cleanup() }
         let outcome = try await h.analyse(Fixtures.content("fatura.pdf", text: Fixtures.edpText))
@@ -245,7 +245,7 @@ import Testing
     }
 
     @Test func aChatModelThatIsNotInstalledHoldsTheDocumentUnread() async throws {
-        let h = try await ClassifyHarness.make { _ in Fixtures.answer() }
+        let h = try await ClassifyHarness.make { _ in try Fixtures.answer() }
         defer { h.env.cleanup() }
         let settings = try h.settings.reading(withChatModel: "llama-9:1t")
         await #expect(throws: OllamaError.modelNotFound("llama-9:1t"), "the document waits for its model rather than another reading it unasked") {
@@ -266,7 +266,7 @@ import Testing
     }
 
     @Test func aDocumentWithNoTextWaitsForTheUserUnderItsOwnName() async throws {
-        let h = try await ClassifyHarness.make { _ in Fixtures.answer() }
+        let h = try await ClassifyHarness.make { _ in try Fixtures.answer() }
         defer { h.env.cleanup() }
         let outcome = try await h.analyse(Fixtures.content("blank.pdf", text: "  \n"))
         #expect(outcome.analysis.problems == ["no text could be read"] && outcome.analysis.fileName == nil,
@@ -279,6 +279,52 @@ import Testing
         await #expect(throws: OllamaError.unreachable("connection refused"), "the document waits for the model instead of being filed unread") {
             try await h.analyse(Fixtures.content("fatura.pdf", text: Fixtures.edpText))
         }
+    }
+
+    @Test func aCallBeforeTheServerWentAwayIsTracedWithTheOneThatFoundItAway() async throws {
+        let h = try await ClassifyHarness.make { request in
+            if request.messages.count > 2 { throw OllamaError.unreachable("connection refused") }
+            return "I cannot tell."
+        }
+        defer { h.env.cleanup() }
+        await #expect(throws: OllamaError.unreachable("connection refused"), "the document still waits for the model") {
+            try await h.analyse(Fixtures.content("fatura.pdf", text: Fixtures.edpText))
+        }
+        let step = try #require(await h.steps(.analyse).first, "the reading is traced although it ended with Ollama away")
+        #expect(try step.exchange().map(\.reason) == [.primary, .repair] && step.status == .error,
+                "with the answer that was not valid and the call that found the server away")
+        #expect(try step.exchange().last?.error == OllamaError.unreachable("connection refused").localizedDescription, "and why that one failed")
+    }
+
+    // MARK: Stopping
+
+    @Test func aStopWhileTheModelReadsStopsTheReadingRatherThanFailingIt() async throws {
+        // `OllamaClient` throws `CancellationError` for a request a stop cut off.
+        let h = try await ClassifyHarness.make { _ in throw CancellationError() }
+        defer { h.env.cleanup() }
+        await #expect(throws: CancellationError.self, "a stop is no answer the model failed to give, which would send the document to the user") {
+            try await h.analyse(Fixtures.content("fatura.pdf", text: Fixtures.edpText))
+        }
+        #expect(await h.mock.embedRequests.isEmpty, "and nothing more is asked once it is stopped")
+        #expect(await h.steps(.analyse).map(\.status) == [.warn], "the trace keeps the call the stop cut off, as no failure of the model's")
+    }
+
+    @Test func aStopWhileTheModelIsLookedUpOrTheDocumentEmbeddedStopsTheReading() async throws {
+        let h = try await ClassifyHarness.make { _ in try Fixtures.answer() }
+        defer { h.env.cleanup() }
+        await h.mock.failShowing(ClassifyHarness.chatModel, with: CancellationError())
+        await #expect(throws: CancellationError.self, "a stop while the model's capabilities are read is not a model that says nothing of them") {
+            try await h.analyse(Fixtures.content("fatura.pdf", text: Fixtures.edpText))
+        }
+        #expect(await h.mock.chatRequests.isEmpty, "and the model is not asked")
+
+        let embedding = try await ClassifyHarness.make { _ in try Fixtures.answer() }
+        defer { embedding.env.cleanup() }
+        await embedding.mock.failEmbedding(with: CancellationError())
+        await #expect(throws: CancellationError.self, "a stop while the document is embedded is not a document found by its words only") {
+            try await embedding.analyse(Fixtures.content("fatura.pdf", text: Fixtures.edpText))
+        }
+        #expect(await embedding.steps(.embed).isEmpty, "nor traced as one")
     }
 }
 

@@ -20,11 +20,13 @@ public struct TestEnvironment: Sendable {
         let archive = root.appendingPathComponent("Archive", isDirectory: true)
         let incoming = root.appendingPathComponent("Incoming", isDirectory: true)
         let config = try PipelineConfig.bundledDefaults()
-        let settings = try SettingsStore(paths: paths)
+        let settings = try SettingsStore.opened(paths: paths)
         try await settings.update {
             $0.archivePath = archive.path
             $0.incomingPath = incoming.path
         }
+        // The archive's folder is there, as the app makes it when it applies its settings: filing never makes it.
+        try FileManager.default.createDirectory(at: archive, withIntermediateDirectories: true)
         let database = try AppDatabase.inMemory()
         return TestEnvironment(root: root, paths: paths, archive: archive, incoming: incoming, database: database, config: config,
                                settings: settings, time: TestTime(.advances))
@@ -32,6 +34,12 @@ public struct TestEnvironment: Sendable {
 
     public func cleanup() {
         try? FileManager.default.removeItem(at: root)
+    }
+
+    /// The same folders and settings over `database`, as after the index was lost and made again.
+    public func with(database: AppDatabase) -> TestEnvironment {
+        TestEnvironment(root: root, paths: paths, archive: archive, incoming: incoming, database: database, config: config,
+                        settings: settings, time: time)
     }
 
     /// What stands in for the Trash in everything built on this environment, so nothing a test does reaches the user's.
@@ -58,6 +66,13 @@ public struct TestEnvironment: Sendable {
 
     /// Where things are in the archive.
     public var layout: ArchiveLayout { ArchiveLayout(root: archive, records: config.records, watcher: config.watcher) }
+
+    /// The archive's record files, kept with `index`: the environment's own database unless another is given, such as an
+    /// index made anew over the same archive. The archive is one the test made, not the app.
+    public func records(index: AppDatabase? = nil) -> ArchiveRecords {
+        ArchiveRecords(database: index ?? database, archive: archive, config: config, registry: nil,
+                       time: time, timeZone: TestTime.zone)
+    }
 
     /// Writes a text file into the archive at `path`, below its top, as the user would put one there.
     @discardableResult

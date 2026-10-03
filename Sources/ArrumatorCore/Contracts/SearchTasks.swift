@@ -267,6 +267,8 @@ public struct LabelGroup: Sendable, Codable, Hashable {
 
     /// Every document in the group and the groups below it.
     public var count: Int { documents.count + groups.reduce(0) { $0 + $1.count } }
+    /// Every document in the group and the groups below it, those at this level first.
+    public var allDocuments: [DocumentRecord] { documents + groups.flatMap(\.allDocuments) }
 }
 
 /// A task and its set, arranged.

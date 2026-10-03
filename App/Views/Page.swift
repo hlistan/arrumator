@@ -27,8 +27,9 @@ struct Page<Content: View>: View {
     }
 
     var body: some View {
+        // Lazy, so a long list builds the rows in sight, not every row it has.
         ScrollView {
-            VStack(alignment: .leading, spacing: Style.sectionSpacing) {
+            LazyVStack(alignment: .leading, spacing: Style.sectionSpacing) {
                 VStack(alignment: .leading, spacing: Style.pageTitleSpacing) {
                     HStack(alignment: .firstTextBaseline, spacing: Style.titleSymbolSpacing) {
                         Image(systemName: symbol)
@@ -75,7 +76,7 @@ struct PageSection<Content: View, Trailing: View>: View {
                 trailing().font(.callout)
             }
             Divider().padding(.bottom, Style.sectionRuleGap)
-            VStack(alignment: .leading, spacing: 0) { content() }
+            LazyVStack(alignment: .leading, spacing: 0) { content() }
         }
     }
 }
@@ -135,11 +136,27 @@ struct ListRow: View {
     }
 }
 
+/// How many clicks choose a row and open a document, as everywhere on the Mac.
+private enum Clicks {
+    static let choose = 1
+    static let open = 2
+}
+
 extension View {
     /// What choosing a row does: a click, Return or Space once the keyboard has brought focus to it, or VoiceOver's
     /// default action. Rows are views, not controls, and reach the keyboard only so.
     func rowAction(_ action: @escaping () -> Void) -> some View {
-        onTapGesture(perform: action)
+        rowAction(clicks: Clicks.choose, action)
+    }
+
+    /// What opens a document in the app that shows it: a double click, as in the Finder, Return or Space once the
+    /// keyboard has brought focus to it, or VoiceOver's default action.
+    func openAction(_ action: @escaping () -> Void) -> some View {
+        rowAction(clicks: Clicks.open, action)
+    }
+
+    private func rowAction(clicks: Int, _ action: @escaping () -> Void) -> some View {
+        onTapGesture(count: clicks, perform: action)
             .focusable(interactions: .activate)
             .onKeyPress(keys: [.return, .space]) { _ in
                 action()

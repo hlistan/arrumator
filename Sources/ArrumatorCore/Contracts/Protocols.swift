@@ -39,6 +39,15 @@ public struct SystemTime: TimeSource {
     public func sleep(seconds: Double) async throws { try await Task.sleep(for: .seconds(seconds)) }
 }
 
+/// What a host name stands for on the network now: how a `.local` name, which the app takes for the local network by
+/// its name, is checked before it is trusted (`OllamaEndpoint.resolved(_:by:within:)`). `SystemHostResolver` is the one the app
+/// runs on; a test gives the answers it needs, as nothing in `swift test` may look a name up on the network.
+public protocol HostResolving: Sendable {
+    /// The numeric addresses `host` resolves to, an IPv6 one with its zone (`%en0`) when it has one; none when it does
+    /// not resolve within `seconds`. Throws `CancellationError` as soon as the task is cancelled.
+    func addresses(of host: String, within seconds: Double) async throws -> [String]
+}
+
 /// Where a file the app has no more use for goes, so the user can still take it back: never deleted (AGENTS.md §4.2).
 /// `SystemTrash` is the one the app runs on; `FolderTrash` keeps what it is given in a folder of its own, for a run that
 /// must leave nothing outside its own folders, as `eval` and the tests.

@@ -81,6 +81,9 @@ import Testing
         let trace = try #require(try await w.h.services.traces.trace(id: traceID))
         #expect(trace.0.source == TraceSource.conversation.rawValue && trace.1.map(\.stage) == ["context", "answer"],
                 "the answer is traced: what it was shown, then how it was answered")
+        let context = try #require(JSON.decode([String: JSONValue].self, from: trace.1.first?.outputJson))
+        #expect(context["semanticUsed"] == .bool(false) && context["semanticUnavailableReason"] == .string(SearchService.noEmbedder),
+                "and whether the documents were ordered by the question's meaning too, here without an embedding model: \(context)")
     }
 
     @Test func aQuestionWithoutWordsTooLongOrAboutNoTaskIsRefusedAndNothingIsAsked() async throws {
@@ -157,13 +160,13 @@ import Testing
         let waiting = try await turn(talk, asked.id)
         #expect(waiting.state == .queued && waiting.problem == nil, "the question waits in the queue, no failure")
         let status = await away.status
-        let retry = w.h.env.time.now().addingTimeInterval(try #require(w.h.env.config.ingest.retryDelays.last))
+        let retry = w.h.env.time.now().addingTimeInterval(w.h.env.config.ingest.retryDelays.last)
         #expect(status.waitingForOllama && status.queued == 1 && status.retryAt == retry, "and the queue says it waits for Ollama, until when")
         #expect(status.progress(of: waiting) == .waitingForOllama(until: retry), "which the question shows")
         let (back, _) = w.h.conversations(StubAnswerer(fallback: Self.reply), interpreter: StubInterpreter(plans: [:]))
         await back.drain()
         #expect(try await turn(talk, asked.id).state == .queued, "it is not tried again before its time")
-        w.h.env.time.advance(by: try #require(w.h.env.config.ingest.retryDelays.last))
+        w.h.env.time.advance(by: w.h.env.config.ingest.retryDelays.last)
         await back.drain()
         #expect(try await turn(talk, asked.id).answer == Self.reply.text, "and is answered once it is due and Ollama answers")
     }
@@ -210,17 +213,22 @@ import Testing
     @Test func aQuestionBeingAnsweredWhenTheAppStoppedIsAnsweredFirstAtTheNextStart() async throws {
         let w = try await world()
         defer { w.h.env.cleanup() }
-        let (queue, talk) = w.h.conversations(StubAnswerer(fallback: Self.reply), interpreter: StubInterpreter(plans: [:]))
+        let answerer = StubAnswerer(fallback: Self.reply)
+        let (queue, talk) = w.h.conversations(answerer, interpreter: StubInterpreter(plans: [:]))
         let first = try await talk.ask(w.task.id, question: Self.question)
         let second = try await talk.ask(w.task.id, question: "And the second?")
-        _ = try await talk.store.begin(first.id)
+        _ = try await talk.store.begin(first.id, by: w.h.processes.current.description)
         #expect(try await turn(talk, first.id).state == .answering, "as the app left it")
         await queue.start()
-        let answered = await Patience.until { (try? await talk.store.turn(id: second.id))?.state == .answered }
+        let states = { await [first.id, second.id].asyncMap { (try? await talk.store.turn(id: $0))?.state } }
+        let answered = await Patience.until { await states() == [.answered, .answered] }
         await queue.stop()
-        #expect(answered, "both are answered once the queue starts again")
-        let traces = try await [first.id, second.id].asyncMap { try await turn(talk, $0).lastTrace ?? 0 }
-        #expect(traces[0] < traces[1], "the one interrupted first, in its place")
+        #expect(answered, "both are answered once the queue starts again, the interrupted one too")
+        #expect(await answerer.calls.questions == [Self.question, "And the second?"],
+                "the one interrupted is asked first, in its place, and each once")
+        let interrupted = try #require(try await turn(talk, first.id).lastTrace, "the interrupted question's answer was traced")
+        let next = try #require(try await turn(talk, second.id).lastTrace, "the second question's answer was traced")
+        #expect(interrupted < next, "and its answer was traced before the second's")
     }
 
     @Test func stoppingAQuestionKeepsWhatCameOfItsAnswerAndOneWaitingIsTakenOut() async throws {
@@ -255,9 +263,10 @@ import Testing
         defer { w.h.env.cleanup() }
         let (_, talk) = w.h.conversations(StubAnswerer(), interpreter: StubInterpreter(plans: [:]))
         let asked = try await talk.ask(w.task.id, question: Self.question)
-        _ = try await talk.store.begin(asked.id)
+        let other = w.h.processes.start(pid: TestProcesses.otherPID).description
+        _ = try await talk.store.begin(asked.id, by: other)
         try await talk.stop(asked.id)
-        let kept = try await talk.store.finish(asked.id, answer: TaskAnswer(text: "late", sources: [], find: nil, model: "m", problem: nil),
+        let kept = try await talk.store.finish(asked.id, by: other, answer: TaskAnswer(text: "late", sources: [], find: nil, model: "m", problem: nil),
                                                finding: nil, trace: nil)
         let after = try await turn(talk, asked.id)
         #expect(!kept && after.answer == nil && after.state == .failed,
@@ -391,10 +400,9 @@ import Testing
         let answered = try await talk.ask(w.task.id, question: Self.question)
         await queue.drain()
         let waiting = try await talk.ask(w.task.id, question: "Still waiting?")
-        _ = try await talk.store.begin(waiting.id)
+        _ = try await talk.store.begin(waiting.id, by: w.h.processes.current.description)
 
-        let records = ArchiveRecords(database: w.h.env.database, settings: w.h.env.settings, config: w.h.env.config, registry: nil,
-                                     time: w.h.env.time)
+        let records = w.h.env.records()
         try await records.flush()
         let url = w.h.env.layout.conversationFile(task: w.task.id)
         let file = try String(contentsOf: url, encoding: .utf8)
@@ -406,8 +414,7 @@ import Testing
                 "and below it, for people, each question, its answer and the documents it draws on and found, by name")
 
         let database = try AppDatabase.inMemory()
-        _ = try await ArchiveRecords(database: database, settings: w.h.env.settings, config: w.h.env.config, registry: nil,
-                                     time: w.h.env.time).rebuild()
+        _ = try await w.h.env.records(index: database).rebuild()
         let rebuilt = TaskConversationStore(database: database, time: w.h.env.time)
         let before = try await turn(talk, answered.id)
         let after = try #require(try await rebuilt.turn(id: answered.id))
@@ -428,8 +435,7 @@ import Testing
         let (queue, talk) = w.h.conversations(StubAnswerer(fallback: Self.reply), interpreter: StubInterpreter(plans: [:]))
         let asked = try await talk.ask(w.task.id, question: Self.question)
         await queue.drain()
-        let records = ArchiveRecords(database: w.h.env.database, settings: w.h.env.settings, config: w.h.env.config, registry: nil,
-                                     time: w.h.env.time)
+        let records = w.h.env.records()
         try await records.flush()
         let url = w.h.env.layout.conversationFile(task: w.task.id)
         let edited = try String(contentsOf: url, encoding: .utf8).replacingOccurrences(of: Self.reply.text, with: "Corrected by hand")
@@ -442,6 +448,25 @@ import Testing
         #expect(w.h.env.layout.task(ofConversationFile: "_12.md") == 12 && w.h.env.layout.task(ofConversationFile: "_x.md") == nil
                     && w.h.env.layout.task(ofConversationFile: "_.md") == nil, "a conversation's file is known by its task's number")
         #expect(RecordKind(key: RecordKind.conversation(task: 12).key) == .conversation(task: 12), "and so is its mark")
+    }
+
+    @Test func startingTheQueueAgainWhileItAnswersAQuestionLeavesThatQuestionBeingAnswered() async throws {
+        let w = try await world()
+        defer { w.h.env.cleanup() }
+        let answering = Signal()
+        let answerer = StubAnswerer(fallback: Self.reply) { _ in
+            answering.fire()
+            try await TestTime(.blocks).sleep(seconds: 1)
+        }
+        let (queue, talk) = w.h.conversations(answerer, interpreter: StubInterpreter(plans: [:]))
+        let asked = try await talk.ask(w.task.id, question: Self.question)
+        await queue.start()
+        try #require(await Patience.until { answering.fired }, "the queue answers the question")
+        await queue.start()
+        #expect(try await turn(talk, asked.id).state == .answering,
+                "a second start does not put back in the queue the question being answered, as if it had been stopped")
+        #expect(await queue.status.answering?.turn == asked.id, "which the queue goes on answering")
+        await queue.stop()
     }
 }
 

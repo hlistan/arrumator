@@ -11,6 +11,9 @@ struct VisionOutcome: Sendable {
     var rawResponse: String?
     var metrics: OllamaMetrics?
     var error: String?
+    /// What kept the model from being asked, or from answering, that passes: Ollama away. The image is described when
+    /// it is read again, so its job waits for this rather than filing it without a description for good.
+    var waitsFor: OllamaError?
     var durationMs: Double
 }
 
@@ -27,7 +30,8 @@ struct VisionPrompts: Sendable {
 
 /// Describes images with a local multimodal model through `OllamaAPI` (localhost only). The response is
 /// constrained by a JSON schema; organisations the model names are kept only when the OCR text contains them,
-/// otherwise they are reported as unverified. Never throws: failures are returned in `VisionOutcome.error`.
+/// otherwise they are reported as unverified. A failure is returned in `VisionOutcome.error`, and one that passes,
+/// Ollama away, in `waitsFor` too; only cancellation is thrown.
 actor VisionDescriber {
     private let ollama: any OllamaAPI
     private let prompts: VisionPrompts
@@ -41,20 +45,26 @@ actor VisionDescriber {
         self.time = time
     }
 
-    func describe(jpeg: Data, ocrText: String, options: VisionModelOptions, timeout: Double) async -> VisionOutcome {
+    func describe(jpeg: Data, ocrText: String, options: VisionModelOptions, timeout: Double) async throws -> VisionOutcome {
         let started = Date()
-        let think = await think(options.think, to: options.model)
-        let request = Self.request(jpeg: jpeg, options: options, prompts: prompts, think: think)
-        var outcome = VisionOutcome(summary: nil, model: options.model, think: think,
+        var outcome = VisionOutcome(summary: nil, model: options.model, think: nil,
                                     imageBytes: jpeg.count, rawResponse: nil, metrics: nil, error: nil, durationMs: 0)
         let ollama = ollama
         do {
+            let think = try await think(options.think, to: options.model)
+            outcome.think = think
+            let request = Self.request(jpeg: jpeg, options: options, prompts: prompts, think: think)
             let response = try await Deadline.run(timeout, time: time, expired: { DeadlineExceeded(seconds: timeout) }) {
                 try await ollama.chat(request)
             }
             outcome.rawResponse = response.message.content
             outcome.metrics = response.metrics
             outcome.summary = try Self.parse(response.message.content, ocrText: ocrText)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let error as OllamaError where error.isTransient {
+            outcome.error = error.localizedDescription
+            outcome.waitsFor = error
         } catch let error as DeadlineExceeded {
             outcome.error = "vision model timed out after \(error.seconds) s"
         } catch {
@@ -65,11 +75,21 @@ actor VisionDescriber {
     }
 
     /// What `model` is told about thinking when `wanted` (`VisionModelOptions.think`, `analysis.think`): what its
-    /// `/api/show` allows of it (`OllamaShowResponse.think(sending:)`), else nothing. What the model said is cached per
-    /// model; a failed lookup tells it nothing and is retried next time.
-    private func think(_ wanted: OllamaThink, to model: String) async -> OllamaThink? {
+    /// `/api/show` allows of it (`OllamaShowResponse.think(sending:)`). What the model said is cached per model. Ollama
+    /// away and a stop are thrown, as asking would fail on them too; any other failed lookup tells the model nothing,
+    /// and is tried again next time.
+    private func think(_ wanted: OllamaThink, to model: String) async throws -> OllamaThink? {
         if let cached = shown[model] { return cached.think(sending: wanted) }
-        guard let show = try? await ollama.show(model: model) else { return nil }
+        let show: OllamaShowResponse
+        do {
+            show = try await ollama.show(model: model)
+        } catch let error as OllamaError where error.isTransient {
+            throw error
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            return nil
+        }
         shown[model] = show
         return show.think(sending: wanted)
     }

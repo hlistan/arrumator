@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import Synchronization
 
 public enum OllamaState: Sendable, Hashable, Codable {
     case unknown
@@ -43,11 +44,21 @@ public actor OllamaLifecycle {
     private var process: Process?
     private var restarts: [Date] = []
     private var monitorTask: Task<Void, Never>?
+    /// The start under way (`ensureRunning()`), which every caller meanwhile waits for.
+    private var starting: Task<Start, Never>?
+    /// How many times `shutdown()` has run: a start begun before the last one starts nothing after it.
+    private var shutdowns = 0
+    /// The server the app spawned and has not seen end, by its process number, readable outside the actor, as a process
+    /// that must end at once ends it (`endSpawnedServerNow()`), and whether one has: then no server is spawned again.
+    /// A spawn runs under its lock, so an end at once either comes first and spawns nothing, or finds the server spawned.
+    private let spawned = Mutex<(pid: pid_t?, endedNow: Bool)>((nil, false))
+    /// What the log says when the app spawns `ollama serve`, with the server's process number in `pid`.
+    public static let spawnedMessage: StaticString = "Spawned ollama serve"
     private var continuations: [UUID: AsyncStream<OllamaState>.Continuation] = [:]
     public private(set) var state: OllamaState = .unknown {
         didSet {
             guard state != oldValue else { return }
-            Log.info(.ollama, "State: \(state.summary)")
+            Log.info(.ollama, "Ollama's state changed", ["state": state.summary])
             for c in continuations.values { c.yield(state) }
         }
     }
@@ -119,12 +130,19 @@ public actor OllamaLifecycle {
 
     // MARK: Health
 
-    /// Checks the server once and updates `state`.
+    /// Checks the server once and updates `state`. A server that cannot be reached (`OllamaError.isAway`), or does not
+    /// answer this probe in time (`timedOut`: it answers nothing else either), is not running; one that answers with a
+    /// failure runs, unhealthy, and is never started again beside itself. Stopped meanwhile, it learns nothing, whatever
+    /// failure the stop brought, and `state` stays as it was.
     @discardableResult
     public func check() async -> OllamaState {
         do {
             let v = try await api.version()
             state = .ready(version: v)
+        } catch where Cancellation.stops(error) {
+            // Stopped while it asked: nothing was learnt of the server, not even that it failed.
+        } catch let failure as OllamaError where !failure.isAway && !failure.timedOut {
+            state = .unhealthy(failure.localizedDescription)
         } catch {
             if !OllamaEndpoint.isThisMac(address) {
                 // What is installed on this Mac says nothing of a server on another machine.
@@ -137,11 +155,43 @@ public actor OllamaLifecycle {
         return state
     }
 
-    /// Makes sure the server runs, starting it according to the management mode.
+    /// What a start came to: the state it left, and whether it launched or spawned a server to get there.
+    struct Start: Sendable {
+        let state: OllamaState
+        let started: Bool
+    }
+
+    /// Makes sure the server runs, starting it according to the management mode. A start already under way is waited
+    /// for rather than begun again beside it, so a server is started once however often this is asked meanwhile, as when
+    /// the user presses Start while the app starts it. A caller stopped while it waits stops the start too: a start is
+    /// the runtime's work, which its stop ends (`shutdown()`).
     @discardableResult
     public func ensureRunning() async -> OllamaState {
-        if await check().isReady { return state }
-        guard management != .external else { return state }
+        await start().state
+    }
+
+    /// The start under way, or a new one.
+    private func start() async -> Start {
+        let start: Task<Start, Never>
+        if let starting {
+            start = starting
+        } else {
+            start = Task { await self.startOnce() }
+            starting = start
+        }
+        let outcome = await withTaskCancellationHandler { await start.value } onCancel: { start.cancel() }
+        if starting == start { starting = nil }
+        return outcome
+    }
+
+    /// Checks the server, and starts it when it does not run on this Mac and the app may start it. A start stopped while
+    /// it checks, or ended by `shutdown()` meanwhile, starts nothing: a server it spawned then would outlive the app.
+    private func startOnce() async -> Start {
+        let generation = shutdowns
+        let checked = await check()
+        guard !Task.isCancelled, generation == shutdowns, checked == .stopped, management != .external else {
+            return Start(state: state, started: false)
+        }
         let install = discover()
         state = .starting
         do {
@@ -153,21 +203,26 @@ public actor OllamaLifecycle {
                     try spawnServe(binary)
                 } else {
                     state = .notInstalled
-                    return state
+                    return Start(state: state, started: false)
                 }
             case .spawnServe:
                 guard let binary = install.binaryURL else {
                     state = .notInstalled
-                    return state
+                    return Start(state: state, started: false)
                 }
                 try spawnServe(binary)
             case .external:
-                return state
+                return Start(state: state, started: false)
             }
         } catch {
             state = .unhealthy(error.localizedDescription)
-            return state
+            return Start(state: state, started: false)
         }
+        return Start(state: await answered(), started: true)
+    }
+
+    /// Waits for a server just started to answer, at most `startTimeout`.
+    private func answered() async -> OllamaState {
         let deadline = time.now().addingTimeInterval(config.startTimeout)
         while time.now() < deadline {
             do { try await time.sleep(seconds: config.healthPollStarting) } catch { return state }
@@ -189,7 +244,10 @@ public actor OllamaLifecycle {
         Log.info(.ollama, "Launched Ollama app", ["app": app.path])
     }
 
+    /// Starts `ollama serve` in place of the one the app started before, which, still running but not answering, is
+    /// stopped first: the app keeps one server of its own, the one `shutdown()` stops.
     private func spawnServe(_ binary: URL) throws {
+        stopSpawned()
         let p = Process()
         p.executableURL = binary
         p.arguments = ["serve"]
@@ -200,18 +258,47 @@ public actor OllamaLifecycle {
         p.standardOutput = FileHandle.nullDevice
         p.standardError = FileHandle.nullDevice
         p.terminationHandler = { [weak self] proc in
-            let status = proc.terminationStatus
-            Task { await self?.processExited(status: status) }
+            let (id, status) = (ObjectIdentifier(proc), proc.terminationStatus)
+            Task { await self?.processExited(id, status: status) }
         }
-        try p.run()
+        try spawned.withLock { spawned in
+            // The process is ending at once: a server spawned now would outlive it.
+            guard !spawned.endedNow else { throw CancellationError() }
+            try p.run()
+            spawned.pid = p.processIdentifier
+        }
         process = p
-        Log.info(.ollama, "Spawned ollama serve", ["binary": binary.path, "pid": String(p.processIdentifier)])
+        Log.info(.ollama, Self.spawnedMessage, ["binary": binary.path, "pid": String(p.processIdentifier)])
     }
 
-    private func processExited(status: Int32) {
+    /// The server the app started has ended: unless it is one the app has since replaced, none runs.
+    private func processExited(_ id: ObjectIdentifier, status: Int32) {
         Log.warning(.ollama, "ollama serve exited", ["status": String(status)])
-        process = nil
+        guard let process, ObjectIdentifier(process) == id else { return }
+        self.process = nil
+        spawned.withLock { $0.pid = nil }
         state = .stopped
+    }
+
+    /// Stops the server the app started, if it still runs.
+    private func stopSpawned() {
+        if let process, process.isRunning {
+            process.terminate()
+            Log.info(.ollama, "Stopped spawned ollama serve")
+        }
+        process = nil
+        spawned.withLock { $0.pid = nil }
+    }
+
+    /// Ends the server the app spawned at once, from outside the actor, as a command does when a second Ctrl-C ends it
+    /// before its stop could: the server runs in a process group of its own, which no signal to the command reaches. A
+    /// spawn under way is waited for, as it holds the lock, and none is spawned after it.
+    public nonisolated func endSpawnedServerNow() {
+        let pid = spawned.withLock { spawned in
+            spawned.endedNow = true
+            return spawned.pid
+        }
+        if let pid { kill(pid, SIGTERM) }
     }
 
     /// Supervises the server: periodic health checks and bounded restarts with backoff.
@@ -227,8 +314,10 @@ public actor OllamaLifecycle {
         }
     }
 
+    /// Restarts a server that stopped, after a backoff, at most `maxRestartsPerHour` times an hour. A restart counts
+    /// only when one was made: not when the server answered again meanwhile, or none could be started.
     private func supervise() async {
-        if await check().isReady || management == .external { return }
+        if await check().isReady || management == .external || Task.isCancelled { return }
         let hourAgo = time.now().addingTimeInterval(-Units.secondsPerHour)
         restarts = restarts.filter { $0 > hourAgo }
         guard restarts.count < config.maxRestartsPerHour else {
@@ -236,19 +325,19 @@ public actor OllamaLifecycle {
             return
         }
         let delay = config.restartBackoff.clamped(restarts.count)
-        restarts.append(time.now())
-        Log.info(.ollama, "Restarting Ollama", ["attempt": String(restarts.count), "delay": String(delay)])
         do { try await time.sleep(seconds: delay) } catch { return }
-        await ensureRunning()
+        guard await start().started else { return }
+        restarts.append(time.now())
+        Log.info(.ollama, "Restarted Ollama", ["attempt": String(restarts.count), "delay": String(delay)])
     }
 
+    /// Stops supervising, ends a start under way, and stops the server the app started.
     public func shutdown() {
         monitorTask?.cancel()
         monitorTask = nil
-        if let process, process.isRunning {
-            process.terminate()
-            Log.info(.ollama, "Stopped spawned ollama serve")
-        }
-        process = nil
+        shutdowns += 1
+        starting?.cancel()
+        starting = nil
+        stopSpawned()
     }
 }

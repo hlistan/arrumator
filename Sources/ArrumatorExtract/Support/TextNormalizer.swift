@@ -27,6 +27,12 @@ enum TextNormalizer {
         return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// A value of one line, as a metadata value and an attachment's name are: normalised as text is, its line breaks,
+    /// tabs and runs of spaces each one space.
+    static func line(_ value: String) -> String {
+        normalize(value).split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    }
+
     /// Keeps at most `maxChars` characters. Returns whether anything was cut.
     static func cap(_ text: String, maxChars: Int) -> (text: String, truncated: Bool) {
         guard maxChars > 0, text.count > maxChars else { return (text, false) }

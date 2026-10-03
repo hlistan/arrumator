@@ -23,6 +23,21 @@ extension Harness {
     }
 }
 
+/// An extractor that throws each of `failures` in turn, one a call, and then reads files as `PlainTestExtractor` does;
+/// it counts its calls.
+actor ScriptedExtractor: ContentExtracting {
+    private var failures: [any Error & Sendable]
+    private(set) var calls = 0
+
+    init(failures: [any Error & Sendable]) { self.failures = failures }
+
+    func extract(_ url: URL, sha256: String, context: ExtractionContext, trace: TraceContext) async throws -> ExtractedContent {
+        calls += 1
+        if !failures.isEmpty { throw failures.removeFirst() }
+        return try await PlainTestExtractor().extract(url, sha256: sha256, context: context, trace: trace)
+    }
+}
+
 /// A Trash that takes nothing, as that of a volume without one.
 struct RefusingTrash: Trashing {
     static let reason = "the volume has no Trash"
@@ -102,7 +117,7 @@ struct RefusingTrash: Trashing {
         #expect(event.summary == "bill copy.txt is a copy of \(original.filename), which is read again; the copy is in the Trash",
                 "History says, under the original, what became of the copy")
         let payload = try #require(JSON.decode(CopyPayload.self, from: event.payloadJson))
-        #expect(payload.copy == copy.standardizedFileURL.path && payload.trashed.map { URL(fileURLWithPath: $0).lastPathComponent } == "bill copy.txt"
+        #expect(payload.copy == copy.spelledOnDisk.path && payload.trashed.map { URL(fileURLWithPath: $0).lastPathComponent } == "bill copy.txt"
                     && payload.tags == nil, "and where the copy was and went: \(event.payloadJson)")
         #expect(try await h.jobs().map(\.state) == [.done, .duplicate, .done],
                 "the copy's job ends as a copy's, and reading its original is a job of its own")
@@ -131,7 +146,7 @@ struct RefusingTrash: Trashing {
         defer { h.env.cleanup() }
         let original = try await h.ingest("bill.txt", text: Self.bill)
         let put = try h.env.put("Old/bill copy.txt", text: Self.bill)
-        await ArchiveReconciler(services: h.services, coordinator: h.coordinator).apply([.untrackedFile(path: put.path)])
+        try await ArchiveReconciler(services: h.services, coordinator: h.coordinator).apply([.found(path: put.path)])
         await h.coordinator.drain()
         let adopted = try #require(try await h.services.documents.document(path: put.path))
         #expect(adopted.id != original.id && adopted.status == .filed && FileManager.default.fileExists(atPath: put.path),
@@ -140,7 +155,7 @@ struct RefusingTrash: Trashing {
                 "its original is not read again, and nothing of the archive goes to the Trash")
     }
 
-    @Test func aCopyTheTrashRefusesStaysInIncomingAndItsOriginalIsNotReadAgain() async throws {
+    @Test func aCopyTheTrashRefusesStaysInIncomingOnceSaidAndItsOriginalIsNotReadAgain() async throws {
         let base = try await Harness.make()
         defer { base.env.cleanup() }
         let original = try await base.ingest("bill.txt", text: Self.bill)
@@ -150,17 +165,22 @@ struct RefusingTrash: Trashing {
         services.trash = RefusingTrash()
         let coordinator = IngestCoordinator(services: services)
         let copy = try base.env.drop("bill copy.txt", text: Self.bill)
-        await coordinator.enqueue(copy)
-        await coordinator.drain()
+        for arrival in ["arrives", "is found again by a rescan"] {
+            await coordinator.enqueue(copy)
+            for _ in 0..<services.config.ingest.maxAttempts { await coordinator.drain() }
 
-        #expect(FileManager.default.fileExists(atPath: copy.path), "the copy stays where it was: nothing is lost")
-        #expect(await analyzer.calls.files.isEmpty, "its original is not read again while the copy cannot go")
-        let job = try #require(try await base.jobs().last)
-        #expect(job.state == .failed && job.attempt == services.config.ingest.maxAttempts, "the copy's job is tried again, then fails")
-        let failed = try #require(try await services.history.events(limit: 5, kinds: [.failed]).first)
-        #expect(failed.summary == IngestError.notTrashed(copy.standardizedFileURL.path, reason: RefusingTrash.reason).localizedDescription,
-                "History says why: \(failed.summary)")
-        #expect(try await services.documents.list(DocumentFilter(), limit: 5).map(\.id) == [original.id], "and no document is made of it")
+            #expect(FileManager.default.fileExists(atPath: copy.path), "when it \(arrival), the copy stays where it was: nothing is lost")
+            #expect(await analyzer.calls.files.isEmpty, "when it \(arrival), its original is not read again while the copy cannot go")
+            let jobs = try await base.jobs()
+            #expect(jobs.count == 2 && jobs.last?.state == .failed && jobs.last?.attempt == 0,
+                    "when it \(arrival), the copy's job ends at once, as a Trash that refuses will refuse again")
+            let failed = try await services.history.events(limit: 5, kinds: [.failed]).map(\.summary)
+            let why = IngestError.notTrashed(copy.spelledOnDisk.path, reason: RefusingTrash.reason).localizedDescription
+            #expect(failed == ["bill copy.txt stays in Incoming: \(why)"], "when it \(arrival), History says why, once: \(failed)")
+            let left = try #require(try await services.documents.list(DocumentFilter(), limit: 5).first { $0.id != original.id })
+            #expect(left.status == .failed && left.path == copy.spelledOnDisk.path && left.status.isReviewable,
+                    "when it \(arrival), it waits for the user in Needs You, left where it is, which a rescan leaves alone")
+        }
     }
 
     @Test func aStopAfterTheCopyWentToTheTrashStillHasItsOriginalReadAgain() async throws {
@@ -206,16 +226,78 @@ struct RefusingTrash: Trashing {
         #expect(FileManager.default.fileExists(atPath: url.path), "nothing is moved meanwhile")
     }
 
-    @Test func aMissingModelHoldsTheDocument() async throws {
-        let h = try await Harness.make(analyzer: StubAnalyzer(error: OllamaError.modelNotFound("ministral-3:14b")))
+    @Test func aFileWhoseExtractionWaitsForOllamaIsExtractedAgainWithoutSpendingAnAttempt() async throws {
+        let extractor = ScriptedExtractor(failures: [OllamaError.unreachable("connection refused")])
+        let h = try await Harness.make(extractor: extractor)
         defer { h.env.cleanup() }
-        await h.coordinator.enqueue(try h.env.drop("bill.txt", text: "EDP electricity July"))
+        await h.coordinator.enqueue(try h.env.drop("scan.txt", text: Self.bill))
         await h.coordinator.drain()
-        #expect(try await h.jobs().map(\.state) == [.held], "held until the model is downloaded")
+        let waiting = try await h.jobs()
+        #expect(waiting.map(\.state) == [.extracting] && waiting.first?.attempt == 0,
+                "an image Ollama was away to describe waits where it stopped, and waiting costs no attempt")
+        #expect(await h.coordinator.status.waitingForOllama, "the app shows it is waiting for Ollama")
+
+        h.env.time.advance(by: h.env.config.ingest.retryDelays.last)
+        await h.coordinator.drain()
+        #expect(try await h.jobs().map(\.state) == [.done], "once Ollama is back the file is extracted again, and filed")
+        #expect(await extractor.calls == 2, "it was extracted again from the start, not filed with what it had")
+    }
+
+    @Test("A server that answers each time with a failure for one file spends its attempts; one away spends none",
+          arguments: [OllamaError.http(status: 500, body: "llama runner process has terminated"), .emptyResponse])
+    func aFailureTheServerRepeatsEndsTheJob(answered: OllamaError) async throws {
+        let failing = ScriptedExtractor(failures: Array(repeating: answered, count: 10))
+        let base = try await Harness.make(extractor: failing)
+        defer { base.env.cleanup() }
+        let h = base.with { $0.ingest.retryDelays = NonEmpty(0, []) }
+        await h.coordinator.enqueue(try base.env.drop("scan.txt", text: Self.bill))
+        for _ in 0..<h.services.config.ingest.maxAttempts { await h.coordinator.drain() }
+        #expect(try await base.jobs().map(\.state) == [.failed],
+                "\(answered.localizedDescription): a failure the server answers with again and again ends the job, not every 30 s for ever")
+        #expect(await failing.calls == h.services.config.ingest.maxAttempts, "after its attempts, each of which it spent")
+        #expect(await !h.coordinator.status.waitingForOllama, "Ollama answered, so nothing waits for it")
+
+        let away = ScriptedExtractor(failures: Array(repeating: OllamaError.unreachable("connection refused"), count: 10))
+        let waits = try await Harness.make(extractor: away)
+        defer { waits.env.cleanup() }
+        await waits.coordinator.enqueue(try waits.env.drop("scan.txt", text: Self.bill))
+        for _ in 0..<(waits.services.config.ingest.maxAttempts + 2) {
+            await waits.coordinator.drain()
+            waits.env.time.advance(by: waits.services.config.ingest.retryDelays.last)
+        }
+        let jobs = try await waits.jobs()
+        #expect(jobs.map(\.state) == [.extracting] && jobs.first?.attempt == 0, "Ollama away, however often, spends no attempt")
+        #expect(await away.calls == waits.services.config.ingest.maxAttempts + 2, "and the file is tried again each time it is due")
+    }
+
+    @Test func aTimeoutWaitsOnlyWhileOllamaAnswersNothingElseEither() async throws {
+        let timedOut = OllamaError.timeout("chat")
+        let answering = ScriptedExtractor(failures: Array(repeating: timedOut, count: 10))
+        let base = try await Harness.make(extractor: answering)
+        defer { base.env.cleanup() }
+        let h = base.with { $0.ingest.retryDelays = NonEmpty(0, []) }
+        await h.coordinator.enqueue(try base.env.drop("scan.txt", text: Self.bill))
+        for _ in 0..<h.services.config.ingest.maxAttempts { await h.coordinator.drain() }
+        #expect(try await base.jobs().map(\.state) == [.failed],
+                "a read that times out each time while Ollama answers its version ends after its attempts, not every 30 s for ever")
+
+        let silent = MockOllama { _ in "" }
+        await silent.failVersion(with: .unreachable("connection refused"))
+        let away = ScriptedExtractor(failures: Array(repeating: timedOut, count: 10))
+        let waits = try await Harness.make(extractor: away, ollama: silent)
+        defer { waits.env.cleanup() }
+        await waits.coordinator.enqueue(try waits.env.drop("scan.txt", text: Self.bill))
+        for _ in 0..<(waits.services.config.ingest.maxAttempts + 2) {
+            await waits.coordinator.drain()
+            waits.env.time.advance(by: waits.services.config.ingest.retryDelays.last)
+        }
+        let jobs = try await waits.jobs()
+        #expect(jobs.map(\.state) == [.extracting] && jobs.first?.attempt == 0, "a timeout while Ollama answers nothing is Ollama away")
+        #expect(await waits.coordinator.status.waitingForOllama, "and the app shows it is waiting for Ollama")
     }
 
     @Test func aDocumentThatKeepsFailingIsParkedInTheArchiveAndWaitsForTheUser() async throws {
-        let base = try await Harness.make(analyzer: StubAnalyzer(error: IngestError.invalidState("boom")))
+        let base = try await Harness.make(analyzer: StubAnalyzer(error: TestFailure("boom")))
         defer { base.env.cleanup() }
         let h = base.with { $0.ingest.retryDelays = NonEmpty(0, []) }
         let (services, coordinator) = (h.services, h.coordinator)
@@ -260,7 +342,7 @@ struct RefusingTrash: Trashing {
         let reconciler = ArchiveReconciler(services: h.services, coordinator: h.coordinator)
         let loose = try h.env.put("contract.txt", text: "Rental contract")
         let deep = try h.env.put("Old/2024/receipt.txt", text: "A receipt")
-        await reconciler.apply([.untrackedFile(path: loose.path), .untrackedFile(path: deep.path)])
+        try await reconciler.apply([.found(path: loose.path), .found(path: deep.path)])
         await h.coordinator.drain()
         let docs = try await h.services.documents.list(DocumentFilter(), limit: 5)
         #expect(Set(docs.map(\.path)) == [loose.path, deep.path], "adopted where they are, at any depth, under their own names")
@@ -274,7 +356,7 @@ struct RefusingTrash: Trashing {
         let reconciler = ArchiveReconciler(services: h.services, coordinator: h.coordinator)
         let renamed = h.env.archive.appendingPathComponent("EDP July.txt").standardizedFileURL
         try FileManager.default.moveItem(at: doc.url, to: renamed)
-        await reconciler.apply([.documentMoved(uid: doc.uid, newPath: renamed.path)])
+        try await reconciler.apply([.found(path: renamed.path), .gone(path: doc.path)])
         #expect(try await h.services.documents.document(id: try #require(doc.id))?.path == renamed.path, "the record follows the file to its new name")
         let events = try await h.services.history.events(limit: 5, kinds: [.userRenamed, .userMoved], docID: doc.id)
         #expect(events.map(\.kind) == [.userRenamed], "a new name in the same place is a rename")
@@ -286,7 +368,7 @@ struct RefusingTrash: Trashing {
         let doc = try await h.ingest("bill.txt", text: "EDP electricity July")
         let id = try #require(doc.id)
         try FileManager.default.removeItem(at: doc.url)
-        await ArchiveReconciler(services: h.services, coordinator: h.coordinator).apply([.documentMissing(path: doc.path)])
+        try await ArchiveReconciler(services: h.services, coordinator: h.coordinator).apply([.gone(path: doc.path)])
         let missing = try #require(try await h.services.documents.document(id: id))
         #expect(missing.status == .missing && missing.labels == doc.labels, "the record stays, with its labels, marked missing")
         #expect(try await h.services.history.events(limit: 5, kinds: [.missing], docID: id).count == 1, "and the removal is in History")
@@ -299,8 +381,8 @@ struct RefusingTrash: Trashing {
         let id = try #require(doc.id)
         try await h.review.undo(id)
         let undone = try #require(try await h.services.documents.document(id: id))
-        #expect(undone.status == .undone && undone.path == h.env.incoming.appendingPathComponent("bill.txt").path,
-                "undo puts the file back in Incoming under its original name")
+        #expect(undone.status == .undone && undone.path == h.env.incoming.appendingPathComponent("bill.txt").spelledOnDisk.path,
+                "undo puts the file back in Incoming under its original name, at its path as the disk spells it, as a rescan names it")
         try await h.review.retry(id)
         await h.coordinator.drain()
         let refiled = try #require(try await h.services.documents.document(id: id))
@@ -313,7 +395,7 @@ struct RefusingTrash: Trashing {
         defer { h.env.cleanup() }
         let reconciler = ArchiveReconciler(services: h.services, coordinator: h.coordinator)
         let deep = try h.env.put("Old/receipt.txt", text: "A receipt")
-        await reconciler.apply([.untrackedFile(path: deep.path)])
+        try await reconciler.apply([.found(path: deep.path)])
         await h.coordinator.drain()
         let id = try #require(try await h.services.documents.document(path: deep.path)?.id)
         try await h.review.retry(id)
@@ -337,11 +419,11 @@ struct RefusingTrash: Trashing {
         let h = try await Harness.make()
         defer { h.env.cleanup() }
         let id = try #require(try await h.ingest("bill.txt", text: "EDP electricity July").id)
-        let corrected = StubAnalyzer.edpBill.filter { $0.kind != .sender && $0.kind != .type } + [
+        let corrected = LabelEdit(adding: [
             DocumentLabel(kind: .sender, value: "  EDP\nEnergia "), DocumentLabel(kind: .type, value: "receipt"),
             DocumentLabel(kind: .type, value: "invoice"), DocumentLabel(kind: .deadline, value: "tomorrow"),
             DocumentLabel(kind: .topic, value: "Electricity"),
-        ]
+        ], removing: StubAnalyzer.edpBill.filter { $0.kind == .sender })
         try await h.review.edit(id, fileName: "2026-07-05 EDP - Julho", labels: corrected)
         let edited = try #require(try await h.services.documents.document(id: id))
         #expect(edited.filename == "2026-07-05 EDP - Julho.txt" && FileManager.default.fileExists(atPath: edited.path),
@@ -373,11 +455,16 @@ struct RefusingTrash: Trashing {
         defer { h.env.cleanup() }
         let filed = try await h.ingest("bill.txt", text: "EDP electricity July")
         let id = try #require(filed.id)
-        for blank in ["", "   ", "\n\t"] {
-            await #expect(throws: IngestError.blankFileName, "a name of nothing is no name: “\(blank)”") {
+        for blank in ["", "   ", "\n\t", " ... ", "/"] {
+            await #expect(throws: IngestError.unusableFileName(blank), "a name cleaning leaves nothing of is no name: “\(blank)”") {
                 try await h.review.edit(id, fileName: blank, labels: nil)
             }
         }
+        await #expect(throws: IngestError.unusableFileName("~$Bill"), "nor is one the app keeps for files it never takes in") {
+            try await h.review.edit(id, fileName: "~$Bill", labels: nil)
+        }
+        #expect(IngestError.unusableFileName("  ").errorDescription == "A document needs a name; it cannot be blank",
+                "a blank name is refused in those words")
         let after = try #require(try await h.services.documents.document(id: id))
         #expect(after.filename == filed.filename && FileManager.default.fileExists(atPath: after.path), "the file keeps its name")
         #expect(try await h.services.history.events(limit: 5, kinds: [.corrected], docID: id).isEmpty, "and nothing is recorded")

@@ -35,9 +35,10 @@ struct OCRRequest: Sendable {
 /// configured language, else `RecognizeTextRequest`; always accurate, with language correction and automatic
 /// language detection, languages ordered by the caller's hint.
 ///
-/// Vision runs on its default device, the Neural Engine or GPU, until that fails: then the page is read again on the
-/// CPU, and so is every later page. On physical Macs the Neural Engine path can fail when its model does not compile,
-/// and then keeps failing until the process restarts, while the CPU path still reads text (E5RT error 13 in
+/// Vision runs on its default device, the Neural Engine or GPU. A page it fails on is read again on the CPU, and once
+/// the CPU has read a page the default device could not, so is every later page; a page the CPU cannot read either is
+/// at fault itself, and leaves the default device in use. On physical Macs the Neural Engine path can fail when its
+/// model does not compile, and then keeps failing until the process restarts, while the CPU path still reads text (E5RT error 13 in
 /// `CRImageReaderError`; [TRex #95](https://github.com/amebalabs/TRex/pull/95),
 /// [phone-harness #9](https://github.com/alexbejan/phone-harness/pull/9)). Virtual Macs, such as GitHub's runners,
 /// cannot run Vision's text recognition on either device.
@@ -83,11 +84,14 @@ actor OCRService {
         } catch is CancellationError {
             throw CancellationError()
         } catch where device == .automatic {
-            Log.warning(.extract, "OCR failed on Vision's default device; reading on the CPU from now on",
-                        ["engine": engine.rawValue, "error": error.localizedDescription])
-            self.device = .cpu
             let found = try await recognizer.recognize(image, orientation: orientation, engine: engine,
                                                        languages: request.languages, on: .cpu)
+            // Only an image the CPU reads shows the default device at fault; one the CPU cannot read either is.
+            if self.device == .automatic {
+                Log.warning(.extract, "OCR failed on Vision's default device and the CPU read the page; reading on the CPU from now on",
+                            ["engine": engine.rawValue, "error": error.localizedDescription])
+                self.device = .cpu
+            }
             return Self.result(found, engine: engine, device: .cpu, orientation: orientation, request: request)
         }
     }

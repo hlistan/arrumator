@@ -58,14 +58,30 @@ struct TextEncodingDetector: Sendable {
         return nil
     }
 
-    /// Strict UTF-8; when the read was capped, up to three trailing bytes of a cut sequence are ignored.
-    private static func strictUTF8(_ data: Data, allowCutTail: Bool) -> String? {
-        let maxCut = allowCutTail ? min(3, data.count) : 0
-        for cut in 0...maxCut {
+    /// Strict UTF-8; when the read was capped, the trailing bytes of a character the cap cut are ignored.
+    static func strictUTF8(_ data: Data, allowCutTail: Bool) -> String? {
+        for cut in 0...maxCut(data, allowCutTail: allowCutTail) {
             if let text = String(validating: data.dropLast(cut), as: UTF8.self) { return text }
         }
         return nil
     }
+
+    /// `data` in a declared `encoding`; when the read was capped, the trailing bytes of a character the cap cut are
+    /// ignored, so a cut never makes the whole text unreadable in the encoding it is in.
+    static func decode(_ data: Data, as encoding: String.Encoding, allowCutTail: Bool) -> String? {
+        for cut in 0...maxCut(data, allowCutTail: allowCutTail) {
+            if let text = String(data: data.dropLast(cut), encoding: encoding) { return text }
+        }
+        return nil
+    }
+
+    private static func maxCut(_ data: Data, allowCutTail: Bool) -> Int {
+        allowCutTail ? min(cutCharacterMaxBytes, data.count) : 0
+    }
+
+    /// The most bytes a cut can leave of a character: one less than the longest character of UTF-8, UTF-16 and
+    /// GB18030, which is four bytes.
+    static let cutCharacterMaxBytes = 3
 
     private func detectWithNSString(_ data: Data) -> DecodedText? {
         var converted: NSString?

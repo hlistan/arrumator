@@ -1,7 +1,9 @@
 // Drives one process through the macOS accessibility API, as a user does, for the QA protocol (docs/qa/protocol.md):
-// reads its windows' elements, presses, clicks, types, scrolls and screenshots its windows and no other. It never reads
-// the system's Apple menu, which lists the user's own recent files, nor an open file panel, which lists the user's
-// folders. Built and run by scripts/qa-drive.sh; the terminal running it needs Accessibility in System Settings.
+// reads its windows' elements, presses, clicks, types, scrolls and screenshots its windows and no other: a click, a
+// hover or a scroll is refused unless one of the process's windows is the frontmost one at that point, as the pointer's
+// events reach whatever window is there. It never reads the system's Apple menu, which lists the user's own recent
+// files, nor an open file panel, which lists the user's folders, and takes no screenshot while one is open. Built and
+// run by scripts/qa-drive.sh; the terminal running it needs Accessibility in System Settings.
 import AppKit
 import ApplicationServices
 import Foundation
@@ -93,6 +95,11 @@ func isFilePanel(_ e: AXUIElement) -> Bool {
     ["open-panel", "save-panel"].contains(str(e, kAXIdentifierAttribute) ?? "")
 }
 
+/// Whether a file panel is open: as a window of its own, or as a sheet on one.
+func filePanelOpen() -> Bool {
+    windows().contains { window in isFilePanel(window) || children(window).contains(where: isFilePanel) }
+}
+
 /// Where elements are looked for: an open pop-up or context menu, the focused window, the other windows, and the menu
 /// bar when asked for.
 func roots(menus: Bool) -> [AXUIElement] {
@@ -142,7 +149,27 @@ func activate() {
     usleep(250_000)
 }
 
+/// The process whose window is frontmost on screen at `p`, which the pointer's events there reach.
+func owner(at p: CGPoint) -> pid_t? {
+    let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
+    for window in list {
+        guard (window[kCGWindowAlpha as String] as? Double ?? 0) > 0,
+              let bounds = window[kCGWindowBounds as String] as? NSDictionary,
+              let rect = CGRect(dictionaryRepresentation: bounds), rect.contains(p) else { continue }
+        return window[kCGWindowOwnerPID as String] as? pid_t
+    }
+    return nil
+}
+
+/// Refuses a pointer event at `p` that would reach another process's window, or none.
+func ensureOwnWindow(at p: CGPoint) {
+    guard owner(at: p) == pid else {
+        fail("refused: \(Int(p.x)),\(Int(p.y)) is not on a window of \(pid), so nothing was sent there")
+    }
+}
+
 func mouse(_ p: CGPoint, button: CGMouseButton = .left, clicks: Int = 1) {
+    ensureOwnWindow(at: p)
     let (down, up): (CGEventType, CGEventType) = button == .left ? (.leftMouseDown, .leftMouseUp) : (.rightMouseDown, .rightMouseUp)
     CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: p, mouseButton: button)?.post(tap: .cghidEventTap)
     usleep(80_000)
@@ -235,6 +262,7 @@ case "clickat":
 case "hover":
     guard rest.count >= 2 else { fail(usage, code: 2) }
     activate()
+    ensureOwnWindow(at: point(rest[0], rest[1]))
     CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: point(rest[0], rest[1]), mouseButton: .left)?
         .post(tap: .cghidEventTap)
 case "set":
@@ -260,6 +288,7 @@ case "scroll":
     guard rest.count >= 2 else { fail(usage, code: 2) }
     let target = center(pick(rest[0], role: nil, n: 0))
     activate()
+    ensureOwnWindow(at: target)
     CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: target, mouseButton: .left)?.post(tap: .cghidEventTap)
     usleep(100_000)
     let steps = Int32(rest[1]) ?? -5
@@ -275,6 +304,8 @@ case "resize":
     if let value = AXValueCreate(.cgSize, &size) { AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, value) }
     print("resized " + describe(window))
 case "shot":
+    // A file panel lists the user's own folders and files, and a screenshot would keep them.
+    guard !filePanelOpen() else { fail("refused: a file panel is open; close it before taking a screenshot") }
     guard let file = rest.first, let number = windowNumber(title: optional(1)) else { fail("no window to capture") }
     let capture = Process()
     capture.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")

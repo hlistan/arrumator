@@ -50,6 +50,7 @@ struct TextAndLanguageTests {
     @Test("KOI8-R and CP1251 are told apart by Russian bigrams")
     func cyrillicEncodings() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let koi8 = try #require(TextEncodingDetector.encoding(named: "koi8R"))
         let registry = try TestConfig.registry()
         let context = try TestConfig.context()
@@ -66,6 +67,7 @@ struct TextAndLanguageTests {
     @Test("Latin-1 Portuguese is not mistaken for Cyrillic; UTF-8 needs no guess")
     func latinAndUTF8() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let registry = try TestConfig.registry()
         let context = try TestConfig.context()
         let latin = try scratch.write("latin1.txt", "Informação: fatura nº 12, emissão 20/05/2026. Obrigação cumprida.",
@@ -86,6 +88,7 @@ struct TextAndLanguageTests {
     @Test("CSV keeps the header plus csvMaxRows rows as TSV, handling quotes and semicolons")
     func csv() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         var csv = "Data;Descrição;Valor\n"
         for index in 1...10 { csv += "0\(index % 9 + 1)/05/2026;\"Pagamento; ref \(index)\";\(index),50\n" }
         let url = try scratch.write("movimentos.csv", csv)
@@ -98,6 +101,26 @@ struct TextAndLanguageTests {
         #expect(lines[1] == "02/05/2026\tPagamento; ref 1\t1,50", "a quoted cell keeps its semicolon and loses its quotes")
         let table = try #require(content.structure?.tables.first)
         #expect(table.hasPrefix("Data\tDescrição\tValor\n"), "the table starts with its header row")
+    }
+
+    @Test("A CRLF CSV's delimiter is its first line's; rows past csvMaxRows are noted, and no cell keeps a line break")
+    func csvLinesAndCuts() async throws {
+        let scratch = try Scratch()
+        defer { scratch.cleanup() }
+        // One semicolon on the header; more commas than that on the rows after it, which must not decide.
+        let rows = ["Conta;Saldo", "Ordem;1,234,567.00", "\"Poupança\r\nhabitação\rjovem\";2,500,000.00", "Prazo;10,000.00"]
+        let url = try scratch.write("saldos.csv", rows.joined(separator: "\r\n") + "\r\n")
+        let cut = try TestConfig.context { extraction, _ in extraction.csvMaxRows = 2 }
+        let content = try await TestConfig.registry().extract(url, sha256: "x", context: cut, trace: .disabled)
+        #expect(content.text.split(separator: "\n") == ["Conta\tSaldo", "Ordem\t1,234,567.00", "Poupança habitação jovem\t2,500,000.00"],
+                "the semicolon of the first line separates the cells, and a cell's line breaks, CR and CRLF too, are spaces")
+        #expect(content.warnings.map(\.detail) == ["kept the header and the first 2 rows"],
+                "the rows left out are noted, so the model knows it saw part of the table (\(content.warningSummary))")
+
+        let whole = try TestConfig.context { extraction, _ in extraction.csvMaxRows = 3 }
+        let all = try await TestConfig.registry().extract(url, sha256: "x", context: whole, trace: .disabled)
+        #expect(all.text.split(separator: "\n").count == 4, "with room for every row, every row is kept")
+        #expect(all.warnings.isEmpty, "and nothing is noted, the line break that ends the file being no row (\(all.warningSummary))")
     }
 
     @Test("Russian plausibility separates real text from KOI8-R/CP1251 mix-ups, even for short samples")
@@ -114,6 +137,7 @@ struct TextAndLanguageTests {
     @Test("Short KOI8-R text is still decoded correctly")
     func shortKOI8() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let koi8 = try #require(TextEncodingDetector.encoding(named: "koi8R"))
         let url = try scratch.write("short.txt", "Счёт на оплату 15", encoding: koi8)
         let content = try await TestConfig.registry().extract(url, sha256: "x", context: try TestConfig.context(),

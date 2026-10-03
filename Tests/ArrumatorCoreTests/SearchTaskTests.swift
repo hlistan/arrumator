@@ -108,7 +108,7 @@ import Testing
     @Test func theMatcherFindsDocumentsInTheArchiveWithTheLabelsAndWordsAskedFor() async throws {
         let w = try await world()
         defer { w.h.env.cleanup() }
-        let matcher = SearchPlanMatcher(database: w.h.env.database, limit: 100)
+        let matcher = SearchPlanMatcher(database: w.h.env.database, archive: w.h.env.archive, limit: 100)
         #expect(Set(try await matcher.documents(Self.invoices2025)) == (try w.ids("edp_2025_03.txt", "aguas_2025_05.txt")),
                 "the 2025 invoices about electricity or water: not the 2024 one, the phone bill, the contract or the tax assessment")
         let meter = SearchPlan(title: "", labels: [Self.label(.sender, "EDP")], words: ["meter \"reading\""], grouping: [])
@@ -122,7 +122,7 @@ import Testing
         try await w.h.review.undo(try w.id("aguas_2025_05.txt"))
         #expect(try await matcher.documents(Self.invoices2025) == [try w.id("edp_2025_03.txt")],
                 "a document undone back to Incoming is no longer in the archive")
-        let one = SearchPlanMatcher(database: w.h.env.database, limit: 1)
+        let one = SearchPlanMatcher(database: w.h.env.database, archive: w.h.env.archive, limit: 1)
         #expect(try await one.documents(Self.invoices) == [try w.id("edp_2025_03.txt")],
                 "at most the limit, the newest by their own date first: the March invoice, not the January one processed after it")
     }
@@ -132,7 +132,7 @@ import Testing
         let w = try await world(filing: Self.invoicesNewestFirst, apart: 60)
         defer { w.h.env.cleanup() }
         let newestFirst = try Self.invoicesNewestFirst.map(w.id)
-        let matcher = SearchPlanMatcher(database: w.h.env.database, limit: newestFirst.count)
+        let matcher = SearchPlanMatcher(database: w.h.env.database, archive: w.h.env.archive, limit: newestFirst.count)
         #expect(try await matcher.documents(Self.invoices) == newestFirst,
                 "a task's documents are found newest by their own date first, not the most recently processed first")
 
@@ -168,8 +168,8 @@ import Testing
                 "the task keeps what the model read its prompt as, and which model that was")
         #expect(Set(ready.documents) == (try w.ids("edp_2025_03.txt", "aguas_2025_05.txt")), "and the documents that plan finds")
         #expect(ready.name == "Utility invoices 2025" && ready.grouping == [.sender], "it goes by the model's name and arrangement")
-        #expect(await interpreter.calls.days == [TestTime.start.formatted(Date.ISO8601FormatStyle(timeZone: .current).year().month().day())],
-                "the model is told today's date, from the injected clock, to count “last year” from")
+        #expect(await interpreter.calls.days == [TestTime.startDay],
+                "the model is told today's date, from the injected clock in the pipeline's time zone, to count “last year” from")
         #expect(await interpreter.calls.vocabularies.first?[.sender]?.first?.label.value == "EDP Comercial",
                 "and the archive's labels, the most used first, to ask for them as the archive writes them")
         #expect(try await events(w.h, [.taskCreated, .taskPrepared]).map(\.kind) == [.taskCreated, .taskPrepared],
@@ -226,16 +226,17 @@ import Testing
         let interpreter = StubInterpreter(plans: SearchTaskQueueStatusTests.plans)
         let (queue, tasks) = w.h.searchTasks(interpreter)
         let asked = try await tasks.create(prompt: Self.prompt)
-        try await w.h.env.database.writer.write { db in
-            try db.execute(sql: "UPDATE search_tasks SET state = ? WHERE id = ?", arguments: [SearchTaskState.interpreting.rawValue, asked.id])
-        }
+        // The app reads it.
+        let app = w.h.processes.start(pid: TestProcesses.otherPID)
+        _ = try await tasks.store.begin(asked.id, by: app.description)
         await queue.drain()
-        #expect(try await task(tasks, asked.id).state == .interpreting, "a task being read is not taken up twice")
-        // Another task is asked while the first is read, and the app quits; it starts again a minute later.
+        #expect(try await task(tasks, asked.id).state == .interpreting, "a task another process reads is not taken up twice")
+        // Another task is asked while the first is read, and the app quits; a command runs a minute later.
         w.h.env.time.advance(by: 60)
         _ = try await tasks.create(prompt: phones)
         w.h.env.time.advance(by: 60)
-        #expect(try await tasks.store.recoverInterrupted() == 1, "at the next start it goes back into the queue")
+        w.h.processes.end(app)
+        #expect(try await tasks.store.recoverLeft(w.h.processes) == 1, "once that process has ended it goes back into the queue")
         await queue.drain()
         let read = await interpreter.calls.prompts
         #expect(read == [Self.prompt, phones], "and is read first, keeping its place before the task asked after it")
@@ -249,9 +250,9 @@ import Testing
         let phonePlan = SearchPlan(title: "Phone bills", labels: [Self.label(.topic, "telecommunications")], words: [], grouping: [])
         let holder = TaskHolder()
         let interpreter = StubInterpreter(plans: [Self.prompt: Self.invoices2025, phones: phonePlan]) { prompt in
-            // The user changes the prompt while the first one is being read.
+            // The user changes the prompt from the app, in a task of its own, while the first one is being read.
             if prompt == Self.prompt, let tasks = await holder.tasks, let id = await holder.id {
-                try await tasks.update(id, SearchTaskChange(prompt: phones))
+                _ = try await Task { try await tasks.update(id, SearchTaskChange(prompt: phones)) }.value
             }
         }
         let (queue, tasks) = w.h.searchTasks(interpreter)
@@ -363,21 +364,21 @@ import Testing
     // MARK: Arranging
 
     /// A document with these labels, numbered `id`.
-    static func document(_ id: Int64, _ name: String, _ labels: [DocumentLabel]) -> DocumentRecord {
+    static func document(_ id: Int64, _ name: String, _ labels: [DocumentLabel]) throws -> DocumentRecord {
         var d = DocumentRecord.arrived(path: "/archive/\(name)", sha256: name, size: 1, uttype: "public.data", inode: nil, modified: nil,
                                        now: TestTime.start)
         d.id = id
-        d.labelsJson = JSON.string(labels)
+        d.labelsJson = try JSON.string(labels)
         return d
     }
 
-    @Test func theSetIsArrangedALevelPerKindYearsNewestFirstAndTheUnlabelledLast() {
+    @Test func theSetIsArrangedALevelPerKindYearsNewestFirstAndTheUnlabelledLast() throws {
         let docs = [
-            Self.document(1, "b.pdf", [Self.label(.sender, "EDP Comercial"), Self.label(.date, "2025-03-05")]),
-            Self.document(2, "a.pdf", [Self.label(.sender, "edp comercial"), Self.label(.date, "2025-01-10")]),
-            Self.document(3, "c.pdf", [Self.label(.sender, "Águas do Porto"), Self.label(.period, "2024-07/2025-06")]),
-            Self.document(4, "d.pdf", [Self.label(.date, "2024-02-01")]),
-            Self.document(5, "e.pdf", [Self.label(.sender, "EDP Comercial"), Self.label(.date, "2024-12-01")]),
+            try Self.document(1, "b.pdf", [Self.label(.sender, "EDP Comercial"), Self.label(.date, "2025-03-05")]),
+            try Self.document(2, "a.pdf", [Self.label(.sender, "edp comercial"), Self.label(.date, "2025-01-10")]),
+            try Self.document(3, "c.pdf", [Self.label(.sender, "Águas do Porto"), Self.label(.period, "2024-07/2025-06")]),
+            try Self.document(4, "d.pdf", [Self.label(.date, "2024-02-01")]),
+            try Self.document(5, "e.pdf", [Self.label(.sender, "EDP Comercial"), Self.label(.date, "2024-12-01")]),
         ]
         let tree = DocumentGrouping.tree(docs, by: [.sender, .date])
         #expect(tree.groups.map(\.value) == ["Águas do Porto", "EDP Comercial", nil],
@@ -392,10 +393,10 @@ import Testing
         #expect(DocumentGrouping.value(of: docs[2], kind: .period) == "2024", "a span is arranged by the year it starts in")
     }
 
-    @Test func documentsOfOneDateFollowTheirNameThenTheirNumber() {
+    @Test func documentsOfOneDateFollowTheirNameThenTheirNumber() throws {
         let day = Self.label(.date, "2025-03-05")
-        let docs = [Self.document(13, "b/same.pdf", [day]), Self.document(12, "a/same.pdf", [day]), Self.document(11, "bill 10.pdf", [day]),
-                    Self.document(10, "bill 9.pdf", [day]), Self.document(9, "undated.pdf", [])]
+        let docs = [try Self.document(13, "b/same.pdf", [day]), try Self.document(12, "a/same.pdf", [day]), try Self.document(11, "bill 10.pdf", [day]),
+                    try Self.document(10, "bill 9.pdf", [day]), try Self.document(9, "undated.pdf", [])]
         #expect(DocumentGrouping.tree(docs, by: [.type]).groups.first?.documents.compactMap(\.id) == [10, 11, 12, 13, 9],
                 "one date by name as Finder sorts it, numbers by their value; one name by number, so the order is the same however they came")
     }
@@ -414,8 +415,7 @@ import Testing
         _ = try await tasks.export(id, to: w.h.env.root.appendingPathComponent("Out", isDirectory: true), format: .folder)
         let waiting = try await tasks.create(prompt: "phone bills", effort: .high, profile: "smart").id
 
-        let records = ArchiveRecords(database: w.h.env.database, settings: w.h.env.settings, config: w.h.env.config, registry: nil,
-                                     time: w.h.env.time)
+        let records = w.h.env.records()
         try await records.flush()
         let file = try String(contentsOf: w.h.env.layout.searchTasks, encoding: .utf8)
         #expect(file.contains("prompt: \(Self.prompt)") && file.contains("inclusion: removed") && file.contains("format: folder"),
@@ -426,8 +426,7 @@ import Testing
         #expect(file.components(separatedBy: "profile:").count == 2, "a task that follows Settings' profile names none")
 
         let database = try AppDatabase.inMemory()
-        let summary = try await ArchiveRecords(database: database, settings: w.h.env.settings, config: w.h.env.config, registry: nil,
-                                               time: w.h.env.time).rebuild()
+        let summary = try await w.h.env.records(index: database).rebuild()
         #expect(summary.searchTasks == 2, "a rebuild reads both tasks back")
         let rebuilt = SearchTaskStore(database: database, config: w.h.env.config.tasks, time: w.h.env.time)
         let before = try await task(tasks, id)
@@ -464,8 +463,7 @@ import Testing
           exports: []
         ---
         """.write(to: h.env.layout.searchTasks, atomically: true, encoding: .utf8)
-        let summary = try await ArchiveRecords(database: h.env.database, settings: h.env.settings, config: h.env.config, registry: nil,
-                                               time: h.env.time).rebuild()
+        let summary = try await h.env.records().rebuild()
         #expect(summary.searchTasks == 1, "the earlier version's task is read")
         let interpreter = StubInterpreter(plans: ["water bills": Self.invoices2025])
         let (queue, tasks) = h.searchTasks(interpreter)
@@ -488,5 +486,24 @@ actor TaskHolder {
     func set(_ tasks: SearchTaskActions, _ id: Int64) {
         self.tasks = tasks
         self.id = id
+    }
+}
+
+/// A task's name, as the card's field gives it back.
+extension SearchTaskTests {
+    @Test func aNameLeftAsItWasStaysTheModelsAndIsNoChange() async throws {
+        let w = try await world()
+        defer { w.h.env.cleanup() }
+        let (queue, tasks) = w.h.searchTasks(StubInterpreter(plans: [Self.prompt: Self.invoices2025]))
+        let id = try await tasks.create(prompt: Self.prompt).id
+        await queue.drain()
+        // The card's name field shows the model's name, and gives it back when the user leaves it unchanged.
+        let left = try await tasks.update(id, SearchTaskChange(title: Self.invoices2025.title))
+        #expect(left.title == nil && left.name == Self.invoices2025.title, "the name stays the model's, to follow its next reading")
+        #expect(try await events(w.h, [.taskEdited]).isEmpty, "and nothing is recorded, as nothing changed")
+        let named = try await tasks.update(id, SearchTaskChange(title: "For the accountant"))
+        _ = try await tasks.update(id, SearchTaskChange(title: "For the accountant"))
+        #expect(named.title == "For the accountant", "a name of the user's is theirs")
+        #expect(try await events(w.h, [.taskEdited]).count == 1, "and giving it again changes nothing more")
     }
 }

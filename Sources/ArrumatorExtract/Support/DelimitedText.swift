@@ -10,14 +10,14 @@ enum DelimitedText {
         var quoted = false
         for char in text {
             if char == "\"" { quoted.toggle() }
-            if char == "\n", !quoted { break }
+            if isRecordBreak(char), !quoted { break }
             if !quoted, candidates.contains(char) { counts[char, default: 0] += 1 }
         }
         return candidates.max { (counts[$0] ?? 0) < (counts[$1] ?? 0) } ?? ","
     }
 
-    /// The first `maxRows` records (header included).
-    static func rows(_ text: String, delimiter: Character, maxRows: Int) -> [[String]] {
+    /// The first `maxRows` records (header included), and whether a record follows them.
+    static func rows(_ text: String, delimiter: Character, maxRows: Int) -> (rows: [[String]], truncated: Bool) {
         var rows: [[String]] = []
         var row: [String] = []
         var field = ""
@@ -45,7 +45,7 @@ enum DelimitedText {
             case delimiter:
                 row.append(field)
                 field = ""
-            case "\n", "\r\n", "\r":
+            case _ where isRecordBreak(char):
                 row.append(field)
                 field = ""
                 if !(row.count == 1 && row[0].isEmpty) { rows.append(row) }
@@ -58,15 +58,21 @@ enum DelimitedText {
             row.append(field)
             rows.append(row)
         }
-        return rows
+        // Past the rows kept, anything but the line breaks that end the file is a record left out.
+        while let char = pending, isRecordBreak(char) { pending = iterator.next() }
+        return (rows, pending != nil)
     }
 
-    /// Rows rendered as TSV (tabs and line breaks inside cells flattened to spaces).
+    /// Rows rendered as TSV: a tab or a line break inside a cell, of whatever kind, is a space.
     static func tsv(_ rows: [[String]]) -> String {
         rows.map { cells in
-            cells.map { $0.replacingOccurrences(of: "\t", with: " ").replacingOccurrences(of: "\n", with: " ") }
-                .joined(separator: "\t")
+            cells.map { String($0.map { $0 == "\t" || $0.isNewline ? " " : $0 }) }.joined(separator: "\t")
         }
         .joined(separator: "\n")
+    }
+
+    /// A line break ends a record however it is written: LF, CRLF (one `Character`) or CR.
+    private static func isRecordBreak(_ char: Character) -> Bool {
+        char == "\n" || char == "\r\n" || char == "\r"
     }
 }

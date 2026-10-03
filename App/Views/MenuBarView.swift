@@ -4,7 +4,7 @@ import SwiftUI
 /// The menu bar popover: what the app is doing, whether anything needs you, and the last few decisions.
 struct MenuBarView: View {
     @Environment(AppModel.self) private var model
-    @State private var recent: [DocumentRecord] = []
+    @State private var recent: [ListedDocument] = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: Style.menuBarSpacing) {
@@ -16,9 +16,9 @@ struct MenuBarView: View {
             if model.settings?.onboardingCompleted == false {
                 Button(Wording.setUpApp) { model.show(.onboarding) }.buttonStyle(.borderedProminent)
             }
-            if model.reviewCount > 0 {
+            if model.session.reviewCount > 0 {
                 Button { model.open(document: nil, on: .review) } label: {
-                    Label(Wording.needYou(model.reviewCount),
+                    Label(Wording.needYou(model.session.reviewCount),
                           systemImage: Destination.review.symbol)
                         .foregroundStyle(Destination.review.tint)
                 }
@@ -26,10 +26,9 @@ struct MenuBarView: View {
             }
             if !recent.isEmpty {
                 VStack(alignment: .leading, spacing: Style.menuBarRecentSpacing) {
-                    ForEach(recent, id: \.id) { document in
-                        ListRow(symbol: document.status.symbol, tint: document.status.tint, title: document.filename,
-                                subtitle: Wording.outcome(of: document, archive: model.settings?.archiveURL,
-                                                          incoming: model.settings?.incomingURL))
+                    ForEach(recent) { document in
+                        ListRow(symbol: document.record.status.symbol, tint: document.record.status.tint, title: document.record.filename,
+                                subtitle: document.outcome)
                             .rowAction { model.open(document: document.id, on: .processed) }
                     }
                 }
@@ -45,29 +44,27 @@ struct MenuBarView: View {
                 Spacer()
                 Menu {
                     Button(Wording.openIncomingFolder) { if let path = model.settings?.incomingURL.path { model.open(path) } }
-                    Button(Wording.openArchiveFolder) { if let path = model.settings?.archiveURL.path { model.open(path) } }
+                    Button(Wording.openArchiveFolder) { if let path = model.archive?.path { model.open(path) } }
                     Divider()
                     Button(Wording.settings) { model.show(.settings) }
-                    Button(Wording.quitApp) {
-                        Task {
-                            await model.runtime?.stop()
-                            NSApp.terminate(nil)
-                        }
-                    }
+                    // Quits as the app menu's Quit does: the app delegate stops the work first, for a bounded time
+                    // (`applicationShouldTerminate`), so every way to quit takes that one path.
+                    Button(Wording.quitApp) { NSApp.terminate(nil) }
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
                 .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                .accessibilityLabel(Wording.moreActions).help(Wording.moreActions)
             }
             .buttonStyle(.borderless)
         }
         .padding(Style.menuBarPadding)
         .frame(width: Style.popover.width)
         .task(id: model.activity) {
-            recent = await model.load(Wording.loadProcessedAction) {
+            if let read = await model.load(Wording.loadProcessedAction, {
                 try await $0.services.documents.list(DocumentFilter(statuses: DocumentStatus.processed), order: .recentlyProcessed,
                                                      limit: $0.config.interface.menuBarRecent)
-            } ?? []
+            }) { recent = model.listed(read) }
         }
     }
 }

@@ -10,7 +10,8 @@ import Testing
 import UniformTypeIdentifiers
 import Vision
 
-/// Test inputs generated at runtime into a private temporary directory.
+/// Test inputs generated at runtime into a private temporary directory, which the test removes when it ends
+/// (`cleanup()`, deferred where the scratch is made).
 struct Scratch {
     let directory: URL
 
@@ -21,6 +22,9 @@ struct Scratch {
     }
 
     func url(_ name: String) -> URL { directory.appendingPathComponent(name) }
+
+    /// Removes the directory and everything written into it.
+    func cleanup() { try? FileManager.default.removeItem(at: directory) }
 
     // MARK: Text files
 
@@ -103,6 +107,25 @@ struct Scratch {
         return url
     }
 
+    /// A PDF of one empty page whose document information gives `creationDate` as written (`D:20240520013000+02'00'`),
+    /// which Core Graphics writes no other way than its own: written by hand, its objects, cross-reference table and
+    /// trailer as ISO 32000-1 §7.5 lays them out.
+    @discardableResult
+    func writePDF(_ name: String, creationDate: String) throws -> URL {
+        let objects = ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+                       "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] >>", "<< /CreationDate (\(creationDate)) >>"]
+        var pdf = "%PDF-1.4\n"
+        var offsets: [Int] = []
+        for (number, object) in objects.enumerated() {
+            offsets.append(pdf.utf8.count)
+            pdf += "\(number + 1) 0 obj\n\(object)\nendobj\n"
+        }
+        let table = pdf.utf8.count
+        pdf += "xref\n0 \(objects.count + 1)\n0000000000 65535 f \n" + offsets.map { String(format: "%010d 00000 n \n", $0) }.joined()
+        pdf += "trailer\n<< /Size \(objects.count + 1) /Root 1 0 R /Info 4 0 R >>\nstartxref\n\(table)\n%%EOF\n"
+        return try write(name, data: Data(pdf.utf8))
+    }
+
     /// A "scanned" PDF: each page is only a full-page raster image of the text, no text layer.
     @discardableResult
     func writeImagePDF(_ name: String, pages: [[String]]) throws -> URL {
@@ -119,6 +142,49 @@ struct Scratch {
         return url
     }
 
+    /// A TIFF of several pages, one image each, as a scanner or a fax writes one.
+    @discardableResult
+    func writeTIFF(_ name: String, pages: [CGImage]) throws -> URL {
+        let url = url(name)
+        guard let destination = CGImageDestinationCreateWithURL(url as CFURL, UTType.tiff.identifier as CFString,
+                                                                pages.count, nil) else { throw FixtureError.render }
+        for page in pages { CGImageDestinationAddImage(destination, page, nil) }
+        guard CGImageDestinationFinalize(destination) else { throw FixtureError.render }
+        return url
+    }
+
+    /// A grayscale TIFF that declares `width` × `height` pixels in a few hundred kilobytes: each row is a strip of
+    /// its own, and every strip is the same Adobe Deflate stream of one black row (TIFF 6.0 §7 and the Adobe
+    /// supplement; RFC 1950 and 1951), its row held in a stored block, so nothing needs compressing. `width` is at most
+    /// one stored block, 65,535 bytes.
+    @discardableResult
+    func writeTIFF(_ name: String, declaring width: Int, by height: Int) throws -> URL {
+        func le16(_ value: Int) -> [UInt8] { withUnsafeBytes(of: UInt16(value).littleEndian, Array.init) }
+        func le32(_ value: Int) -> [UInt8] { withUnsafeBytes(of: UInt32(value).littleEndian, Array.init) }
+        // zlib header, a final stored block of the row's zero bytes, and their Adler-32 (a = 1, b = width).
+        let row = [0x78, 0x01, 0x01] + le16(width) + le16(width ^ 0xFFFF) + [UInt8](repeating: 0, count: width)
+            + withUnsafeBytes(of: (UInt32(width % 65_521) << 16 | 1).bigEndian, Array.init)
+        let short = 3, long = 4
+        let fields: [(tag: Int, type: Int, count: Int)] = [
+            (256, long, 1), (257, long, 1), (258, short, 1), (259, short, 1), (262, short, 1),
+            (273, long, height), (277, short, 1), (278, long, 1), (279, long, height),
+        ]
+        let offsets = 8 + 2 + 12 * fields.count + 4
+        let counts = offsets + 4 * height
+        let rowAt = counts + 4 * height
+        // Width, height, 8 bits, Adobe Deflate, black is zero, strip offsets, one sample, one row a strip, strip sizes.
+        let values = [width, height, 8, 8, 1, offsets, 1, 1, counts]
+        var bytes: [UInt8] = Array("II*\0".utf8) + le32(8) + le16(fields.count)
+        for (field, value) in zip(fields, values) {
+            bytes += le16(field.tag) + le16(field.type) + le32(field.count)
+            bytes += field.type == short ? le16(value) + le16(0) : le32(value)
+        }
+        bytes += le32(0)
+        for _ in 0..<height { bytes += le32(rowAt) }
+        for _ in 0..<height { bytes += le32(row.count) }
+        return try write(name, data: Data(bytes + row))
+    }
+
     // MARK: Office and archives
 
     @discardableResult
@@ -133,21 +199,216 @@ struct Scratch {
     /// Zips `files` (relative path → contents) with `/usr/bin/zip`.
     @discardableResult
     func writeZip(_ name: String, files: [String: String]) throws -> URL {
-        let root = url("zip-src-\(UUID().uuidString)")
+        let root = try writeTree(files: files, folders: [])
+        let output = url(name)
+        try Self.run("/usr/bin/zip", ["-q", "-X", "-r", output.path] + files.keys.sorted(), in: root)
+        return output
+    }
+
+    /// The archivers a Mac has, as a person or an app runs them.
+    enum Archiver: String, CaseIterable, Sendable {
+        /// `ditto -c -k --sequesterRsrc`, what Finder's Compress runs: data descriptors of 16 bytes.
+        case ditto
+        /// libarchive's `bsdtar --format zip`: data descriptors of 16 bytes, an empty file's too.
+        case bsdtar
+        /// `bsdtar --options zip:zip64`: data descriptors of 24 bytes.
+        case bsdtarZIP64
+        /// Info-ZIP's `zip -r`: no data descriptors.
+        case infoZIP
+        /// Info-ZIP's `zip -fz`: a ZIP64 extra field on every entry, holding 0 for a folder or an empty file.
+        case infoZIPZIP64
+    }
+
+    /// `files` (path → contents, "" for an empty file) and the empty `folders`, archived from their root by `archiver`,
+    /// with an entry for each folder.
+    @discardableResult
+    func writeArchive(_ name: String, files: [String: String], folders: [String], with archiver: Archiver) throws -> URL {
+        let root = try writeTree(files: files, folders: folders)
+        let output = url(name)
+        let topLevel = try FileManager.default.contentsOfDirectory(atPath: root.path).sorted()
+        switch archiver {
+        case .ditto:
+            try Self.run("/usr/bin/ditto", ["-c", "-k", "--sequesterRsrc", root.path, output.path], in: root)
+        case .bsdtar:
+            try Self.run("/usr/bin/bsdtar", ["-c", "--format", "zip", "-f", output.path] + topLevel, in: root)
+        case .bsdtarZIP64:
+            try Self.run("/usr/bin/bsdtar", ["-c", "--format", "zip", "--options", "zip:zip64", "-f", output.path] + topLevel,
+                         in: root)
+        case .infoZIP:
+            try Self.run("/usr/bin/zip", ["-q", "-X", "-r", output.path, "."], in: root)
+        case .infoZIPZIP64:
+            try Self.run("/usr/bin/zip", ["-q", "-X", "-r", "-fz", output.path, "."], in: root)
+        }
+        return output
+    }
+
+    /// A folder of its own holding `files` and the empty `folders`.
+    private func writeTree(files: [String: String], folders: [String]) throws -> URL {
+        let root = url("archive-src-\(UUID().uuidString)")
         for (path, contents) in files {
             let file = root.appendingPathComponent(path)
             try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
             try Data(contents.utf8).write(to: file)
         }
-        let output = url(name)
+        for folder in folders {
+            try FileManager.default.createDirectory(at: root.appendingPathComponent(folder), withIntermediateDirectories: true)
+        }
+        return root
+    }
+
+    private static func run(_ executable: String, _ arguments: [String], in folder: URL) throws {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/zip")
-        process.currentDirectoryURL = root
-        process.arguments = ["-q", "-X", "-r", output.path] + files.keys.sorted()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.currentDirectoryURL = folder
+        process.arguments = arguments
         try process.run()
         process.waitUntilExit()
         guard process.terminationStatus == 0 else { throw FixtureError.zip(process.terminationStatus) }
-        return output
+    }
+}
+
+/// ZIP files written byte by byte (PKWARE, APPNOTE.TXT 6.3.10), their entries stored, with what no archiver writes:
+/// ZIP64 sizes and offsets (APPNOTE 4.5.3) that lie, which the central directory gives in place of the real ones.
+struct ZipBuilder {
+    /// A data descriptor after an entry's data (APPNOTE 4.3.9), in each form a writer may give it: it sets general
+    /// purpose bit 3 and leaves the local header's CRC and sizes zero, as a writer that streams does.
+    enum Descriptor: Int, CaseIterable, Sendable {
+        /// The CRC-32 and 32-bit sizes, without the optional signature: 12 bytes.
+        case short = 12
+        /// With its signature: 16 bytes, as ditto, bsdtar and jar write it.
+        case signed = 16
+        /// With 64-bit sizes and no signature: 20 bytes.
+        case wide = 20
+        /// With its signature and 64-bit sizes: 24 bytes, as bsdtar writes it for ZIP64.
+        case wideSigned = 24
+
+        var isWide: Bool { self == .wide || self == .wideSigned }
+        var isSigned: Bool { self == .signed || self == .wideSigned }
+    }
+
+    struct Entry {
+        var name: [UInt8]
+        var contents: [UInt8]
+        /// General purpose bit 11: the name is UTF-8 (APPNOTE 4.4.4).
+        var utf8Name = true
+        var zip64Uncompressed: UInt64?
+        var zip64Compressed: UInt64?
+        var zip64Offset: UInt64?
+        /// The data descriptor after the entry's data, if any.
+        var descriptor: Descriptor?
+        /// A folder: a name ending in `/` and the Unix folder type (APPNOTE 4.4.15).
+        var isFolder = false
+        /// The compression method recorded (APPNOTE 4.4.5): 0, stored, or 8, deflated, though the bytes are stored.
+        var method = 0
+        /// General purpose bit 0: the entry is encrypted (APPNOTE 4.4.4). Its bytes are written as they are.
+        var encrypted = false
+        /// Bytes of an extra field of no known kind (APPNOTE 4.5.1) in the local header, header included: at most 65,535.
+        var localExtra = 0
+
+        init(_ name: String, _ contents: String = "") {
+            self.name = Array(name.utf8)
+            self.contents = Array(contents.utf8)
+        }
+
+        init(rawName: [UInt8], utf8Name: Bool) {
+            name = rawName
+            contents = []
+            self.utf8Name = utf8Name
+        }
+
+        init(folder name: String) {
+            self.init(name)
+            isFolder = true
+        }
+
+        var isZIP64: Bool { zip64Uncompressed != nil || zip64Compressed != nil || zip64Offset != nil }
+        /// Version 4.5, which tells a reader to take a data descriptor's sizes as 64-bit (APPNOTE 4.3.9.2).
+        var needsZIP64: Bool { isZIP64 || descriptor?.isWide == true }
+    }
+
+    var entries: [Entry]
+    /// A ZIP64 end of central directory record (APPNOTE 4.3.14), with its locator, giving this as the central
+    /// directory's offset.
+    var zip64DirectoryOffset: UInt64?
+    /// Central directory headers of their own names that point at the local header of the entry at `of`, after the
+    /// entries' own: entries that share their bytes, as an overlapping-file ZIP bomb's do (Fifield, "A better zip bomb",
+    /// WOOT 2019).
+    var aliases: [(name: String, of: Int)] = []
+
+    func data() -> Data {
+        var bytes: [UInt8] = []
+        var offsets: [Int] = []
+        let checksums = entries.map { Self.crc32($0.contents) }
+        for (entry, checksum) in zip(entries, checksums) {
+            offsets.append(bytes.count)
+            let streamed = entry.descriptor != nil
+            bytes += Self.le32(0x0403_4B50) + Self.le16(entry.needsZIP64 ? 45 : 20) + Self.le16(Self.flags(entry))
+                + Self.le16(entry.method) + Self.le16(0) + Self.le16(0) + Self.le32(streamed ? 0 : checksum)
+                + Self.le32(streamed ? 0 : entry.contents.count) + Self.le32(streamed ? 0 : entry.contents.count)
+                + Self.le16(entry.name.count) + Self.le16(entry.localExtra) + entry.name
+                + Self.unknownExtraField(entry.localExtra) + entry.contents
+            if let descriptor = entry.descriptor {
+                let size = UInt64(entry.contents.count)
+                bytes += (descriptor.isSigned ? Self.le32(0x0807_4B50) : []) + Self.le32(checksum)
+                    + (descriptor.isWide ? Self.le64(size) + Self.le64(size) : Self.le32(Int(size)) + Self.le32(Int(size)))
+            }
+        }
+        let directoryStart = bytes.count
+        // Each central header: the entry it describes, the name it gives it.
+        let headers = entries.indices.map { ($0, entries[$0].name) } + aliases.map { ($0.of, Array($0.name.utf8)) }
+        for (index, name) in headers {
+            let entry = entries[index], offset = offsets[index]
+            let wide = [entry.zip64Uncompressed, entry.zip64Compressed, entry.zip64Offset].compactMap { $0 }
+            let extra = wide.isEmpty ? [] : Self.le16(1) + Self.le16(8 * wide.count) + wide.flatMap(Self.le64)
+            // Made on Unix (APPNOTE 4.4.2), a regular file or a folder (its mode in the high half of the external
+            // attributes).
+            let mode = entry.isFolder ? 0o040755 : 0o100644
+            bytes += Self.le32(0x0201_4B50) + Self.le16(0x0314) + Self.le16(entry.needsZIP64 ? 45 : 20)
+                + Self.le16(Self.flags(entry)) + Self.le16(entry.method) + Self.le16(0) + Self.le16(0)
+                + Self.le32(checksums[index])
+                + Self.le32(entry.zip64Compressed == nil ? entry.contents.count : Self.wide)
+                + Self.le32(entry.zip64Uncompressed == nil ? entry.contents.count : Self.wide)
+                + Self.le16(name.count) + Self.le16(extra.count) + Self.le16(0) + Self.le16(0) + Self.le16(0)
+                + Self.le32(mode << 16) + Self.le32(entry.zip64Offset == nil ? offset : Self.wide) + name + extra
+        }
+        let directorySize = bytes.count - directoryStart
+        if let zip64DirectoryOffset {
+            let record = bytes.count
+            bytes += Self.le32(0x0606_4B50) + Self.le64(44) + Self.le16(45) + Self.le16(45) + Self.le32(0) + Self.le32(0)
+                + Self.le64(UInt64(headers.count)) + Self.le64(UInt64(headers.count)) + Self.le64(UInt64(directorySize))
+                + Self.le64(zip64DirectoryOffset)
+            bytes += Self.le32(0x0706_4B50) + Self.le32(0) + Self.le64(UInt64(record)) + Self.le32(1)
+        }
+        bytes += Self.le32(0x0605_4B50) + Self.le16(0) + Self.le16(0) + Self.le16(headers.count) + Self.le16(headers.count)
+            + Self.le32(directorySize) + Self.le32(zip64DirectoryOffset == nil ? directoryStart : Self.wide) + Self.le16(0)
+        return Data(bytes)
+    }
+
+    /// What a 32-bit field holds when its value is in the ZIP64 extra field.
+    private static let wide = 0xFFFF_FFFF
+
+    /// An extra field of `size` bytes, its four-byte header included, of an ID no reader knows; empty for 0.
+    private static func unknownExtraField(_ size: Int) -> [UInt8] {
+        size == 0 ? [] : le16(0xCAFE) + le16(size - 4) + [UInt8](repeating: 0, count: size - 4)
+    }
+
+    private static func flags(_ entry: Entry) -> Int {
+        (entry.utf8Name ? 1 << 11 : 0) | (entry.descriptor != nil ? 1 << 3 : 0) | (entry.encrypted ? 1 : 0)
+    }
+
+    private static func le16(_ value: Int) -> [UInt8] { withUnsafeBytes(of: UInt16(truncatingIfNeeded: value).littleEndian, Array.init) }
+    private static func le32(_ value: Int) -> [UInt8] { withUnsafeBytes(of: UInt32(truncatingIfNeeded: value).littleEndian, Array.init) }
+    private static func le32(_ value: UInt32) -> [UInt8] { withUnsafeBytes(of: value.littleEndian, Array.init) }
+    private static func le64(_ value: UInt64) -> [UInt8] { withUnsafeBytes(of: value.littleEndian, Array.init) }
+
+    /// CRC-32 as ZIP computes it (APPNOTE 4.4.7: the polynomial 0xEDB88320, reflected).
+    private static func crc32(_ bytes: [UInt8]) -> UInt32 {
+        var crc: UInt32 = 0xFFFF_FFFF
+        for byte in bytes {
+            crc ^= UInt32(byte)
+            for _ in 0..<8 { crc = crc & 1 == 1 ? (crc >> 1) ^ 0xEDB8_8320 : crc >> 1 }
+        }
+        return ~crc
     }
 }
 
@@ -155,6 +416,7 @@ enum FixtureError: Error {
     case encoding(String)
     case render
     case zip(Int32)
+    case missing(String)
 }
 
 // MARK: Configuration
@@ -162,22 +424,34 @@ enum FixtureError: Error {
 enum TestConfig {
     static func pipeline() throws -> PipelineConfig { try PipelineConfig.bundledDefaults() }
 
-    static func context(vision: VisionModelOptions? = nil,
+    /// What the pipeline extracts with, waiting for Ollama unless `whenOllamaIsAway` says otherwise.
+    static func context(vision: VisionModelOptions? = nil, whenOllamaIsAway: WhenOllamaIsAway = .wait,
                         _ adjust: (inout ExtractionConfig, inout EntityConfig) -> Void = { _, _ in }) throws -> ExtractionContext {
         let pipeline = try pipeline()
         var extraction = pipeline.extraction
         var entities = pipeline.entities
         adjust(&extraction, &entities)
-        return ExtractionContext(config: extraction, entities: entities, vision: vision)
+        return ExtractionContext(config: extraction, entities: entities, vision: vision, whenOllamaIsAway: whenOllamaIsAway)
     }
 
     /// The registry the app wires, with Vision's own recognizer and the real shell. Its deadlines are measured on time
     /// that never comes (`TestTime(.blocks)`), so real OCR and tools finish however slow the machine; pass
-    /// `TestTime(.advances)` for deadlines that expire at once.
+    /// `TestTime(.advances)` for deadlines that expire at once. It takes `calendar` for the Mac's, whatever this Mac's is.
     static func registry(ollama: (any OllamaAPI)? = nil, recognizer: any TextRecognizing = VisionTextRecognizer(),
-                         time: TestTime = TestTime(.blocks)) throws -> ExtractorRegistry {
-        try ExtractorRegistry(ollama: ollama, recognizer: recognizer, shell: ShellRunner(time: time), time: time)
+                         time: TestTime = TestTime(.blocks), calendar: Calendar = TestConfig.calendar) throws -> ExtractorRegistry {
+        try ExtractorRegistry(ollama: ollama, recognizer: recognizer, shell: ShellRunner(time: time), time: time,
+                              calendar: calendar)
     }
+
+    /// The calendar a Mac set to `identifier` in `zone` has.
+    static func calendar(_ identifier: Calendar.Identifier, in zone: TimeZone) -> Calendar {
+        var calendar = Calendar(identifier: identifier)
+        calendar.timeZone = zone
+        return calendar
+    }
+
+    /// The Mac's calendar the tests' registry has unless one says otherwise: Gregorian, in UTC.
+    static let calendar = calendar(.gregorian, in: .gmt)
 
     /// A vision model of its own, asked as the pipeline asks the profile's (`PipelineConfig.extractionContext`).
     static func visionOptions() throws -> VisionModelOptions {
@@ -201,6 +475,36 @@ enum VisionOCR {
     }
 }
 
+/// OCR that reads nothing until it is cancelled, as on a page it never ends.
+struct EndlessRecognizer: TextRecognizing {
+    func documentsSupport(_ languages: [String]) -> Bool { true }
+
+    func recognize(_ image: CGImage, orientation: CGImagePropertyOrientation, engine: OCREngine, languages: [String],
+                   on device: OCRDevice) async throws -> ArrumatorExtract.RecognizedText {
+        try await TestTime(.blocks).sleep(seconds: 0)
+        throw CancellationError()
+    }
+}
+
+/// Stands in for Vision: answers each image with what `answer` reads in it, and records the width of each image it
+/// was asked to read, in order.
+actor RecordingRecognizer: TextRecognizing {
+    private let answer: @Sendable (CGImage) -> String
+    private(set) var widths: [Int] = []
+
+    init(answer: @escaping @Sendable (CGImage) -> String = { _ in "" }) { self.answer = answer }
+
+    nonisolated func documentsSupport(_ languages: [String]) -> Bool { true }
+
+    func recognize(_ image: CGImage, orientation: CGImagePropertyOrientation, engine: OCREngine, languages: [String],
+                   on device: OCRDevice) async throws -> ArrumatorExtract.RecognizedText {
+        widths.append(image.width)
+        let text = answer(image)
+        return ArrumatorExtract.RecognizedText(text: text, paragraphs: [text], tables: [],
+                                               lines: text.isEmpty ? [] : [RecognizedLine(text: text, confidence: 0.9)], languages: languages)
+    }
+}
+
 extension ExtractedContent {
     /// What went wrong while reading, for expectation messages: an OCR failure shows its error here, which tells
     /// Vision failing on a machine apart from Vision finding no text.
@@ -214,4 +518,86 @@ extension ExtractedContent {
 extension MockOllama {
     /// What a model that can describe images reports, as the vision extractor checks before asking it.
     static let visionCapabilities = ["completion", "vision", "thinking"]
+}
+
+// MARK: Labelled numbers
+
+/// Account and policy numbers written in the many ways a label, a number sign and a number are written together: each
+/// label `StableKeys` had before its labels were configuration (429517b), in the spellings its patterns allowed (with and
+/// without dots, spaces and accents, with `º`, `°` and `o`), before a number that starts with a digit and one that starts
+/// with letters, after a space and after a colon; and sentences in which a label should, or should not, take a number.
+enum LabelledNumberVariants {
+    /// The number sign as `n.º` is written: `n` or `n.`, a space or none, `º`, `o` or `°`, and a dot or none after it.
+    static func ordinals(trailingDot: Bool = true) -> [String] {
+        combinations(["n", "n.", "N", "N."], ["", " "], ["º", "o", "°"], trailingDot ? ["", "."] : [""])
+    }
+
+    static var accountLabels: [String] {
+        combinations(["account "], ["no", "no.", "number", "nr", "nr.", "#"])
+            + combinations(["customer "], ["no", "no.", "number", "id", "ref", "reference", "#"])
+            + combinations(["client "], ["no", "no.", "number", "id", "#"])
+            + ["contract account"]
+            + combinations(["member ", "membership ", "subscriber "], ["no", "no.", "number", "id"])
+            + combinations(["número ", "numero ", "Número "], ["", "de "], ["cliente", "conta"])
+            + combinations(ordinals(), ["", " "], ["", "de "], ["cliente", "conta"])
+            + combinations(["código ", "codigo ", "referência ", "referencia "], ["", "de "], ["cliente"])
+            + combinations(["cliente "], ordinals(trailingDot: false))
+            + ["CPE", "CIL", "лицевой счёт", "лицевой счет", "Лицевой счёт", "л/с", "номер лицевого счёта",
+               "номер лицевого счета", "номер клиента", "номер абонента", "абонентский номер", "код клиента", "клиент№",
+               "клиент №"]
+    }
+
+    static var policyLabels: [String] {
+        combinations(["policy "], ["no", "no.", "number", "nr", "nr.", "#"])
+            + combinations(["contract "], ["no", "no.", "number", "nr", "nr.", "ref", "reference", "#"])
+            + combinations(["agreement "], ["no", "no.", "number", "#"])
+            + ["apólice", "apolice", "Apólice"]
+            + combinations(["número ", "numero "], ["", "de ", "do ", "da "], ["contrato", "apólice", "apolice"])
+            + combinations(ordinals(), ["", " "], ["", "de ", "do ", "da "], ["contrato", "apólice"])
+            + combinations(["contrato "], ordinals(trailingDot: false))
+            + ["contrato número", "contrato numero", "полис", "страховой полис", "номер договора", "номер полиса"]
+            // A contract's title between договор and its sign, and one of four words, which is too far.
+            + combinations(["договор"], contractTitles + [" на оказание услуг связи"], ["№", " №", "N", " N"] + contractSigns)
+    }
+
+    /// The titles of none to three words that may stand between договор and its number sign.
+    static let contractTitles = ["", " аренды", " оказания услуг", " купли продажи квартиры"]
+    /// The number signs written with an N after a contract's title, a space before each.
+    static let contractSigns = [" Nº", " N°", " No", " N º"]
+    /// The numbers after a label: one that starts with a digit, one that starts with letters.
+    static let numbers = ["12/2024-77", "AB-2024/77"]
+
+    /// Sentences around a label, as documents have them.
+    static let sentences = [
+        "Договор NDA-2024 подписан сторонами", "Договор Nr. 1234/56", "Договор No 12345678", "Договор N 2024/15",
+        "Договор N12/2024", "договор NOVA2024 заключён", "Customer number: 12345678", "Номер договора: 77-2024/15",
+        "ДОГОВОР АРЕНДЫ № 12/2024", "Договор купли-продажи № 45/2023", "Кредитный договор № 625/0018-0123456",
+        "Договор страхования № 001SB2024", "Договор № ДП-12/2024", "Policy No. AB-123456", "Apólice n.º AB-123456",
+        "Apólice n.ºAB-123456", "N.o de cliente 12345678", "No. de cliente: 12345678", "Cliente No. 12345678",
+        "Contrato No. 2024/0099", "Nº. de contrato: 2024/0099", "nºcliente 12345678", "клиент№ 12345678",
+        "Nº do contrato 2024/0099", "N.º da apólice 2024/0099", "NIF: 999 999 990", "Contribuinte n.º 999999990",
+        "Contribuinte n.o 999999990", "Contribuinte nº999999990", "Lugar no cliente do mês: 2024/77",
+        "Policy #A1234567", "Account #AC-998877", "Договор №АБ-123/2024", "Клиент №А-1234567", "Contrato nºCT2024001",
+    ]
+
+    /// What stands between a label and its number: a space, a colon, or nothing.
+    static let separators = [" ", ": ", ""]
+
+    /// `label` before each number, after each separator, inside a sentence.
+    static func texts(for label: String) -> [String] {
+        combinations(["Texto \(label)"], separators, numbers.map { "\($0) fim" })
+    }
+
+    /// The keys `StableKeys` found in each of `texts` before (429517b), as tokens in their order: captured once from that
+    /// commit's patterns, which are no longer in the code.
+    static func before() throws -> [String: [String]] {
+        guard let url = Bundle.module.url(forResource: "labelled-numbers-before", withExtension: "json", subdirectory: "Resources")
+        else { throw FixtureError.missing("labelled-numbers-before.json") }
+        return try JSONDecoder().decode([String: [String]].self, from: Data(contentsOf: url))
+    }
+
+    /// Each string of the first list followed by each of the next, and so on.
+    private static func combinations(_ lists: [String]...) -> [String] {
+        lists.dropFirst().reduce(lists.first ?? []) { heads, tails in heads.flatMap { head in tails.map { head + $0 } } }
+    }
 }

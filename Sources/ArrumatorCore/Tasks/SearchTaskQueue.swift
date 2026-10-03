@@ -60,15 +60,20 @@ public enum SearchTaskProgress: Sendable, Hashable {
 /// whether it waits for Ollama, is its status (`statusUpdates()`), which the app follows.
 ///
 /// A task survives a stop: one whose prompt was being read goes back into the queue, in its place, and is read first at
-/// the next start. While Ollama cannot be reached a task waits in the queue, as a document does (`ingest.retryDelays`);
-/// a profile the settings no longer list, a model that is missing, an answer that took longer than the task's effort
-/// allows, or one the model never got right, fails the task with the reason, and the user can give it another profile
-/// or effort or ask again. No other profile reads a task in its place unasked.
-public actor SearchTaskQueue {
-    private let services: PipelineServices
+/// the next start; so does one a process that ended was reading (`ModelQueue`). A task the user changes or removes while
+/// it is read stops being read at once (`supersede(_:)`). While Ollama cannot be reached a task waits in the queue, as a
+/// document does (`ingest.retryDelays`), its trace taken up again by each attempt; a profile the settings no longer
+/// list, a model that is missing, a server that answers with a failure, an answer that took longer than the task's
+/// effort allows, or one the model never got right, fails the task with the reason, and the user can give it another
+/// profile or effort or ask again. No other profile reads a task in its place unasked.
+public actor SearchTaskQueue: ModelQueue {
+    let services: PipelineServices
+    let processes: any ProcessWatching
     private let interpreter: any SearchPromptInterpreting
-    private var worker: Task<Void, Never>?
-    private let doorbell = Doorbell()
+    var worker: Task<Void, Never>?
+    let doorbell = Doorbell()
+    var inHand: InHand?
+    nonisolated let name = "search tasks"
     private var statusContinuations: [UUID: AsyncStream<SearchTaskQueueStatus>.Continuation] = [:]
     public private(set) var status = SearchTaskQueueStatus.idle {
         didSet { if status != oldValue { for c in statusContinuations.values { c.yield(status) } } }
@@ -77,9 +82,10 @@ public actor SearchTaskQueue {
     private var countsAsked = 0
     private var countPublished = 0
 
-    public init(services: PipelineServices, interpreter: any SearchPromptInterpreting) {
+    public init(services: PipelineServices, interpreter: any SearchPromptInterpreting, processes: any ProcessWatching) {
         self.services = services
         self.interpreter = interpreter
+        self.processes = processes
     }
 
     /// What the queue is doing, the current status first, then each change: a subscriber that joins while a request is
@@ -117,30 +123,22 @@ public actor SearchTaskQueue {
         status = next
     }
 
+    func recount() async { await publish() }
+
     private var store: SearchTaskStore { SearchTaskStore(database: services.database, config: services.config.tasks, time: services.time) }
 
     // MARK: Control
 
+    /// Starts the worker, unless it runs (`ModelQueue.startWorker`), and counts the tasks waiting.
     public func start() async {
-        do {
-            let recovered = try await store.recoverInterrupted()
-            if recovered > 0 { Log.info(.search, "Search tasks back in the queue", ["tasks": String(recovered)]) }
-        } catch {
-            Log.error(.search, "Could not recover search tasks", ["error": error.localizedDescription])
-        }
+        startWorker()
         await publish()
-        guard worker == nil else { return }
-        worker = Task { [weak self] in await self?.runLoop() }
-        doorbell.ring()
     }
 
-    /// Stops the worker and waits until it has. A task whose prompt is being read goes back into the queue at the next
-    /// start; until then the queue reads nothing and waits for nothing.
+    /// Stops the worker and waits until it has. A task whose prompt is being read goes back into the queue, in its
+    /// place, once it has; until the next start the queue reads nothing and waits for nothing.
     public func stop() async {
-        guard let worker else { return }
-        worker.cancel()
-        await worker.value
-        self.worker = nil
+        guard await stopWorker() else { return }
         await publish {
             $0.reading = nil
             $0.waitingForOllama = false
@@ -154,50 +152,37 @@ public actor SearchTaskQueue {
     }
 
     /// Runs every task that is due until none is left (the command line and tests), or until one cannot be taken from
-    /// the queue, which is logged.
+    /// the queue, which is logged, or until the draining task is cancelled; first the tasks no running process reads go back into the queue.
     public func drain() async {
-        while let task = await nextDue(), await run(task) {}
+        await drainQueue()
     }
 
-    // MARK: Loop
-
-    private func runLoop() async {
-        while !Task.isCancelled {
-            if let task = await nextDue() {
-                if await run(task) { continue }
-                // The queue could not be written; it is tried again after a while rather than at once.
-                await doorbell.wait(timeout: services.config.ingest.retryDelays.last, time: services.time)
-                continue
-            }
-            let wait = await earliestDue().map { max(IngestCoordinator.minimumWait, $0.timeIntervalSince(services.time.now())) }
-            await doorbell.wait(timeout: wait, time: services.time)
-        }
+    /// Stops reading `task` if its request is being read, as when the user changed or removed it: nothing of the reading
+    /// is kept. Whether it was being read.
+    @discardableResult
+    func supersede(_ task: Int64) -> Bool {
+        end(because: .superseded) { $0.item == task }
     }
 
-    private func nextDue() async -> SearchTaskRecord? {
-        do { return try await store.nextDue() } catch {
-            Log.error(.search, "Could not read the search task queue", ["error": error.localizedDescription])
-            return nil
-        }
-    }
+    // MARK: The queue
 
-    private func earliestDue() async -> Date? {
-        do { return try await store.earliestDue() } catch {
-            Log.error(.search, "Could not read the search task queue", ["error": error.localizedDescription])
-            return nil
-        }
-    }
+    func recoverLeft() async throws -> Int { try await store.recoverLeft(processes) }
+    func nextDue() async throws -> SearchTaskRecord? { try await store.nextDue() }
+    func earliestDue() async throws -> Date? { try await store.earliestDue() }
+    func heldElsewhere() async throws -> Bool { try await store.heldElsewhere(processes) }
 
     // MARK: A task
 
     /// Runs a queued task; false when it could not be taken from the queue. Once it has run, the status says nothing is
     /// read, and whether the queue waits for Ollama.
-    private func run(_ queued: SearchTaskRecord) async -> Bool {
+    func run(_ queued: SearchTaskRecord) async -> Bool {
         guard let id = queued.id else { return false }
+        inHand = InHand(item: id, task: id)
+        defer { inHand = nil }
         let record: SearchTaskRecord
         do {
             // A task no longer queued, such as one removed meanwhile, is simply not run.
-            guard let begun = try await store.begin(id) else { return true }
+            guard let begun = try await store.begin(id, by: tag) else { return true }
             record = begun
         } catch {
             Log.error(.search, "Could not start a search task", ["task": String(id), "error": error.localizedDescription])
@@ -216,6 +201,7 @@ public actor SearchTaskQueue {
     /// profile that is gone, which no model reads, or on stopping.
     private func read(_ record: SearchTaskRecord, id: Int64) async -> Bool? {
         let store = store
+        let tag = tag
         let settings = await services.settings.current
         // The profile that reads the task, its own or Settings'; one that is gone names no models, and fails the task.
         let profile = Result { try settings.modelProfile(record.profile) }
@@ -223,37 +209,36 @@ public actor SearchTaskQueue {
             let since = services.time.now()
             await publish { $0.reading = SearchTaskQueueStatus.Reading(task: id, model: model, since: since) }
         }
-        let trace: TraceContext
-        do {
-            trace = try await services.traces.start(TraceHeader(docID: nil, jobID: nil, attempt: 0, source: .task,
-                                                                promptVersion: services.config.tasks.promptVersion,
-                                                                models: try? profile.get(), settings: settings))
-        } catch {
-            Log.error(.db, "Could not start trace", ["error": error.localizedDescription])
-            trace = .disabled
-        }
+        let trace = await startTrace(TraceHeader(docID: nil, jobID: nil, attempt: 0, source: .task,
+                                                 promptVersion: services.config.tasks.promptVersion,
+                                                 models: try? profile.get(), settings: settings), resuming: record.lastTraceId)
         let outcome: String
         let reached: Bool?
-        do {
-            outcome = try await interpret(record, id: id, profile: try profile.get(), trace: trace)
+        switch await attempt({ try await self.interpret(record, id: id, profile: try profile.get(), trace: trace) }) {
+        case let .done(concluded):
+            outcome = concluded
             reached = true
-        } catch let error as OllamaError where error.isTransient {
+        case .ended:
+            // Changed or removed meanwhile: the change put it back in the queue, or it is gone.
+            outcome = Self.superseded
+            reached = nil
+        case .interrupted:
             // Stopping interrupts the task; that is no failure, and the next start takes it up again.
-            guard !Task.isCancelled else { return nil }
-            outcome = "waiting"
+            outcome = Self.interrupted
+            reached = nil
+        case let .away(error):
+            outcome = TraceRecorder.waitingOutcome
             reached = false
-            let until = services.time.now().addingTimeInterval(services.config.ingest.retryDelays.last)
-            do { try await store.postpone(id, prompt: record.prompt, until: until) } catch {
+            do { try await store.postpone(id, by: tag, until: retryAt, trace: trace.traceID) } catch {
                 Log.error(.search, "Could not put a search task back in the queue", ["task": String(id), "error": error.localizedDescription])
             }
             Log.warning(.search, "Ollama unavailable; the search task waits", ["task": String(id), "error": error.localizedDescription])
-        } catch {
-            guard !Task.isCancelled else { return nil }
-            outcome = "failed"
+        case let .failed(error):
+            outcome = SearchTaskState.failed.rawValue
             // Ollama that answers with an error of its own, such as a model it does not have, can be reached.
             reached = error is OllamaError ? true : nil
             let failed = SearchInterpretation(plan: nil, model: nil, problem: error.localizedDescription)
-            do { try await store.fail(id, prompt: record.prompt, interpretation: failed, trace: trace.traceID) } catch {
+            do { try await store.fail(id, by: tag, interpretation: failed, trace: trace.traceID) } catch {
                 Log.error(.search, "Could not record a failed search task", ["task": String(id), "error": error.localizedDescription])
             }
             Log.error(.search, "Search task failed", ["task": String(id), "error": error.localizedDescription])
@@ -262,25 +247,30 @@ public actor SearchTaskQueue {
         return reached
     }
 
+    /// How the trace of a reading ends when the task changed or was removed while it was read.
+    static let superseded = "superseded"
+    /// How the trace of a reading ends when the queue stopped while it read.
+    static let interrupted = "interrupted"
+
     /// Reads the task's prompt and keeps what it found, or why it found nothing; the outcome the trace ends with.
     private func interpret(_ record: SearchTaskRecord, id: Int64, profile: ModelProfile, trace: TraceContext) async throws -> String {
         let vocabulary = try await services.labels.usage()
-        let today = services.time.now().formatted(Date.ISO8601FormatStyle(timeZone: .current).year().month().day())
+        let today = services.time.now().formatted(Date.ISO8601FormatStyle(timeZone: services.timeZone).year().month().day())
         let interpretation = try await interpreter.interpret(record.prompt, effort: record.effort, profile: profile, vocabulary: vocabulary,
                                                              today: today, config: services.config, trace: trace)
         guard let plan = interpretation.plan else {
-            try await store.fail(id, prompt: record.prompt, interpretation: interpretation, trace: trace.traceID)
+            try await store.fail(id, by: tag, interpretation: interpretation, trace: trace.traceID)
             Log.warning(.search, "The model could not read a search task", ["task": String(id)])
             return SearchTaskState.failed.rawValue
         }
-        let matcher = SearchPlanMatcher(database: services.database, limit: services.config.tasks.maxDocuments)
+        let matcher = SearchPlanMatcher(database: services.database, archive: services.archive,
+                                        limit: services.config.tasks.maxDocuments)
         let found = try await trace.measure(.match, input: plan, output: { (ids: [Int64]) in ["documents": ids] }) {
             try await matcher.documents(plan)
         }
-        guard try await store.prepare(id, prompt: record.prompt, interpretation: interpretation, plan: plan, found: found,
-                                      trace: trace.traceID) else {
+        guard try await store.prepare(id, by: tag, interpretation: interpretation, plan: plan, found: found, trace: trace.traceID) else {
             Log.info(.search, "A search task changed while it was read; it is read again", ["task": String(id)])
-            return "superseded"
+            return Self.superseded
         }
         Log.info(.search, "Search task ready", ["task": String(id), "documents": String(found.count)])
         return SearchTaskState.ready.rawValue

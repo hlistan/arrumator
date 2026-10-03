@@ -8,9 +8,13 @@ import GRDB
 /// such as "translate it" goes on about; then those the question concerns (`SearchService.relevance`); then the rest by
 /// their own date, the newest first. In that order each is shown with its text, its start and its end cut to
 /// `conversation.documentChars` as a document is read, while the text fits in `conversation.contextChars`; one whose text
-/// does not fit, or that has none yet, is listed by its name, date and labels, at most `conversation.maxListed`, and the
-/// answer is told how many more there are. A set the context holds is shown whole. The conversation so far is shown
-/// up to `conversation.historyChars`, the latest exchanges kept, the latest cut to fit when it alone is longer.
+/// does not fit, or that has none yet, is listed by its name, date and labels, at most `conversation.maxListed`. Once the
+/// list is full, a document without text is passed over, and the first whose text is too long for the room left ends
+/// the choice; the answer is told how many more there are. A set the context holds is shown whole. The documents are put
+/// in order by their numbers alone, which of them have a text is told without reading it, and a document's text is read
+/// only to be shown or listed (`choose`), so a question reads the text of the documents it shows or lists, and one more,
+/// never of the whole set. The conversation so far is shown up to `conversation.historyChars`, the latest exchanges kept,
+/// the latest cut to fit when it alone is longer.
 public struct TaskContextBuilder: Sendable {
     public let database: AppDatabase
     public let search: SearchService
@@ -23,35 +27,92 @@ public struct TaskContextBuilder: Sendable {
     }
 
     /// What an answer to `question` is shown of `set`, the documents of the task's set, with `earlier`, the questions
-    /// answered before it, the first asked first.
-    public func context(for question: String, set: [Int64], earlier: [TaskTurn]) async throws -> TaskContext {
+    /// answered before it, the first asked first; and how the documents were put in the order the question concerns
+    /// them.
+    public func context(for question: String, set: [Int64], earlier: [TaskTurn]) async throws -> ContextChoice {
         let conversation = config.conversation
         let excerptDivisor = config.analysis.excerptTailDivisor
-        let documents = try await database.reader.read { db in try Self.documents(db, ids: set, maxChars: conversation.documentChars,
-                                                                                    tailDivisor: excerptDivisor) }
         let members = Set(set)
         let followed = (earlier.last(where: { $0.state == .answered })?.sources ?? []).filter(members.contains)
-        let concerned = try await search.relevance(of: question, among: set)
-        let dated = DocumentOrder.byDocumentDate(documents.map(\.record)).compactMap(\.id)
-        var seen = Set<Int64>()
-        let ranked = (followed + concerned + dated).filter { seen.insert($0).inserted }
-        let byID = Dictionary(documents.map { ($0.record.id ?? 0, $0) }, uniquingKeysWith: { a, _ in a })
+        let relevance = try await search.relevance(of: question, among: set)
+        let (chosen, held) = try await database.reader.read { db in
+            let dated = try Self.byDocumentDate(db, ids: set)
+            var seen = Set<Int64>()
+            let ranked = (followed + relevance.documents + dated).filter { seen.insert($0).inserted }
+            let withText = try Self.withText(db, ids: set)
+            let chosen = try Self.choose(ranked, room: conversation.contextChars, maxListed: conversation.maxListed,
+                                         hasText: withText.contains, record: { try DocumentRecord.fetchOne(db, key: $0) },
+                                         text: { try Self.text(db, of: $0, maxChars: conversation.documentChars, tailDivisor: excerptDivisor) })
+            return (chosen, dated.count)
+        }
+        return ContextChoice(shown: TaskContext(documents: chosen.read + chosen.listed, unlisted: held - chosen.read.count - chosen.listed.count,
+                                                conversation: Self.exchanges(earlier, maxChars: conversation.historyChars)),
+                             semanticUsed: relevance.semanticUsed, semanticUnavailableReason: relevance.semanticUnavailableReason)
+    }
 
+    /// The documents with these numbers that the index has, by number, in the order of their own date, the newest first
+    /// (`DocumentOrder.documentDate`).
+    static func byDocumentDate(_ db: Database, ids: [Int64]) throws -> [Int64] {
+        try Int64.fetchAll(db, sql: """
+            SELECT d.id FROM documents d WHERE d.id IN (\(databaseQuestionMarks(count: ids.count))) ORDER BY \(DocumentOrder.documentDate.sql)
+            """, arguments: StatementArguments(ids))
+    }
+
+    /// The documents with these numbers that have a text to be shown, told by the length of what was read of them
+    /// without reading it: their text, or a description of what an image shows (`ExtractedContent.visual`, kept as the
+    /// text's summary).
+    static func withText(_ db: Database, ids: [Int64]) throws -> Set<Int64> {
+        Set(try Int64.fetchAll(db, sql: """
+            SELECT d.id FROM documents d JOIN document_text t ON t.doc_id = d.id
+            WHERE d.id IN (\(databaseQuestionMarks(count: ids.count))) AND d.content_json IS NOT NULL
+            AND (length(t.body) > 0 OR t.summary IS NOT NULL)
+            """, arguments: StatementArguments(ids)))
+    }
+
+    /// In `ranked` order, the documents shown with their text while it fits in `room`, and those listed by name, at most
+    /// `maxListed`, whose text does not fit or that have none, each as `record` has it; one it does not have is passed
+    /// over. Once the list is full, a document without text (`hasText`) is passed over unread, and the first whose text
+    /// is too long for the room left ends the choice, as does the next document when there is no room left for any text.
+    /// A document's text is read (`text`) only while there is room for it, so it is read for the documents shown and
+    /// listed, and the one that ends the choice, at most.
+    static func choose(_ ranked: [Int64], room: Int, maxListed: Int, hasText: (Int64) -> Bool, record: (Int64) throws -> DocumentRecord?,
+                       text: (DocumentRecord) throws -> String?) rethrows -> (read: [ContextDocument], listed: [ContextDocument]) {
         var read: [ContextDocument] = []
-        var others: [ContextDocument] = []
+        var listed: [ContextDocument] = []
         var used = 0
         for id in ranked {
-            guard let document = byID[id] else { continue }
-            if let text = document.text, used + text.count <= conversation.contextChars {
-                used += text.count
-                read.append(document.shown(text: text))
-            } else {
-                others.append(document.shown(text: nil))
+            let listFull = listed.count >= maxListed
+            // A text is at least a character long, so none fits once the room is full.
+            if listFull && used >= room { break }
+            guard !listFull || hasText(id), let document = try record(id) else { continue }
+            if used < room, let shown = try text(document) {
+                if used + shown.count <= room {
+                    used += shown.count
+                    read.append(Self.shown(document, text: shown))
+                } else if listFull {
+                    break
+                } else {
+                    listed.append(Self.shown(document, text: nil))
+                }
+            } else if !listFull {
+                listed.append(Self.shown(document, text: nil))
             }
         }
-        let listed = Array(others.prefix(conversation.maxListed))
-        return TaskContext(documents: read + listed, unlisted: others.count - listed.count,
-                           conversation: Self.exchanges(earlier, maxChars: conversation.historyChars))
+        return (read, listed)
+    }
+
+    /// A document as an answer is shown it, with `text`, or by name alone when it is nil.
+    static func shown(_ document: DocumentRecord, text: String?) -> ContextDocument {
+        ContextDocument(id: document.id ?? 0, name: document.filename, date: document.documentDate, labels: document.labels ?? [], text: text)
+    }
+
+    /// `document`'s text as it was read (`ExtractedContent`, which describes an image too), its start and end cut to
+    /// `maxChars`; nil when it has none yet.
+    static func text(_ db: Database, of document: DocumentRecord, maxChars: Int, tailDivisor: Int) throws -> String? {
+        guard let id = document.id, var content = JSON.decode(ExtractedContent.self, from: document.contentJson) else { return nil }
+        content.text = try String.fetchOne(db, sql: "SELECT body FROM document_text WHERE doc_id = ?", arguments: [id]) ?? ""
+        let text = content.classificationExcerpt(maxChars: maxChars, tailDivisor: tailDivisor)
+        return text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : text
     }
 
     /// The questions answered before, the latest kept up to `maxChars`, the first asked first; the latest is cut to fit
@@ -79,32 +140,11 @@ public struct TaskContextBuilder: Sendable {
     /// What ends an answer cut to fit.
     static let cut = "…"
 
-    /// A document of the set with its text as an answer may be shown it.
-    struct Candidate {
-        var record: DocumentRecord
-        /// Its text cut to fit, or nil when it has none yet.
-        var text: String?
-
-        func shown(text: String?) -> ContextDocument {
-            ContextDocument(id: record.id ?? 0, name: record.filename, date: record.documentDate, labels: record.labels ?? [], text: text)
-        }
-    }
-
-    /// The documents with these numbers that the index has, each with its text as it was read (`ExtractedContent`, which
-    /// describes an image too), its start and end cut to `maxChars`.
-    static func documents(_ db: Database, ids: [Int64], maxChars: Int, tailDivisor: Int) throws -> [Candidate] {
-        let records = try DocumentStore.documents(db, ids: ids)
-        guard !records.isEmpty else { return [] }
-        let bodies = Dictionary(try Row.fetchAll(db, sql: """
-            SELECT doc_id, body FROM document_text WHERE doc_id IN (\(databaseQuestionMarks(count: ids.count)))
-            """, arguments: StatementArguments(ids)).map { ($0["doc_id"] as Int64, $0["body"] as String? ?? "") }, uniquingKeysWith: { a, _ in a })
-        return records.map { record in
-            guard let id = record.id, var content = JSON.decode(ExtractedContent.self, from: record.contentJson) else {
-                return Candidate(record: record, text: nil)
-            }
-            content.text = bodies[id] ?? ""
-            let text = content.classificationExcerpt(maxChars: maxChars, tailDivisor: tailDivisor)
-            return Candidate(record: record, text: text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : text)
-        }
+    /// What an answer is shown, and whether the documents of the set were put in order by the question's meaning as
+    /// well as its words, or, when they were not, why (`SearchService.relevance`): what its trace records.
+    public struct ContextChoice: Sendable {
+        public var shown: TaskContext
+        public var semanticUsed: Bool
+        public var semanticUnavailableReason: String?
     }
 }

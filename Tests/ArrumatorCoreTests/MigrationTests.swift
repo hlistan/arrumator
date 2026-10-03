@@ -2,6 +2,7 @@ import Foundation
 import GRDB
 import Testing
 @testable import ArrumatorCore
+import ArrumatorTesting
 
 /// Installed databases record which migrations they have applied by identifier, and every one of them must still
 /// reach today's schema with its documents intact.
@@ -11,17 +12,90 @@ import Testing
                           "v5_logicEvents", "v6_archiveRecords", "v7_oneLogicPerArchive",
                           "v8_undoForgets", "v9_foldersOfAnyDepth", "v10_folderKinds", "v11_labelsNotFolders",
                           "v12_labelRules", "v13_traceExchanges", "v14_searchTasks", "v15_taskEffort",
-                          "v16_taskProfile", "v17_tags", "v18_taskConversations"]
+                          "v16_taskProfile", "v17_tags", "v18_taskConversations", "v19_unreadIndexRefusesRecords",
+                          "v20_queueWorkers", "v21_jobClaims", "v22_jobsWaitForTheirModel", "v23_endedJobsKeepNoText",
+                          "v24_documentLabels", "v25_documentsInTwoPlaces"]
+
+    /// An index as a release before this one made it, migrated up to `identifier`: its first migration ran before that
+    /// one marked a new index as still to be rebuilt from its archive, so it is not.
+    static func installed(upTo identifier: String) throws -> DatabaseQueue {
+        let queue = try DatabaseQueue()
+        try AppDatabase.migrator(time: TestTime(.advances)).migrate(queue, upTo: try #require(shipped.first))
+        try queue.write { db in try AppDatabase.setPendingRebuild(db, nil) }
+        try AppDatabase.migrator(time: TestTime(.advances)).migrate(queue, upTo: identifier)
+        return queue
+    }
 
     @Test func shippedIdentifiersNeverChange() {
-        let registered = AppDatabase.migrator.migrations
-        #expect(Array(registered.prefix(Self.shipped.count)) == Self.shipped,
-                "a shipped migration was renamed, removed or reordered; installed databases would re-run it and fail")
+        let registered = AppDatabase.migrator(time: TestTime(.advances)).migrations
+        #expect(registered == Self.shipped,
+                "a shipped migration was renamed, removed or reordered (installed databases would run it again and fail), or a new one is not listed: \(registered)")
+    }
+
+    @Test func anIndexIsNewFromTheTransactionThatMakesItWhereverAStopCameWhileItWasMade() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("arrumator-db-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let config = try PipelineConfig.bundledDefaults()
+        func open(_ url: URL) throws -> (AppDatabase, AppDatabase.Opening) {
+            try AppDatabase.open(at: url, config: config.database, setAsideSuffix: config.records.setAsideSuffix, time: TestTime(.advances)) { true }
+        }
+        // A stop came while the index was being made: after its file, and after its first migrations, each committed on
+        // its own.
+        let empty = dir.appendingPathComponent("empty.sqlite")
+        #expect(FileManager.default.createFile(atPath: empty.path, contents: Data()))
+        var stopped = [empty]
+        for count in [1, 2] {
+            let url = dir.appendingPathComponent("after-\(count).sqlite")
+            let queue = try DatabaseQueue(path: url.path)
+            try AppDatabase.migrator(time: TestTime(.advances)).migrate(queue, upTo: Self.shipped[count - 1])
+            try queue.close()
+            stopped.append(url)
+        }
+        for url in stopped {
+            let (database, opening) = try open(url)
+            let pending = try await database.pendingRebuild()
+            #expect(opening == .existing && pending == .unread,
+                    "\(url.lastPathComponent): its file was there, but it holds nothing of its archive yet, so it is still to be rebuilt")
+        }
+        let first = try #require(stopped.last)
+        let (database, _) = try open(first)
+        try await database.writer.write { db in try AppDatabase.setPendingRebuild(db, nil) }
+        #expect(try await open(first).0.pendingRebuild() == nil, "an index that was rebuilt is not new again")
+    }
+
+    @Test func anIndexThatHasReadNothingOfItsArchiveRefusesEveryChangeToWhatTheRecordFilesHold() throws {
+        let queue = try DatabaseQueue()
+        try AppDatabase.migrator(time: TestTime(.advances)).migrate(queue)
+        let changes = ["INSERT INTO events (at, kind, actor, summary, payload_json) VALUES (0, 'paused', 'user', 'Paused', '{}')",
+                       "INSERT INTO label_rules (kind, value, action, created_at) VALUES ('topic', 'electricity', 'ignore', 0)",
+                       "INSERT INTO search_tasks (prompt, state, effort, created_at, updated_at) VALUES ('bills', 'queued', 'medium', 0, 0)",
+                       "INSERT INTO documents (uid, path, original_filename, sha256, size, uttype, status, added_at, created_at, updated_at) "
+                           + "VALUES ('u', '/archive/a.pdf', 'a.pdf', 'h', 1, 'pdf', 'filed', 0, 0, 0)"]
+        for sql in changes {
+            #expect("a new index takes nothing a record file holds, from any writer: \(sql)") {
+                try queue.write { db in try db.execute(sql: sql) }
+            } throws: { error in
+                (error as? DatabaseError)?.message == AppDatabase.notRebuiltMessage
+            }
+        }
+        try queue.write { db in
+            try db.execute(sql: "INSERT INTO jobs (kind, source_path, state, created_at, updated_at) VALUES ('ingest', '/incoming/a.pdf', 'pending', 0, 0)")
+            try AppDatabase.setPendingRebuild(db, .unfinished)
+            for sql in changes { try db.execute(sql: sql) }
+            try AppDatabase.setPendingRebuild(db, .unread)
+        }
+        #expect("nor are its rows changed or removed while it is unread") {
+            try queue.write { db in try db.execute(sql: "DELETE FROM events") }
+        } throws: { error in
+            (error as? DatabaseError)?.message == AppDatabase.notRebuiltMessage
+        }
+        #expect(try queue.read { db in try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM events") } == 1,
+                "what the rebuild wrote once the index was unfinished is kept, and its queue was never refused")
     }
 
     @Test func tracesOfEarlierReadingsKeepTheirExchangeWhereRetentionFindsIt() throws {
-        let queue = try DatabaseQueue()
-        try AppDatabase.migrator.migrate(queue, upTo: "v12_labelRules")
+        let queue = try Self.installed(upTo: "v12_labelRules")
         try queue.write { db in
             try db.execute(sql: """
                 INSERT INTO traces (id, attempt, source, started_at, app_version, prompt_version, settings_json)
@@ -32,7 +106,7 @@ import Testing
                   (1, 3, 'place', 'ok', 0, 1, '{"calls":"not a model exchange"}');
                 """)
         }
-        try AppDatabase.migrator.migrate(queue)
+        try AppDatabase.migrator(time: TestTime(.advances)).migrate(queue)
         try queue.read { db in
             let outputs = try String.fetchAll(db, sql: "SELECT output_json FROM trace_steps ORDER BY seq")
             #expect(outputs[0] == #"{"answer":{"fileName":"EDP"},"exchange":[{"user":"the text"}]}"#,
@@ -43,15 +117,14 @@ import Testing
     }
 
     @Test func searchTasksAskedBeforeEffortsAreReadAsMediumReadsThemWithTheProfilesModel() throws {
-        let queue = try DatabaseQueue()
-        try AppDatabase.migrator.migrate(queue, upTo: "v14_searchTasks")
+        let queue = try Self.installed(upTo: "v14_searchTasks")
         try queue.write { db in
             try db.execute(sql: """
                 INSERT INTO search_tasks (id, prompt, state, created_at, updated_at) VALUES (1, 'water bills', 'ready', 0, 0);
                 DELETE FROM record_dirty;
                 """)
         }
-        try AppDatabase.migrator.migrate(queue, upTo: "v15_taskEffort")
+        try AppDatabase.migrator(time: TestTime(.advances)).migrate(queue, upTo: "v15_taskEffort")
         try queue.write { db in
             let task = try #require(try Row.fetchOne(db, sql: "SELECT effort, assigned_model FROM search_tasks WHERE id = 1"))
             #expect(task["effort"] as String? == "medium" && task["assigned_model"] as String? == nil,
@@ -67,14 +140,13 @@ import Testing
             #expect(try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM record_dirty WHERE key = 'tasks'") == 1, "so does a change of model")
         }
         let empty = try DatabaseQueue()
-        try AppDatabase.migrator.migrate(empty, upTo: "v15_taskEffort")
+        try AppDatabase.migrator(time: TestTime(.advances)).migrate(empty, upTo: "v15_taskEffort")
         #expect(try empty.read { db in try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM record_dirty") } == 0,
                 "an index without tasks has no record of them to write")
     }
 
     @Test func tasksGivenAModelFollowSettingsProfileOnceTheColumnIsGone() throws {
-        let queue = try DatabaseQueue()
-        try AppDatabase.migrator.migrate(queue, upTo: "v15_taskEffort")
+        let queue = try Self.installed(upTo: "v15_taskEffort")
         try queue.write { db in
             try db.execute(sql: """
                 INSERT INTO search_tasks (id, prompt, state, effort, assigned_model, created_at, updated_at)
@@ -83,7 +155,7 @@ import Testing
                 DELETE FROM record_dirty;
                 """)
         }
-        try AppDatabase.migrator.migrate(queue)
+        try AppDatabase.migrator(time: TestTime(.advances)).migrate(queue)
         let marks = "SELECT version FROM record_dirty WHERE key = 'tasks'"
         try queue.write { db in
             #expect(try !db.columns(in: "search_tasks").contains { $0.name == "assigned_model" },
@@ -101,14 +173,13 @@ import Testing
             #expect(try Int.fetchOne(db, sql: marks) == 1, "and a change of effort still does")
         }
         let empty = try DatabaseQueue()
-        try AppDatabase.migrator.migrate(empty)
+        try AppDatabase.migrator(time: TestTime(.advances)).migrate(empty)
         #expect(try empty.read { db in try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM record_dirty") } == 0,
                 "an index without tasks has no record of them to write")
     }
 
     @Test func tagsComeAsAFieldOfTheFullTextIndexAndEveryDocumentKeepsWhatItHad() throws {
-        let queue = try DatabaseQueue()
-        try AppDatabase.migrator.migrate(queue, upTo: "v16_taskProfile")
+        let queue = try Self.installed(upTo: "v16_taskProfile")
         try queue.write { db in
             try db.execute(sql: """
                 INSERT INTO documents (id, uid, path, original_filename, sha256, size, uttype, status, labels_json, content_json,
@@ -122,7 +193,7 @@ import Testing
                 """)
         }
 
-        try AppDatabase.migrator.migrate(queue)
+        try AppDatabase.migrator(time: TestTime(.advances)).migrate(queue)
 
         try queue.write { db in
             #expect(try db.columns(in: "document_fts").map(\.name) == SearchService.columns && SearchService.columns.last == "tag",
@@ -146,8 +217,7 @@ import Testing
     }
 
     @Test func aTasksConversationMarksItsOwnFileAndGoesWithItsTask() throws {
-        let queue = try DatabaseQueue()
-        try AppDatabase.migrator.migrate(queue, upTo: "v17_tags")
+        let queue = try Self.installed(upTo: "v17_tags")
         try queue.write { db in
             try db.execute(sql: """
                 INSERT INTO search_tasks (id, prompt, state, effort, created_at, updated_at) VALUES (4, 'water bills', 'ready', 'medium', 0, 0),
@@ -155,7 +225,7 @@ import Testing
                 DELETE FROM record_dirty;
                 """)
         }
-        try AppDatabase.migrator.migrate(queue)
+        try AppDatabase.migrator(time: TestTime(.advances)).migrate(queue)
         let marks = "SELECT key FROM record_dirty ORDER BY key"
         try queue.write { db in
             #expect(try String.fetchAll(db, sql: marks).isEmpty, "no task had a conversation before, so no file needs writing")
@@ -180,17 +250,86 @@ import Testing
         }
     }
 
+    @Test func aJobHeldForAMissingModelWaitsForItAtTheStageItReachedOneJobAPath() throws {
+        let queue = try Self.installed(upTo: "v21_jobClaims")
+        try queue.write { db in
+            try db.execute(sql: """
+                INSERT INTO jobs (id, kind, source_path, state, payload_json, created_at, updated_at) VALUES
+                  (1, 'ingest', '/Incoming/read.pdf', 'held', '{"sha256":"a","content":{}}', 0, 7),
+                  (2, 'ingest', '/Incoming/twice.pdf', 'held', '{}', 0, 7),
+                  (3, 'ingest', '/Incoming/twice.pdf', 'held', '{"sha256":"b"}', 0, 8),
+                  (4, 'ingest', '/Incoming/again.pdf', 'held', '{}', 0, 7),
+                  (5, 'ingest', '/Incoming/again.pdf', 'pending', '{}', 0, 9),
+                  (6, 'reindex', '/Archive/filed.pdf', 'held', '{"content":{}}', 0, 7);
+                """)
+        }
+        try AppDatabase.migrator(time: TestTime(.advances)).migrate(queue, upTo: "v22_jobsWaitForTheirModel")
+        let jobs = try queue.read { db in try Row.fetchAll(db, sql: "SELECT id, state, next_run_at FROM jobs ORDER BY id") }
+        #expect(jobs.map { $0["state"] as String } == ["analysing", "cancelled", "pending", "cancelled", "pending", "pending"],
+                "each waits again at the stage after the last it finished, and a path keeps one active job: \(jobs)")
+        #expect(jobs.first?["next_run_at"] as Double? == 7, "due at once, as it was when it was held")
+    }
+
+    @Test func aJobHeldForAMissingModelWhoseFileALaterJobFiledStaysEnded() throws {
+        let queue = try Self.installed(upTo: "v21_jobClaims")
+        try queue.write { db in
+            try db.execute(sql: """
+                INSERT INTO jobs (id, kind, source_path, state, payload_json, created_at, updated_at) VALUES
+                  (1, 'ingest', '/Incoming/bill.pdf', 'held', '{"sha256":"a","content":{}}', 0, 7),
+                  (2, 'ingest', '/Incoming/bill.pdf', 'done', '{"sha256":"a","targetPath":"/Archive/bill.pdf"}', 0, 9);
+                """)
+        }
+        try AppDatabase.migrator(time: TestTime(.advances)).migrate(queue, upTo: "v22_jobsWaitForTheirModel")
+        let states = try queue.read { db in try String.fetchAll(db, sql: "SELECT state FROM jobs ORDER BY id") }
+        #expect(states == ["cancelled", "done"], "a held job whose file a later job filed is not taken up again: \(states)")
+    }
+
+    @Test func jobsThatEndedBeforeKeepNoTextOrEmbeddingAndWaitingOnesKeepTheirs() throws {
+        let queue = try Self.installed(upTo: "v22_jobsWaitForTheirModel")
+        let read = #"{"sha256":"a","content":{"text":"EDP"},"outcome":{"embedding":[1,0],"embeddingModel":"m"},"targetPath":"/A/b.pdf"}"#
+        try queue.write { db in
+            try db.execute(sql: """
+                INSERT INTO jobs (id, kind, source_path, state, payload_json, created_at, updated_at) VALUES
+                  (1, 'ingest', '/Incoming/done.pdf', 'done', ?, 0, 0), (2, 'ingest', '/Incoming/waits.pdf', 'filing', ?, 0, 0),
+                  (3, 'ingest', '/Incoming/broken.pdf', 'failed', 'not json', 0, 0);
+                """, arguments: [read, read])
+        }
+        try AppDatabase.migrator(time: TestTime(.advances)).migrate(queue, upTo: "v23_endedJobsKeepNoText")
+        let payloads = try queue.read { db in try String.fetchAll(db, sql: "SELECT payload_json FROM jobs ORDER BY id") }
+        #expect(payloads == [#"{"sha256":"a","outcome":{"embeddingModel":"m"},"targetPath":"/A/b.pdf"}"#, read, "not json"],
+                "an ended job keeps what it did but no text or embedding; a waiting one keeps all; one no JSON is kept as it is")
+    }
+
+    @Test func anItemInHandWhenTheQueuesLearntTheirWorkersHasNoneAndGoesBackIntoTheQueue() throws {
+        let queue = try Self.installed(upTo: "v19_unreadIndexRefusesRecords")
+        try queue.write { db in
+            try db.execute(sql: """
+                INSERT INTO search_tasks (id, prompt, state, effort, created_at, updated_at) VALUES (1, 'water bills', 'interpreting', 'medium', 0, 0);
+                INSERT INTO search_task_turns (id, task_id, question, state, asked_at) VALUES (1, 1, 'How much?', 'answering', 0);
+                DELETE FROM record_dirty;
+                """)
+        }
+        try AppDatabase.migrator(time: TestTime(.advances)).migrate(queue)
+        try queue.write { db in
+            #expect(try String.fetchAll(db, sql: "SELECT worker FROM search_tasks WHERE worker IS NOT NULL").isEmpty
+                        && (try String.fetchAll(db, sql: "SELECT worker FROM search_task_turns WHERE worker IS NOT NULL")).isEmpty,
+                    "what an earlier release had in hand names no process, so no process still works on it (ProcessWatching.hasLeft)")
+            try db.execute(sql: "UPDATE search_tasks SET worker = '1:2'; UPDATE search_task_turns SET worker = '1:2'")
+            #expect(try String.fetchAll(db, sql: "SELECT key FROM record_dirty").isEmpty, "the worker is the index's own, and marks no record file")
+        }
+        #expect(TestProcesses().hasLeft(nil), "an item in hand without a worker goes back into the queue")
+    }
+
     @Test func theFullTextIndexHasTheColumnsSearchNames() throws {
         let queue = try DatabaseQueue()
-        try AppDatabase.migrator.migrate(queue)
+        try AppDatabase.migrator(time: TestTime(.advances)).migrate(queue)
         let columns = try queue.read { db in try db.columns(in: "document_fts").map(\.name) }
         #expect(columns == SearchService.columns, "`column:term` and the BM25 weights address columns by these names, in this order")
         #expect(columns[SearchService.bodyColumn] == "body", "snippets are cut from the text")
     }
 
     @Test func aDatabaseFromTheBrainsReleaseReachesTodaysSchema() throws {
-        let queue = try DatabaseQueue()
-        try AppDatabase.migrator.migrate(queue, upTo: "v3_brainsAndRethink")
+        let queue = try Self.installed(upTo: "v3_brainsAndRethink")
         try queue.write { db in
             try db.execute(sql: """
                 INSERT INTO brains (builtin_key, name, body, active, position, edited, created_at, updated_at)
@@ -198,7 +337,7 @@ import Testing
                 INSERT INTO events (at, kind, actor, summary, payload_json) VALUES (0, 'arrived', 'system', 'bill.pdf', '{}');
                 """)
         }
-        try AppDatabase.migrator.migrate(queue)
+        try AppDatabase.migrator(time: TestTime(.advances)).migrate(queue)
         try queue.read { db in
             let gone = try !db.tableExists("logic") && !(try db.tableExists("brains"))
             #expect(gone, "an archive has no logic any more")
@@ -210,8 +349,7 @@ import Testing
     /// A database as the release that filed into folders left it: a folder, a document filed there with its decision,
     /// what was learned about it, events and a job half way through.
     @Test func aDatabaseThatFiledIntoFoldersKeepsItsDocumentsWithTheirDetailsAsLabels() throws {
-        let queue = try DatabaseQueue()
-        try AppDatabase.migrator.migrate(queue, upTo: "v10_folderKinds")
+        let queue = try Self.installed(upTo: "v10_folderKinds")
         let decision = #"""
         {"folderCode":"F12","alternatives":[],"correspondent":"EDP Comercial","correspondentID":1,"documentType":"invoice",
          "documentDate":"2026-07-05","dateSource":"label","title":"Fatura eletricidade","fileName":"2026-07-05 EDP - Fatura",
@@ -243,7 +381,7 @@ import Testing
         }
 
         // What the app does at launch.
-        try AppDatabase.migrator.migrate(queue)
+        try AppDatabase.migrator(time: TestTime(.advances)).migrate(queue)
 
         try queue.write { db in
             let doc = try #require(try DocumentRecord.fetchOne(db, key: 1))

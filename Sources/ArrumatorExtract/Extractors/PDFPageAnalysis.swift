@@ -11,6 +11,9 @@ enum ImagePageReason: String, Sendable, Encodable {
 /// Text-layer measurements of one page.
 struct PageTextQuality: Sendable, Encodable {
     var characters: Int
+    /// The characters that are not U+FFFD, the replacement for a glyph the text layer cannot name: how much a page's
+    /// text says, to weigh a text layer against what OCR read of the page.
+    var readable: Int
     var letterShare: Double
     var replacementShare: Double
 
@@ -24,6 +27,7 @@ struct PageTextQuality: Sendable, Encodable {
             if char == "\u{FFFD}" { replacements += 1 }
         }
         characters = visible
+        readable = visible - replacements
         letterShare = visible == 0 ? 0 : Double(letters) / Double(visible)
         replacementShare = visible == 0 ? 0 : Double(replacements) / Double(visible)
     }
@@ -128,9 +132,11 @@ enum PDFPageRenderer {
         var scale = dpi / pointsPerInch
         let longest = Double(max(size.width, size.height)) * scale
         if longest > Double(config.pdf.ocrMaxPixel) { scale *= Double(config.pdf.ocrMaxPixel) / longest }
-        let width = max(1, Int((Double(size.width) * scale).rounded()))
-        let height = max(1, Int((Double(size.height) * scale).rounded()))
-        guard let context = ImageTools.grayscaleCanvas(width: width, height: height) else { return nil }
+        // A crop box is what the file declares, infinite included: a page that comes to no whole number of pixels is
+        // not drawn.
+        guard let width = Int(exactly: (Double(size.width) * scale).rounded()),
+              let height = Int(exactly: (Double(size.height) * scale).rounded()),
+              let context = ImageTools.grayscaleCanvas(width: max(1, width), height: max(1, height)) else { return nil }
         context.interpolationQuality = .high
         context.scaleBy(x: scale, y: scale)
         page.draw(with: .cropBox, to: context)

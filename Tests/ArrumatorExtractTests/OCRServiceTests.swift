@@ -80,6 +80,19 @@ struct OCRServiceTests {
         #expect(await vision.devices == [.automatic, .cpu], "each device is tried once, then the page fails")
     }
 
+    @Test func anImageNeitherDeviceReadsLeavesTheDefaultDeviceInUse() async throws {
+        let vision = ScriptedRecognizer([.automatic: .failure(AcceleratedPathFailed()), .cpu: .failure(CPUFailed())])
+        let service = OCRService(recognizer: vision)
+        for _ in 1...2 {
+            await #expect(throws: CPUFailed.self, "an image no device reads fails") {
+                try await service.recognize(try page(), request: request)
+            }
+        }
+        let devices = await vision.devices
+        #expect(devices == [.automatic, .cpu, .automatic, .cpu],
+                "an image the CPU cannot read either is at fault, not the default device, so the next is tried on it first")
+    }
+
     @Test func cancellationIsNotRetried() async throws {
         let vision = ScriptedRecognizer([.automatic: .failure(CancellationError())])
         await #expect(throws: CancellationError.self, "stopping a job stops its OCR, on no device") {

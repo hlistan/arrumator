@@ -37,15 +37,17 @@ public struct StubAnalyzer: DocumentAnalyzing {
         await trace.record(.analyse, status: labels == nil ? .error : .ok, startedAt: TestTime.start, output: labels)
         let analysis = DocumentAnalysis(fileName: fileName, model: labels == nil ? nil : "stub",
                                         problems: labels == nil ? ["the model gave no valid answer"] : [])
-        return AnalysisOutcome(analysis: analysis, labels: labels, embedding: [1, 0, 0], embeddingModel: Self.embeddingModel)
+        return AnalysisOutcome(analysis: analysis, labels: labels, embedding: Self.embedding, embeddingModel: Self.embeddingModel)
     }
 
     public func embedding(for content: ExtractedContent, senders: [String], settings: AppSettings, config: PipelineConfig,
                           trace: TraceContext) async throws -> (vector: [Float], model: String)? {
-        ([1, 0, 0], Self.embeddingModel)
+        (Self.embedding, Self.embeddingModel)
     }
 
     public static let embeddingModel = "stub-embed"
+    /// What every document is embedded as.
+    public static let embedding: [Float] = [1, 0, 0]
     public static let edpFileName = "2026-07-05 EDP Comercial - Fatura eletricidade julho"
 
     /// What an electricity bill from EDP to Maria Exemplo is labelled with.
