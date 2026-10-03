@@ -29,7 +29,8 @@ public final class ArrumatorRuntime: Sendable {
     /// What the user does with model profiles: lists, adds, changes, resets and removes them, and chooses the one in use.
     public let profiles: ModelProfileActions
     public let registry: SelfChangeRegistry
-    /// The Ollama server in use; `useOllama(at:)` points it elsewhere.
+    /// The Ollama server in use; `useOllama(at:)` points it elsewhere. A switch of archives hands it to the next runtime,
+    /// so a server chosen while the switch stops this one is the next one's too.
     public let ollama: OllamaConnection
     public let gate: InferenceGate
     public let lifecycle: OllamaLifecycle
@@ -78,12 +79,14 @@ public final class ArrumatorRuntime: Sendable {
         Log.shared.configure(directory: paths.logsDirectory, minLevel: logLevelOverride ?? current.logLevel,
                              config: config.logging, echoToStderr: echoLogsToStderr)
         Log.shared.prune(config.logging, now: time.now())
-        // The archive's folder names its index, so it exists before the index opens.
-        try FileManager.default.createDirectory(at: current.archiveURL, withIntermediateDirectories: true)
-        try paths.moveSingleIndex(to: try paths.indexURL(for: current.archiveURL))
+        // One of the two places that read the archive from the settings, with a switch (`switchArchive`): the runtime
+        // acts on this one from now on, whatever the settings name later.
+        let archive = current.archiveURL
+        try paths.moveSingleIndex(to: paths.indexURL(for: archive))
+        let address = try configuredOllama(environment: environment, settings: current, paths: paths)
+        let ollama = try OllamaConnection(config: config.ollama, url: address, time: time)
         return try ArrumatorRuntime(appVersion: appVersion, environment: environment, logLevelOverride: logLevelOverride,
-                                    time: time, paths: paths, config: config, settings: settings, archive: current.archiveURL,
-                                    ollamaURL: try configuredOllama(environment: environment, settings: current, paths: paths), trash: trash)
+                                    time: time, paths: paths, config: config, settings: settings, archive: archive, ollama: ollama, trash: trash)
     }
 
     /// The Ollama server to talk to: the one the environment names in place of the saved setting, else the setting. One
@@ -116,15 +119,17 @@ public final class ArrumatorRuntime: Sendable {
     /// name it from then on. Files waiting in Incoming are filed into the new archive.
     /// Call `openArchive()` and then `start()`, or `openAndStart()`, on the runtime returned, as after `bootstrap`.
     ///
-    /// Both runtimes keep the settings in one store, so a change made while this one stops, such as a pause, is the
-    /// next one's too, and never names this archive again. This runtime stops before the settings name the next archive,
-    /// as what it does finds the archive by them. A switch is made whole or not at all: the next archive's index opens
-    /// and the settings are shown to be savable before anything stops; then this runtime stops, its waiting files leave
-    /// its queue and its history records the switch, and only then do the settings name the next archive. A step that
-    /// fails starts this runtime again as it was, and a failure to save the settings after the switch was recorded is
-    /// recorded too. The record files of this archive are written before the settings change; when they cannot be, as on
-    /// a disk that is gone, the switch is made all the same, so the user can always switch away, and what they lack,
-    /// kept in its index, is written when it is next opened (`ArchiveSwitch.unwritten`).
+    /// Both runtimes keep the settings in one store and talk to Ollama through one connection, so a change made while
+    /// this one stops, such as a pause or another server, is the next one's too, and never names this archive again.
+    /// Each acts on its own archive, which it was made with, and never on the one the settings name: this one, stopped
+    /// again after the switch, as when the app quits then, writes only into its own archive. A switch is made whole or
+    /// not at all: the next archive's index opens and the settings are shown to be savable before anything stops; then
+    /// this runtime stops and its history records the switch, and only then do the settings name the next archive and
+    /// the files waiting in Incoming leave this runtime's queue. A step that fails starts this runtime again as it was,
+    /// its queue untouched, and a failure to save the settings after the switch was recorded is recorded too. The record
+    /// files of this archive are written before the settings change; when they cannot be, as on a disk that is gone, the
+    /// switch is made all the same, so the user can always switch away, and what they lack, kept in its index, is
+    /// written when it is next opened (`ArchiveSwitch.unwritten`).
     public func switchArchive(to path: String) async throws -> ArchiveSwitch {
         let chosen = URL(fileURLWithPath: path.expandingTilde, isDirectory: true).standardizedFileURL
         var isDirectory: ObjCBool = false
@@ -136,28 +141,33 @@ public final class ArrumatorRuntime: Sendable {
             (folder + "/").hasPrefix((incoming.canonicalFolderPath ?? incoming.path) + "/") || (folder + "/").hasPrefix(incoming.path + "/")
         }
         guard !isInsideIncoming(chosen.path) else { throw ArchiveSwitchError.insideIncoming(archive: chosen.path, incoming: incoming.path) }
-        try FileManager.default.createDirectory(at: chosen, withIntermediateDirectories: true)
         // Spelled as the file system spells it (links resolved, letters in their case on disk), so every path under
         // the archive is written one way, and another spelling of this archive's folder is this archive.
-        let target = chosen.canonicalFolderPath.map { URL(fileURLWithPath: $0, isDirectory: true).standardizedFileURL } ?? chosen
-        guard try paths.indexURL(for: target) != index else { throw ArchiveSwitchError.alreadyOpen(target.path) }
+        let target = chosen.canonicalPlace
+        guard paths.indexURL(for: target) != index else { throw ArchiveSwitchError.alreadyOpen(target.path) }
         guard !isInsideIncoming(target.path) else { throw ArchiveSwitchError.insideIncoming(archive: target.path, incoming: incoming.path) }
 
         let next = try ArrumatorRuntime(appVersion: appVersion, environment: environment, logLevelOverride: logLevelOverride,
                                         time: time, paths: paths, config: config, settings: settings, archive: target,
-                                        ollamaURL: ollama.baseURL, trash: services.trash)
+                                        ollama: ollama, trash: services.trash)
+        if !next.records.archiveIsThere {
+            // A folder the user switches to that is not there is made, for a new archive: never in place of an archive
+            // its index has held, which is away and is not switched to.
+            guard try await !next.database.heldAnArchive() else { throw RecordsError.archiveNotThere(target.path) }
+            try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        }
         // The settings in force, saved as they are: the file the switch saves can be written, or nothing stops.
         try await settings.save(await settings.current)
         let halted = await halt(forGood: false)
         do {
-            let waiting = try await services.jobs.cancelActive(kinds: [.ingest])
-            // An index not rebuilt from its archive takes no event; leaving that archive must stay possible.
-            if try await database.pendingRebuild() != .unread {
-                try await services.history.record(
-                    .settingsChanged, actor: .user,
-                    summary: "Switched to the archive at \(target.path)" + (waiting > 0 ? "; \(Format.count(waiting, "file")) waiting in Incoming go there" : ""),
-                    payload: ["archive": target.path])
-            }
+            // The files waiting in Incoming leave the queue only once the switch is made, below, so one that fails keeps it.
+            let waiting = try await services.jobs.active(kinds: [.ingest]).count
+            // An index not rebuilt from its archive holds the event until it is (`HistoryStore.insert`), so leaving that
+            // archive stays possible, and is recorded in it.
+            try await services.history.record(
+                .settingsChanged, actor: .user,
+                summary: "Switched to the archive at \(target.path)" + (waiting > 0 ? "; \(Format.count(waiting, "file")) waiting in Incoming go there" : ""),
+                payload: ["archive": target.path])
         } catch {
             Log.error(.app, "Could not switch archives; staying on this one", ["to": target.path, "error": error.localizedDescription])
             await resume(halted)
@@ -182,6 +192,12 @@ public final class ArrumatorRuntime: Sendable {
             throw error
         }
         await tasks.closeForGood()
+        // The switch is made: the files waiting in Incoming leave this archive's queue, for the next archive's. Should
+        // they stay, this archive files them, or finds them gone, when it is next opened, as after any stop.
+        do { _ = try await services.jobs.cancelActive(kinds: [.ingest]) } catch {
+            Log.error(.app, "Switched archives; the files waiting in Incoming stay queued in the archive left",
+                      ["archive": archive.path, "error": error.localizedDescription])
+        }
         Log.info(.app, "Switched archives", ["from": archive.path, "to": target.path, "index": next.index.path])
         return ArchiveSwitch(runtime: next, unwritten: unwritten)
     }
@@ -215,7 +231,7 @@ public final class ArrumatorRuntime: Sendable {
     }
 
     private init(appVersion: String, environment: RuntimeEnvironment, logLevelOverride: LogLevel?, time: any TimeSource,
-                 paths: AppPaths, config: PipelineConfig, settings: SettingsStore, archive: URL, ollamaURL: URL,
+                 paths: AppPaths, config: PipelineConfig, settings: SettingsStore, archive: URL, ollama: OllamaConnection,
                  trash: any Trashing) throws {
         self.appVersion = appVersion
         self.environment = environment
@@ -225,18 +241,18 @@ public final class ArrumatorRuntime: Sendable {
         self.config = config
         self.settings = settings
         self.archive = archive
-        index = try paths.indexURL(for: archive)
+        index = paths.indexURL(for: archive)
         (database, _) = try AppDatabase.open(at: index, config: config.database, setAsideSuffix: config.records.setAsideSuffix,
                                              time: time) {
             ArchiveRecords.mayHoldRecords(archive: archive, config: config)
         }
         registry = SelfChangeRegistry(ttl: config.watcher.selfChangeTTLSeconds, time: time)
-        records = ArchiveRecords(database: database, settings: settings, config: config, registry: registry, time: time)
-        ollama = try OllamaConnection(config: config.ollama, url: ollamaURL, time: time)
+        records = ArchiveRecords(database: database, archive: archive, settings: settings, config: config, registry: registry, time: time)
+        self.ollama = ollama
         gate = InferenceGate(api: ollama, retryDelays: config.ollama.retryDelays, time: time)
         models = ModelManager(api: ollama, config: config.ollama)
         lifecycle = OllamaLifecycle(api: ollama, config: config.ollama, management: .external, binaryOverride: nil,
-                                    address: ollamaURL, time: time)
+                                    address: ollama.baseURL, time: time)
         prompts = PromptBuilder(library: try PromptLibrary.bundled(), config: config.analysis, labels: config.labels,
                                 naming: config.naming)
         analyzer = DocumentAnalyzer(gate: gate, models: models, prompts: prompts)
@@ -248,7 +264,7 @@ public final class ArrumatorRuntime: Sendable {
         let extractor = try ExtractorRegistry(ollama: GatedOllama(gate: gate), recognizer: VisionTextRecognizer(),
                                               shell: ShellRunner(time: time), time: time)
         services = PipelineServices(
-            database: database, config: config, settings: settings, extractor: extractor, analyzer: analyzer,
+            database: database, archive: archive, config: config, settings: settings, extractor: extractor, analyzer: analyzer,
             filer: DocumentFiler(database: database, placer: placer, index: IndexStore(database: database, time: time),
                                  registry: registry, time: time),
             traces: traces, vectors: vectors, trash: trash, time: time)
@@ -268,7 +284,7 @@ public final class ArrumatorRuntime: Sendable {
         archiveWatcher = ArchiveWatcher(config: config.watcher, records: config.records, skip: skip, registry: registry,
                                         database: database)
         stats = StatsService(database: database, config: config.stats, time: time)
-        doctor = Doctor(database: database, paths: paths, appVersion: appVersion, time: time)
+        doctor = Doctor(database: database, archive: archive, paths: paths, appVersion: appVersion, time: time)
     }
 
     /// Records an event of the app's own in History. Nothing waits on these, so one that cannot be recorded is logged
@@ -321,22 +337,34 @@ public final class ArrumatorRuntime: Sendable {
         return await tasks.isStarted
     }
 
-    /// Starts the work (`begin()`) on an index rebuilt from its archive. On one that is not, it starts nothing, and lets
-    /// the step that started go, so that the start after its rebuild begins one of its own; it is decided within that
-    /// step, so a stop meanwhile is waited for like any start.
+    /// Starts the work (`begin()`) on an index rebuilt from its archive, whose folder is there. Otherwise it starts
+    /// nothing, and lets the step that started go, so that the start after its rebuild begins one of its own; it is
+    /// decided within that step, so a stop meanwhile is waited for like any start.
     private func beginOnRebuiltIndex() async throws {
+        guard records.archiveIsThere else {
+            Log.error(.app, "Not started: the archive's folder is not there", ["archive": archive.path])
+            await tasks.refused(as: .away)
+            throw RecordsError.archiveNotThere(archive.path)
+        }
         let pending: AppDatabase.PendingRebuild?
         do { pending = try await database.pendingRebuild() } catch {
             Log.error(.app, "Not started: whether the index was rebuilt from the archive cannot be read", ["error": error.localizedDescription])
-            await tasks.refused()
+            await tasks.refused(as: .refused)
             throw error
         }
         if let pending {
             Log.error(.app, "Not started: the index has not been rebuilt from the archive", ["state": pending.rawValue])
-            await tasks.refused()
+            await tasks.refused(as: .refused)
             throw await database.notRebuilt()
         }
         await begin()
+        await tasks.began()
+    }
+
+    /// Whether the work runs now, then each time that changes: started, refused as the index is not rebuilt from its
+    /// archive, or stopped. What the app shows, rather than what it asked for.
+    public func workUpdates() async -> AsyncStream<RuntimeWork> {
+        await tasks.workUpdates()
     }
 
     private func begin() async {
@@ -348,7 +376,7 @@ public final class ArrumatorRuntime: Sendable {
         let stableFiles = await incomingWatcher.stableFiles()
         let archiveChanges = await archiveWatcher.changes()
         let current = await settings.current
-        Log.info(.app, "Arrumator starting", ["version": appVersion, "archive": current.archivePath, "incoming": current.incomingPath])
+        Log.info(.app, "Arrumator starting", ["version": appVersion, "archive": archive.path, "incoming": current.incomingPath])
         await audit(.appStarted, actor: .system, summary: "Arrumator \(appVersion) started", payload: nil)
         await apply(current)
         await tasks.run("ollama") { [lifecycle] in
@@ -435,10 +463,11 @@ public final class ArrumatorRuntime: Sendable {
     }
 
     /// Starts again, after a switch that failed, what was under way when it halted the runtime: the work, and the reading
-    /// of the archive first when it had not ended. Nothing starts when the runtime has meanwhile stopped for good, as when
+    /// of the archive first when it had not ended. A runtime that had not started is left free to start, as the app
+    /// starts it once onboarding is done; nothing starts, then or later, when it has meanwhile stopped for good, as when
     /// the app quits.
     private func resume(_ halted: Halted) async {
-        guard halted.started, await tasks.reopen() else { return }
+        guard await tasks.reopen(), halted.started else { return }
         guard halted.unread else {
             await start()
             return
@@ -483,16 +512,16 @@ public final class ArrumatorRuntime: Sendable {
         return stopped
     }
 
-    /// Applies (changed) settings: Ollama management, watched folders, embedding model for search.
+    /// Applies (changed) settings: Ollama management, watched folders, embedding model for search. The archive watched is
+    /// the runtime's own, whatever the settings name; its folder is never made here, as one that is not there is away.
     public func apply(_ current: AppSettings) async {
         await lifecycle.configure(management: Self.management(for: current, at: ollama.baseURL), binaryOverride: current.ollamaBinaryPath,
                                   address: ollama.baseURL)
         Log.shared.setMinLevel(logLevelOverride ?? current.logLevel)
         do {
             try await prepareSearch(current)
-            try FileManager.default.createDirectory(at: current.archiveURL, withIntermediateDirectories: true)
             try await incomingWatcher.start(root: current.incomingURL)
-            try await archiveWatcher.start(root: current.archiveURL, excluding: [current.incomingURL])
+            try await archiveWatcher.start(root: archive, excluding: [current.incomingURL])
         } catch {
             // Stopped while it applied them: what was not applied is applied at the next start.
             guard !Task.isCancelled else { return }
@@ -538,95 +567,21 @@ public final class ArrumatorRuntime: Sendable {
     }
 }
 
-/// The runtime's background work: the step that starts it, the named tasks that step starts, and whether the runtime
-/// stopped. A runtime runs once: once stopped, nothing starts again, and a step begun before the stop starts nothing
-/// more after it (`ArrumatorRuntime.start()`, `stop()`). A switch of archives stops it so that, if the switch fails, it
-/// can start again (`reopen()`), unless it was meanwhile stopped for good.
-actor BackgroundTasks {
-    /// Nothing starts: while the runtime stops, and after it stopped.
-    private var closed = false
-    private var stoppedForGood = false
-    /// Whether the step that starts the runtime reads the archive first, and whether it has.
-    private var stepReads = false
-    private var wasRead = false
-    private var step: Task<Void, any Error>?
-    /// The last step let go of itself, as its index was not rebuilt from its archive (`refused()`).
-    private(set) var startWasRefused = false
-    private var tasks: [String: Task<Void, Never>] = [:]
-
-    /// The step that starts the runtime: `body`, begun now, the first time; the same step after that, until the runtime
-    /// is stopped; nil while it is.
-    func starting(reading: Bool, _ body: @escaping @Sendable () async throws -> Void) -> Task<Void, any Error>? {
-        guard !closed else { return nil }
-        if let step { return step }
-        let begun = Task { try await body() }
-        step = begun
-        stepReads = reading
-        wasRead = false
-        startWasRefused = false
-        return begun
-    }
-
-    /// The step that starts the runtime started nothing, as the index is not rebuilt: it is let go, so the next start
-    /// begins one of its own. Called from within that step, which is the runtime's only one until a stop, after which it
-    /// is cancelled and nothing is let go.
-    func refused() {
-        guard !closed else { return }
-        step = nil
-        stepReads = false
-        wasRead = false
-        startWasRefused = true
-    }
-
-    /// Whether the work is started: a step began it and was not let go, and the runtime is not stopped.
-    var isStarted: Bool { !closed && step != nil }
-
-    /// The step that starts the runtime has read the archive.
-    func opened() { wasRead = true }
-
-    /// Runs `body` as the task named `name`, unless the runtime is stopped.
-    func run(_ name: String, _ body: @escaping @Sendable () async -> Void) {
-        guard !closed else { return }
-        tasks[name]?.cancel()
-        tasks[name] = Task(priority: .utility) { await body() }
-    }
-
-    /// Stops, for good or until `reopen()`: cancels the step that starts the runtime, which is given back for the caller
-    /// to wait for, with what was under way, and every task, which `ended()` waits for. A second stop meanwhile, as when
-    /// the app quits while it switches archives, is given the same step, and waits for it too.
-    func close(forGood: Bool) -> (starting: Task<Void, any Error>?, halted: ArrumatorRuntime.Halted) {
-        closed = true
-        if forGood { stoppedForGood = true }
-        step?.cancel()
-        for task in tasks.values { task.cancel() }
-        return (step, ArrumatorRuntime.Halted(started: step != nil, unread: stepReads && !wasRead))
-    }
-
-    /// Lets the runtime start again, with a step of its own, after a stop that was not for good; whether it may.
-    func reopen() -> Bool {
-        guard !stoppedForGood else { return false }
-        closed = false
-        step = nil
-        return true
-    }
-
-    /// Keeps the runtime stopped for good, as after a switch that was made.
-    func closeForGood() {
-        closed = true
-        stoppedForGood = true
-    }
-
-    /// Waits until every task `close(forGood:)` cancelled has ended, such as the settings being applied, which would
-    /// otherwise start a watcher after the runtime stopped.
-    func ended() async {
-        while let (name, task) = tasks.first.map({ ($0.key, $0.value) }) {
-            awaiting = name
-            await task.value
-            tasks[name] = nil
+extension ArrumatorRuntime {
+    /// Ends the app's onboarding, the archive's first setup: makes the archive's folder when it is not there, then records
+    /// that onboarding is done. With a switch to a folder that is not there, the only time the app makes an archive's
+    /// folder, as both are what the user asks: at any other launch, one that is not there is away
+    /// (`RecordsError.archiveNotThere`), whatever its index holds, as a new index looks the same whether the archive is
+    /// new or away. A folder that cannot be made, as on a disk not connected under a mount point the user cannot write
+    /// in, is left away, which opening it then says.
+    public func finishOnboarding() async throws {
+        if await !settings.current.onboardingCompleted, !records.archiveIsThere {
+            do {
+                try FileManager.default.createDirectory(at: archive, withIntermediateDirectories: true)
+            } catch {
+                Log.warning(.app, "The archive's folder could not be made; it is away", ["archive": archive.path, "error": error.localizedDescription])
+            }
         }
-        awaiting = nil
+        try await settingsActions.change { $0.onboardingCompleted = true }
     }
-
-    /// The task `ended()` waits for, while it waits: what a test watches for before it lets that task end.
-    private(set) var awaiting: String?
 }

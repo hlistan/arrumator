@@ -27,9 +27,15 @@ public enum RecordsError: Error, LocalizedError {
     /// A change refused as the index has not been rebuilt from the archive yet, with the record files that kept its last
     /// rebuild from being done; none when it has not been tried.
     case notRebuilt([UnreadableRecordFile])
+    /// The archive's own folder, at this path, is not there, as on a disk not connected or a folder renamed or moved:
+    /// nothing is read from it, written into it or filed into it, and no folder is made in its place.
+    case archiveNotThere(String)
 
     public var errorDescription: String? {
         switch self {
+        case let .archiveNotThere(path):
+            "The archive's folder \(path) is not there, so nothing is read from it or filed into it. Connect the disk it is "
+                + "on or put the folder back, or make it for a new archive, then open Arrumator again; or choose another archive."
         case let .unreadable(path, why): "Could not read the record file \(path): \(why)"
         case let .unwritable(path, why): "Could not write the record file \(path): \(why)"
         case let .notWritten(key, why): "The record file for \(key) was not written and will be tried again: \(why)"
@@ -40,10 +46,11 @@ public enum RecordsError: Error, LocalizedError {
             "The index was not rebuilt: it changed each of the \(times) times the archive was read for it, as the app or a "
                 + "command kept recording. Try again."
         case let .notRebuilt(files) where files.isEmpty:
-            "Nothing can be changed until the index is rebuilt from the archive, which is done when the archive is opened."
+            "Nothing the archive's record files hold can be changed until the index is rebuilt from the archive, which is "
+                + "done when the archive is opened."
         case let .notRebuilt(files):
-            "Nothing can be changed until the index is rebuilt from the archive, which these record files or folders keep "
-                + "from being done, as they cannot be read. " + Self.whatToDo + " " + Self.list(files)
+            "Nothing the archive's record files hold can be changed until the index is rebuilt from the archive, which these "
+                + "record files or folders keep from being done, as they cannot be read. " + Self.whatToDo + " " + Self.list(files)
         }
     }
 

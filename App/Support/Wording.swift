@@ -62,6 +62,10 @@ enum Wording {
     static let idle = "Idle"
     static let waitingForFolders = "Waiting for access to your folders"
     static let startingForFolders = "Starting: waiting for folder access"
+    /// Nothing is filed, as the archive's index could not be rebuilt from its record files.
+    static let archiveNotRead = "Not filing: reading the archive failed"
+    /// Nothing is filed, as the archive's folder is not there, as on a disk that is not connected.
+    static let archiveAway = "Not filing: the archive's folder is not there"
     static let waitingForOllama = "Waiting for Ollama"
 
     /// Why filing waits, such as low battery.
@@ -97,6 +101,15 @@ enum Wording {
 
     /// An action that failed, and why: "Rename: The file is locked."
     static func failure(_ action: String, _ reason: String) -> String { "\(action): \(reason)" }
+
+    /// Why an action failed, in the user's words: a change refused as the archive has not been read yet, as during
+    /// onboarding, says so; anything else as it says itself.
+    static func reason(_ error: any Error) -> String {
+        if case let RecordsError.notRebuilt(files) = error, files.isEmpty { return notReadYet }
+        return error.localizedDescription
+    }
+
+    static let notReadYet = "This can be changed once Arrumator has read your archive folder."
 
     static let readArchiveAction = "Reading the archive"
     static let switchArchivesAction = "Switch archives"

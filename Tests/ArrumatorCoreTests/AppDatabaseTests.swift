@@ -71,9 +71,11 @@ import Testing
         func open(_ url: URL) throws -> AppDatabase {
             try AppDatabase.open(at: url, config: config.database, setAsideSuffix: config.records.setAsideSuffix, time: TestTime(.advances)) { false }.0
         }
-        // The one index of an earlier version as a stop left it: its last change only in its write-ahead log.
+        // The one index of an earlier version as a stop left it: its last change only in its write-ahead log. Earlier
+        // versions never marked an index to be rebuilt.
         let live = root.appendingPathComponent("live.sqlite")
         let database = try open(live)
+        try await database.writer.write { db in try AppDatabase.setPendingRebuild(db, nil) }
         try await HistoryStore(database: database, time: TestTime(.advances)).record(.paused, summary: "Only in the log")
         for suffix in [""] + AppDatabase.companionSuffixes {
             try FileManager.default.copyItem(atPath: live.path + suffix, toPath: paths.singleIndexURL.path + suffix)

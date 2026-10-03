@@ -9,6 +9,10 @@ import GRDB
 /// back and rebuilding take turns (`inTurn`).
 public actor ArchiveRecords {
     let database: AppDatabase
+    /// The archive whose record files these are, as it was given when they were opened. The settings may name another
+    /// archive meanwhile, as at the end of a switch, and this one's record files never go into it.
+    let archive: URL
+    /// Where Incoming is, which a walk of the archive leaves out when it is kept inside it.
     let settings: SettingsStore
     let config: PipelineConfig
     private let registry: SelfChangeRegistry?
@@ -21,18 +25,23 @@ public actor ArchiveRecords {
     /// Called with each record file's URL between reading it and writing or removing it: what a test does there is what
     /// another process or the user could do at that moment. Set by tests only.
     private var beforeWriting: (@Sendable (URL) async -> Void)?
+    /// Called with each record file's URL between reading it and applying what it holds to the index, as `beforeWriting`
+    /// is. Set by tests only.
+    private var beforeApplying: (@Sendable (URL) async -> Void)?
 
-    public init(database: AppDatabase, settings: SettingsStore, config: PipelineConfig, registry: SelfChangeRegistry?,
+    public init(database: AppDatabase, archive: URL, settings: SettingsStore, config: PipelineConfig, registry: SelfChangeRegistry?,
                 time: any TimeSource) {
         self.database = database
+        self.archive = archive.standardizedFileURL
         self.settings = settings
         self.config = config
         self.registry = registry
         self.time = time
     }
 
-    func layout(_ root: URL) -> ArchiveLayout {
-        ArchiveLayout(root: root, records: config.records, watcher: config.watcher)
+    /// Where things are in this archive.
+    var layout: ArchiveLayout {
+        ArchiveLayout(root: archive, records: config.records, watcher: config.watcher)
     }
 
     // MARK: Taking turns
@@ -59,6 +68,10 @@ public actor ArchiveRecords {
 
     func setBeforeWriting(_ hook: (@Sendable (URL) async -> Void)?) {
         beforeWriting = hook
+    }
+
+    func setBeforeApplying(_ hook: (@Sendable (URL) async -> Void)?) {
+        beforeApplying = hook
     }
 
     /// Whether the index has read nothing of the archive yet (`AppDatabase.PendingRebuild.unread`): until its rebuild
@@ -108,7 +121,6 @@ public actor ArchiveRecords {
             Log.warning(.db, "Record files not written: the index has not been rebuilt from the archive yet")
             return 0
         }
-        let root = await settings.current.archiveURL
         var written = 0
         var failures: [String: any Error] = [:]
         var unreadableKeys: Set<String> = []
@@ -124,7 +136,7 @@ public actor ArchiveRecords {
                     continue
                 }
                 do {
-                    switch try await render(kind, root: root) {
+                    switch try await render(kind) {
                     case .written:
                         written += 1
                         try await unmark(key, version: version)
@@ -166,8 +178,8 @@ public actor ArchiveRecords {
 
     /// Writes one record file from the index. A file that does not hold what the app last wrote or read, an edit by hand
     /// or one the index has never read, is read first, so it is never written over unread.
-    private func render(_ kind: RecordKind, root: URL) async throws -> Rendering {
-        guard let url = recordURL(of: kind, root: root) else { return .unchanged }
+    private func render(_ kind: RecordKind) async throws -> Rendering {
+        guard let url = recordURL(of: kind) else { return .unchanged }
         let held = try await readUnlessKnown(kind, url: url)
         let text = try await composed(kind, at: url)
         await beforeWriting?(url)
@@ -181,16 +193,16 @@ public actor ArchiveRecords {
     }
 
     /// Where the record file of `kind` is; nil for documents outside the archive, which have no list.
-    private func recordURL(of kind: RecordKind, root: URL) -> URL? {
+    private func recordURL(of kind: RecordKind) -> URL? {
         switch kind {
         case let .documents(directory):
             // Documents are filed at the top of the archive, or kept where an earlier version filed them below it.
-            guard directory == root.path || directory.hasPrefix(root.path + "/") else { return nil }
+            guard directory == archive.path || directory.hasPrefix(archive.path + "/") else { return nil }
             return URL(fileURLWithPath: directory, isDirectory: true).appendingPathComponent(config.records.documentsFileName)
-        case let .history(month): return layout(root).historyFile(month: month)
-        case .labelRules: return layout(root).labelRules
-        case .searchTasks: return layout(root).searchTasks
-        case let .conversation(task): return layout(root).conversationFile(task: task)
+        case let .history(month): return layout.historyFile(month: month)
+        case .labelRules: return layout.labelRules
+        case .searchTasks: return layout.searchTasks
+        case let .conversation(task): return layout.conversationFile(task: task)
         }
     }
 
@@ -239,8 +251,10 @@ public actor ArchiveRecords {
 
     // MARK: Files and their checksums
 
-    /// `url`, with the directory it goes in made first: the system folder appears when it is first needed.
+    /// `url`, with the directory it goes in made first: the system folder appears when it is first needed. Never in an
+    /// archive whose folder is not there, which a folder made in its place would hide.
     private func directoryMade(for url: URL) throws -> URL {
+        guard archiveIsThere else { throw RecordsError.archiveNotThere(archive.path) }
         let directory = url.deletingLastPathComponent()
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -324,10 +338,11 @@ public actor ArchiveRecords {
             Log.warning(.db, "Record files not read: the index has not been rebuilt from the archive yet")
             return 0
         }
-        let root = await settings.current.archiveURL
         let known = try await knownHashes()
         let walk = await recordFiles()
         for folder in walk.unlisted { noteUnreadable(folder) }
+        // Nothing of an archive that is not there is read, taken for gone or written again.
+        guard archiveIsThere else { throw RecordsError.archiveNotThere(archive.path) }
         var reread = 0
         for (kind, url) in walk.records {
             do {
@@ -347,7 +362,7 @@ public actor ArchiveRecords {
         // A file in a folder that was not, or could not be, looked into is not known to be gone.
         for path in known.keys where !present.contains(path) && !walk.hides(path) {
             // A record file that disappeared is written again from the index: deleting it is not deleting its records.
-            let kind = kind(of: URL(fileURLWithPath: path), root: root)
+            let kind = kind(of: URL(fileURLWithPath: path))
             try await database.writer.write { db in
                 try db.execute(sql: "DELETE FROM record_files WHERE path = ?", arguments: [path])
                 if let kind { try Self.mark(db, kind) }
@@ -384,6 +399,7 @@ public actor ArchiveRecords {
     private func read(_ kind: RecordKind, url: URL, text: String, replacing: Bool?) async throws {
         let parsed = try ParsedRecords(kind, url: url, text: text)
         let now = time.now()
+        await beforeApplying?(url)
         try await database.writer.write { db in
             let replacing = try replacing ?? !(Bool.fetchOne(db, sql: "SELECT EXISTS (SELECT 1 FROM record_dirty WHERE key = ?)",
                                                               arguments: [kind.key]) ?? false)
@@ -411,6 +427,9 @@ extension ArchiveRecords {
 
     /// Why a folder the file system gives no listing of at all is not read.
     static let notListed = "it cannot be listed"
+    /// Why an archive whose folder is not there is not read: what it holds is not known, as on a disk that is not
+    /// mounted or a cloud folder not connected, so it is neither taken for an archive without records nor written into.
+    static let notThere = "no folder is there"
 
     /// What walking the archive found.
     struct ArchiveWalk {
@@ -434,6 +453,11 @@ extension ArchiveRecords {
     /// nothing in them is a document of the archive or a record file.
     static func walk(_ root: URL, skip: SkipRules, incoming: URL) -> ArchiveWalk {
         var walk = ArchiveWalk()
+        // The archive itself not there is no archive without record files, unlike a folder gone while it is walked.
+        guard isFolder(root) else {
+            walk.unlisted = [UnreadableRecordFile(path: root.standardizedFileURL.path, reason: notThere)]
+            return walk
+        }
         let walker = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey],
                                                     options: [.skipsHiddenFiles, .skipsPackageDescendants]) { url, error in
             // One gone while the folder is walked is simply not there.
@@ -461,13 +485,20 @@ extension ArchiveRecords {
         return walk
     }
 
+    /// Whether the archive's folder is there: an archive whose folder is not is neither read nor written, nor filed into.
+    public nonisolated var archiveIsThere: Bool { Self.isFolder(archive) }
+
+    /// Whether a folder is at `url`.
+    static func isFolder(_ url: URL) -> Bool {
+        var isDirectory: ObjCBool = false
+        return FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) && isDirectory.boolValue
+    }
+
     /// The archive walked, with every record file in it and the kind it holds: the lists of documents first, and the
     /// search tasks before the conversations about them, as each refers to those before it.
     func recordFiles() async -> ArchiveWalk {
-        let current = await settings.current
-        let root = current.archiveURL
-        var walk = Self.walk(root, skip: SkipRules(watcher: config.watcher), incoming: current.incomingURL)
-        walk.records = walk.files.compactMap { url in kind(of: url, root: root).map { ($0, url) } }
+        var walk = Self.walk(archive, skip: SkipRules(watcher: config.watcher), incoming: await settings.current.incomingURL)
+        walk.records = walk.files.compactMap { url in kind(of: url).map { ($0, url) } }
             .sorted { Self.readingOrder($0.0) < Self.readingOrder($1.0) }
         return walk
     }
@@ -483,9 +514,8 @@ extension ArchiveRecords {
     }
 
     /// The kind of record file at `url` from where it is, or nil for a file that is none.
-    private func kind(of url: URL, root: URL) -> RecordKind? {
+    private func kind(of url: URL) -> RecordKind? {
         let url = url.standardizedFileURL
-        let layout = layout(root)
         if url.lastPathComponent == config.records.documentsFileName { return .documents(directory: url.deletingLastPathComponent().path) }
         if url.path == layout.labelRules.standardizedFileURL.path { return .labelRules }
         if url.path == layout.searchTasks.standardizedFileURL.path { return .searchTasks }

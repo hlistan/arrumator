@@ -41,18 +41,30 @@ archive does not have (`duplicate_of`) is read as a copy of nothing, as an event
 ## One index per archive
 
 The index of an archive is `~/Library/Application Support/Arrumator/Indexes/<name>.sqlite`, named after the first bytes
-of the SHA-256 of the archive's path. Switching archives opens the other archive's index, stops everything working on
-the one in use, takes the files waiting in Incoming off its queue (they are filed into the new one), records the switch
-in its history and writes its record files; only then do the settings name the other archive, whose documents and
-history take its place. A switch that fails on the way changes nothing: the app goes on with the archive it had, its
-queue as it was, and a switch it had recorded is followed in History by `Stayed on the archive at …` with the reason.
+of the SHA-256 of the archive's path as the file system spells it, or of where it would be when its folder is not
+there. Switching archives opens the other archive's index, stops everything working on
+the one in use, records the switch in its history and writes its record files; only then do the settings name the
+other archive, whose documents and history take its place, and the files waiting in Incoming leave the queue of the
+one left, to be filed into the new one. A switch that fails on the way changes nothing: the app goes on with the
+archive it had, its queue as it was and its work started again, and a switch it had recorded is followed in History by
+`Stayed on the archive at …` with the reason.
 An archive whose record files cannot be written then, as on a disk that is gone, does not keep you from switching away:
 its index keeps what they lack, they are written when it is next opened, and the app, or `arrumatorcli archive switch`,
 says so, naming the archive.
 
-A folder that has never been an archive gets a new index. If it already holds record files, such as a `System` folder
-or a `_documents.md` at its top, the index is rebuilt from them; otherwise it starts empty. An archive moved to another
-path is the same case: its new index is rebuilt from its records.
+A folder that has never been an archive gets a new index. If it holds record files when it is opened, anywhere in it,
+the index is rebuilt from them; otherwise it starts empty. An archive moved to another path is the same case: its new
+index is rebuilt from its records. The app makes an archive's folder only when the user sets an archive up: when
+onboarding is finished, or on a switch to a folder that is not there and that no index of the app has held an
+archive in. Whether an archive is new is decided by what the user did, never by what its index lacks: a new index
+looks the same whether its archive is new or away, as on a new Mac, after the app is installed again or the index
+lost, or when the settings spell the path another way. At any other launch, and whenever settings are applied, an
+archive whose folder is not there, renamed, moved or on a disk that is not connected, is away, whatever its index
+holds: nothing is made, read, written or filed in its place, the app says its folder is not there, naming it, and
+starts nothing until it is back and the app is opened again. A setting can still be changed, and the archive left for
+another, whose History it is recorded in once its folder is back; a switch to an archive that is away is refused,
+naming its folder. The command line has no onboarding, and cannot tell a new archive from one away: none of its
+commands makes an archive's folder but `arrumatorcli archive switch`.
 
 Earlier versions kept one index, `arrumator.sqlite`, for whichever archive the settings named. The first start of this
 version moves it into place as that archive's index, so nothing it held is lost: its write-ahead log is written into it
@@ -99,7 +111,8 @@ Some working state is deliberately not kept in files, so a lost index loses it:
    no checksum for, such as a file another Mac synchronised, is read first.
    A file that is there but cannot be read, such as one edited into broken YAML, saved again as UTF-16 by an editor or
    whose permissions keep the app out, is never taken for a missing or empty one and never written over or removed,
-   nor are the files in a folder of the archive whose contents cannot be listed:
+   nor are the files in a folder of the archive whose contents cannot be listed, nor any while the archive's own
+   folder is not there, where no folder is made:
    the app logs which file or folder and why (the line and column where the YAML breaks, or the field whose value it
    does not read, never what the file says there), `arrumatorcli doctor` names it, every other file is still read, and
    the index keeps what it holds and writes the file's changes once it reads again. That is so for an index that holds
@@ -117,15 +130,24 @@ first migration, so a stop at any point while it is made leaves it marked; a reb
 transaction that replaces the index. Only the rebuild's last step clears it, so a rebuild that never ran, as when the
 app quits before onboarding opens the archive, or that was refused or cut short is done the next time the archive is
 opened; documents queued to be read again are not queued twice. Until then the app starts no work on the index:
-nothing is filed into it, read back into it or written from it, and whatever the user asks to change in it, a label,
-a rule, a search task, a question, or a setting with the History event that records it, is refused by the index
-itself, whatever process asks, with the same reason, naming the record files to correct, rather than kept for the
-rebuild to drop. A setting
-is saved in `settings.json` all the same; only its History event is refused. Switching to another archive stays
-possible, unrecorded in this one. An archive without record files has nothing to rebuild from, so its new index is
-complete as it is made, and takes what the user changes at once, during onboarding too. A database that
-is damaged or cannot be migrated is moved aside, never deleted, as `<name>.sqlite.unreadable-<date>`. That only happens
-when the archive has record files to rebuild from; otherwise the app stops and says why, rather than starting with an
+nothing is filed into it, read back into it or written from it, and whatever the user asks to change in what the
+record files hold, a label, a rule, a search task or a question, is refused by the index itself, whatever process
+asks, with the same reason, naming the record files to correct, rather than kept for the rebuild to drop. A setting
+changed meanwhile, as during onboarding, or a switch to another archive, is made all the same, and its History event
+is held in the index, apart from what the rebuild replaces, until the rebuild's last step, which records it once,
+at its own time, after the archive's own history. Whether the archive holds record files is decided when it is
+opened, by walking it whole, never when its index is made, before macOS lets the app read the folder: an archive with
+none has nothing to rebuild from, so its new index is then complete as it is, and records what was held. An archive
+whose folder is not there when it is opened, as on a disk that is not connected, is not taken for one without
+records: its rebuild is refused, naming the folder, nothing is made or written where it was, and it is rebuilt once
+the folder is back. A folder that is there but empty cannot be told from an archive
+whose records have not arrived yet, so a sync from another Mac that has not delivered them by the time the archive is
+opened leaves an index taken for complete; what arrives later is read back as record files changed on disk, which
+neither finds their documents nor reads their text again: rebuild the index in Settings › Advanced, or with
+`arrumatorcli rebuild`, once the sync is done. An index whose rebuild was refused or cut short is complete only once
+it is rebuilt, however the archive looks when it is next opened. A database that is damaged or cannot be migrated is
+moved aside, never deleted, as `<name>.sqlite.unreadable-<date>`. That only happens when the archive has record files
+to rebuild from; otherwise the app stops and says why, rather than starting with an
 empty index. A database that cannot be opened only for the moment, because another process holds it longer than
 `database.busyTimeout`, the disk is full or the file may not be read, is never moved aside: the app stops and says
 why, and starts once that has passed. A rebuild of an index that holds the archive, as on request, first writes

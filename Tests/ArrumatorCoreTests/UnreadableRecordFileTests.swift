@@ -10,7 +10,7 @@ import Testing
         let w = try await RecordsWorld.make()
         defer { w.h.env.cleanup() }
         let url = w.topListing
-        let broken = RecordsWorld.broken(try String(contentsOf: url, encoding: .utf8))
+        let broken = TestRecordFiles.broken(try String(contentsOf: url, encoding: .utf8))
         try broken.write(to: url, atomically: true, encoding: .utf8)
         try await w.records.reconcile()
         let unreadable = await w.records.unreadableFiles()
@@ -26,8 +26,7 @@ import Testing
         #expect(documents.filter { $0.labels == StubAnalyzer.edpBill }.compactMap(\.id).sorted() == w.documents,
                 "and the ones already there keep their labels")
 
-        try String(contentsOf: url, encoding: .utf8).replacingOccurrences(of: "entries: [unclosed", with: "entries:")
-            .write(to: url, atomically: true, encoding: .utf8)
+        try TestRecordFiles.mended(String(contentsOf: url, encoding: .utf8)).write(to: url, atomically: true, encoding: .utf8)
         try await w.records.reconcile()
         #expect(try w.listing(in: w.h.env.archive).contains("file: edp_september.txt"), "once it reads again, the directory's changes are written into it")
         #expect(await w.records.unreadableFiles().isEmpty, "and it is no longer reported")
@@ -70,7 +69,7 @@ import Testing
         let w = try await RecordsWorld.make()
         defer { w.h.env.cleanup() }
         let broken = try w.h.env.put("Kept/\(w.h.env.config.records.documentsFileName)",
-                                     text: RecordsWorld.broken(try String(contentsOf: w.topListing, encoding: .utf8)))
+                                     text: TestRecordFiles.broken(try String(contentsOf: w.topListing, encoding: .utf8)))
         _ = try w.editLabelByHand()
         #expect(try await w.records.reconcile() == 1, "the file edited by hand is read, whichever comes first")
         let parties = try await w.h.services.documents.list(DocumentFilter(), limit: 5).flatMap { $0.labels(.party) }
@@ -84,7 +83,7 @@ import Testing
         try await w.h.labels.merge(DocumentLabel(kind: .sender, value: "EDP Comercial"), into: "EDP")
         try await w.records.flush()
         let url = w.h.env.layout.labelRules
-        let broken = RecordsWorld.broken(try String(contentsOf: url, encoding: .utf8))
+        let broken = TestRecordFiles.broken(try String(contentsOf: url, encoding: .utf8))
         try broken.write(to: url, atomically: true, encoding: .utf8)
         await #expect("the user asked for a rebuild, which would drop the rules the file holds") {
             try await w.records.rebuild()
@@ -133,6 +132,28 @@ import Testing
         try await w.records.reconcile()
         #expect(await w.records.unreadableFiles().map(\.path) == [folder.path], "and the folder is reported, its files not taken for gone")
         #expect(try await RecordsWorld.marks(w.h.env.database).isEmpty, "none of which is written again as though it had been deleted")
+    }
+
+    @Test func anArchiveWhoseFolderIsGoneIsNeitherTakenForEmptyNorWrittenInto() async throws {
+        let w = try await RecordsWorld.make()
+        defer { w.h.env.cleanup() }
+        try await w.h.services.history.record(.paused, summary: "Paused while the archive is away")
+        let away = w.h.env.root.appendingPathComponent("Away", isDirectory: true)
+        try FileManager.default.moveItem(at: w.h.env.archive, to: away)
+        await #expect(throws: RecordsError.self, "the record files of an archive that is not there cannot be written") {
+            try await w.records.flush()
+        }
+        await #expect(throws: RecordsError.self, "nor when its files are read back") { try await w.records.reconcile() }
+        #expect(!FileManager.default.fileExists(atPath: w.h.env.archive.path), "and nothing is made where it was")
+        #expect(await w.records.unreadableFiles().map(\.path) == [w.h.env.archive.standardizedFileURL.path],
+                "its folder is reported, as the doctor names it")
+
+        try FileManager.default.moveItem(at: away, to: w.h.env.archive)
+        try await w.records.reconcile()
+        #expect(try String(contentsOf: w.topListing, encoding: .utf8).contains("edp_july"),
+                "once it is back, its record files are as they were, none taken for gone and written again empty")
+        let month = w.h.env.layout.historyFile(month: RecordKind.month(of: w.h.env.time.now()))
+        #expect(try String(contentsOf: month, encoding: .utf8).contains("Paused while the archive is away"), "and what waited is written")
     }
 
     @Test func aRecordFileOfANewerFormatIsRefusedNamingItsVersion() async throws {

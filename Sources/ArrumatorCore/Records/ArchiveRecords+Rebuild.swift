@@ -30,31 +30,45 @@ extension ArchiveRecords {
     // MARK: Rebuilding
 
     /// Cheaply, without walking the archive: whether it has the system folder, or a list of documents at its top,
-    /// which every archive the app has written records into has.
+    /// which every archive the app has written records into has. What decides whether an index that cannot be opened
+    /// may be set aside to be rebuilt (`AppDatabase.open`); whether a new index has anything to be rebuilt from is
+    /// decided by walking the archive whole when it is opened (`rebuildIfPending`).
     public static func mayHoldRecords(archive: URL, config: PipelineConfig) -> Bool {
         let layout = ArchiveLayout(root: archive, records: config.records, watcher: config.watcher)
         return FileManager.default.fileExists(atPath: layout.system.path)
             || FileManager.default.fileExists(atPath: archive.appendingPathComponent(config.records.documentsFileName).path)
     }
 
-    /// Whether the archive holds record files a rebuild could read.
+    /// Whether the archive holds record files a rebuild could read, or may: one in a folder that cannot be listed, or
+    /// anywhere in an archive whose folder is not there.
     func archiveHasRecords() async throws -> Bool {
-        let root = await settings.current.archiveURL
-        guard FileManager.default.fileExists(atPath: root.path) else { return false }
         let walk = await recordFiles()
         return !walk.records.isEmpty || !walk.unlisted.isEmpty
     }
 
     /// Rebuilds the index from the archive when it is still to be (`AppDatabase.pendingRebuild`): it was created or set
-    /// aside, or its rebuild was refused or cut short. An archive without record files has nothing to rebuild from: its
-    /// new index is complete as it is. What the rebuild found, or nil when there was nothing to rebuild.
+    /// aside, or its rebuild was refused or cut short. A new index whose archive, walked whole now, holds no record file
+    /// has nothing to rebuild from, and is complete as it is; one whose rebuild was refused or cut short is complete only
+    /// once rebuilt, as the archive held records when it was read. An archive whose folder is not there is away, and
+    /// its rebuild is refused, naming the folder. What the rebuild found, or nil when there was nothing to rebuild.
     public func rebuildIfPending() async throws -> RebuildSummary? {
-        guard try await database.pendingRebuild() != nil else { return nil }
-        guard try await archiveHasRecords() else {
-            try await database.writer.write { db in try AppDatabase.setPendingRebuild(db, nil) }
-            return nil
+        try await inTurn {
+            guard let pending = try await database.pendingRebuild() else { return nil }
+            if pending == .unread, try await !archiveHasRecords(), try await completeAsEmpty() { return nil }
+            return try await rebuildInTurn()
         }
-        return try await rebuild()
+    }
+
+    /// Takes the index, found to have nothing to read in its archive, for complete, unless it was refused or its rebuild
+    /// began meanwhile: decided in the transaction that completes it. Whether the index is complete once it has run, as
+    /// it is too when another process completed it meanwhile, which leaves nothing to rebuild.
+    func completeAsEmpty() async throws -> Bool {
+        try await database.writer.write { db in
+            guard let pending = try AppDatabase.pendingRebuild(db) else { return true }
+            guard pending == .unread, try !AppDatabase.rebuildWasRefused(db) else { return false }
+            try AppDatabase.setPendingRebuild(db, nil)
+            return true
+        }
     }
 
     /// Reads the whole archive into the index, replacing what it held: documents, history, the rules for labels, the
@@ -79,7 +93,6 @@ extension ArchiveRecords {
     static let maxRebuildAttempts = 3
 
     private func rebuildInTurn() async throws -> RebuildSummary {
-        let root = await settings.current.archiveURL
         for attempt in 1...Self.maxRebuildAttempts {
             try await flushInTurn()
             let before = try await indexState()
@@ -88,6 +101,7 @@ extension ArchiveRecords {
             guard unreadable.isEmpty else {
                 // So a change the index then refuses can name them, in any process (`AppDatabase.explained`).
                 try await database.writer.write { db in try AppDatabase.setRebuildRefused(db, unreadable) }
+                guard archiveIsThere else { throw RecordsError.archiveNotThere(archive.path) }
                 throw RecordsError.unreadableFiles(unreadable)
             }
             guard try await replaceIndex(with: parsed, expecting: before) else {
@@ -99,7 +113,7 @@ extension ArchiveRecords {
             summary.events = parsed.history.reduce(0) { $0 + $1.entries.count }
             summary.labelRules = parsed.labelRules?.count ?? 0
             summary.searchTasks = parsed.searchTasks?.count ?? 0
-            try await locateDocuments(root: root, summary: &summary)
+            try await locateDocuments(summary: &summary)
             try await queueReindex(summary: &summary)
             // The last step: what was found is recorded, and the index no longer waits to be rebuilt, together.
             let at = time.now()
@@ -140,8 +154,7 @@ extension ArchiveRecords {
     func replaceIndex(with parsed: ParsedRecords, expecting before: IndexState) async throws -> Bool {
         let now = time.now()
         return try await database.writer.write { db in
-            let unread = try String.fetchOne(db, sql: "SELECT value FROM meta WHERE key = ?", arguments: [AppDatabase.rebuildPendingKey])
-                .map { AppDatabase.PendingRebuild(rawValue: $0) ?? .unread } == .unread
+            let unread = try AppDatabase.pendingRebuild(db) == .unread
             let marked = try Bool.fetchOne(db, sql: "SELECT EXISTS (SELECT 1 FROM record_dirty)") ?? false
             guard try IndexState.read(db) == before, unread || !marked else { return false }
             // First: an unread index refuses every change to what the record files hold (v19), this one's too.
@@ -185,7 +198,7 @@ extension ArchiveRecords {
     /// Finds documents whose file is not where their entry says by the identifier on each file, takes back a document
     /// marked missing whose file is found, as `ArchiveReconciler` does when it sees one come back, and takes in files
     /// that no entry describes.
-    private func locateDocuments(root: URL, summary: inout RebuildSummary) async throws {
+    private func locateDocuments(summary: inout RebuildSummary) async throws {
         let documents = try await DocumentStore(database: database, time: time).list(DocumentFilter(), limit: Int.max)
         let byUID = Dictionary(documents.map { ($0.uid, $0) }, uniquingKeysWith: { a, _ in a })
         let skip = SkipRules(watcher: config.watcher)
@@ -222,7 +235,6 @@ extension ArchiveRecords {
         }
         // A file put into the archive by hand is read and labelled where it is; the system folder holds no documents.
         let jobs = JobStore(database: database, time: time)
-        let layout = layout(root)
         for path in untracked where !layout.isSystem(URL(fileURLWithPath: path)) {
             if try await jobs.enqueue(path: path, kind: .adopt) != nil { summary.adopted += 1 }
         }

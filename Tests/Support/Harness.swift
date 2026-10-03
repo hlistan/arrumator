@@ -23,7 +23,8 @@ public struct Harness: Sendable {
     public static func services(_ env: TestEnvironment, analyzer: any DocumentAnalyzing, config: PipelineConfig) -> PipelineServices {
         let placer = Placer(builder: FilenameBuilder(config: config.naming), operations: FileOperations(naming: config.naming))
         return PipelineServices(
-            database: env.database, config: config, settings: env.settings, extractor: PlainTestExtractor(), analyzer: analyzer,
+            database: env.database, archive: env.archive, config: config, settings: env.settings, extractor: PlainTestExtractor(),
+            analyzer: analyzer,
             filer: DocumentFiler(database: env.database, placer: placer, index: IndexStore(database: env.database, time: env.time),
                                  registry: SelfChangeRegistry(ttl: config.watcher.selfChangeTTLSeconds, time: env.time), time: env.time),
             traces: TraceRecorder(database: env.database, appVersion: "test", time: env.time), vectors: VectorIndex(), trash: env.trash,

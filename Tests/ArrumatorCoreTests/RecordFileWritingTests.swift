@@ -8,39 +8,6 @@ import Testing
 /// never overlap (docs/storage.md): what a test does between reading a file and writing it (`setBeforeWriting`) is what
 /// the user or another process could do at that moment.
 @Suite struct RecordFileWritingTests {
-    /// What a flush is held at, between reading a file and writing it: how many times it got there, and a gate the
-    /// first time waits at until the test opens it.
-    private final class Hold: Sendable {
-        private let state = Mutex<(arrivals: Int, gate: CheckedContinuation<Void, Never>?, open: Bool)>((0, nil, false))
-
-        var arrivals: Int { state.withLock { $0.arrivals } }
-
-        /// Arrives; the first arrival waits until `open()`.
-        func arrive() async {
-            let first = state.withLock { state in
-                state.arrivals += 1
-                return state.arrivals == 1
-            }
-            guard first else { return }
-            await withCheckedContinuation { continuation in
-                let open = state.withLock { state in
-                    if !state.open { state.gate = continuation }
-                    return state.open
-                }
-                if open { continuation.resume() }
-            }
-        }
-
-        func open() {
-            let gate = state.withLock { state in
-                state.open = true
-                defer { state.gate = nil }
-                return state.gate
-            }
-            gate?.resume()
-        }
-    }
-
     /// Runs `change` the first time a flush is between reading the file at `url` and writing it.
     private func once(at url: URL, _ change: @escaping @Sendable () throws -> Void) -> @Sendable (URL) async -> Void {
         let done = Mutex(false)

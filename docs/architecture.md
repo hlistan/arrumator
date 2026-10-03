@@ -214,7 +214,9 @@ table in [AGENTS.md §5](../AGENTS.md#5-boundaries).
 
 `ArrumatorRuntime.bootstrap` loads the configuration and settings, opens the archive's index and wires the services.
 `openArchive()` brings the index in line with the record files: an index that records it is still to be rebuilt, being
-new or its rebuild refused or cut short, is rebuilt from them, any other reads back whatever changed on disk. `start()`
+new or its rebuild refused or cut short, is rebuilt from them, any other reads back whatever changed on disk. Only
+there, walking the archive whole, is a new index found to have nothing to rebuild from; never when it is made, when
+the archive may not show its records yet. `start()`
 then starts the three queue workers and, as named background tasks, the Ollama supervision and the audit of its state,
 the two watcher pumps, the record-file writer, the settings subscription and hourly maintenance; on an index still to
 be rebuilt, as when a record file that cannot be read refused its rebuild, it starts nothing until the index is rebuilt
@@ -228,11 +230,19 @@ started Ollama, stops it. A start after a stop, or a second one, starts nothing.
 `applicationShouldTerminate`, which answers `.terminateLater` and waits for `stopBeforeQuitting()`, at most
 `ingest.quitTimeout` seconds ([AGENTS.md §3](../AGENTS.md#3-core-principles), "Stopping is awaited"); when the stop
 takes longer, the Ollama server the app started is stopped all the same before the app ends. Switching archives opens
-the next archive's index on the same `SettingsStore`, so a change made while it switches is kept by both runtimes, and
-shows the settings can be saved before anything stops. It then stops this runtime (not for good), takes the waiting
-files off its queue, records the switch and writes its record files, and only then saves the settings naming the next
-archive, as this runtime finds its archive by them; a step that fails starts this runtime again as it was. Record files
-that cannot be written are no reason to stay: the switch returns which archive's wait (`ArchiveSwitch.unwritten`).
+the next archive's index on the same `SettingsStore` and the same `OllamaConnection`, so a change made while it
+switches, a pause or another server, is kept by both runtimes, and shows the settings can be saved before anything
+stops. It then stops this runtime (not for good), records the switch
+and writes its record files, and only then saves the settings naming the next archive and takes the files waiting in
+Incoming off this runtime's queue; a step that fails starts this runtime again as it was, its queue untouched. Each
+runtime acts on the archive it was made with (`archive`: its record files, where it files, what it watches), never on
+the one the settings name, which only `bootstrap` and a switch read, so the runtime left, stopped again as when the app
+quits then, writes only into its own. An archive's folder is made only when the user sets the archive up
+(`finishOnboarding()`, or a switch to a folder that is not there and that no index has held an archive in), never
+from what an index lacks; otherwise one that is not there is away (`RecordsError.archiveNotThere`,
+`RuntimeWork.away`), and is neither made again nor started on. Record
+files that cannot be written are no reason to stay: the switch returns which archive's wait
+(`ArchiveSwitch.unwritten`).
 
 ### A file from Incoming to the archive
 
@@ -291,7 +301,9 @@ back and rebuilding take turns on `ArchiveRecords`, as each awaits the index bet
 whether a file read back replaces or merges, or whether a rebuild replaces the index, is decided in the transaction
 that does it. An index that has read nothing of its archive yet refuses every change to the tables the record files
 hold, by triggers, in any process, until its rebuild replaces it; `AppDatabase.explained` turns that refusal into the
-error the user sees. The four steps and their guarantees are in [Storage](storage.md#keeping-files-and-index-together).
+error the user sees. An event about nothing the index holds, such as a setting changed, is held in its `meta` table
+instead, decided in the transaction that records it (`HistoryStore.insert`), and recorded once the index is rebuilt.
+The four steps and their guarantees are in [Storage](storage.md#keeping-files-and-index-together).
 
 ### A search task and a conversation
 
@@ -317,6 +329,7 @@ Views never poll. `AppModel` holds one task per stream and mirrors the value:
 | `IngestCoordinator.statusUpdates()` | Which file is in hand, at which stage, and how many wait. |
 | `SearchTaskQueue.statusUpdates()`, `TaskConversationQueue.statusUpdates()` | Which request is read or question answered, by which model, and the answer so far. |
 | `OllamaLifecycle.states()` | Whether Ollama is ready. |
+| `ArrumatorRuntime.workUpdates()` | Whether the runtime's work runs, or was refused as the index is not rebuilt from its archive or the archive is away. |
 | `SettingsStore.changes()` | Each change to the settings. The settings in force are read once, beside it. |
 
 A decision the user can audit is recorded in History; a state the user only watches is published on a stream
@@ -437,6 +450,7 @@ evolutionary architecture, and what each protects.
 | Quitting has one path: work at quit runs before AppKit lets the app end, and nothing else in the app stops the runtime. | `scripts/lint.sh`, quit gate |
 | Only `SystemTrash` and a move across volumes call `trashItem`; everything else goes through `Trashing`. | `scripts/lint.sh`, trash gate |
 | What opens on a click opens from the keyboard. | `scripts/lint.sh`, rows gate |
+| A runtime acts on its own archive: only `bootstrap` and a switch read the archive from the settings. | `scripts/lint.sh`, archive gate |
 | No `TODO`, `FIXME`, `HACK` or `XXX`. | `scripts/lint.sh`, debt gate |
 | The app icon is the project's own drawing. | `scripts/lint.sh`, icon gate |
 | No unused code. | `scripts/deadcode.sh` (Periphery) |

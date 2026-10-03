@@ -109,10 +109,13 @@ struct Eval: AsyncParsableCommand {
         var environment = RuntimeEnvironment.current
         environment.home = home.path
         // The throw-away folders are chosen before the runtime opens, as the runtime is open on one archive; a profile the
-        // settings do not list is refused before anything is read.
+        // settings do not list is refused before anything is read. The archive is new, so its folder is made here, as
+        // setting an archive up makes it: the runtime never makes one by itself.
         let store = try SettingsStore(paths: AppPaths.resolve(environment))
         var chosen = await store.current
-        chosen.archivePath = home.appendingPathComponent("Archive").path
+        let archive = home.appendingPathComponent("Archive", isDirectory: true)
+        try FileManager.default.createDirectory(at: archive, withIntermediateDirectories: true)
+        chosen.archivePath = archive.path
         chosen.incomingPath = home.appendingPathComponent("Incoming").path
         if let profile { chosen.profile = profile }
         if let model { chosen = try chosen.reading(withChatModel: model) }

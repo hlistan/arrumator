@@ -69,7 +69,7 @@ let package = Package(
         .testTarget(name: "ArrumatorRuntimeTests", dependencies: ["ArrumatorRuntime", "ArrumatorCore", "ArrumatorTesting"],
                     swiftSettings: strict),
         // Runs the built command itself, so it depends on it to have it built beside the tests.
-        .testTarget(name: "ArrumatorCLITests", dependencies: ["ArrumatorCLI", "ArrumatorCore"], swiftSettings: strict),
+        .testTarget(name: "ArrumatorCLITests", dependencies: ["ArrumatorCLI", "ArrumatorCore", "ArrumatorTesting"], swiftSettings: strict),
     ],
     swiftLanguageModes: [.v6]
 )

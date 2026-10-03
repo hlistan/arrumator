@@ -1,4 +1,4 @@
-import ArrumatorCore
+@testable import ArrumatorCore
 @testable import ArrumatorRuntime
 import ArrumatorTesting
 import Foundation
@@ -26,8 +26,7 @@ import Testing
         #expect(try await marks(second).isEmpty, "one archive's history is not another's")
         try await second.services.history.record(.paused, summary: "In the second archive")
         try await second.records.flush()
-        let layout = second.services.layout(await second.settings.current)
-        #expect(layout.history.path.hasPrefix(home.folder("Second").path + "/"), "the history is kept in its archive")
+        #expect(try home.historyWritten(in: home.folder("Second")).contains("In the second archive"), "the history is kept in its archive")
 
         let back = try await second.switchArchive(to: home.folder("First").path).runtime
         try await back.openArchive()
@@ -62,6 +61,8 @@ import Testing
             let config = try PipelineConfig.bundledDefaults()
             let (database, _) = try AppDatabase.open(at: single, config: config.database, setAsideSuffix: config.records.setAsideSuffix,
                                                      time: TestTime(.advances)) { false }
+            // Earlier versions never marked an index to be rebuilt.
+            try await database.writer.write { db in try AppDatabase.setPendingRebuild(db, nil) }
             try await HistoryStore(database: database, time: TestTime(.advances)).record(.paused, summary: "Written before")
         }
 
@@ -79,7 +80,9 @@ import Testing
         // The temporary folder lives under /private/var, reached as /var; the archive does not exist yet.
         let aliased = "/private" + home.folder("Aliased").path
         try await SettingsStore(paths: home.paths).update { $0.archivePath = aliased }
-        let first = try await home.open()
+        // Set up as onboarding sets it up, which makes its folder.
+        let first = try await home.bootstrap()
+        try await first.finishOnboarding()
         let again = try await home.open()
         #expect(again.index == first.index, "one folder has one index, before and after it exists")
         await #expect(throws: ArchiveSwitchError.self, "another spelling of the archive is the archive") {
@@ -128,6 +131,26 @@ import Testing
         await runtime.stop()
     }
 
+    @Test func theFilesWaitingInIncomingGoToTheArchiveSwitchedTo() async throws {
+        let home = try await RuntimeHome.make()
+        defer { home.cleanup() }
+        try await home.withoutOllama()
+        try home.watchQuickly()
+        let first = try await home.open()
+        await first.start()
+        try await first.setPaused(true)
+        try Data(Self.waiting.utf8).write(to: home.folder("Incoming").appendingPathComponent(Self.before))
+        #expect(try await Patience.until { try await queued(first) == [Self.before] }, "a file waits in Incoming, paused")
+        let second = try await first.switchArchive(to: home.folder("Second").path).runtime
+        #expect(try await queued(first).isEmpty, "the archive left keeps no job for it, so it is not filed there when opened again")
+        let recorded = try await first.services.history.events(limit: 20, kinds: [.settingsChanged]).map(\.summary)
+        #expect(recorded == ["Switched to the archive at \(home.folder("Second").path); 1 file waiting in Incoming go there"],
+                "the switch says where the file goes")
+        try await second.openAndStart()
+        #expect(try await Patience.until { try await queued(second) == [Self.before] }, "and the archive switched to queues it")
+        await second.stop()
+    }
+
     @Test func anArchiveThatCannotBeWrittenToIsSwitchedAwayFromAndSaysSoOnceItCanBe() async throws {
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }
@@ -147,12 +170,45 @@ import Testing
         try home.setWritable(true, home.folder("First"), withFoldersInIt: true)
         let back = try await second.switchArchive(to: home.folder("First").path).runtime
         try await back.openArchive()
-        let history = back.services.layout(await back.settings.current).history
-        let files = try FileManager.default.contentsOfDirectory(at: history, includingPropertiesForKeys: nil)
-        let written = try files.map { try String(contentsOf: $0, encoding: .utf8) }.joined()
-        #expect(written.contains("Switched to the archive at \(home.folder("Second").path)"),
+        #expect(try home.historyWritten(in: home.folder("First")).contains("Switched to the archive at \(home.folder("Second").path)"),
                 "the switch is written into the archive's history once it can be: it was kept in its index meanwhile")
     }
+
+    @Test func theRuntimeLeftWritesIntoItsOwnArchiveNeverTheOneSwitchedTo() async throws {
+        let home = try await RuntimeHome.make()
+        defer { home.cleanup() }
+        let first = try await home.open()
+        try await first.services.history.record(.paused, summary: Self.inTheFirst)
+        try await first.records.flush()
+        try home.setWritable(false, home.folder("First"), withFoldersInIt: true)
+        defer { try? home.setWritable(true, home.folder("First"), withFoldersInIt: true) }
+        let switched = try await first.switchArchive(to: home.folder("Second").path)
+        try #require(switched.unwritten != nil, "the record files of the archive left wait, so a later stop of its runtime writes them")
+        let second = switched.runtime
+        try await second.openArchive()
+        try await second.services.history.record(.paused, summary: Self.inTheSecond)
+        try await second.records.flush()
+        let secondWrote = try home.historyWritten(in: home.folder("Second"))
+        try #require(secondWrote.contains(Self.inTheSecond), "the archive switched to has its own history")
+
+        // The app quits at the end of the switch: the runtime left is stopped once more, while the settings name the other.
+        await first.stop()
+        #expect(try home.historyWritten(in: home.folder("Second")) == secondWrote,
+                "the runtime left writes nothing into the archive the settings now name")
+        try await second.records.reconcile()
+        #expect(try await second.services.history.events(limit: 50).map(\.summary) == [Self.inTheSecond],
+                "whose index keeps its own history, and only its own")
+
+        try home.setWritable(true, home.folder("First"), withFoldersInIt: true)
+        await first.stop()
+        let firstWrote = try home.historyWritten(in: home.folder("First"))
+        #expect(firstWrote.contains(Self.inTheFirst) && firstWrote.contains("Switched to the archive at \(home.folder("Second").path)"),
+                "the runtime left writes its own archive's record files, the switch among them, once they can be written")
+        #expect(try home.historyWritten(in: home.folder("Second")) == secondWrote, "and still nothing into the other")
+    }
+
+    static let inTheFirst = "In the first archive"
+    static let inTheSecond = "In the second archive"
 
     /// Holds `runtime`'s stop, as a page being read or a file being moved holds it, until `letGo` fires; `stopped` fires
     /// once the stop has begun.
@@ -182,6 +238,41 @@ import Testing
         #expect(saved.paused && inUse.paused,
                 "and keep the pause made meanwhile, which the runtime switched to has too: one store holds the settings")
     }
+
+    @Test func anOllamaServerChosenWhileASwitchStopsTheAppIsTheOneTheArchiveSwitchedToTalksTo() async throws {
+        let home = try await RuntimeHome.make()
+        defer { home.cleanup() }
+        try await home.withoutOllama()
+        let first = try await home.open()
+        await first.start()
+        let (stopped, letGo) = (Signal(), OneShot<Void>())
+        await holdStop(first, stopped: stopped, letGo: letGo)
+        let switching = Task { try await first.switchArchive(to: home.folder("Second").path) }
+        try #require(await Patience.until { stopped.fired }, "the switch stops the app's work")
+        // The user points the app at another server meanwhile, through the runtime the app still has.
+        try await first.useOllama(at: Self.anotherServer)
+        letGo.fire(())
+        let second = try await switching.value.runtime
+        let saved = await (try SettingsStore(paths: home.paths)).current.ollamaURL
+        #expect(saved == Self.anotherServer, "the server chosen is saved")
+        #expect(second.ollama.baseURL.absoluteString == Self.anotherServer, "and is the one the runtime switched to talks to")
+    }
+
+    @Test func theServerTheEnvironmentNamesIsTheArchiveSwitchedTosToo() async throws {
+        let home = try await RuntimeHome.make()
+        defer { home.cleanup() }
+        try await home.withoutOllama()
+        var environment = home.environment
+        environment.ollamaURL = Self.anotherServer
+        let first = try await ArrumatorRuntime.bootstrap(appVersion: "test", environment: environment, echoLogsToStderr: false, trash: home.trash)
+        let second = try await first.switchArchive(to: home.folder("Second").path).runtime
+        let saved = await second.settings.current.ollamaURL
+        #expect(saved == RuntimeHome.nowhere, "the settings name another server")
+        #expect(second.ollama.baseURL.absoluteString == Self.anotherServer, "but ARRUMATOR_OLLAMA_URL takes its place in the runtime switched to too")
+    }
+
+    /// A server on this Mac where no Ollama answers, other than `RuntimeHome.nowhere`.
+    static let anotherServer = "http://127.0.0.1:12345"
 
     @Test func aSwitchWhoseSettingsCannotBeSavedOnceRecordedSaysTheAppStayedAndStartsItAgain() async throws {
         let home = try await RuntimeHome.make()

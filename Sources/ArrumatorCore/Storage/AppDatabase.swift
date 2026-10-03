@@ -47,8 +47,8 @@ public struct AppDatabase: Sendable {
     /// got (`PendingRebuild`). The index says so itself from the transaction that makes it (`v1_initial`), so a rebuild
     /// that never ran, as when the app quits before onboarding opens the archive, or that was refused or cut short, is
     /// done at the next opening; until then the index takes no change to what the record files hold
-    /// (`v19_unreadIndexRefusesRecords`) and is worked on by nothing (`ArchiveRecords.rebuildIfPending`,
-    /// `ArrumatorRuntime.start`).
+    /// (`v19_unreadIndexRefusesRecords`), holds the events of other changes until it is rebuilt (`HistoryStore.insert`)
+    /// and is worked on by nothing (`ArchiveRecords.rebuildIfPending`, `ArrumatorRuntime.start`).
     public static let rebuildPendingKey = "rebuild_pending"
 
     /// The key in `meta` of the record files that kept the index's last rebuild from being done, which a change it then
@@ -67,17 +67,39 @@ public struct AppDatabase: Sendable {
     /// Where this index is in being rebuilt from its archive; nil when it is not to be rebuilt. A value this version does
     /// not know, which a later version wrote, is taken as `unread`: the index is not taken for one that holds the archive.
     public func pendingRebuild() async throws -> PendingRebuild? {
-        try await meta(Self.rebuildPendingKey).map { PendingRebuild(rawValue: $0) ?? .unread }
+        try await reader.read { db in try Self.pendingRebuild(db) }
+    }
+
+    /// `pendingRebuild()`, read in the transaction of `db`, where what it decides is acted on.
+    static func pendingRebuild(_ db: Database) throws -> PendingRebuild? {
+        try String.fetchOne(db, sql: "SELECT value FROM meta WHERE key = ?", arguments: [rebuildPendingKey]).map { PendingRebuild(rawValue: $0) ?? .unread }
     }
 
     /// Records, in the transaction of `db`, where the index is in being rebuilt; nil when it is rebuilt, which also
-    /// forgets what kept it from being.
+    /// forgets what kept it from being and records the events held while it held nothing of its archive
+    /// (`HistoryStore.recordHeld`).
     static func setPendingRebuild(_ db: Database, _ pending: PendingRebuild?) throws {
         if let pending {
             try db.execute(sql: "INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                            arguments: [rebuildPendingKey, pending.rawValue])
         } else {
             try db.execute(sql: "DELETE FROM meta WHERE key IN (?, ?)", arguments: [rebuildPendingKey, rebuildRefusedKey])
+            try HistoryStore.recordHeld(db)
+        }
+    }
+
+    /// Whether, in the transaction of `db`, the index's last rebuild was refused for record files it could not read, and
+    /// none has succeeded since.
+    static func rebuildWasRefused(_ db: Database) throws -> Bool {
+        try String.fetchOne(db, sql: "SELECT value FROM meta WHERE key = ?", arguments: [rebuildRefusedKey]) != nil
+    }
+
+    /// Whether the index has ever held anything of its archive, which an empty folder made in the archive's place would
+    /// hide: a document, a record file written or read, or a rebuild refused for record files it could not read.
+    public func heldAnArchive() async throws -> Bool {
+        try await reader.read { db in
+            try DocumentRecord.fetchCount(db) > 0 || Bool.fetchOne(db, sql: "SELECT EXISTS (SELECT 1 FROM record_files)") == true
+                || Self.rebuildWasRefused(db)
         }
     }
 
@@ -87,7 +109,8 @@ public struct AppDatabase: Sendable {
                        arguments: [rebuildRefusedKey, JSON.string(files)])
     }
 
-    /// Why nothing can be changed in the index yet: the record files its last rebuild could not read, if it was refused.
+    /// Why nothing the record files hold can be changed in the index yet: the record files its last rebuild could not
+    /// read, if it was refused.
     public func notRebuilt() async -> RecordsError {
         // Only to say why; a refusal that cannot be read back still says what to do.
         let files = (try? await meta(Self.rebuildRefusedKey)).flatMap { JSON.decode([UnreadableRecordFile].self, from: $0) }
@@ -106,15 +129,16 @@ public struct AppDatabase: Sendable {
     /// deleted, when `canRebuild` says the archive holds the records to rebuild it from; otherwise the error stands, so
     /// the app stops instead of starting empty. One that cannot be opened for the moment (`isPassing`) is never set
     /// aside: rebuilding it would lose its traces and queue for a lock that would have been released. A new index, and
-    /// the one that takes the place of one set aside, is to be rebuilt (`PendingRebuild.unread`), unless the archive
-    /// holds no records to rebuild it from: then it is complete as it is made, and takes what the app records at once.
+    /// the one that takes the place of one set aside, is to be rebuilt (`PendingRebuild.unread`), even when the archive
+    /// seems to hold no records: whether it does is decided when it is opened, by walking it whole
+    /// (`ArchiveRecords.rebuildIfPending`), as its records may not show yet, while a sync goes on or before macOS lets the
+    /// app read the folder.
     public static func open(at url: URL, config: DatabaseConfig, setAsideSuffix: String, time: any TimeSource,
                             canRebuild: () -> Bool) throws -> (AppDatabase, Opening) {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let existed = FileManager.default.fileExists(atPath: url.path)
         do {
             let database = try openPool(at: url, config: config, time: time)
-            try database.completeIfNothingToRead(canRebuild)
             return (database, existed ? .existing : .created)
         } catch {
             if isPassing(error) { throw DatabaseOpeningError.unavailable(url.path, error.localizedDescription) }
@@ -131,15 +155,6 @@ public struct AppDatabase: Sendable {
                       ["path": aside.path, "error": error.localizedDescription])
             return (try openPool(at: url, config: config, time: time), .setAside(aside))
         }
-    }
-
-    /// Takes an index that has read nothing of its archive for complete when the archive holds no records to read.
-    private func completeIfNothingToRead(_ archiveHoldsRecords: () -> Bool) throws {
-        let unread = try writer.read { db in
-            try String.fetchOne(db, sql: "SELECT value FROM meta WHERE key = ?", arguments: [Self.rebuildPendingKey]) == PendingRebuild.unread.rawValue
-        }
-        guard unread, !archiveHoldsRecords() else { return }
-        try writer.write { db in try Self.setPendingRebuild(db, nil) }
     }
 
     /// SQLite's results that say nothing about the database itself (https://sqlite.org/rescode.html): it is locked by

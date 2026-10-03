@@ -18,7 +18,7 @@ struct RecordsWorld {
             try await h.ingest(name, text: text)
         }
         let documents = try await h.services.documents.list(DocumentFilter(statuses: [.filed]), limit: 10).compactMap(\.id).sorted()
-        let records = ArchiveRecords(database: h.env.database, settings: h.env.settings, config: h.env.config, registry: nil, time: TestTime(.advances))
+        let records = h.env.records()
         try await records.flush()
         return RecordsWorld(h: h, records: records, documents: documents)
     }
@@ -26,7 +26,7 @@ struct RecordsWorld {
     /// A second index over the same archive, as after the database was lost.
     func freshIndex() throws -> (AppDatabase, ArchiveRecords) {
         let database = try AppDatabase.inMemory()
-        return (database, ArchiveRecords(database: database, settings: h.env.settings, config: h.env.config, registry: nil, time: TestTime(.advances)))
+        return (database, h.env.records(index: database))
     }
 
     /// A new index on disk over the same archive, as the app makes one when the archive's index was lost: it holds
@@ -36,7 +36,7 @@ struct RecordsWorld {
         let (database, _) = try AppDatabase.open(at: h.env.root.appendingPathComponent("Indexes/\(UUID().uuidString).sqlite"),
                                                  config: config.database, setAsideSuffix: config.records.setAsideSuffix,
                                                  time: TestTime(.advances)) { true }
-        return (database, ArchiveRecords(database: database, settings: h.env.settings, config: config, registry: nil, time: TestTime(.advances)))
+        return (database, h.env.records(index: database))
     }
 
     /// The record file of the top of the archive, where both documents are filed.
@@ -59,9 +59,6 @@ struct RecordsWorld {
     static func marks(_ database: AppDatabase) async throws -> [String] {
         try await database.reader.read { db in try String.fetchAll(db, sql: "SELECT key FROM record_dirty ORDER BY key") }
     }
-
-    /// A record file's text with its front matter no longer valid YAML, as a slip of the keyboard leaves it.
-    static func broken(_ text: String) -> String { text.replacingOccurrences(of: "entries:", with: "entries: [unclosed") }
 
     /// The identity an entry of the archive's record files gives document `id`.
     static func uid(_ id: Int) -> String { String(format: "5B7A8F4E-0000-0000-0000-%012d", id) }

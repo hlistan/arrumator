@@ -59,6 +59,13 @@ public struct TestEnvironment: Sendable {
     /// Where things are in the archive.
     public var layout: ArchiveLayout { ArchiveLayout(root: archive, records: config.records, watcher: config.watcher) }
 
+    /// The archive's record files, kept with `index`: the environment's own database unless another is given, such as an
+    /// index made anew over the same archive. The archive is one the test made, not the app.
+    public func records(index: AppDatabase? = nil) -> ArchiveRecords {
+        ArchiveRecords(database: index ?? database, archive: archive, settings: settings, config: config, registry: nil,
+                       time: time)
+    }
+
     /// Writes a text file into the archive at `path`, below its top, as the user would put one there.
     @discardableResult
     public func put(_ path: String, text: String) throws -> URL {

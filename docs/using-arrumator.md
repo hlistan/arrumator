@@ -323,10 +323,18 @@ locked by another process or on a full disk is left as it is, and the app says w
 from an archive that cannot be written to, as when its disk is gone, still switches; the app says that archive's record
 files wait, and they are written when you open it again. You can edit the files by hand; the app reads the change back
 and never overwrites it, not even one it cannot read, which `arrumatorcli doctor` names with the reason. An index cannot
-be rebuilt without such a file: the app then files nothing, shows at the foot of the window that reading the archive
-failed, with the file and why, and refuses any change you ask for with the same reason, until the file is corrected or
-moved out of the archive and the index rebuilt in Settings › Advanced, which starts the filing again, or the app opened
-again. The design, and what a rebuild does and does not keep, is in [Storage](storage.md).
+be rebuilt without such a file: the app then files nothing, says **Not filing: reading the archive failed** above the
+sidebar's bar, shows at the foot of the window that reading the archive failed, with the file and why, and refuses
+any change to labels, rules, tasks or questions with the same reason, until the file is corrected or moved out of the
+archive and the index rebuilt in Settings › Advanced, which starts the filing again and clears the foot of the
+window, or the app opened again. An archive whose folder is not there, renamed, moved or on a disk that is not
+connected, is away: the app says **Not filing: the archive's folder is not there** above the bar and names the folder
+at the foot of the window, makes no folder in its place, and starts once it is back and the app is opened again. The
+app makes an archive's folder only when you set the archive up: when you finish onboarding, or switch to a folder that
+is not there. A setting you change meanwhile, as during onboarding, is changed, and recorded in History once
+the index is rebuilt; a change to labels before the archive has been read is refused, saying it can be made once
+Arrumator has read your archive folder. The design, and what a rebuild does and does not keep, is in
+[Storage](storage.md).
 
 The app is not sandboxed: it watches folders you choose, writes extended attributes, and starts Ollama. It uses the
 hardened runtime and makes no network requests other than to your Ollama server.

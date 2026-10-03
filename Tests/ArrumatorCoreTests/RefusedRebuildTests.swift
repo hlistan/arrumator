@@ -6,8 +6,9 @@ import Testing
 /// A rebuild never goes on without a record file, or a folder of the archive, it cannot read (AGENTS.md §4.2): an index
 /// that lacked what it holds would have its gaps filled by what the app did next, over the user's records once the file
 /// read again. It stops naming each and saying what to do, the index stays to be rebuilt, and nothing is read into it,
-/// written from it or worked on until a rebuild succeeds, and a change the user asks for meanwhile is refused, saying
-/// why, rather than dropped by the rebuild (docs/storage.md).
+/// written from it or worked on until a rebuild succeeds, and a change the user asks for meanwhile to what the record
+/// files hold is refused, saying why, rather than dropped by the rebuild, while a setting's event is held for it
+/// (docs/storage.md).
 @Suite struct RefusedRebuildTests {
     /// Expects `rebuild` to be refused naming exactly `paths`, with where each breaks and what to do.
     private func expectRefused(_ paths: [String], _ comment: Comment, _ rebuild: () async throws -> RebuildSummary?) async {
@@ -43,7 +44,7 @@ import Testing
         try await w.records.flush()
         let url = w.h.env.layout.labelRules
         let text = try String(contentsOf: url, encoding: .utf8)
-        let broken = RecordsWorld.broken(text)
+        let broken = TestRecordFiles.broken(text)
         try broken.write(to: url, atomically: true, encoding: .utf8)
 
         let (database, records) = try w.newIndex()
@@ -80,7 +81,7 @@ import Testing
         let tasks = w.h.env.layout.searchTasks
         let conversation = w.h.env.layout.conversationFile(task: task.id)
         let text = try String(contentsOf: tasks, encoding: .utf8)
-        try RecordsWorld.broken(text).write(to: tasks, atomically: true, encoding: .utf8)
+        try TestRecordFiles.broken(text).write(to: tasks, atomically: true, encoding: .utf8)
         let held = try String(contentsOf: conversation, encoding: .utf8)
 
         let (database, records) = try w.newIndex()
@@ -110,7 +111,7 @@ import Testing
         let month = w.h.env.layout.historyFile(month: RecordKind.month(of: w.h.env.time.now()))
         let history = try String(contentsOf: month, encoding: .utf8)
         let text = try String(contentsOf: w.topListing, encoding: .utf8)
-        try RecordsWorld.broken(text).write(to: w.topListing, atomically: true, encoding: .utf8)
+        try TestRecordFiles.broken(text).write(to: w.topListing, atomically: true, encoding: .utf8)
 
         let (database, records) = try w.newIndex()
         await expectRefused([w.topListing.path], "the documents cannot be read, so the history about them is not read without them") {
@@ -118,20 +119,22 @@ import Testing
         }
         #expect(try await records.reconcile() == 0, "nor is anything read into the index, which would take the history's documents for gone")
         let store = HistoryStore(database: database, time: TestTime(.advances))
-        await expectRefused([w.topListing.path], in: database, "an event recorded meanwhile, as of a setting changed, is refused") {
-            try await store.record(.paused, summary: "Paused meanwhile")
-        }
+        // A setting changed meanwhile is made; its event is held until the index holds the archive.
+        try await store.record(.paused, summary: Self.meanwhile)
         try await records.flush()
         #expect(try String(contentsOf: month, encoding: .utf8) == history, "and the month's history is not written without them")
 
         try text.write(to: w.topListing, atomically: true, encoding: .utf8)
         let summary = try #require(try await records.rebuildIfPending(), "once it is corrected, the index is rebuilt")
         let events = try await store.events(limit: 100)
+        #expect(events.filter { $0.summary == Self.meanwhile }.count == 1, "and the event held meanwhile is recorded, once")
         #expect(Set(events.compactMap(\.docId)) == Set(w.documents), "every event about a document is about it still")
         let queued = try await JobStore(database: database, time: TestTime(.advances)).active(kinds: [.reindex]).compactMap(\.docId).sorted()
         #expect(summary.documents == w.documents.count && queued == w.documents && events.contains { $0.kind == .rebuilt },
                 "and the rebuild's steps after it replaced the index, finding the documents, queueing them and recording it, all ran")
     }
+
+    static let meanwhile = "Paused meanwhile"
 
     @Test func foldersOfIncomingAndOnesTheWatcherIgnoresAreNotLookedIntoByARebuild() async throws {
         let w = try await RecordsWorld.make()

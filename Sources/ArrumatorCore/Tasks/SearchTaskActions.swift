@@ -229,9 +229,8 @@ public struct SearchTaskActions: Sendable {
     public func export(_ id: Int64, to folder: URL, format: ExportFormat) async throws -> SearchTaskExport {
         guard let detail = try await store.detail(id: id) else { throw SearchTaskError.taskNotFound(id) }
         guard detail.tree.count > 0 else { throw SearchTaskError.nothingToExport(id) }
-        let settings = await services.settings.current
-        let exporter = SearchTaskExporter(naming: services.config.naming, tasks: config,
-                                          excluded: [settings.archiveURL, settings.incomingURL])
+        let incoming = await services.settings.current.incomingURL
+        let exporter = SearchTaskExporter(naming: services.config.naming, tasks: config, excluded: [services.archive, incoming])
         let (path, manifest) = try exporter.export(detail, into: folder, format: format)
         let now = services.time.now()
         let config = config

@@ -53,9 +53,10 @@ final class OpenedArchives: Sendable {
         runtimes.withLock { $0.append(runtime) }
     }
 
-    /// Writes every record file the command's changes marked.
+    /// Writes every record file the command's changes marked; those of an archive whose folder is away wait in its index
+    /// until it is back, as the command said.
     func flush() async throws {
-        for runtime in runtimes.withLock({ $0 }) { try await runtime.records.flush() }
+        for runtime in runtimes.withLock({ $0 }) where runtime.records.archiveIsThere { try await runtime.records.flush() }
     }
 
     /// Writes them after the command failed, whose error is the one it exits with: one that cannot be written is said
@@ -81,12 +82,34 @@ struct GlobalOptions: ParsableArguments {
     /// already validated, is the Ollama server it talks to in place of the saved one, as `settings --ollama-url` needs to
     /// mend a saved address the runtime would refuse.
     func runtime(ollamaURL: URL? = nil) async throws -> ArrumatorRuntime {
+        let runtime = try await bootstrapped(ollamaURL: ollamaURL)
+        try await runtime.openArchive()
+        return runtime
+    }
+
+    /// `runtime(ollamaURL:)` for a command the app also runs on an archive it cannot read: changing a setting, switching
+    /// to another archive, on one whose index its rebuild refused for a record file that cannot be read, or whose folder
+    /// is away. Why is said on standard error, and the command goes on: its change is made, and recorded in the archive's
+    /// History, held until the index is rebuilt or kept in it until the folder is back (docs/storage.md).
+    func runtimeEvenIfUnread(ollamaURL: URL? = nil) async throws -> ArrumatorRuntime {
+        let runtime = try await bootstrapped(ollamaURL: ollamaURL)
+        do {
+            try await runtime.openArchive()
+        } catch let unread as RecordsError {
+            switch unread {
+            case .unreadableFiles, .archiveNotThere: FileHandle.standardError.write(Data((unread.localizedDescription + "\n").utf8))
+            default: throw unread
+            }
+        }
+        return runtime
+    }
+
+    private func bootstrapped(ollamaURL: URL?) async throws -> ArrumatorRuntime {
         var environment = RuntimeEnvironment.current
         if let ollamaURL { environment.ollamaURL = ollamaURL.absoluteString }
         let runtime = try await ArrumatorRuntime.bootstrap(appVersion: Arrumator.version, environment: environment,
                                                            echoLogsToStderr: verbose, trash: environment.trash(orElse: SystemTrash()))
         OpenedArchives.current?.add(runtime)
-        try await runtime.openArchive()
         return runtime
     }
 
@@ -183,8 +206,8 @@ struct Run: AsyncParsableCommand {
     func run() async throws {
         let runtime = try await options.runtime()
         guard await runtime.start() else { throw await runtime.database.notRebuilt() }
-        let current = await runtime.settings.current
-        print("Watching \(current.incomingPath) → \(current.archivePath). Press Ctrl-C to stop.")
+        let incoming = await runtime.settings.current.incomingURL
+        print("Watching \(incoming.path) → \(runtime.archive.path). Press Ctrl-C to stop.")
         for await status in await runtime.coordinator.statusUpdates() {
             if let current = status.current {
                 let tags = current.tags.isEmpty ? "" : " · " + current.tags.map(\.value).joined(separator: " · ")
@@ -228,7 +251,7 @@ struct Settings: AsyncParsableCommand {
         // A new server is checked before anything opens, and the runtime talks to it rather than to the saved one, which
         // may be an address this version refuses: so the command that gives another can always run.
         let server = try ollamaURL.map { try OllamaEndpoint.validated($0) }
-        let runtime = try await options.runtime(ollamaURL: server)
+        let runtime = try await options.runtimeEvenIfUnread(ollamaURL: server)
         // The profile first: one the settings do not list is refused before anything else is saved.
         if let profile { try await runtime.profiles.use(profile) }
         try await runtime.settingsActions.change(given)

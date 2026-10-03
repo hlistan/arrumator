@@ -118,7 +118,7 @@ public actor IngestCoordinator {
             let settings = await services.settings.current
             let powerReason = PowerState.current().pauseReason(settings: settings, config: services.config.power)
             status.powerPauseReason = powerReason
-            if !settings.paused, powerReason == nil, FileManager.default.fileExists(atPath: settings.archiveURL.path) {
+            if !settings.paused, powerReason == nil, FileManager.default.fileExists(atPath: services.archive.path) {
                 if let job = await nextDue() {
                     await process(job)
                     continue
@@ -345,7 +345,7 @@ public actor IngestCoordinator {
             filedRecord = document
         } else {
             guard FileManager.default.fileExists(atPath: document.path) else { throw IngestError.sourceMissing(document.path) }
-            let directory = job.kind == .ingest ? services.layout(settings).root : document.url.deletingLastPathComponent()
+            let directory = job.kind == .ingest ? services.archive : document.url.deletingLastPathComponent()
             let (unfiledJob, unfiledPayload, now) = (job, payload, services.time.now())
             filedRecord = try await services.filer.file(
                 document, source: content.source, analysis: analysis, status: status, directory: directory,
@@ -443,7 +443,7 @@ public actor IngestCoordinator {
             let analysis = DocumentAnalysis(problems: ["Processing failed: \(message)"])
             if FileManager.default.fileExists(atPath: document.path), job.kind == .ingest {
                 _ = try await services.filer.file(document, source: document.unreadSource, analysis: analysis, status: .failed,
-                                                  directory: services.layout(settings).root, inPlace: false, actor: .system,
+                                                  directory: services.archive, inPlace: false, actor: .system,
                                                   settings: settings, trace: trace, event: .failed, recording: nil)
             } else {
                 var failed = document

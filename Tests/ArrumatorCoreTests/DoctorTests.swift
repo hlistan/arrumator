@@ -21,7 +21,7 @@ import Testing
         let address = try OllamaEndpoint.validated(settings.ollamaURL)
         let lifecycle = OllamaLifecycle(api: mock, config: env.config.ollama, management: .external, binaryOverride: nil,
                                         address: address, time: env.time)
-        return await Doctor(database: env.database, paths: env.paths, appVersion: "test", time: env.time)
+        return await Doctor(database: env.database, archive: env.archive, paths: env.paths, appVersion: "test", time: env.time)
             .run(settings: settings, config: env.config, lifecycle: lifecycle, models: ModelManager(api: mock, config: env.config.ollama),
                  ollamaURL: address, unreadableRecords: unreadable)
     }

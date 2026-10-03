@@ -2,6 +2,13 @@ import ArrumatorCore
 import ArrumatorRuntime
 import Foundation
 
+/// A subscriber to whether a runtime's work runs (`ArrumatorRuntime.workUpdates()`), as the app is one: everything it was
+/// sent, in order.
+actor WorkFollower {
+    private(set) var received: [RuntimeWork] = []
+    func add(_ work: RuntimeWork) { received.append(work) }
+}
+
 /// A scratch app home whose settings name scratch folders, never the user's archive or Incoming.
 struct RuntimeHome {
     let root: URL
@@ -28,6 +35,8 @@ struct RuntimeHome {
             $0.archivePath = home.folder("First").path
             $0.incomingPath = home.folder("Incoming").path
         }
+        // The archive the user has, set up as onboarding sets it up: the app never makes its folder at a later launch.
+        try FileManager.default.createDirectory(at: home.folder("First"), withIntermediateDirectories: true)
         return home
     }
 
@@ -38,6 +47,25 @@ struct RuntimeHome {
             $0.ollamaURL = Self.nowhere
             $0.ollamaManagement = .external
         }
+    }
+
+    /// Everything the history files of the archive in `folder` hold, one after another; empty while it has none.
+    func historyWritten(in folder: URL) throws -> String {
+        let config = try PipelineConfig.load(paths: paths, environment: environment)
+        let history = ArchiveLayout(root: folder, records: config.records, watcher: config.watcher).history
+        // No folder yet is nothing written yet.
+        let files = (try? FileManager.default.contentsOfDirectory(at: history, includingPropertiesForKeys: nil)) ?? []
+        return try files.sorted { $0.path < $1.path }.map { try String(contentsOf: $0, encoding: .utf8) }.joined()
+    }
+
+    /// Writes `text` as the list of documents at the top of the archive in `folder`, which it makes if need be: an
+    /// archive with records, as one the app has filed into. The list's URL.
+    @discardableResult
+    func writeList(_ text: String, in folder: URL) throws -> URL {
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let list = folder.appendingPathComponent(try PipelineConfig.load(paths: paths, environment: environment).records.documentsFileName)
+        try text.write(to: list, atomically: true, encoding: .utf8)
+        return list
     }
 
     /// What the app and every command do first.

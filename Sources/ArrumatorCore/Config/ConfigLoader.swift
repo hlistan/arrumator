@@ -3,13 +3,11 @@ import Foundation
 public enum ConfigError: Error, LocalizedError {
     case missingResource(String)
     case invalid(name: String, underlying: String)
-    case archiveFolderMissing(String)
 
     public var errorDescription: String? {
         switch self {
         case let .missingResource(name): "Bundled configuration \(name) is missing"
         case let .invalid(name, underlying): "Configuration \(name) is invalid: \(underlying)"
-        case let .archiveFolderMissing(path): "The archive folder \(path) does not exist, so it has no index yet"
         }
     }
 }

@@ -66,9 +66,10 @@ final class AppModel {
     var menuBarIconHidden = false
     private var streams: [Task<Void, Never>] = []
     private var watcherStart: Task<Void, Never>?
-    /// True once the folder watchers are running. Starting them opens the archive and Incoming folders, which macOS
-    /// may hold until the user answers a permission prompt.
-    private(set) var watching = false
+    /// Whether the runtime's work runs, the folder watchers among it, as the runtime says (`workUpdates()`): not while
+    /// it opens the archive and Incoming folders, which macOS may hold until the user answers a permission prompt, nor
+    /// when the archive's index could not be rebuilt from it.
+    private(set) var work = RuntimeWork.idle
     /// True while the app closes one archive and opens another.
     private(set) var switchingArchive = false
     private let notifications = NotificationService()
@@ -91,34 +92,32 @@ final class AppModel {
         }
     }
 
-    /// Called when onboarding finishes.
+    /// Called when onboarding finishes: the archive is set up, its folder made when it is not there
+    /// (`ArrumatorRuntime.finishOnboarding()`), and opened.
     func finishOnboarding() async {
         guard let runtime else { return }
-        await update { $0.onboardingCompleted = true }
+        await changeSettings(Wording.saveSettingsAction) { try await $0.finishOnboarding() }
         startWatching(runtime)
     }
 
     /// Opens the archive and starts the work off the main actor (`ArrumatorRuntime.openAndStart()`): macOS blocks the
     /// first access to the Documents folder until the user answers its permission prompt, and the windows and the menu
     /// bar item must appear regardless. The runtime owns that step, so quitting or switching archives meanwhile stops it,
-    /// and what it says comes only while the runtime it began on is still the app's.
+    /// and what it says comes only while the runtime it began on is still the app's. Whether the work then runs, the
+    /// runtime says (`work`): the archive may have been read with the index refused, so nothing runs.
     private func startWatching(_ runtime: ArrumatorRuntime) {
         guard watcherStart == nil else { return }
         watcherStart = Task.detached { [weak self] in
-            let unread: String?
             do {
                 try await runtime.openAndStart()
-                unread = nil
             } catch is CancellationError {
                 // Stopped first, by quitting or by a switch of archives: nothing started.
-                return
             } catch {
-                unread = error.localizedDescription
-            }
-            await MainActor.run {
-                guard let self, self.runtime === runtime else { return }
-                if let unread { self.lastError = Wording.failure(Wording.readArchiveAction, unread) }
-                self.watching = true
+                let unread = error.localizedDescription
+                await MainActor.run {
+                    guard let self, self.runtime === runtime else { return }
+                    self.lastError = Wording.failure(Wording.readArchiveAction, unread)
+                }
             }
         }
     }
@@ -135,7 +134,7 @@ final class AppModel {
             let switched = try await runtime.switchArchive(to: path)
             let next = switched.runtime
             watcherStart = nil
-            watching = false
+            work = .idle
             self.runtime = next
             settings = await next.settings.current
             ingest = .idle
@@ -154,7 +153,7 @@ final class AppModel {
             Log.error(.ui, "Could not switch archives", ["error": error.localizedDescription])
             // A switch that failed once this archive had stopped starts it again, reading it first if it was being read
             // then: the app follows that start as it followed the first.
-            if !watching, settings?.onboardingCompleted == true {
+            if work != .running, settings?.onboardingCompleted == true {
                 watcherStart = nil
                 startWatching(runtime)
             }
@@ -180,6 +179,19 @@ final class AppModel {
             },
             Task { [weak self] in
                 for await state in await runtime.lifecycle.states() { self?.ollama = state }
+            },
+            Task { [weak self] in
+                var refused = false
+                for await work in await runtime.workUpdates() {
+                    guard let self else { return }
+                    self.work = work
+                    if work == .refused || work == .away { refused = true }
+                    // Once the work runs where it was refused, why it was refused no longer holds.
+                    if work == .running, refused {
+                        refused = false
+                        self.lastError = nil
+                    }
+                }
             },
             Task { [weak self] in
                 for await changed in await runtime.settings.changes() { self?.settings = changed }
@@ -238,7 +250,7 @@ final class AppModel {
             lastError = nil
         } catch {
             let error = await runtime.database.explained(error)
-            lastError = Wording.failure(what, error.localizedDescription)
+            lastError = Wording.failure(what, Wording.reason(error))
             Log.error(.ui, "An action failed", ["action": what, "error": error.localizedDescription])
         }
         await refresh()
@@ -374,18 +386,31 @@ final class AppModel {
     /// Why the app is not filing right now, or nil when everything is working.
     var attention: String? {
         if case let .failed(why) = phase { return why }
-        if settings?.onboardingCompleted == true, !watching { return Wording.waitingForFolders }
+        if let notWorking = notWorking(waiting: Wording.waitingForFolders) { return notWorking }
         if settings?.paused == true { return Wording.paused }
         if let reason = ingest.powerPauseReason { return Wording.waiting(reason) }
         if ingest.waitingForOllama || !ollama.isReady { return ollama.summary }
         return nil
     }
 
+    /// Why nothing is filed although the user has set the app up, as the runtime says (`work`): it waits for the
+    /// folders, in the words `waiting` gives, or the archive could not be read for its index to be rebuilt, which the
+    /// foot of the window says more of (`lastError`); nil while the work runs, or before onboarding is done.
+    private func notWorking(waiting: String) -> String? {
+        guard settings?.onboardingCompleted == true else { return nil }
+        switch work {
+        case .running: return nil
+        case .idle: return waiting
+        case .refused: return Wording.archiveNotRead
+        case .away: return Wording.archiveAway
+        }
+    }
+
     /// What the app is doing, in the menu bar popover: a document being filed first, then a search request being read or a
     /// question about a task's documents being answered.
     var statusLine: String {
         if case let .failed(why) = phase { return why }
-        if settings?.onboardingCompleted == true, !watching { return Wording.startingForFolders }
+        if let notWorking = notWorking(waiting: Wording.startingForFolders) { return notWorking }
         if settings?.paused == true { return Wording.paused }
         if let reason = ingest.powerPauseReason { return Wording.waiting(reason) }
         if ingest.waitingForOllama || taskQueue.waitingForOllama || conversation.waitingForOllama { return Wording.waitingForOllama }

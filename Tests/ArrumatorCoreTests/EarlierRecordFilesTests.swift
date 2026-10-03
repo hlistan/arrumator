@@ -42,7 +42,7 @@ import Testing
           decision: {folderCode: F12, title: Fatura eletricidade, confidence: {final: 0.93}}
         ---
         """.write(to: directory.appendingPathComponent(env.config.records.documentsFileName), atomically: true, encoding: .utf8)
-        let summary = try await ArchiveRecords(database: env.database, settings: env.settings, config: env.config, registry: nil, time: TestTime(.advances)).rebuild()
+        let summary = try await env.records().rebuild()
         #expect(summary.documents == 1, "the earlier version's entry is read")
         let doc = try #require(try await DocumentStore(database: env.database, time: TestTime(.advances)).document(id: 7))
         #expect(doc.path == file.standardizedFileURL.path && doc.status == .filed && doc.originalFilename == "fatura.pdf",
@@ -90,8 +90,7 @@ import Testing
           sha256: \(sha)
         ---
         """.write(to: h.env.archive.appendingPathComponent(h.env.config.records.documentsFileName), atomically: true, encoding: .utf8)
-        try await ArchiveRecords(database: h.env.database, settings: h.env.settings, config: h.env.config, registry: nil,
-                                 time: TestTime(.advances)).rebuild()
+        try await h.env.records().rebuild()
         let copy = try #require(try await h.services.documents.document(id: 2))
         #expect(copy.status == .duplicate && copy.duplicateOf == 1, "a copy an earlier version filed is read back as the copy it is")
         #expect(try await h.services.jobs.active().map(\.kind) == [.reindex, .reindex], "and both have their text read again for search")
@@ -198,7 +197,7 @@ import Testing
         let text = Self.task(release, exportedTo: env.root.appendingPathComponent("Exports/Electricity"))
         try text.write(to: url, atomically: true, encoding: .utf8)
 
-        let records = ArchiveRecords(database: env.database, settings: env.settings, config: env.config, registry: nil, time: TestTime(.advances))
+        let records = env.records()
         let summary = try await records.rebuild()
         #expect(summary.searchTasks == 1, "the task is read, and the rebuild is not refused for its file: \(summary)")
         let task = try #require(try await SearchTaskStore(database: env.database, config: env.config.tasks, time: env.time).detail(id: 1))
@@ -250,7 +249,7 @@ import Testing
           payload: '{}'
         ---
         """.write(to: url, atomically: true, encoding: .utf8)
-        let records = ArchiveRecords(database: env.database, settings: env.settings, config: env.config, registry: nil, time: TestTime(.advances))
+        let records = env.records()
         let summary = try await records.rebuild()
         #expect(summary.events == 2, "the file is read, the events of kinds that still exist with it: \(summary)")
         let events = try await HistoryStore(database: env.database, time: env.time).events(limit: 10, before: TestTime.start)

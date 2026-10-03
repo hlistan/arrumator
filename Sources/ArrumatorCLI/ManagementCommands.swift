@@ -124,9 +124,9 @@ struct Archive: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
             abstract: "File into another archive from now on. A folder that was an archive is opened as it was left.")
         @OptionGroup var options: GlobalOptions
-        @Argument(help: "The archive's folder; created if it does not exist.") var path: String
+        @Argument(help: "The archive's folder; made when it is not there and no index has held an archive in it, never in place of one that is away.") var path: String
         func run() async throws {
-            let switched = try await options.runtime().switchArchive(to: path)
+            let switched = try await options.runtimeEvenIfUnread().switchArchive(to: path)
             // Said on standard error, so the output stays one JSON document with --json.
             if let unwritten = switched.unwritten { FileHandle.standardError.write(Data((unwritten.note + "\n").utf8)) }
             let next = switched.runtime

@@ -2,12 +2,13 @@
 import ArrumatorTesting
 import Foundation
 import GRDB
+import Synchronization
 import Testing
 
 /// What a record file says reaches the index without losing what the index holds (docs/storage.md): a document is the
 /// one its identity names, a reference to nothing is dropped rather than failing the read, an entry removed by hand is
-/// written back, what the index keeps of its own about an event stays attached to it, and a rebuild never replaces
-/// what was committed after the archive was read for it.
+/// written back, what the index keeps of its own about an event stays attached to it, and neither a file read back nor a
+/// rebuild replaces what was committed after the file, or the archive, was read for it.
 @Suite struct RecordFileReadingTests {
     @Test func aFolderCopiedInFromAnotherArchiveNeverTakesTheNumbersOfThisOnesDocuments() async throws {
         let w = try await RecordsWorld.make()
@@ -66,7 +67,7 @@ import Testing
           sha256: abc
         ---
         """.write(to: env.archive.appendingPathComponent(env.config.records.documentsFileName), atomically: true, encoding: .utf8)
-        let records = ArchiveRecords(database: env.database, settings: env.settings, config: env.config, registry: nil, time: TestTime(.advances))
+        let records = env.records()
         let summary = try await records.rebuild()
         #expect(summary.documents == 1, "the rebuild is not undone by a reference to a document the archive does not have")
         let copy = try #require(try await DocumentStore(database: env.database, time: env.time).document(id: 2))
@@ -107,6 +108,49 @@ import Testing
         #expect(after.map(\.id) == before.map(\.id) && after.map(\.jobId) == before.map(\.jobId) && after.map(\.traceId) == before.map(\.traceId),
                 "each event keeps the job and trace it was recorded with, which the file does not hold")
         #expect(try await w.h.services.history.events(limit: 100).contains { $0.summary.hasPrefix("Corrected ") }, "and the edit is read")
+    }
+
+    @Test func anEventRecordedWhileItsHistoryFileIsReadBackIsKept() async throws {
+        let w = try await RecordsWorld.make()
+        defer { w.h.env.cleanup() }
+        let month = w.h.env.layout.historyFile(month: RecordKind.month(of: w.h.env.time.now()))
+        // The user edits the month's history by hand, and the app records an event while the file is read back: after it
+        // was read, before what it holds is applied to the index.
+        try (try String(contentsOf: month, encoding: .utf8) + "\nEdited by hand\n").write(to: month, atomically: true, encoding: .utf8)
+        let history = w.h.services.history
+        let recorded = Mutex(false)
+        await w.records.setBeforeApplying { url in
+            guard url.path == month.path, recorded.withLock({ done in defer { done = true }; return !done }) else { return }
+            // From a task of its own, as the app records it.
+            _ = try? await Task { try await history.record(.paused, summary: Self.meanwhile) }.value
+        }
+        #expect(try await w.records.reconcile() == 1, "the edited month is read back")
+        #expect(recorded.withLock { $0 }, "with the event recorded meanwhile")
+        let kept = try await history.events(limit: 100, kinds: [.paused]).map(\.summary)
+        #expect(kept == [Self.meanwhile], "the event is kept, not replaced by what the file held before it")
+        #expect(try String(contentsOf: month, encoding: .utf8).contains(Self.meanwhile), "and written into the month's file")
+    }
+
+    static let meanwhile = "Recorded while the file was read back"
+
+    @Test func aRuleMadeWhileTheRulesFileIsReadBackIsKeptBesideTheEdit() async throws {
+        let w = try await RecordsWorld.make()
+        defer { w.h.env.cleanup() }
+        try await w.h.labels.merge(DocumentLabel(kind: .sender, value: "EDP Comercial"), into: "EDP")
+        try await w.records.flush()
+        let url = w.h.env.layout.labelRules
+        // The user changes the rule by hand, and decides about another label while the file is read back.
+        try String(contentsOf: url, encoding: .utf8).replacingOccurrences(of: "target: EDP", with: "target: EDP Energia")
+            .write(to: url, atomically: true, encoding: .utf8)
+        let labels = w.h.labels
+        let decided = Mutex(false)
+        await w.records.setBeforeApplying { read in
+            guard read.path == url.path, decided.withLock({ done in defer { done = true }; return !done }) else { return }
+            _ = try? await Task { try await labels.ignore(DocumentLabel(kind: .topic, value: "electricity")) }.value
+        }
+        #expect(try await w.records.reconcile() == 1, "the edited rules are read back")
+        let rules = try await w.h.services.labels.rules()
+        #expect(rules.map(\.target) == ["EDP Energia", nil], "both the edit and the rule decided meanwhile are kept: \(rules.map(\.summary))")
     }
 
     @Test func aChangeCommittedWhileTheArchiveIsReadForARebuildIsNeverLost() async throws {

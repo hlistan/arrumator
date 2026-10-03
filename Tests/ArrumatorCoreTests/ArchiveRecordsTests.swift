@@ -118,13 +118,13 @@ import Testing
         let h = try await Harness.make(analyzer: StubAnalyzer(labels: nil))
         defer { h.env.cleanup() }
         let doc = try await h.ingest("bill.txt", text: "EDP electricity July")
-        let records = ArchiveRecords(database: h.env.database, settings: h.env.settings, config: h.env.config, registry: nil, time: TestTime(.advances))
+        let records = h.env.records()
         try await records.flush()
         let text = try String(contentsOf: h.env.archive.appendingPathComponent(h.env.config.records.documentsFileName), encoding: .utf8)
         #expect(!text.contains("labels:"), "an entry has no labels until the model has given some")
 
         let database = try AppDatabase.inMemory()
-        try await ArchiveRecords(database: database, settings: h.env.settings, config: h.env.config, registry: nil, time: TestTime(.advances)).rebuild()
+        try await h.env.records(index: database).rebuild()
         let id = try #require(doc.id)
         let back = try #require(try await DocumentStore(database: database, time: TestTime(.advances)).document(id: id))
         #expect(back.labels == nil && back.status == .needsReview, "read back as not labelled, never as labelled with nothing")
@@ -302,8 +302,7 @@ import Testing
         let url = w.h.env.root.appendingPathComponent("Indexes/archive.sqlite")
         func open() throws -> (AppDatabase, AppDatabase.Opening, ArchiveRecords) {
             let (database, opening) = try Self.open(url, canRebuild: true)
-            return (database, opening, ArchiveRecords(database: database, settings: w.h.env.settings, config: w.h.env.config, registry: nil,
-                                                      time: TestTime(.advances)))
+            return (database, opening, w.h.env.records(index: database))
         }
         // The app makes the archive's index when it starts, and reads the archive into it once onboarding is done: it quits between.
         #expect(try open().1 == .created, "the first opening makes the index")
@@ -320,12 +319,13 @@ import Testing
         #expect(try await open().2.rebuildIfPending() == nil, "and once done, an opening only reads back what changed")
     }
 
-    @Test func anIndexOfAnArchiveWithoutRecordsIsCompleteAsItIsMade() async throws {
+    @Test func anIndexOfAnArchiveWithoutRecordsIsCompleteOnceItIsOpened() async throws {
         let env = try await TestEnvironment.make()
         defer { env.cleanup() }
         try FileManager.default.createDirectory(at: env.archive, withIntermediateDirectories: true)
         let (database, _) = try Self.open(env.root.appendingPathComponent("Indexes/archive.sqlite"), canRebuild: true)
-        let records = ArchiveRecords(database: database, settings: env.settings, config: env.config, registry: nil, time: TestTime(.advances))
+        let records = env.records(index: database)
+        #expect(try await database.pendingRebuild() == .unread, "a new index holds nothing of its archive until the archive is opened")
         #expect(try await records.rebuildIfPending() == nil, "an empty archive has nothing to rebuild from")
         try await HistoryStore(database: database, time: env.time).record(.paused, summary: "Paused")
         try await records.flush()

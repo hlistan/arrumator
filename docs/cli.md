@@ -14,7 +14,13 @@ and `eval` writes its JSON report with `--report`.
 A command opens the archive named in your settings, and can write that archive's record files and create the
 archive's `System` folder: what it changes is written into the record files before it exits, also when it fails part
 way. When the archive's index is new and a record file cannot be read, every command stops, naming the file and why,
-until it is corrected or moved out of the archive. To experiment, set `ARRUMATOR_HOME` to a scratch folder and put a
+until it is corrected or moved out of the archive. So does an archive whose folder is not there, as on a disk not
+connected, naming the folder. The command line has no onboarding and cannot tell a new archive from one that is away,
+so no command makes an archive's folder but `archive switch`, which makes the folder it switches to: to start an
+archive at the path the settings already name, make its folder yourself. On either, `settings` and `archive switch`
+say why on standard error and go on, as the app does: the change or the switch is made, and recorded in the archive's
+History once its index is rebuilt or its folder is back; a switch to an archive that is away is refused, naming its
+folder. To experiment, set `ARRUMATOR_HOME` to a scratch folder and put a
 `settings.json` there whose `incomingPath` and `archivePath` point at scratch folders too: `ARRUMATOR_HOME` alone does
 not move the archive.
 
@@ -126,7 +132,7 @@ join a queue of their own, kept with the task in `System/Conversations`, which `
 | Command | What it does |
 |---|---|
 | `arrumatorcli archive [show]` | The archive documents are filed into, and its index. |
-| `arrumatorcli archive switch <path>` | File into another archive from now on, with its own documents and history. The folder is created if it does not exist; one that was an archive is opened as it was left. When the record files of the archive left cannot be written, the switch is made and a note on standard error names that archive: they are written when it is next opened. |
+| `arrumatorcli archive switch <path>` | File into another archive from now on, with its own documents and history. The folder is made when it is not there and no index has held an archive in it; one that was an archive is opened as it was left, and one whose folder is not there though an index has held it is away: the switch is refused, naming it, and no folder is made in its place. When the record files of the archive left cannot be written, the switch is made and a note on standard error names that archive: they are written when it is next opened. |
 | `arrumatorcli rebuild` | Rebuild the index from the archive's record files. Changes not yet written to them are written first; documents then have their text read again in the background of the app or `arrumatorcli run`. A record file that cannot be read stops it before anything changes, naming the file. |
 
 ## Insight and diagnostics

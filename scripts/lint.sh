@@ -90,6 +90,11 @@ gate rows "what opens or acts on a click opens from the keyboard and VoiceOver t
   'onTapGesture( \{|\(perform:)' \
   App
 
+gate archive "a runtime acts on its own archive, ArrumatorRuntime.archive, which it is made with: only bootstrap and a switch of archives read the archive from the settings (and eval chooses its throw-away one before bootstrap), as after a switch the settings name the next archive, and the runtime left, stopped again, would write into it" \
+  '^Sources/ArrumatorCore/Config/AppSettings[^/]*\.swift:|^Sources/ArrumatorRuntime/ArrumatorRuntime\.swift:[0-9]+: +let archive = current\.archiveURL$|^Sources/ArrumatorRuntime/ArrumatorRuntime\.swift:[0-9]+: +try await settings\.update \{ [$]0\.archivePath = target\.path \}$|^Sources/ArrumatorCLI/Eval\.swift:[0-9]+: +chosen\.archivePath = archive\.path$' \
+  '\.archive(URL|Path)\b' \
+  Sources
+
 gate debt "no TODO, FIXME, HACK or XXX markers" \
   '^scripts/lint\.sh:' \
   '\b(TODO|FIXME|HACK|XXX)\b' \

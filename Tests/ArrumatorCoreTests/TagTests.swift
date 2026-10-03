@@ -20,11 +20,6 @@ import Testing
         try await StatsService(database: h.env.database, config: h.env.config.stats, time: h.env.time).insights()
     }
 
-    static func records(_ h: Harness, database: AppDatabase? = nil) -> ArchiveRecords {
-        ArchiveRecords(database: database ?? h.env.database, settings: h.env.settings, config: h.env.config, registry: nil,
-                       time: TestTime(.advances))
-    }
-
     // MARK: The kind
 
     @Test func aTagIsKeptAsWrittenOnOneLineAndCutAtTheLimit() throws {
@@ -115,7 +110,7 @@ import Testing
         }
         #expect(left.isEmpty, "and is left empty of files, every one filed")
 
-        try await Self.records(h).flush()
+        try await h.env.records().flush()
         let listing = try String(contentsOf: h.env.archive.appendingPathComponent(h.env.config.records.documentsFileName), encoding: .utf8)
         #expect(listing.contains("kind: tag") && listing.contains("value: Taxes 2024"), "the tag is in the archive's record of the document")
 
@@ -156,11 +151,11 @@ import Testing
         #expect(event.summary == "Not read: the model gave no valid answer; tagged “Taxes 2024” by its folder in Incoming",
                 "History says why it was not read, and that it was tagged all the same")
 
-        try await Self.records(h).flush()
+        try await h.env.records().flush()
         let text = try String(contentsOf: h.env.archive.appendingPathComponent(h.env.config.records.documentsFileName), encoding: .utf8)
         #expect(text.contains("tags_only: true") && text.contains("value: Taxes 2024"), "its record keeps the tag, and that it is no more yet")
         let database = try AppDatabase.inMemory()
-        try await Self.records(h, database: database).rebuild()
+        try await h.env.records(index: database).rebuild()
         let back = try #require(try await DocumentStore(database: database, time: TestTime(.advances)).document(id: id))
         #expect(back.labels == [Self.tag] && !back.isLabelled, "a rebuild brings back the tag, with the document still not labelled")
 

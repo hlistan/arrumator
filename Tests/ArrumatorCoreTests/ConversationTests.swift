@@ -393,8 +393,7 @@ import Testing
         let waiting = try await talk.ask(w.task.id, question: "Still waiting?")
         _ = try await talk.store.begin(waiting.id)
 
-        let records = ArchiveRecords(database: w.h.env.database, settings: w.h.env.settings, config: w.h.env.config, registry: nil,
-                                     time: w.h.env.time)
+        let records = w.h.env.records()
         try await records.flush()
         let url = w.h.env.layout.conversationFile(task: w.task.id)
         let file = try String(contentsOf: url, encoding: .utf8)
@@ -406,8 +405,7 @@ import Testing
                 "and below it, for people, each question, its answer and the documents it draws on and found, by name")
 
         let database = try AppDatabase.inMemory()
-        _ = try await ArchiveRecords(database: database, settings: w.h.env.settings, config: w.h.env.config, registry: nil,
-                                     time: w.h.env.time).rebuild()
+        _ = try await w.h.env.records(index: database).rebuild()
         let rebuilt = TaskConversationStore(database: database, time: w.h.env.time)
         let before = try await turn(talk, answered.id)
         let after = try #require(try await rebuilt.turn(id: answered.id))
@@ -428,8 +426,7 @@ import Testing
         let (queue, talk) = w.h.conversations(StubAnswerer(fallback: Self.reply), interpreter: StubInterpreter(plans: [:]))
         let asked = try await talk.ask(w.task.id, question: Self.question)
         await queue.drain()
-        let records = ArchiveRecords(database: w.h.env.database, settings: w.h.env.settings, config: w.h.env.config, registry: nil,
-                                     time: w.h.env.time)
+        let records = w.h.env.records()
         try await records.flush()
         let url = w.h.env.layout.conversationFile(task: w.task.id)
         let edited = try String(contentsOf: url, encoding: .utf8).replacingOccurrences(of: Self.reply.text, with: "Corrected by hand")

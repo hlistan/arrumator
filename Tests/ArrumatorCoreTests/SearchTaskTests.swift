@@ -414,8 +414,7 @@ import Testing
         _ = try await tasks.export(id, to: w.h.env.root.appendingPathComponent("Out", isDirectory: true), format: .folder)
         let waiting = try await tasks.create(prompt: "phone bills", effort: .high, profile: "smart").id
 
-        let records = ArchiveRecords(database: w.h.env.database, settings: w.h.env.settings, config: w.h.env.config, registry: nil,
-                                     time: w.h.env.time)
+        let records = w.h.env.records()
         try await records.flush()
         let file = try String(contentsOf: w.h.env.layout.searchTasks, encoding: .utf8)
         #expect(file.contains("prompt: \(Self.prompt)") && file.contains("inclusion: removed") && file.contains("format: folder"),
@@ -426,8 +425,7 @@ import Testing
         #expect(file.components(separatedBy: "profile:").count == 2, "a task that follows Settings' profile names none")
 
         let database = try AppDatabase.inMemory()
-        let summary = try await ArchiveRecords(database: database, settings: w.h.env.settings, config: w.h.env.config, registry: nil,
-                                               time: w.h.env.time).rebuild()
+        let summary = try await w.h.env.records(index: database).rebuild()
         #expect(summary.searchTasks == 2, "a rebuild reads both tasks back")
         let rebuilt = SearchTaskStore(database: database, config: w.h.env.config.tasks, time: w.h.env.time)
         let before = try await task(tasks, id)
@@ -464,8 +462,7 @@ import Testing
           exports: []
         ---
         """.write(to: h.env.layout.searchTasks, atomically: true, encoding: .utf8)
-        let summary = try await ArchiveRecords(database: h.env.database, settings: h.env.settings, config: h.env.config, registry: nil,
-                                               time: h.env.time).rebuild()
+        let summary = try await h.env.records().rebuild()
         #expect(summary.searchTasks == 1, "the earlier version's task is read")
         let interpreter = StubInterpreter(plans: ["water bills": Self.invoices2025])
         let (queue, tasks) = h.searchTasks(interpreter)

@@ -23,12 +23,15 @@ public struct DoctorReport: Sendable, Codable, Hashable {
 /// Environment self-check, logged at startup and exported with diagnostics.
 public struct Doctor: Sendable {
     public let database: AppDatabase
+    /// The archive checked, whose index `database` is.
+    public let archive: URL
     public let paths: AppPaths
     public let appVersion: String
     public let time: any TimeSource
 
-    public init(database: AppDatabase, paths: AppPaths, appVersion: String, time: any TimeSource) {
+    public init(database: AppDatabase, archive: URL, paths: AppPaths, appVersion: String, time: any TimeSource) {
         self.database = database
+        self.archive = archive
         self.paths = paths
         self.appVersion = appVersion
         self.time = time
@@ -46,10 +49,10 @@ public struct Doctor: Sendable {
             checks.append(DoctorCheck(name: name, status: ok ? .ok : (warnOnly ? .warning : .error), detail: detail))
         }
         var isDir: ObjCBool = false
-        let archiveExists = fm.fileExists(atPath: settings.archiveURL.path, isDirectory: &isDir) && isDir.boolValue
-        add("Archive folder", archiveExists && fm.isWritableFile(atPath: settings.archiveURL.path), settings.archiveURL.path)
+        let archiveExists = fm.fileExists(atPath: archive.path, isDirectory: &isDir) && isDir.boolValue
+        add("Archive folder", archiveExists && fm.isWritableFile(atPath: archive.path), archive.path)
         add("Incoming folder", fm.fileExists(atPath: settings.incomingURL.path), settings.incomingURL.path, warnOnly: true)
-        let nested = settings.archiveURL.path.hasPrefix(settings.incomingURL.path + "/")
+        let nested = archive.path.hasPrefix(settings.incomingURL.path + "/")
         add("Incoming is not above the archive", !nested, nested ? "The archive is inside Incoming" : "ok")
         do {
             let fts = try await database.reader.read { db in try Bool.fetchOne(db, sql: "SELECT sqlite_compileoption_used('ENABLE_FTS5')") }
@@ -95,7 +98,7 @@ public struct Doctor: Sendable {
         let report = DoctorReport(generatedAt: time.now(), appVersion: appVersion,
                                   macOS: ProcessInfo.processInfo.operatingSystemVersionString,
                                   paths: ["support": paths.supportDirectory.path, "logs": paths.logsDirectory.path,
-                                          "index": (try? paths.indexURL(for: settings.archiveURL))?.path ?? "none yet", "settings": paths.settingsURL.path],
+                                          "index": paths.indexURL(for: archive).path, "settings": paths.settingsURL.path],
                                   checks: checks, models: modelStatus, ollama: state.summary)
         for c in checks where c.status != .ok {
             Log.log(c.status == .error ? .error : .warning, .app, "A doctor check did not pass", ["check": c.name, "detail": c.detail])

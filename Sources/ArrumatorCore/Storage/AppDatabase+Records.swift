@@ -13,7 +13,9 @@ extension AppDatabase {
     /// refused) takes no change to what the record files hold, from any writer in any process: every table they hold
     /// refuses an insert, an update or a delete, raising `notRebuiltMessage`, until its rebuild moves it to `unfinished`
     /// in the transaction that replaces it. What was done to it meanwhile would otherwise be dropped by the rebuild, or
-    /// written over the files. The triggers are per row: an unread index holds none, so a migration changes none.
+    /// written over the files. An event that concerns nothing the index holds, such as a setting changed, is held in
+    /// `meta` instead, which no trigger guards, and recorded once the index is rebuilt (`HistoryStore.insert`). The
+    /// triggers are per row: an unread index holds none, so a migration changes none.
     static func unreadIndexMigration(_ db: Database) throws {
         for table in ["documents", "events", "label_rules", "search_tasks", "search_task_documents", "search_task_exports", "search_task_turns"] {
             for operation in ["INSERT", "UPDATE", "DELETE"] {

@@ -1,4 +1,5 @@
 @testable import ArrumatorCore
+import ArrumatorTesting
 import Foundation
 import Testing
 
@@ -6,63 +7,6 @@ import Testing
 /// name scratch folders (§4.3) and an address where no Ollama answers, so nothing needs a model and nothing reaches the
 /// user's archive. Every command's `--json` output is decoded as the contract it is.
 @Suite struct CommandLineTests {
-    /// Finds the built command beside this test bundle, as SwiftPM builds both into one products folder.
-    private final class Marker: NSObject {}
-
-    private struct Home {
-        let root: URL
-        var support: URL { root.appendingPathComponent("support", isDirectory: true) }
-        var archive: URL { root.appendingPathComponent("Archive", isDirectory: true) }
-
-        /// Port 9 is the discard service: nothing answers there, so every model check sees Ollama as not running.
-        static let nowhere = "http://127.0.0.1:9"
-
-        /// A home whose settings save `ollamaURL` as the Ollama server.
-        static func make(ollamaURL: String = nowhere) throws -> Home {
-            let root = FileManager.default.temporaryDirectory.appendingPathComponent("arrumator-cli-\(UUID().uuidString)", isDirectory: true)
-            let home = Home(root: root)
-            try FileManager.default.createDirectory(at: home.support, withIntermediateDirectories: true)
-            let settings: [String: String] = ["incomingPath": root.appendingPathComponent("Incoming").path,
-                                              "archivePath": home.archive.path,
-                                              "ollamaURL": ollamaURL, "ollamaManagement": "external"]
-            try JSONEncoder().encode(settings).write(to: home.support.appendingPathComponent("settings.json"))
-            return home
-        }
-
-        func cleanup() { try? FileManager.default.removeItem(at: root) }
-    }
-
-    private struct Result {
-        let status: Int32
-        let stdout: Data
-        let stderr: String
-        var text: String { String(decoding: stdout, as: UTF8.self) }
-    }
-
-    private func run(_ home: Home, _ arguments: [String]) throws -> Result {
-        let command = Bundle(for: Marker.self).bundleURL.deletingLastPathComponent().appendingPathComponent("arrumatorcli")
-        guard FileManager.default.isExecutableFile(atPath: command.path) else { throw CocoaError(.fileNoSuchFile) }
-        let process = Process()
-        process.executableURL = command
-        process.arguments = arguments
-        // Only what the command needs: its scratch home and Trash, and a home folder for the disk-space check.
-        process.environment = ["ARRUMATOR_HOME": home.support.path, "ARRUMATOR_TRASH": home.root.appendingPathComponent("Trash").path,
-                               "HOME": FileManager.default.homeDirectoryForCurrentUser.path]
-        let out = Pipe()
-        let err = Pipe()
-        process.standardOutput = out
-        process.standardError = err
-        try process.run()
-        let stdout = out.fileHandleForReading.readDataToEndOfFile()
-        let stderr = err.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        return Result(status: process.terminationStatus, stdout: stdout, stderr: String(decoding: stderr, as: UTF8.self))
-    }
-
-    private func settings(_ home: Home) throws -> AppSettings {
-        try JSON.decoder.decode(AppSettings.self, from: try run(home, ["settings", "--json"]).stdout)
-    }
-
     @Test func doctorReportsAHealthyIndexAndExitsAsItsReportSays() throws {
         let home = try Home.make()
         defer { home.cleanup() }
@@ -109,11 +53,6 @@ import Testing
                 "the command stops naming the key to remove, rather than reading the profile chosen before as another: \(result.stderr)")
         #expect(result.stderr.contains(ConfigLoader.unknownKey("duplicateAction")),
                 "and so does what copies were done with, now that a copy always has its original read again: \(result.stderr)")
-    }
-
-    /// The settings changes in the scratch archive's History.
-    private func settingsEvents(_ home: Home) throws -> [EventRecord] {
-        try JSON.decoder.decode([EventRecord].self, from: try run(home, ["history", "--json"]).stdout).filter { $0.kind == .settingsChanged }
     }
 
     @Test func everySettingTheAppChangesCanBeChangedFromTheCommandLine() throws {
@@ -235,30 +174,6 @@ import Testing
         let scope = try JSONSerialization.jsonObject(with: result.stdout) as? [String: Any]
         #expect(scope?["labels"] is [Any] && scope?["documents"] is [Any],
                 "the scope lists its documents and the labels to narrow them by, as before: \(result.text)")
-    }
-
-    /// Puts documents into the scratch archive as an earlier run filed them, one a minute after the other, each labelled
-    /// as given: the files, each with the identifier Arrumator keeps on it, and the archive's record of them, which the
-    /// command's new index is rebuilt from. Returns their numbers, in the order given.
-    private func file(_ home: Home, _ documents: [(name: String, labels: [DocumentLabel])]) throws -> [Int64] {
-        try FileManager.default.createDirectory(at: home.archive, withIntermediateDirectories: true)
-        var entries: [DocumentEntry] = []
-        for (offset, document) in documents.enumerated() {
-            let url = home.archive.appendingPathComponent(document.name)
-            let text = Data("A document: \(document.name)".utf8)
-            try text.write(to: url)
-            var record = DocumentRecord.arrived(path: url.path, sha256: try HashService.sha256(of: url), size: Int64(text.count),
-                                                uttype: "public.plain-text", inode: nil, modified: nil, now: Date())
-            record.id = Int64(offset + 1)
-            record.status = .filed
-            record.filedAt = record.addedAt.addingTimeInterval(Double(offset) * 60)
-            record.labelsJson = JSON.string(document.labels)
-            try Xattr.set(Xattr.documentID, record.uid, on: url)
-            entries.append(try #require(DocumentEntry(record)))
-        }
-        let records = home.archive.appendingPathComponent(try PipelineConfig.bundledDefaults().records.documentsFileName)
-        try FrontMatter.compose(RecordList(entries), body: "").write(to: records, atomically: true, encoding: .utf8)
-        return entries.map(\.id)
     }
 
     @Test func browsingLabelsListsTheDocumentsByTheirOwnDateNewestFirstAsTheAppDoes() throws {
@@ -556,12 +471,9 @@ extension CommandLineTests {
         defer { home.cleanup() }
         _ = try file(home, [("a.txt", [DocumentLabel(kind: .type, value: "invoice")])])
         #expect(try run(home, ["history", "--json"]).status == 0, "the index is made and rebuilt from the archive")
-        let kept = home.archive.appendingPathComponent("Kept", isDirectory: true)
-        try FileManager.default.createDirectory(at: kept, withIntermediateDirectories: true)
-        let listing = kept.appendingPathComponent(try PipelineConfig.bundledDefaults().records.documentsFileName)
         // A list of a folder of the user's, broken by hand: its front matter is no longer valid YAML.
-        let broken = "---\narrumator: 1\nentries: [unclosed\n---\n"
-        try broken.write(to: listing, atomically: true, encoding: .utf8)
+        let broken = TestRecordFiles.brokenList
+        let listing = try writeList(broken, in: home.archive.appendingPathComponent("Kept", isDirectory: true))
         let history = try run(home, ["history", "--json"])
         #expect(history.status == 0, "on an index that holds the archive, every command still runs: \(history.stderr)")
         let doctor = try run(home, ["doctor", "--json"])
@@ -579,7 +491,7 @@ extension CommandLineTests {
                     "every command stops, naming the file, where it breaks and what to do (\(round)): \(refused.stderr)")
         }
         #expect(try String(contentsOf: listing, encoding: .utf8) == broken, "the file is left as the user left it")
-        try "---\narrumator: 1\nentries: []\n---\n".write(to: listing, atomically: true, encoding: .utf8)
+        try TestRecordFiles.emptyList.write(to: listing, atomically: true, encoding: .utf8)
         let corrected = try run(home, ["history", "--json"])
         let events = try JSON.decoder.decode([EventRecord].self, from: corrected.stdout)
         #expect(corrected.status == 0 && events.contains { $0.kind == .rebuilt }, "once it is corrected, the index is rebuilt: \(corrected.stderr)")

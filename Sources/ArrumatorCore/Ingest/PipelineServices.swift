@@ -3,6 +3,9 @@ import Foundation
 /// Everything the pipeline needs, assembled by the composition root (app or CLI).
 public struct PipelineServices: Sendable {
     public var database: AppDatabase
+    /// The archive the pipeline files into, whose index `database` is: the runtime's own, whatever the settings name
+    /// once a switch has made them name another.
+    public var archive: URL
     public var config: PipelineConfig
     public var settings: SettingsStore
     public var extractor: any ContentExtracting
@@ -14,10 +17,11 @@ public struct PipelineServices: Sendable {
     public var trash: any Trashing
     public var time: any TimeSource
 
-    public init(database: AppDatabase, config: PipelineConfig, settings: SettingsStore, extractor: any ContentExtracting,
+    public init(database: AppDatabase, archive: URL, config: PipelineConfig, settings: SettingsStore, extractor: any ContentExtracting,
                 analyzer: any DocumentAnalyzing, filer: DocumentFiler, traces: TraceRecorder, vectors: VectorIndex,
                 trash: any Trashing, time: any TimeSource) {
         self.database = database
+        self.archive = archive.standardizedFileURL
         self.config = config
         self.settings = settings
         self.extractor = extractor
@@ -33,11 +37,6 @@ public struct PipelineServices: Sendable {
     public var jobs: JobStore { JobStore(database: database, time: time) }
     public var history: HistoryStore { HistoryStore(database: database, time: time) }
     public var index: IndexStore { IndexStore(database: database, time: time) }
-
-    /// Where things are in the archive the settings name.
-    public func layout(_ settings: AppSettings) -> ArchiveLayout {
-        ArchiveLayout(root: settings.archiveURL, records: config.records, watcher: config.watcher)
-    }
 
     /// Starts a trace stamped with the prompt version and the models of the profile in use. Settings that name no profile
     /// they list leave it unstamped: reading with them fails, saying so, and the trace records that.
@@ -109,7 +108,7 @@ public struct PipelineServices: Sendable {
     public func queueReadingAgain(_ document: DocumentRecord, content: ExtractedContent?, settings: AppSettings) async throws -> Int64? {
         guard let docID = document.id else { throw IngestError.documentNotPersisted }
         var doc = document
-        let inArchive = doc.path.hasPrefix(layout(settings).root.path + "/")
+        let inArchive = doc.path.hasPrefix(archive.path + "/")
         if [.undone, .held].contains(doc.status) {
             doc.status = .processing
             doc = try await documents.save(doc)

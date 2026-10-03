@@ -31,6 +31,41 @@ public final class Signal: Sendable {
     public var fired: Bool { state.withLock { $0 } }
 }
 
+/// A place work is held at, such as a flush between reading a file and writing it: how many times it got there, and a
+/// gate the first arrival waits at until the test opens it.
+public final class Hold: Sendable {
+    private let state = Mutex<(arrivals: Int, gate: CheckedContinuation<Void, Never>?, open: Bool)>((0, nil, false))
+
+    public init() {}
+
+    public var arrivals: Int { state.withLock { $0.arrivals } }
+
+    /// Arrives; the first arrival waits until `open()`.
+    public func arrive() async {
+        let first = state.withLock { state in
+            state.arrivals += 1
+            return state.arrivals == 1
+        }
+        guard first else { return }
+        await withCheckedContinuation { continuation in
+            let open = state.withLock { state in
+                if !state.open { state.gate = continuation }
+                return state.open
+            }
+            if open { continuation.resume() }
+        }
+    }
+
+    public func open() {
+        let gate = state.withLock { state in
+            state.open = true
+            defer { state.gate = nil }
+            return state.gate
+        }
+        gate?.resume()
+    }
+}
+
 /// Work that ends, such as a stop or a wait, each time it ended: whether its task was cancelled then.
 public actor Ending {
     public private(set) var ended: [Bool] = []
