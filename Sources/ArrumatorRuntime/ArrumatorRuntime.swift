@@ -336,8 +336,9 @@ public final class ArrumatorRuntime: Sendable {
         try await step.value
     }
 
-    /// Starts Ollama supervision, the ingest worker, the search task queue, the conversation queue, both watchers,
-    /// maintenance and working out which labels look alike; returns once they have started, saying whether they have. A
+    /// Starts Ollama supervision, the ingest worker, the search task queue, the conversation queue, both watchers and
+    /// maintenance, once the runtime works out which labels look alike, which it does even when the rest cannot start
+    /// (`countLookAlikes()`); returns once they have started, saying whether they have. A
     /// runtime starts once: a second start does nothing more, and one after `stop()` nothing at all. An index not rebuilt
     /// from its archive, as when its rebuild was refused for a record file that cannot be read (`openArchive`), starts
     /// nothing, until it is rebuilt (`rebuildIndex()`): what the workers did would be filed over the user's records.
@@ -353,6 +354,7 @@ public final class ArrumatorRuntime: Sendable {
     /// nothing, and lets the step that started go, so that the start after its rebuild begins one of its own; it is
     /// decided within that step, so a stop meanwhile is waited for like any start.
     private func beginOnRebuiltIndex() async throws {
+        await countLookAlikes()
         guard records.archiveIsThere else {
             Log.error(.app, "Not started: the archive's folder is not there", ["archive": archive.path])
             await tasks.refused(as: .away)
@@ -438,7 +440,17 @@ public final class ArrumatorRuntime: Sendable {
                 do { try await time.sleep(seconds: config.maintenance.interval) } catch { return }
             }
         }
-        await tasks.run("look-alikes") { [services] in await services.labels.workOutLookAlikes() }
+    }
+
+    /// Works out which labels look alike now, and again at each change recorded after, as a document filed or labels
+    /// merged, so the app counts the suggestions from what this publishes (`LookAlikeMemo.suggestionCounts()`) and never
+    /// waits for them. It reads the index alone, so it runs whether or not the work starts, as while the archive is away
+    /// or its index is not rebuilt from it, until the runtime stops. Changes that come while it works are one more pass.
+    private func countLookAlikes() async {
+        let recorded = database.activity()
+        await tasks.run("look-alikes") { [services] in
+            for await _ in recorded { await services.labels.workOutLookAlikes() }
+        }
     }
 
     /// Stops everything `start()` started, for good, and waits until it has. Everything is told to stop before anything
@@ -549,25 +561,6 @@ public final class ArrumatorRuntime: Sendable {
     public func runDoctor() async -> DoctorReport {
         await doctor.run(settings: await settings.current, config: config, lifecycle: lifecycle, models: models, ollamaURL: ollama.baseURL,
                          unreadableRecords: await records.unreadableFiles())
-    }
-}
-
-extension ArrumatorRuntime {
-    /// Ends the app's onboarding, the archive's first setup: makes the archive's folder when it is not there, then records
-    /// that onboarding is done. With a switch to a folder that is not there, the only time the app makes an archive's
-    /// folder, as both are what the user asks: at any other launch, one that is not there is away
-    /// (`RecordsError.archiveNotThere`), whatever its index holds, as a new index looks the same whether the archive is
-    /// new or away. A folder that cannot be made, as on a disk not connected under a mount point the user cannot write
-    /// in, is left away, which opening it then says.
-    public func finishOnboarding() async throws {
-        if await !settings.current.onboardingCompleted, !records.archiveIsThere {
-            do {
-                try FileManager.default.createDirectory(at: archive, withIntermediateDirectories: true)
-            } catch {
-                Log.warning(.app, "The archive's folder could not be made; it is away", ["archive": archive.path, "error": error.localizedDescription])
-            }
-        }
-        try await settingsActions.change { $0.onboardingCompleted = true }
     }
 }
 

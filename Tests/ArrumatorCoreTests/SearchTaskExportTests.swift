@@ -137,9 +137,9 @@ import Testing
         let (w, tasks, id) = try await prepared(escaping)
         defer { w.h.env.cleanup() }
         let meo = try w.id("meo_2025_01.txt")
-        try await w.h.review.edit(meo, fileName: nil, labels: [SearchTaskTests.label(.sender, "../../../etc"), SearchTaskTests.label(.type, "invoice")])
+        try await w.h.review.edit(meo, fileName: nil, labels: LabelEdit(adding: [SearchTaskTests.label(.sender, "../../../etc")], removing: [SearchTaskTests.label(.sender, "MEO")]))
         let edp = try w.id("edp_2024_11.txt")
-        try await w.h.review.edit(edp, fileName: nil, labels: [SearchTaskTests.label(.sender, "..."), SearchTaskTests.label(.type, "invoice")])
+        try await w.h.review.edit(edp, fileName: nil, labels: LabelEdit(adding: [SearchTaskTests.label(.sender, "...")], removing: [SearchTaskTests.label(.sender, "EDP Comercial")]))
         try await findAgain(tasks, id)
         let export = try await tasks.export(id, to: out(w), format: .folder)
         #expect(URL(fileURLWithPath: export.path).deletingLastPathComponent().standardizedFileURL == out(w).standardizedFileURL,

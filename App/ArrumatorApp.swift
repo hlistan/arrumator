@@ -59,7 +59,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Wind
                 show(.main)
             } else if model.settings?.onboardingCompleted != true {
                 show(.onboarding)
-            } else if !launchedAsLoginItem {
+            } else if !launchedAsLoginItem || model.phase != .ready {
                 show(.main)
             }
             trackModel()
@@ -70,8 +70,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Wind
 
     /// Clicking the Dock icon (or opening the app again) brings the window back, once the model knows which one.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
-        if !hasVisibleWindows, model.phase == .ready {
-            show(model.settings?.onboardingCompleted == true ? .main : .onboarding)
+        if !hasVisibleWindows, model.phase != .starting {
+            show(model.phase == .ready && model.settings?.onboardingCompleted != true ? .onboarding : .main)
         }
         return true
     }
@@ -145,14 +145,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Wind
     private func trackModel() {
         withObservationTracking {
             _ = model.statusSymbol
-            _ = model.reviewCount
+            _ = model.session.reviewCount
             _ = model.settings?.showInDock
         } onChange: { [weak self] in
             Task { @MainActor in
                 guard let self else { return }
                 self.statusItem?.button?.image = NSImage(systemSymbolName: self.model.statusSymbol,
                                                          accessibilityDescription: Wording.appName)
-                self.statusItem?.button?.title = self.model.reviewCount > 0 ? Wording.statusItemCount(self.model.reviewCount) : ""
+                self.statusItem?.button?.title = self.model.session.reviewCount > 0 ? Wording.statusItemCount(self.model.session.reviewCount) : ""
                 self.applyDockPolicy()
                 self.trackModel()
             }
@@ -260,6 +260,12 @@ enum MainMenu {
         edit.addItem(withTitle: Wording.copy, action: #selector(NSText.copy(_:)), keyEquivalent: "c")
         edit.addItem(withTitle: Wording.paste, action: #selector(NSText.paste(_:)), keyEquivalent: "v")
         edit.addItem(withTitle: Wording.selectAll, action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        edit.addItem(.separator())
+        // Go to the search field, as the Human Interface Guidelines give Option-Command-F: the filter sits in a row of the
+        // sidebar's list, outside the window's key view loop, so this is how the keyboard reaches it.
+        let filter = item(Wording.filterLabels, #selector((any AppCommands).filterLabels), "f")
+        filter.keyEquivalentModifierMask = [.command, .option]
+        edit.addItem(filter)
         editItem.submenu = edit
         main.addItem(editItem)
         return main
@@ -275,10 +281,12 @@ enum MainMenu {
     func showMain()
     func showOnboarding()
     func showSettings()
+    func filterLabels()
 }
 
 extension AppDelegate: AppCommands {
     @objc func showMain() { show(.main) }
     @objc func showOnboarding() { show(.onboarding) }
     @objc func showSettings() { show(.settings) }
+    @objc func filterLabels() { model.filterLabels() }
 }

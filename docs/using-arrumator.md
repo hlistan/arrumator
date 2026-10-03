@@ -103,7 +103,9 @@ alone. From a terminal, `arrumatorcli labels browse` does the same, listing the 
 **Filter Labels**, between the lists and the labels, finds labels: as you type, the sidebar lists only the labels
 written with your text in them, every one it finds, whatever their case, accents or punctuation (`tax return` finds the
 type `tax-return`), and a language by its English name too. **Clear Filter** below them, or the × in the field, clears
-it. It filters the labels the sidebar offers, so with labels chosen, only those of the documents in view.
+it. It filters the labels the sidebar offers, so with labels chosen, only those of the documents in view. Edit ›
+**Filter Labels** (Option-Command-F) brings the window forward with the cursor in it, and Escape clears it, then
+leaves it.
 `arrumatorcli labels browse --matching` does the same.
 
 Only the labels scroll. The lists and **Filter Labels** stay at the top of the sidebar however far the labels are
@@ -209,9 +211,9 @@ documents embedded by another model are found by meaning only once they are read
   folder in Incoming or command that gave each (the `tag` step), the exact prompts (with what the model was shown of the
   archive's labels), raw model responses and the labels the `consolidate` step changed ("How was
   this read?"; `arrumatorcli trace <doc> --full`). The prompts and raw answers of a reading, and the raw answer of an
-  image description, are kept for Settings › Advanced › "Keep full model prompts" days (`traceRawRetentionDays`, 180 by
-  default, or `arrumatorcli settings --trace-retention-days`); after that they are cleared once an hour
-  (`maintenance.interval`) and what the reading concluded stays. Every trace is stamped with the models of the profile
+  image description, are kept for Settings › Advanced › "Keep full model prompts" days (`traceRawRetentionDays`,
+  from 1 to 3650, 180 by default, or `arrumatorcli settings --trace-retention-days`); after that they are cleared once
+  an hour (`maintenance.interval`) and what the reading concluded stays. Every trace is stamped with the models of the profile
   that read. `arrumatorcli replay` reads a document again with another reading model without touching files. A search
   task's request is traced too: what the model was shown and answered (the `interpret` step, with the effort, the model
   that read and what the effort wanted it told about thinking, and with each call what it was sent, `think`) and what
@@ -380,8 +382,11 @@ sidebar's bar, shows at the foot of the window that reading the archive failed, 
 any change to labels, rules, tasks or questions with the same reason, until the file is corrected or moved out of the
 archive and the index rebuilt in Settings › Advanced, which starts the filing again and clears the foot of the
 window, or the app opened again. An archive whose folder is not there, renamed, moved or on a disk that is not
-connected, is away: the app says **Not filing: the archive's folder is not there** above the bar and names the folder
-at the foot of the window, makes no folder in its place, and starts once it is back and the app is opened again. The
+connected, is away: the app says **Not filing: the archive's folder is not there** above the bar, names the folder
+above every page and at the foot of the window, and makes no folder in its place. Once the disk is back, **Try Again**
+there opens it and starts filing; **Choose Another Archive…** switches to another. When the app cannot start at all,
+as when its settings cannot be read, the main window says why with **Try Again**, never the window that sets the app
+up. The
 app makes an archive's folder only when you set the archive up: when you finish onboarding, or switch to a folder that
 is not there. A setting you change meanwhile, as during onboarding, is changed, and recorded in History once
 the index is rebuilt; a change to labels before the archive has been read is refused, saying it can be made once

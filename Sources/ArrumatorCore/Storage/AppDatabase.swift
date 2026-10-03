@@ -251,11 +251,12 @@ extension AppDatabase {
     /// The values of `observation` for as long as the stream is consumed, the current one first. GRDB ends an
     /// observation at its first error, which would leave whoever watches it deaf to every later change, as nothing
     /// subscribes again; so one that fails is logged once and made again after `observationRetry` seconds, and the
-    /// stream goes on from the value it has then. Only cancelling the stream's consumer ends it.
+    /// stream goes on from the value it has then. Only cancelling the stream's consumer ends it. A consumer slower than the
+    /// changes is given the newest value alone, never one for each change it missed.
     func values<Reducer: ValueReducer>(of observation: ValueObservation<Reducer>, named name: String) -> AsyncStream<Reducer.Value>
     where Reducer.Value: Sendable {
         let (reader, retry, time) = (reader, observationRetry, time)
-        return AsyncStream { continuation in
+        return AsyncStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
             let task = Task {
                 var failing = false
                 while !Task.isCancelled {

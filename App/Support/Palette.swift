@@ -14,6 +14,14 @@ enum Palette {
     static let problem = Color.red
     /// Nothing to act on: a step with no errors or warnings, a model that is installed.
     static let fine = Color.green
+    /// The colour of a stop as much as it matters (`FunnelSeverity`).
+    static func severity(_ severity: FunnelSeverity) -> Color {
+        switch severity {
+        case .expected: expected
+        case .attention: attention
+        case .problem: problem
+        }
+    }
     /// The unfilled part of a bar.
     static let track = Color.secondary.opacity(0.22)
 

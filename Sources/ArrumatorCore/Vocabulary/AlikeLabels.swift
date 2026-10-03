@@ -77,8 +77,34 @@ public final class LookAlikeMemo: Sendable {
     /// One update at a time: a caller that comes while another works a kind out waits for it, and then compares only
     /// what is left, never working the kind out from nothing beside it. A caller stopped while it waits stops at once.
     private let turn = AsyncSemaphore(permits: 1)
+    /// How many suggestions there were when they were last worked out, and the subscribers told of each new count.
+    private let counted = Mutex<(last: Int?, followers: [UUID: AsyncStream<Int>.Continuation])>((nil, [:]))
 
     public init() {}
+
+    /// How many pairs of labels look alike and wait for the user, each time that changes as they are worked out
+    /// (`LabelStore.suggestions()`), the last known first: what the app counts without waiting for them to be worked
+    /// out. A stream per subscriber, which ends when its consumer is cancelled.
+    public func suggestionCounts() -> AsyncStream<Int> {
+        let id = UUID()
+        let (stream, continuation) = AsyncStream<Int>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        continuation.onTermination = { [weak self] _ in self?.counted.withLock { _ = $0.followers.removeValue(forKey: id) } }
+        counted.withLock { state in
+            state.followers[id] = continuation
+            if let last = state.last { continuation.yield(last) }
+        }
+        return stream
+    }
+
+    /// Tells every subscriber how many suggestions there are now, when that changed; told under the lock, so that no
+    /// subscriber is left with an older count than the last.
+    func publish(suggestions count: Int) {
+        counted.withLock { state in
+            guard state.last != count else { return }
+            state.last = count
+            for follower in state.followers.values { follower.yield(count) }
+        }
+    }
 
     /// What is known of `kind`, as it was last worked out, or as far as a stopped working out came.
     func known(_ kind: LabelKind) -> AlikeLabels? {

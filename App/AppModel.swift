@@ -4,6 +4,51 @@ import ArrumatorRuntime
 import Foundation
 import Observation
 
+/// Everything the app shows and has open of the archive it is on: what the runtime's streams last said of it, the page
+/// and the card open, the labels chosen and the task documents are added to. A switch of archives replaces it whole
+/// (`AppModel.switchArchive`), so nothing of one archive is shown, opened or acted on in the next: a task or document of
+/// the same number there, or a filing already announced.
+@Observable
+final class ArchiveSession {
+    /// What the ingest worker is doing: the file it has in hand and its stage, how many wait, and what holds it up.
+    /// Taking a file and moving it from stage to stage records nothing in History, so the Incoming page reloads on this
+    /// too (`AppModel.ingestActivity`).
+    var ingest = IngestStatus.idle
+    /// What the search task queue is doing: the request it reads and by which model, what waits, and whether it waits for
+    /// Ollama. Taking a task to read records nothing in History, so pages that show tasks reload on this too
+    /// (`AppModel.taskActivity`).
+    var taskQueue = SearchTaskQueueStatus.idle
+    /// What the conversation queue is doing: the question it answers and by which model, what waits, and whether it
+    /// waits for Ollama; without the answer being written (`ConversationQueueStatus.settled`), which `answerSoFar` has, so
+    /// what shows this changes as a question is taken or done, not with every word.
+    var conversation = ConversationQueueStatus.idle
+    /// What has come so far of the answer being written, which only the question it answers shows.
+    var answerSoFar: AnswerProgress?
+    var ollama = OllamaState.unknown
+    /// Whether the runtime's work runs, the folder watchers among it, as the runtime says (`workUpdates()`): not while
+    /// it opens the archive and Incoming folders, which macOS may hold until the user answers a permission prompt, nor
+    /// when the archive's index could not be rebuilt from it, nor while its folder is away.
+    var work = RuntimeWork.idle
+    /// The latest filings and the like, to announce those that come after them.
+    var recent: [EventRecord] = []
+    var reviewCount = 0
+    /// Pairs of alike labels waiting for the user to merge them or keep them apart, as the runtime last counted them.
+    var labelSuggestionCount = 0
+    var destination: Destination = .incoming
+    /// The document opened in place as a card. One at a time, as in Things.
+    var openDocument: Int64?
+    /// The label opened in place as a card on the Labels page.
+    var openLabel: DocumentLabel?
+    /// The search task opened in place as a card on the Tasks page.
+    var openTask: Int64?
+    /// The search task whose set documents are being added to, as the user narrows them down by labels in the sidebar:
+    /// every document row then shows whether it is in the set, and adds it or takes it out.
+    fileprivate(set) var collecting: SearchTask?
+    /// The labels chosen in the sidebar, in the order they were chosen: the documents shown have every one, and the
+    /// sidebar offers only the labels those documents have.
+    var labelSelection: [DocumentLabel] = []
+}
+
 /// Main-actor state shared by the menu bar and the windows. Owns the runtime and mirrors its streams.
 @Observable
 final class AppModel {
@@ -18,64 +63,36 @@ final class AppModel {
     var phase: Phase = .starting
     private(set) var runtime: ArrumatorRuntime?
     var settings: AppSettings?
-    /// What the ingest worker is doing: the file it has in hand and its stage, how many wait, and what holds it up.
-    /// Taking a file and moving it from stage to stage records nothing in History, so the Incoming page reloads on this
-    /// too (`ingestActivity`).
-    var ingest = IngestStatus.idle
-    /// What the search task queue is doing: the request it reads and by which model, what waits, and whether it waits for
-    /// Ollama. Taking a task to read records nothing in History, so pages that show tasks reload on this too
-    /// (`taskActivity`).
-    var taskQueue = SearchTaskQueueStatus.idle
-    /// What the conversation queue is doing: the question it answers and by which model, what waits, and whether it
-    /// waits for Ollama; without the answer being written (`ConversationQueueStatus.settled`), which `answerSoFar` has, so
-    /// what shows this changes as a question is taken or done, not with every word.
-    var conversation = ConversationQueueStatus.idle
-    /// What has come so far of the answer being written, which only the question it answers shows.
-    var answerSoFar: AnswerProgress?
-    var ollama = OllamaState.unknown
-    var recent: [EventRecord] = []
-    var reviewCount = 0
-    /// Pairs of alike labels waiting for the user to merge them or keep them apart.
-    var labelSuggestionCount = 0
+    /// What is shown of the archive the app is on.
+    private(set) var session = ArchiveSession()
     /// Bumped on every database change, and when another archive is opened; views reload with `.task(id:)`.
     var activity: Int64 = 0
     /// What the Tasks page and a task's card reload on with `.task(id:)`: History growing, and the search task queue's
     /// status changing, as it does when a task's request starts being read.
-    var taskActivity: String { "\(activity)|\(taskQueue)" }
+    var taskActivity: String { "\(activity)|\(session.taskQueue)" }
     /// What a task's conversation reloads on with `.task(id:)`: History growing, and the conversation queue taking a
     /// question or ending its answer; not each word of the answer being written.
-    var conversationActivity: String { "\(activity)|\(conversation)" }
+    var conversationActivity: String { "\(activity)|\(session.conversation)" }
     /// What the Incoming page reloads on with `.task(id:)`: History growing, and the ingest worker's status changing, as it
     /// does when the worker takes a file, moves it to its next stage or finishes it.
-    var ingestActivity: String { "\(activity)|\(ingest)" }
-    var destination: Destination = .incoming
-    /// The document opened in place as a card. One at a time, as in Things.
-    var openDocument: Int64?
-    /// The label opened in place as a card on the Labels page.
-    var openLabel: DocumentLabel?
-    /// The search task opened in place as a card on the Tasks page.
-    var openTask: Int64?
-    /// The search task whose set documents are being added to, as the user narrows them down by labels in the sidebar:
-    /// every document row then shows whether it is in the set, and adds it or takes it out.
-    private(set) var collecting: SearchTask?
-    /// The labels chosen in the sidebar, in the order they were chosen: the documents shown have every one, and the
-    /// sidebar offers only the labels those documents have.
-    var labelSelection: [DocumentLabel] = []
+    var ingestActivity: String { "\(activity)|\(session.ingest)" }
+    /// Set by the Filter Labels command until the sidebar has put the cursor in its filter.
+    var labelFilterWanted = false
     weak var presenter: (any WindowPresenting)?
     /// True when the menu bar has no room left for the icon, so the Dock icon is the only way in.
     var menuBarIconHidden = false
     private var streams: [Task<Void, Never>] = []
     private var watcherStart: Task<Void, Never>?
-    /// Whether the runtime's work runs, the folder watchers among it, as the runtime says (`workUpdates()`): not while
-    /// it opens the archive and Incoming folders, which macOS may hold until the user answers a permission prompt, nor
-    /// when the archive's index could not be rebuilt from it.
-    private(set) var work = RuntimeWork.idle
     /// True while the app closes one archive and opens another.
     private(set) var switchingArchive = false
     private let notifications = NotificationService()
 
+    /// The archive the app is on: the runtime's, which it acts on whatever the settings name later.
+    var archive: URL? { runtime?.archive }
+
     func start() async {
         guard runtime == nil else { return }
+        phase = .starting
         do {
             let environment = RuntimeEnvironment.current
             let runtime = try await ArrumatorRuntime.bootstrap(appVersion: Self.version, environment: environment, echoLogsToStderr: false,
@@ -93,6 +110,13 @@ final class AppModel {
         }
     }
 
+    /// Starts again after a start that failed, as the window that says why offers; once started, the app is set up if it
+    /// was not yet, as at launch.
+    func retryStart() async {
+        await start()
+        if phase == .ready, settings?.onboardingCompleted != true { show(.onboarding) }
+    }
+
     /// Called when onboarding finishes: the archive is set up, its folder made when it is not there
     /// (`ArrumatorRuntime.finishOnboarding()`), and opened.
     func finishOnboarding() async {
@@ -101,11 +125,19 @@ final class AppModel {
         startWatching(runtime)
     }
 
+    /// Opens the archive again, as at launch, after it could not be opened: its folder away, as on a disk not
+    /// connected, or its index not rebuilt from it. The runtime starts its work once it can (`openAndStart()`).
+    func tryOpeningAgain() {
+        guard let runtime, settings?.onboardingCompleted == true, session.work == .away || session.work == .refused else { return }
+        watcherStart = nil
+        startWatching(runtime)
+    }
+
     /// Opens the archive and starts the work off the main actor (`ArrumatorRuntime.openAndStart()`): macOS blocks the
     /// first access to the Documents folder until the user answers its permission prompt, and the windows and the menu
     /// bar item must appear regardless. The runtime owns that step, so quitting or switching archives meanwhile stops it,
     /// and what it says comes only while the runtime it began on is still the app's. Whether the work then runs, the
-    /// runtime says (`work`): the archive may have been read with the index refused, so nothing runs.
+    /// runtime says (`ArchiveSession.work`): the archive may have been read with the index refused, so nothing runs.
     private func startWatching(_ runtime: ArrumatorRuntime) {
         guard watcherStart == nil else { return }
         watcherStart = Task.detached { [weak self] in
@@ -135,15 +167,12 @@ final class AppModel {
             let switched = try await runtime.switchArchive(to: path)
             let next = switched.runtime
             watcherStart = nil
-            work = .idle
+            // The runtime and everything shown of its archive change together, before anything is awaited, so a refresh
+            // that comes meanwhile never pairs the next runtime with what was shown of the archive left.
             self.runtime = next
-            settings = await next.settings.current
-            ingest = .idle
-            taskQueue = .idle
-            conversation = .idle
-            answerSoFar = nil
-            openDocument = nil
+            session = ArchiveSession()
             observe(next)
+            settings = await next.settings.current
             activity &+= 1
             // The archive left, when its record files could not be written, is named, as they wait for it to be opened.
             lastError = switched.unwritten.map { Wording.failure(Wording.switchArchivesAction, $0.note) }
@@ -154,43 +183,47 @@ final class AppModel {
             Log.error(.ui, "Could not switch archives", ["error": error.localizedDescription])
             // A switch that failed once this archive had stopped starts it again, reading it first if it was being read
             // then: the app follows that start as it followed the first.
-            if work != .running, settings?.onboardingCompleted == true {
+            if session.work != .running, settings?.onboardingCompleted == true {
                 watcherStart = nil
                 startWatching(runtime)
             }
         }
     }
 
+    /// Follows the runtime's streams into the session open now; a value a stream of the runtime left still delivers
+    /// lands in the session it was subscribed for, never in the next.
     private func observe(_ runtime: ArrumatorRuntime) {
         streams.forEach { $0.cancel() }
+        let session = session
         streams = [
-            Task { [weak self] in
-                for await status in await runtime.coordinator.statusUpdates() { self?.ingest = status }
+            Task {
+                for await status in await runtime.coordinator.statusUpdates() { session.ingest = status }
             },
-            Task { [weak self] in
-                for await status in await runtime.taskQueue.statusUpdates() { self?.taskQueue = status }
+            Task {
+                for await status in await runtime.taskQueue.statusUpdates() { session.taskQueue = status }
             },
-            Task { [weak self] in
+            Task {
                 for await status in await runtime.conversationQueue.statusUpdates() {
-                    guard let self else { return }
                     // Set only when changed: setting a value the same as it was still tells every view that shows it.
-                    if conversation != status.settled { conversation = status.settled }
-                    if answerSoFar != status.answering?.progress { answerSoFar = status.answering?.progress }
+                    if session.conversation != status.settled { session.conversation = status.settled }
+                    if session.answerSoFar != status.answering?.progress { session.answerSoFar = status.answering?.progress }
                 }
             },
-            Task { [weak self] in
-                for await state in await runtime.lifecycle.states() { self?.ollama = state }
+            Task {
+                for await state in await runtime.lifecycle.states() { session.ollama = state }
+            },
+            Task {
+                for await count in runtime.services.lookAlikes.suggestionCounts() { session.labelSuggestionCount = count }
             },
             Task { [weak self] in
                 var refused = false
                 for await work in await runtime.workUpdates() {
-                    guard let self else { return }
-                    self.work = work
+                    session.work = work
                     if work == .refused || work == .away { refused = true }
                     // Once the work runs where it was refused, why it was refused no longer holds.
                     if work == .running, refused {
                         refused = false
-                        self.lastError = nil
+                        self?.lastError = nil
                     }
                 }
             },
@@ -209,15 +242,15 @@ final class AppModel {
 
     func refresh() async {
         guard let runtime else { return }
+        let session = session
         do {
             let events = try await runtime.services.history.events(
                 limit: runtime.config.interface.notificationEvents, kinds: [.filed, .needsReview, .duplicate, .failed, .userMoved])
-            await notifications.announce(events, previous: recent, settings: settings)
-            recent = events
-            reviewCount = try await runtime.services.documents.reviewCount()
-            labelSuggestionCount = try await runtime.services.labels.suggestions().count
-            if let id = collecting?.id {
-                collecting = try await runtime.searchTasks.store.task(id: id)
+            await notifications.announce(events, previous: session.recent, settings: settings)
+            session.recent = events
+            session.reviewCount = try await runtime.services.documents.reviewCount()
+            if let id = session.collecting?.id {
+                session.collecting = try await runtime.searchTasks.store.task(id: id)
             }
         } catch {
             Log.error(.ui, "Refresh failed", ["error": error.localizedDescription])
@@ -268,15 +301,23 @@ final class AppModel {
         return result
     }
 
-    /// Reads for display. A failure is reported instead of leaving a view empty or spinning forever.
+    /// Reads for display: what was read, or nil when there is nothing new to show, and then the view keeps what it
+    /// shows. That is so when the read was cancelled, as `.task(id:)` cancels it when the view asks again or goes, and
+    /// when it failed, which is reported instead. A caller assigns only what it is given, never a fallback in place of
+    /// nil, which would empty a list or close a card each time a reload is cancelled.
     func load<T: Sendable>(_ what: String, _ read: (ArrumatorRuntime) async throws -> T) async -> T? {
         guard let runtime else { return nil }
         do {
-            return try await read(runtime)
+            let read = try await read(runtime)
+            // Cancelled while it read, as when the view asked again: the newer read is the one that matters.
+            guard !Task.isCancelled else { return nil }
+            return read
         } catch is CancellationError {
-            // The view asked again before this finished; the newer read is the one that matters.
+            // The view asked again before this finished, or went; the newer read is the one that matters.
             return nil
         } catch {
+            // Cancelled while the read failed for that reason, as a query interrupted: nothing to report.
+            guard !Task.isCancelled else { return nil }
             lastError = Wording.failure(what, error.localizedDescription)
             Log.error(.ui, "A read for display failed", ["action": what, "error": error.localizedDescription])
             return nil
@@ -286,51 +327,52 @@ final class AppModel {
     /// Switches the main window to a page, closing any open card. Any other page than the chosen labels' lets go of
     /// them, and any page but those the labels narrow down ends adding documents to a task.
     func go(_ destination: Destination) {
-        self.destination = destination
-        openDocument = nil
-        openLabel = nil
-        openTask = nil
-        if destination != .labelled { labelSelection = [] }
-        if destination != .labelled && destination != .processed { collecting = nil }
+        session.destination = destination
+        session.openDocument = nil
+        session.openLabel = nil
+        session.openTask = nil
+        if destination != .labelled { session.labelSelection = [] }
+        if destination != .labelled && destination != .processed { session.collecting = nil }
     }
 
     /// Starts adding documents to a task's set: the window shows every processed document, to be narrowed down by
     /// labels in the sidebar, each row with a way to add it or take it out.
     func collect(for task: SearchTask) {
         go(.processed)
-        collecting = task
+        session.collecting = task
     }
 
     /// Ends adding documents, and shows the task again.
     func finishCollecting() {
-        let id = collecting?.id
+        let id = session.collecting?.id
         go(.tasks)
-        openTask = id
+        session.openTask = id
     }
 
     /// Shows a search task opened in place on the Tasks page.
     func open(task id: Int64) {
         go(.tasks)
-        openTask = id
+        session.openTask = id
         show(.main)
     }
 
     /// Shows a label opened in place on the Labels page.
     func open(label: DocumentLabel) {
         go(.labels)
-        openLabel = label
+        session.openLabel = label
         show(.main)
     }
 
     /// Chooses a label in the sidebar, narrowing the documents shown to those that also have it, or lets go of one
     /// already chosen. With none left, the window shows every processed document again.
     func choose(_ label: DocumentLabel) {
-        let selection = labelSelection.contains(label) ? labelSelection.filter { $0 != label } : labelSelection + [label]
+        let chosen = session.labelSelection
+        let selection = chosen.contains(label) ? chosen.filter { $0 != label } : chosen + [label]
         if selection.isEmpty {
             clearLabels()
         } else {
             go(.labelled)
-            labelSelection = selection
+            session.labelSelection = selection
         }
     }
 
@@ -340,14 +382,20 @@ final class AppModel {
     /// Shows the documents that have a label, as choosing it alone in the sidebar does.
     func browse(_ label: DocumentLabel) {
         go(.labelled)
-        labelSelection = [label]
+        session.labelSelection = [label]
         show(.main)
     }
 
     /// Shows a document opened in place on a page, bringing the main window forward.
     func open(document id: Int64?, on destination: Destination) {
         go(destination)
-        openDocument = id
+        session.openDocument = id
+        show(.main)
+    }
+
+    /// Brings the main window forward with the cursor in the sidebar's label filter (Edit › Filter Labels).
+    func filterLabels() {
+        labelFilterWanted = true
         show(.main)
     }
 
@@ -363,63 +411,35 @@ final class AppModel {
         NSPasteboard.general.setString(text, forType: .string)
     }
 
-    /// What the search tasks are at work on, seen from any page: a request being read, else a question being answered;
-    /// nil while neither is.
-    var tasksAtWork: String? {
-        if let reading = taskQueue.reading { return Wording.readingRequest(with: reading.model) }
-        guard let answering = conversation.answering else { return nil }
-        // Tried again while Ollama is away, a question waits for it until the model begins, as the question itself says.
-        if conversation.waitingForOllama, !answering.progress.begun { return Wording.waitingForOllama }
-        return Wording.answeringQuestion(with: answering.model)
+    // MARK: What the app is doing
+
+    /// What the runtime is doing, as Core orders it (`RuntimeActivity`).
+    var runtimeActivity: RuntimeActivity {
+        RuntimeActivity(onboarded: settings?.onboardingCompleted == true, paused: settings?.paused == true, work: session.work,
+                        ingest: session.ingest, taskQueue: session.taskQueue, conversation: session.conversation,
+                        ollama: session.ollama, needsYou: session.reviewCount)
     }
 
+    /// What the search tasks are at work on, seen from any page; nil while neither a request is read nor a question
+    /// answered.
+    var tasksAtWork: String? { runtimeActivity.tasksWork.map(Wording.tasksWork) }
+
     var statusSymbol: String {
-        if case .failed = phase { return "exclamationmark.triangle" }
-        if settings?.paused == true { return "pause.circle" }
-        switch ollama {
-        case .unhealthy, .notInstalled, .unreachable: return "exclamationmark.triangle"
-        default: break
-        }
-        if ingest.current != nil { return "tray.and.arrow.down.fill" }
-        return reviewCount > 0 ? "tray.full" : "tray"
+        if case .failed = phase { return RuntimeActivity.Mark.problem.symbol }
+        return runtimeActivity.mark.symbol
     }
 
     /// Why the app is not filing right now, or nil when everything is working.
     var attention: String? {
         if case let .failed(why) = phase { return why }
-        if let notWorking = notWorking(waiting: Wording.waitingForFolders) { return notWorking }
-        if settings?.paused == true { return Wording.paused }
-        if let reason = ingest.powerPauseReason { return Wording.waiting(reason) }
-        if ingest.waitingForOllama || !ollama.isReady { return ollama.summary }
-        return nil
-    }
-
-    /// Why nothing is filed although the user has set the app up, as the runtime says (`work`): it waits for the
-    /// folders, in the words `waiting` gives, or the archive could not be read for its index to be rebuilt, which the
-    /// foot of the window says more of (`lastError`); nil while the work runs, or before onboarding is done.
-    private func notWorking(waiting: String) -> String? {
-        guard settings?.onboardingCompleted == true else { return nil }
-        switch work {
-        case .running: return nil
-        case .idle: return waiting
-        case .refused: return Wording.archiveNotRead
-        case .away: return Wording.archiveAway
-        }
+        return runtimeActivity.holdup.map { Wording.holdup($0, inMenuBar: false) }
     }
 
     /// What the app is doing, in the menu bar popover: a document being filed first, then a search request being read or a
     /// question about a task's documents being answered.
     var statusLine: String {
         if case let .failed(why) = phase { return why }
-        if let notWorking = notWorking(waiting: Wording.startingForFolders) { return notWorking }
-        if settings?.paused == true { return Wording.paused }
-        if let reason = ingest.powerPauseReason { return Wording.waiting(reason) }
-        if ingest.waitingForOllama || taskQueue.waitingForOllama || conversation.waitingForOllama { return Wording.waitingForOllama }
-        if let current = ingest.current {
-            return Wording.working(on: (current.path as NSString).lastPathComponent, stage: Wording.doing(current.stage))
-        }
-        if let work = tasksAtWork { return work }
-        return ingest.queued > 0 ? Wording.queued(ingest.queued) : Wording.idle
+        return Wording.now(runtimeActivity.now)
     }
 }
 

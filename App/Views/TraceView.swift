@@ -36,7 +36,8 @@ struct TraceView: View {
         }
         .padding()
         .task {
-            traces = await model.load(Wording.loadTracesAction) { try await $0.traces.traces(docID: documentID) } ?? []
+            guard let read = await model.load(Wording.loadTracesAction, { try await $0.traces.traces(docID: documentID) }) else { return }
+            traces = read
             traceID = traces.first?.id
             loaded = true
         }

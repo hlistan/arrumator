@@ -172,7 +172,11 @@ These are rules you can check, not aspirations. Each row says how it is checked;
    `ConversationQueueStatus.progress(of:)`), never by a view from a stored state, which says where an item is, not that
    anything is working on it. A new action for the user also gets an `arrumatorcli` command with `--json` output, so
    tests and agents can drive it: objects and lists of them, never a dictionary keyed by anything but a string, which
-   JSON writes as a flat list of keys and values.
+   JSON writes as a flat list of keys and values. A view sends what the user did (what was added or taken off, a value
+   only when it differs) and never fills a read that returned nothing with a fallback; Core applies the change to the
+   current state inside its transaction (`ReviewActions.edit`, `LabelEdit`). What the app shows of an archive is one
+   value a switch replaces whole (`ArchiveSession`).
+
 7. **The interface stays quiet.** The app follows Things: a sidebar of a few lists and the archive's labels to narrow
    the documents down by, one list per page under a large title, rows without separators, and an item that opens in
    place as a card. A list is ordered as it is read, by an order in Core that the app and the CLI share (`DocumentOrder`

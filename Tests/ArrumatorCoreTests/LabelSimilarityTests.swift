@@ -27,6 +27,17 @@ import Testing
         #expect(!LabelSimilarity.sameWriting("EDP", "EDP Comercial"), "a longer name is another writing")
     }
 
+    @Test func aLabelIsOfferedTheMostAlikeToMergeIntoTheMostUsedOfThoseAsAlikeFirst() {
+        // The others in the order the archive uses them, the most used first.
+        let others = ["Galp", "EDP Comercial", "EDP", "EDP Comercial SA", "Iberdrola"]
+        let offered = LabelSimilarity.mostAlike(to: "EDP Comercail", among: others + ["EDP Comercail"], limit: 3)
+        #expect(offered.first == "EDP Comercial" && offered.count == 3 && !offered.contains("EDP Comercail"),
+                "the most alike first, at most as many as asked, and never the label itself: \(offered)")
+        #expect(LabelSimilarity.mostAlike(to: "x", among: ["EDP", "MEO"], limit: 5) == ["EDP", "MEO"],
+                "of those as alike, the most used first")
+        #expect(LabelSimilarity.mostAlike(to: "EDP", among: others, limit: 0).isEmpty, "and none when none are asked for")
+    }
+
     @Test func labelsWhoseNumbersDifferAreNeverAlike() {
         #expect(LabelSimilarity.similarity("invoice FT 2026/926804564", "invoice FT 2026/926804565") == 0, "two invoices a digit apart stay two")
         #expect(LabelSimilarity.similarity("apartment Rua das Flores 12", "apartment Rua das Flores 14") == 0,

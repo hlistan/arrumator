@@ -176,8 +176,7 @@ import Testing
         let h = try await Harness.make()
         defer { h.env.cleanup() }
         let id = try #require(try await h.ingest("Taxes 2024/bill.txt", text: "EDP electricity July").id)
-        let filed = try #require(try await h.services.documents.document(id: id))
-        try await h.review.edit(id, fileName: nil, labels: (filed.labels ?? []) + [Self.mine])
+        try await h.review.edit(id, fileName: nil, labels: LabelEdit(adding: [Self.mine]))
         h.env.time.advance(by: 60)
         var services = h.services
         services.analyzer = StubAnalyzer(labels: LabelingTests.meoContract)
@@ -196,15 +195,15 @@ import Testing
         let h = try await Harness.make(analyzer: StubAnalyzer(labels: nil, fileName: nil))
         defer { h.env.cleanup() }
         let id = try #require(try await h.ingest("bill.txt", text: "EDP electricity July").id)
-        try await h.review.edit(id, fileName: nil, labels: [Self.mine])
+        try await h.review.edit(id, fileName: nil, labels: LabelEdit(adding: [Self.mine]))
         let tagged = try #require(try await h.services.documents.document(id: id))
         let waiting = try await h.services.documents.unlabelled()
         #expect(tagged.labels == [Self.mine] && !tagged.isLabelled && waiting == [id],
                 "a tag is the user's own and labels nothing: the document still waits for the model")
-        try await h.review.edit(id, fileName: nil, labels: [])
+        try await h.review.edit(id, fileName: nil, labels: LabelEdit(removing: [Self.mine]))
         let untagged = try #require(try await h.services.documents.document(id: id))
         #expect(untagged.labels == nil && !untagged.isLabelled, "and without it, the document has no labels at all, as before")
-        try await h.review.edit(id, fileName: nil, labels: [Self.mine, DocumentLabel(kind: .sender, value: "EDP")])
+        try await h.review.edit(id, fileName: nil, labels: LabelEdit(adding: [Self.mine, DocumentLabel(kind: .sender, value: "EDP")]))
         let labelled = try #require(try await h.services.documents.document(id: id))
         let left = try await h.services.documents.unlabelled()
         #expect(labelled.isLabelled && left.isEmpty,
@@ -294,8 +293,7 @@ import Testing
         let h = try await Harness.make()
         defer { h.env.cleanup() }
         let id = try #require(try await h.ingest("bill.txt", text: "EDP electricity July").id)
-        let filed = try #require(try await h.services.documents.document(id: id))
-        try await h.review.edit(id, fileName: nil, labels: (filed.labels ?? []) + [Self.mine])
+        try await h.review.edit(id, fileName: nil, labels: LabelEdit(adding: [Self.mine]))
         h.env.time.advance(by: 60)
         let (services, coordinator, analyzer) = h.readingOtherwise()
         await coordinator.enqueue(try h.env.drop("Taxes 2024/bill copy.txt", text: "EDP electricity July"))

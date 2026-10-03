@@ -1,4 +1,5 @@
 import ArrumatorCore
+import ArrumatorRuntime
 import Foundation
 
 /// How documents, what the model read them as, and events are put into words on screen. Every sentence, title and
@@ -43,6 +44,8 @@ enum Wording {
     static let setup = "Setup…"
     static let minimise = "Minimise"
     static let close = "Close"
+    /// The name of a card's close button, naming what it closes.
+    static func closeNamed(_ name: String) -> String { "Close “\(name)”" }
     static let editMenu = "Edit"
     static let undo = "Undo"
     static let redo = "Redo"
@@ -73,6 +76,51 @@ enum Wording {
 
     /// The stage a file is at, and the file.
     static func working(on file: String, stage: String) -> String { "\(stage): \(file)" }
+
+    /// Why nothing is filed (`RuntimeActivity.Holdup`): at the foot of the sidebar, or, `inMenuBar`, in the menu bar
+    /// popover's status line, which says the app is starting while it waits for the folders.
+    static func holdup(_ holdup: RuntimeActivity.Holdup, inMenuBar: Bool) -> String {
+        switch holdup {
+        case .waitingForFolders: inMenuBar ? startingForFolders : waitingForFolders
+        case .archiveNotRead: archiveNotRead
+        case .archiveAway: archiveAway
+        case .paused: paused
+        case let .power(reason): waiting(reason)
+        case let .ollama(state): state.summary
+        }
+    }
+
+    /// What the app is doing now (`RuntimeActivity.Now`), in the menu bar popover.
+    static func now(_ now: RuntimeActivity.Now) -> String {
+        switch now {
+        case let .held(holdup): self.holdup(holdup, inMenuBar: true)
+        case .waitingForOllama: waitingForOllama
+        case let .filing(path, stage): working(on: (path as NSString).lastPathComponent, stage: doing(stage))
+        case let .tasks(work): tasksWork(work)
+        case let .queued(count): queued(count)
+        case .idle: idle
+        }
+    }
+
+    /// Heads the main window when the app could not start, above why.
+    static let notStarted = "Arrumator could not start"
+    static let tryAgain = "Try Again"
+    /// The menu of the rest, at the sidebar's foot and in the menu bar popover.
+    static let moreActions = "More"
+    static let chooseAnotherArchive = "Choose Another Archive…"
+    /// What the main window says while the archive's folder is not there, naming it.
+    static func archiveAwayNotice(_ path: String) -> String {
+        "The archive at \(path) is not there, as on a disk that is not connected. Nothing is filed until it is back."
+    }
+
+    /// What a search task is at work on (`RuntimeActivity.TasksWork`).
+    static func tasksWork(_ work: RuntimeActivity.TasksWork) -> String {
+        switch work {
+        case let .readingRequest(model): readingRequest(with: model)
+        case .waitingForOllama: waitingForOllama
+        case let .answering(model): answeringQuestion(with: model)
+        }
+    }
 
     /// What is being done to a file at a stage, while it is: "Reading its text", not the funnel's "Read".
     static func doing(_ state: JobState) -> String {

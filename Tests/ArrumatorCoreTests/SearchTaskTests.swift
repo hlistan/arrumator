@@ -487,3 +487,22 @@ actor TaskHolder {
         self.id = id
     }
 }
+
+/// A task's name, as the card's field gives it back.
+extension SearchTaskTests {
+    @Test func aNameLeftAsItWasStaysTheModelsAndIsNoChange() async throws {
+        let w = try await world()
+        defer { w.h.env.cleanup() }
+        let (queue, tasks) = w.h.searchTasks(StubInterpreter(plans: [Self.prompt: Self.invoices2025]))
+        let id = try await tasks.create(prompt: Self.prompt).id
+        await queue.drain()
+        // The card's name field shows the model's name, and gives it back when the user leaves it unchanged.
+        let left = try await tasks.update(id, SearchTaskChange(title: Self.invoices2025.title))
+        #expect(left.title == nil && left.name == Self.invoices2025.title, "the name stays the model's, to follow its next reading")
+        #expect(try await events(w.h, [.taskEdited]).isEmpty, "and nothing is recorded, as nothing changed")
+        let named = try await tasks.update(id, SearchTaskChange(title: "For the accountant"))
+        _ = try await tasks.update(id, SearchTaskChange(title: "For the accountant"))
+        #expect(named.title == "For the accountant", "a name of the user's is theirs")
+        #expect(try await events(w.h, [.taskEdited]).count == 1, "and giving it again changes nothing more")
+    }
+}

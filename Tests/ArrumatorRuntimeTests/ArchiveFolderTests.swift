@@ -114,6 +114,55 @@ import Testing
         await runtime.stop()
     }
 
+    @Test func anArchiveAwayAtLaunchIsOpenedWhenTheUserTriesAgainOnceItIsBack() async throws {
+        let home = try await RuntimeHome.make()
+        defer { home.cleanup() }
+        try await home.withoutOllama()
+        try await archiveWithADocument(home)
+        try FileManager.default.moveItem(at: home.folder("First"), to: home.folder("Away"))
+        let runtime = try await home.bootstrap()
+        let follower = WorkFollower()
+        let updates = await runtime.workUpdates()
+        let following = Task { for await work in updates { await follower.add(work) } }
+        defer { following.cancel() }
+        await expectAway(home.folder("First"), "the app starts, and is told the archive is away") { try await runtime.openAndStart() }
+        // The disk is connected again, and the user presses Try Again, which opens the archive as at launch.
+        try FileManager.default.moveItem(at: home.folder("Away"), to: home.folder("First"))
+        try await runtime.openAndStart()
+        #expect(await Patience.until { await follower.received.last == .running }, "the work runs")
+        #expect(try await runtime.services.documents.list(DocumentFilter(), limit: 10).count == 1, "on the archive it had")
+        await runtime.stop()
+    }
+
+    @Test func whileTheArchiveIsAwayTheAppIsStillToldHowManyLabelsLookAlike() async throws {
+        let home = try await RuntimeHome.make()
+        defer { home.cleanup() }
+        try await home.withoutOllama()
+        do {
+            let first = try await home.open()
+            for (place, sender) in ["EDP Comercial", "EDP Comercail"].enumerated() {
+                var bill = DocumentRecord.arrived(path: home.folder("First").appendingPathComponent("bill \(place).pdf").path,
+                                                  sha256: "bill \(place)", size: 1, uttype: "com.adobe.pdf", inode: nil, modified: nil,
+                                                  now: first.time.now())
+                bill.status = .filed
+                bill.labelsJson = JSON.string([DocumentLabel(kind: .sender, value: sender)])
+                _ = try await first.services.documents.save(bill)
+            }
+            try await first.records.flush()
+            await first.stop()
+        }
+        try FileManager.default.moveItem(at: home.folder("First"), to: home.folder("Away"))
+        let runtime = try await home.bootstrap()
+        let counts = SuggestionCounts()
+        let stream = runtime.services.lookAlikes.suggestionCounts()
+        let following = Task { for await count in stream { await counts.add(count) } }
+        defer { following.cancel() }
+        await expectAway(home.folder("First"), "the archive is away, and nothing is filed") { try await runtime.openAndStart() }
+        #expect(await Patience.until { await counts.received.last == 1 },
+                "the labels its index holds are still counted, as the Labels page still lists them")
+        await runtime.stop()
+    }
+
     static let note = "note.txt"
 
     @Test func aNewIndexOfAnArchiveThatIsAwayIsNeitherMadeAnewNorTakenForEmpty() async throws {

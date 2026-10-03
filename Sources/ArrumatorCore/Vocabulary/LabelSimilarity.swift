@@ -30,6 +30,15 @@ public enum LabelSimilarity {
         similarity(Key(a), Key(b))
     }
 
+    /// Up to `limit` of `others`, the most alike to `value` first, and of those as alike, in the order given: what a
+    /// label is offered to be merged into. `value` itself is never among them.
+    public static func mostAlike(to value: String, among others: [String], limit: Int) -> [String] {
+        let key = Key(value)
+        let scored = others.enumerated().filter { $0.element != value }.map { (place: $0.offset, value: $0.element, score: similarity(key, Key($0.element))) }
+        let ordered = scored.sorted { ($0.score, -$0.place) > ($1.score, -$1.place) }
+        return Array(ordered.prefix(max(0, limit)).map(\.value))
+    }
+
     /// Whether the two are one label written two ways.
     public static func sameWriting(_ a: String, _ b: String) -> Bool {
         Key(a).isSameWriting(as: Key(b))

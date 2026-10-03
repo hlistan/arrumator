@@ -27,8 +27,9 @@ struct Page<Content: View>: View {
     }
 
     var body: some View {
+        // Lazy, so a long list builds the rows in sight, not every row it has.
         ScrollView {
-            VStack(alignment: .leading, spacing: Style.sectionSpacing) {
+            LazyVStack(alignment: .leading, spacing: Style.sectionSpacing) {
                 VStack(alignment: .leading, spacing: Style.pageTitleSpacing) {
                     HStack(alignment: .firstTextBaseline, spacing: Style.titleSymbolSpacing) {
                         Image(systemName: symbol)
@@ -75,7 +76,7 @@ struct PageSection<Content: View, Trailing: View>: View {
                 trailing().font(.callout)
             }
             Divider().padding(.bottom, Style.sectionRuleGap)
-            VStack(alignment: .leading, spacing: 0) { content() }
+            LazyVStack(alignment: .leading, spacing: 0) { content() }
         }
     }
 }

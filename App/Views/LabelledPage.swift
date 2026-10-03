@@ -6,24 +6,26 @@ import SwiftUI
 /// labels head the page, each can be let go of there as in the sidebar, and Clear beside them lets go of all.
 struct LabelledPage: View {
     @Environment(AppModel.self) private var model
-    @State private var documents: [DocumentRecord] = []
+    /// The documents under the month of their own date, as the list shows them.
+    @State private var sections: [DocumentSection] = []
+    @State private var count = 0
     @State private var pages = 1
 
     var body: some View {
-        let selection = model.labelSelection
+        let selection = model.session.labelSelection
         Page(title: selection.map(Wording.label).joined(separator: Wording.labelSeparator), symbol: Destination.labelled.symbol,
              tint: Destination.labelled.tint) {
-            if let task = model.collecting { CollectingBar(task: task) }
+            if let task = model.session.collecting { CollectingBar(task: task) }
             HStack(spacing: Style.chipSpacing) {
                 ForEach(selection, id: \.self) { ChosenLabel(label: $0) }
                 Button(Wording.clearLabels) { model.clearLabels() }
                     .buttonStyle(.link).font(.callout).help(Wording.clearLabelsHelp)
             }
-            if documents.isEmpty {
+            if count == 0 {
                 EmptyState(symbol: "tag", text: Wording.noDocumentHasAll)
             }
-            DocumentSections(documents: documents, heading: Wording.documentMonth)
-            if let pageSize = model.runtime?.config.interface.pageSize, documents.count == pages * pageSize {
+            DocumentSections(sections: sections)
+            if let pageSize = model.runtime?.config.interface.pageSize, count == pages * pageSize {
                 Button(Wording.showMore) { pages += 1 }.buttonStyle(.link)
             }
         }
@@ -34,7 +36,8 @@ struct LabelledPage: View {
                 try await runtime.services.documents.list(DocumentFilter(labels: selection), order: .documentDate,
                                                           limit: pages * runtime.config.interface.pageSize)
             }) else { return }
-            documents = loaded
+            count = loaded.count
+            sections = DocumentSection.sections(of: model.listed(loaded), heading: Wording.documentMonth)
         }
     }
 }

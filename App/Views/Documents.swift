@@ -7,50 +7,34 @@ import SwiftUI
 /// that adds it to the task's set or takes it out.
 struct DocumentList: View {
     @Environment(AppModel.self) private var model
-    let documents: [DocumentRecord]
+    let documents: [ListedDocument]
 
     var body: some View {
-        ForEach(documents, id: \.id) { document in
-            if let id = document.id, model.openDocument == id {
-                DocumentCard(documentID: id) { if model.openDocument == id { model.openDocument = nil } }
+        ForEach(documents) { listed in
+            if let id = listed.id, model.session.openDocument == id {
+                DocumentCard(documentID: id) { if model.session.openDocument == id { model.session.openDocument = nil } }
             } else {
                 HStack(spacing: Style.rowAccessorySpacing) {
-                    row(document)
-                        .rowAction { withAnimation(.snappy) { model.openDocument = document.id } }
-                    if let task = model.collecting, let id = document.id {
+                    ListRow(symbol: listed.record.status.symbol, tint: listed.record.status.tint, title: listed.record.filename,
+                            detail: listed.detail, subtitle: listed.labels)
+                        .rowAction { withAnimation(.snappy) { model.session.openDocument = listed.id } }
+                    if let task = model.session.collecting, let id = listed.id {
                         CollectToggle(task: task, document: id)
                     }
                 }
             }
         }
     }
-
-    private func row(_ d: DocumentRecord) -> some View {
-        ListRow(symbol: d.status.symbol, tint: d.status.tint, title: d.filename,
-                detail: Wording.rowDetail(of: d, archive: model.settings?.archiveURL, incoming: model.settings?.incomingURL),
-                subtitle: Wording.labels(d.labels))
-    }
 }
 
-/// Documents under headings, in the order they come, a heading wherever `heading` names another than the one before:
-/// what was processed under the day it was processed, the latest first (Processed, and what was just processed on
-/// Incoming, read the same way), and the documents the sidebar's labels choose under the month of their own date, the
-/// newest first and those without a date last.
+/// Documents under headings (`DocumentSection`): what was processed under the day it was processed, the latest first
+/// (Processed, and what was just processed on Incoming, read the same way), and the documents the sidebar's labels choose
+/// under the month of their own date, the newest first and those without a date last.
 struct DocumentSections: View {
-    let documents: [DocumentRecord]
-    let heading: (DocumentRecord) -> String
-
-    private var sections: [(title: String, documents: [DocumentRecord])] {
-        var out: [(title: String, documents: [DocumentRecord])] = []
-        for document in documents {
-            let title = heading(document)
-            if out.last?.title == title { out[out.count - 1].documents.append(document) } else { out.append((title, [document])) }
-        }
-        return out
-    }
+    let sections: [DocumentSection]
 
     var body: some View {
-        ForEach(sections, id: \.title) { section in
+        ForEach(sections) { section in
             PageSection(section.title) { DocumentList(documents: section.documents) }
         }
     }
@@ -118,6 +102,7 @@ struct DocumentCard: View {
             Spacer(minLength: 0)
             Button { close() } label: { Image(systemName: "xmark") }
                 .buttonStyle(.borderless).foregroundStyle(.secondary).help(Wording.close)
+                .accessibilityLabel(Wording.closeNamed(d.filename))
         }
     }
 
@@ -125,7 +110,7 @@ struct DocumentCard: View {
     private func placement(_ d: DocumentRecord) -> some View {
         HStack(spacing: Style.placementSpacing) {
             Image(systemName: d.status.symbol).foregroundStyle(d.status.tint)
-            Text(Wording.outcome(of: d, archive: model.settings?.archiveURL, incoming: model.settings?.incomingURL))
+            Text(Wording.outcome(of: d, archive: model.archive, incoming: model.settings?.incomingURL))
         }
         .font(.callout)
     }
@@ -139,7 +124,7 @@ struct DocumentCard: View {
                     label(Wording.labelKind(kind))
                     HStack(spacing: Style.chipSpacing) {
                         ForEach(labels.filter { $0.kind == kind }, id: \.self) { item in
-                            LabelChip(label: item) { save(labels.filter { $0 != item }) }
+                            LabelChip(label: item) { save(LabelEdit(removing: [item])) }
                         }
                     }
                 }
@@ -154,8 +139,8 @@ struct DocumentCard: View {
                     TextField(Wording.labelPrompt(newKind), text: $newValue)
                         .accessibilityLabel(Wording.labelPrompt(newKind))
                         .textFieldStyle(.roundedBorder)
-                        .onSubmit { add(to: labels) }
-                    Button(Wording.add) { add(to: labels) }
+                        .onSubmit { add() }
+                    Button(Wording.add) { add() }
                         .disabled(newValue.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
                 .controlSize(.small)
@@ -231,17 +216,18 @@ struct DocumentCard: View {
 
     // MARK: Changes
 
-    /// Adds the label being typed; one of a single-valued kind takes the place of the one there.
-    private func add(to labels: [DocumentLabel]) {
+    /// Adds the label being typed; Core decides what it does to the labels the document has then (`LabelEdit`).
+    private func add() {
         let value = newValue.trimmingCharacters(in: .whitespaces)
         guard !value.isEmpty else { return }
-        let kept = newKind.isSingle ? labels.filter { $0.kind != newKind } : labels
-        save(kept + [DocumentLabel(kind: newKind, value: value)])
+        save(LabelEdit(adding: [DocumentLabel(kind: newKind, value: value)]))
         newValue = ""
     }
 
-    private func save(_ labels: [DocumentLabel]) {
-        run(Wording.changeLabelsAction) { try await $0.review.edit(documentID, fileName: nil, labels: labels) }
+    /// Sends what the user did to the labels, never the set the card last showed, so changes made in quick succession
+    /// each keep the others.
+    private func save(_ change: LabelEdit) {
+        run(Wording.changeLabelsAction) { try await $0.review.edit(documentID, fileName: nil, labels: change) }
     }
 
     /// Renames the file when the user leaves the name, as Things saves a field; an unchanged name is left alone. A name
@@ -266,7 +252,8 @@ struct DocumentCard: View {
 
     private func load() async {
         let readBefore = document?.updatedAt
-        document = await model.load(Wording.loadDocumentAction) { try await $0.services.documents.document(id: documentID) } ?? nil
+        guard let read = await model.load(Wording.loadDocumentAction, { try await $0.services.documents.document(id: documentID) }) else { return }
+        document = read
         if let document, let offered = await model.load(Wording.loadDocumentAction, { await $0.review.choices(for: document) }) {
             choices = offered
         }

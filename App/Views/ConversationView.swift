@@ -11,7 +11,7 @@ struct ConversationView: View {
     let task: SearchTask
     @State private var items: [ConversationItem] = []
     /// The documents the answers draw on and found, by number.
-    @State private var documents: [Int64: DocumentRecord] = [:]
+    @State private var documents: [Int64: ListedDocument] = [:]
     @State private var question = ""
     @State private var confirmingClear = false
 
@@ -85,7 +85,7 @@ struct ConversationView: View {
             return (items, try await runtime.services.documents.documents(ids: Array(Set(named))))
         }) else { return }
         items = loaded.0
-        documents = Dictionary(loaded.1.compactMap { d in d.id.map { ($0, d) } }, uniquingKeysWith: { a, _ in a })
+        documents = Dictionary(model.listed(loaded.1).compactMap { d in d.id.map { ($0, d) } }, uniquingKeysWith: { a, _ in a })
     }
 }
 
@@ -96,11 +96,11 @@ private struct TurnView: View {
     @Environment(AppModel.self) private var model
     let turn: TaskTurn
     let task: SearchTask
-    let documents: [Int64: DocumentRecord]
+    let documents: [Int64: ListedDocument]
     let answeredAfterLater: Bool
 
     var body: some View {
-        let progress = model.conversation.progress(of: turn)
+        let progress = model.session.conversation.progress(of: turn)
         VStack(alignment: .leading, spacing: Style.turnSpacing) {
             Text(turn.question)
                 .textSelection(.enabled)
@@ -130,13 +130,13 @@ private struct TurnView: View {
         VStack(alignment: .leading, spacing: Style.sourceSpacing) {
             Text(Wording.drawnFrom).foregroundStyle(.secondary)
             ForEach(turn.sources.compactMap { documents[$0] }, id: \.id) { document in
-                Button { model.open(document.path) } label: {
-                    Label(document.filename, systemImage: "doc.text").lineLimit(1).truncationMode(.tail)
+                Button { model.open(document.record.path) } label: {
+                    Label(document.record.filename, systemImage: "doc.text").lineLimit(1).truncationMode(.tail)
                 }
                 .buttonStyle(.plain)
                 .padding(Style.labelChipInsets)
                 .background(Style.hover, in: .capsule)
-                .help(Wording.openNamedDocument(document.filename))
+                .help(Wording.openNamedDocument(document.record.filename))
             }
         }
         .font(.callout)
@@ -216,7 +216,7 @@ private struct TurnProgressView: View {
     /// What has come of the answer, while this question is the one answered.
     private var written: AnswerProgress? {
         guard case .answering(_?) = progress else { return nil }
-        return model.answerSoFar
+        return model.session.answerSoFar
     }
 
     var body: some View {
@@ -254,7 +254,7 @@ private struct FindingView: View {
     @Environment(AppModel.self) private var model
     let finding: TurnFinding
     let task: SearchTask
-    let documents: [Int64: DocumentRecord]
+    let documents: [Int64: ListedDocument]
 
     var body: some View {
         let found = finding.documents.compactMap { documents[$0] }
@@ -270,15 +270,16 @@ private struct FindingView: View {
             .font(.callout)
             ForEach(found, id: \.id) { document in
                 HStack(spacing: Style.rowAccessorySpacing) {
-                    ListRow(symbol: document.status.symbol, tint: document.status.tint, title: document.filename,
-                            detail: document.documentDate, subtitle: Wording.labels(document.labels))
-                        .openAction { model.open(document.path) }
+                    ListRow(symbol: document.record.status.symbol, tint: document.record.status.tint, title: document.record.filename,
+                            detail: document.date, subtitle: document.labels)
+                        .openAction { model.open(document.record.path) }
                         .help(Wording.doubleClickToOpen)
                     if let id = document.id, task.documents.contains(id) {
                         Image(systemName: "checkmark.circle.fill").foregroundStyle(Palette.tasksList).help(Wording.inTaskAlready)
                     } else if let id = document.id {
                         Button { add([id]) } label: { Image(systemName: "plus.circle") }
                             .buttonStyle(.plain).foregroundStyle(.secondary).help(Wording.addFoundHelp)
+                            .accessibilityLabel(Wording.addFoundHelp)
                     }
                 }
             }

@@ -176,8 +176,9 @@ and writing its value; from a terminal, `arrumatorcli labels <document> --add se
 `--add tag="Taxes 2024"`. Your labels are kept as the model's are: a date must be a date and a type one of the list. A
 label of a kind the model gives labels a document the model has not labelled, so `labels unlabelled` no longer reads it;
 a tag does not. A document keeps one type and one
-date: on the card a new one replaces the old; from a terminal, remove the old one in the same command (`--remove
-type=invoice --add type=receipt`). Each correction is recorded in History. Renaming the document (on its card, or
+date: a new one replaces the old, on the card and from a terminal alike (`--add type=receipt`). A correction is made to
+the labels the document has when it is made, so two made one after the other, such as two labels taken off in quick
+succession, both hold. Each correction is recorded in History. Renaming the document (on its card, or
 `review rename`) renames the file where it is.
 
 ## Keeping labels one vocabulary

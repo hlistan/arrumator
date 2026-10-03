@@ -53,15 +53,15 @@ struct TasksPage: View {
     }
 
     @ViewBuilder private func row(_ task: SearchTask) -> some View {
-        if model.openTask == task.id {
-            TaskCard(taskID: task.id, profiles: profiles) { if model.openTask == task.id { model.openTask = nil } }
+        if model.session.openTask == task.id {
+            TaskCard(taskID: task.id, profiles: profiles) { if model.session.openTask == task.id { model.session.openTask = nil } }
         } else {
-            let progress = model.taskQueue.progress(of: task)
-            let answering = progress == nil && model.conversation.answering?.task == task.id
+            let progress = model.session.taskQueue.progress(of: task)
+            let answering = progress == nil && model.session.conversation.answering?.task == task.id
             ListRow(symbol: task.state.symbol, tint: task.state.tint, title: task.name,
                     detail: answering ? Wording.answeringRow : Wording.taskOutcome(task, progress: progress),
                     subtitle: task.name == task.prompt ? nil : task.prompt, busy: progress?.isReading == true || answering)
-                .rowAction { withAnimation(.snappy) { model.openTask = task.id } }
+                .rowAction { withAnimation(.snappy) { model.session.openTask = task.id } }
         }
     }
 
@@ -81,12 +81,12 @@ struct TasksPage: View {
                 return
             }
             await load()
-            model.openTask = task.id
+            model.session.openTask = task.id
         }
     }
 
     private func load() async {
-        tasks = await model.load(Wording.loadTasksAction) { try await $0.searchTasks.store.tasks() } ?? tasks
+        if let read = await model.load(Wording.loadTasksAction, { try await $0.searchTasks.store.tasks() }) { tasks = read }
     }
 
     /// Reads the profiles again; one chosen for the next task that the settings no longer list gives way to the one
@@ -143,6 +143,10 @@ struct TaskCard: View {
     let profiles: [ModelProfileListing]?
     let onClose: () -> Void
     @State private var detail: SearchTaskDetail?
+    /// The set's documents as its rows show them, by their numbers, worked out when the task is read.
+    @State private var listed: [Int64: ListedDocument] = [:]
+    /// The exports still where they were made, as the disk said when the task was last read.
+    @State private var exportsThere: Set<String> = []
     @State private var name = ""
     @State private var prompt = ""
     @State private var confirmingRemoval = false
@@ -154,7 +158,7 @@ struct TaskCard: View {
         VStack(alignment: .leading, spacing: Style.taskCardSpacing) {
             if let detail {
                 header(detail.task)
-                if let progress = model.taskQueue.progress(of: detail.task) { TaskProgressLine(progress: progress) }
+                if let progress = model.session.taskQueue.progress(of: detail.task) { TaskProgressLine(progress: progress) }
                 request(detail.task)
                 Picker(Wording.documentsSection, selection: $section) {
                     Text(Wording.documentsSection).tag(Section.documents)
@@ -166,7 +170,7 @@ struct TaskCard: View {
                     if detail.task.state == .ready && detail.tree.count == 0 {
                         Text(Wording.nothingFound).foregroundStyle(.secondary)
                     }
-                    SetLevel(group: detail.tree, taskID: taskID)
+                    SetLevel(group: detail.tree, taskID: taskID, listed: listed)
                     actions(detail.task)
                     exports(detail.task)
                 case .conversation:
@@ -180,7 +184,8 @@ struct TaskCard: View {
         .onExitCommand { withAnimation(.snappy) { onClose() } }
         .task(id: model.taskActivity) { await load() }
         .onChange(of: editingName) { wasEditing, _ in
-            if wasEditing { change(SearchTaskChange(title: name)) }
+            // Left as it was, the name is not sent: Core would take it for no change anyway (`SearchTaskActions.update`).
+            if wasEditing, name != detail?.task.name { change(SearchTaskChange(title: name)) }
         }
         .confirmationDialog(Wording.removeTaskQuestion(detail?.task.name ?? ""), isPresented: $confirmingRemoval) {
             Button(Wording.removeTaskConfirm, role: .destructive) {
@@ -211,6 +216,7 @@ struct TaskCard: View {
             Spacer(minLength: 0)
             Button { withAnimation(.snappy) { onClose() } } label: { Image(systemName: "xmark") }
                 .buttonStyle(.borderless).foregroundStyle(.secondary).help(Wording.close)
+                .accessibilityLabel(Wording.closeNamed(task.name))
         }
     }
 
@@ -298,7 +304,7 @@ struct TaskCard: View {
                 Image(systemName: "plus.circle")
             }
             .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-            .help(Wording.addLevel)
+            .help(Wording.addLevel).accessibilityLabel(Wording.addLevel)
         }
         .font(.callout)
     }
@@ -325,7 +331,7 @@ struct TaskCard: View {
             VStack(alignment: .leading, spacing: Style.cardReadingRowSpacing) {
                 Text(Wording.exportsHeading).foregroundStyle(.secondary)
                 ForEach(task.exports.reversed()) { export in
-                    let there = FileManager.default.fileExists(atPath: export.path)
+                    let there = exportsThere.contains(export.path)
                     HStack(spacing: Style.inlineControlSpacing) {
                         Image(systemName: export.format == .zip ? "doc.zipper" : "folder").foregroundStyle(.secondary)
                         Text(Wording.export(export))
@@ -359,7 +365,7 @@ struct TaskCard: View {
     /// beside the archive, never wherever a panel was last left.
     private func export(_ format: ExportFormat) {
         let last = detail?.task.exports.last.map { URL(fileURLWithPath: $0.path).deletingLastPathComponent().path }
-        let start = last ?? model.settings?.archiveURL.deletingLastPathComponent().path
+        let start = last ?? model.archive?.deletingLastPathComponent().path
         guard let path = FolderPicker.choose(title: Wording.chooseExportFolder, startingAt: start) else { return }
         let id = taskID
         Task<Void, Never> {
@@ -372,8 +378,12 @@ struct TaskCard: View {
 
     private func load() async {
         let id = taskID
-        detail = await model.load(Wording.loadTaskAction) { try await $0.searchTasks.store.detail(id: id) } ?? nil
-        guard let task = detail?.task else { return }
+        guard let read = await model.load(Wording.loadTaskAction, { try await $0.searchTasks.store.detail(id: id) }) else { return }
+        detail = read
+        guard let read else { return }
+        listed = Dictionary(model.listed(read.tree.allDocuments).compactMap { row in row.id.map { ($0, row) } }, uniquingKeysWith: { first, _ in first })
+        exportsThere = Set(read.task.exports.map(\.path).filter { FileManager.default.fileExists(atPath: $0) })
+        let task = read.task
         // What the user is typing is not replaced by what the task says.
         if !editingName { name = task.name }
         if !editingPrompt { prompt = task.prompt }
@@ -414,14 +424,17 @@ private struct TaskProgressLine: View {
 private struct SetLevel: View {
     let group: LabelGroup
     let taskID: Int64
+    let listed: [Int64: ListedDocument]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(group.groups.enumerated()), id: \.offset) { item in
-                SetGroup(group: item.element, taskID: taskID)
+            // A group is the label its documents share, one per value in a level, and keeps what is folded as the set
+            // changes around it.
+            ForEach(group.groups, id: \.value) { group in
+                SetGroup(group: group, taskID: taskID, listed: listed)
             }
             ForEach(group.documents, id: \.id) { document in
-                SetDocument(document: document, taskID: taskID)
+                if let id = document.id, let row = listed[id] { SetDocument(document: row, taskID: taskID) }
             }
         }
     }
@@ -430,11 +443,12 @@ private struct SetLevel: View {
 private struct SetGroup: View {
     let group: LabelGroup
     let taskID: Int64
+    let listed: [Int64: ListedDocument]
     @State private var collapsed = false
 
     var body: some View {
         DisclosureGroup(isExpanded: Binding(get: { !collapsed }, set: { collapsed = !$0 })) {
-            SetLevel(group: group, taskID: taskID).padding(.leading, Style.setLevelIndent)
+            SetLevel(group: group, taskID: taskID, listed: listed).padding(.leading, Style.setLevelIndent)
         } label: {
             HStack {
                 Text(Wording.group(group)).fontWeight(.medium)
@@ -449,19 +463,19 @@ private struct SetGroup: View {
 /// A document of a task's set: its name, where it is and its labels; under the pointer, a × takes it out.
 private struct SetDocument: View {
     @Environment(AppModel.self) private var model
-    let document: DocumentRecord
+    let document: ListedDocument
     let taskID: Int64
     @State private var hovering = false
 
     var body: some View {
+        let record = document.record
         HStack(spacing: Style.rowAccessorySpacing) {
-            ListRow(symbol: document.status.symbol, tint: document.status.tint, title: document.filename,
-                    detail: Wording.rowDetail(of: document, archive: model.settings?.archiveURL, incoming: model.settings?.incomingURL),
-                    subtitle: Wording.labels(document.labels))
-                .openAction { model.open(document.path) }
+            ListRow(symbol: record.status.symbol, tint: record.status.tint, title: record.filename, detail: document.detail,
+                    subtitle: document.labels)
+                .openAction { model.open(record.path) }
                 .help(Wording.doubleClickToOpen)
             Button(action: takeOut) {
-                Image(systemName: "xmark.circle.fill").accessibilityLabel(Wording.takeOutNamed(document.filename))
+                Image(systemName: "xmark.circle.fill").accessibilityLabel(Wording.takeOutNamed(record.filename))
             }
             .buttonStyle(.plain).foregroundStyle(.secondary).help(Wording.takeOutHelp)
             .opacity(hovering ? 1 : 0)
@@ -489,9 +503,9 @@ struct CollectingBar: View {
             Image(systemName: Destination.tasks.symbol).foregroundStyle(Palette.tasksList)
             Text(Wording.addingTo(task.name)).foregroundStyle(.secondary)
             Spacer()
-            if !model.labelSelection.isEmpty {
+            if !model.session.labelSelection.isEmpty {
                 Button(Wording.addAllShown) {
-                    let (id, labels) = (task.id, model.labelSelection)
+                    let (id, labels) = (task.id, model.session.labelSelection)
                     Task<Void, Never> { await model.perform(Wording.addToTaskAction) { _ = try await $0.searchTasks.add(id, labelled: labels) } }
                 }
                 .buttonStyle(.link)
@@ -525,5 +539,6 @@ struct CollectToggle: View {
         }
         .buttonStyle(.plain)
         .help(inSet ? Wording.inTaskHelp : Wording.addToTaskHelp)
+        .accessibilityLabel(inSet ? Wording.inTaskHelp : Wording.addToTaskHelp)
     }
 }

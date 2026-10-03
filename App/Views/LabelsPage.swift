@@ -56,13 +56,13 @@ struct LabelsPage: View {
         let shown = expanded.contains(kind) ? all : Array(all.prefix(pageSize))
         return PageSection(Wording.labelKinds(kind)) {
             ForEach(shown, id: \.label) { item in
-                if model.openLabel == item.label {
+                if model.session.openLabel == item.label {
                     LabelCard(label: item.label, others: all.map(\.label.value).filter { $0 != item.label.value })
                 } else {
                     // The most used first, each with how many documents have it, which is why it comes where it does.
                     ListRow(symbol: "tag", tint: .secondary, title: Wording.label(item.label),
                             detail: Format.count(item.documents, "document"))
-                        .rowAction { withAnimation(.snappy) { model.openLabel = item.label } }
+                        .rowAction { withAnimation(.snappy) { model.session.openLabel = item.label } }
                 }
             }
             if shown.count < all.count {
@@ -96,8 +96,9 @@ private struct SuggestionCard: View {
                 Text(Wording.alike(suggestion.value, suggestion.into)).font(.title3.weight(.semibold))
                 Spacer()
                 Button(action: close) { Image(systemName: "xmark") }.buttonStyle(.borderless).foregroundStyle(.secondary).help(Wording.close)
+                    .accessibilityLabel(Wording.closeNamed(Wording.alike(suggestion.value, suggestion.into)))
             }
-            Text(Wording.writtenAlike(suggestion.kind))
+            Text(Wording.alikeBecause(suggestion.reason, kind: suggestion.kind))
                 .foregroundStyle(.secondary)
             HStack(spacing: Style.actionSpacing) {
                 Button(Wording.showDocuments) { model.browse(b) }
@@ -127,12 +128,9 @@ struct LabelCard: View {
     let others: [String]
     @State private var into = ""
     @State private var confirmingRemoval = false
-
-    /// The labels offered to merge into, the most alike first.
-    private var candidates: [String] {
-        let limit = model.runtime?.config.labels.vocabulary.suggestionLimit ?? others.count
-        return Array(others.sorted { LabelSimilarity.similarity($0, label.value) > LabelSimilarity.similarity($1, label.value) }.prefix(limit))
-    }
+    /// The labels offered to merge into, the most alike first (`LabelSimilarity.mostAlike`), worked out when the card
+    /// opens or the labels change, never as it is drawn.
+    @State private var candidates: [String] = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: Style.labelCardSpacing) {
@@ -143,6 +141,7 @@ struct LabelCard: View {
                 }
                 Spacer()
                 Button { close() } label: { Image(systemName: "xmark") }.buttonStyle(.borderless).foregroundStyle(.secondary).help(Wording.close)
+                    .accessibilityLabel(Wording.closeNamed(Wording.label(label)))
             }
             HStack(spacing: Style.inlineControlSpacing) {
                 Text(Wording.mergeInto).foregroundStyle(.secondary)
@@ -157,6 +156,7 @@ struct LabelCard: View {
                         Image(systemName: "chevron.down")
                     }
                     .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help(Wording.chooseLabelInUse)
+                    .accessibilityLabel(Wording.chooseLabelInUse)
                 }
                 Button(Wording.merge) { merge() }.disabled(into.trimmingCharacters(in: .whitespaces).isEmpty)
             }
@@ -172,6 +172,10 @@ struct LabelCard: View {
         }
         .card()
         .onExitCommand { close() }
+        .task(id: [label.value] + others) {
+            guard let limit = model.runtime?.config.labels.vocabulary.suggestionLimit else { return }
+            candidates = LabelSimilarity.mostAlike(to: label.value, among: others, limit: limit)
+        }
         .confirmationDialog(Wording.removeEverywhereQuestion(Wording.label(label)), isPresented: $confirmingRemoval) {
             Button(Wording.removeEverywhere, role: .destructive) {
                 let label = label
@@ -190,7 +194,7 @@ struct LabelCard: View {
     }
 
     private func close() {
-        withAnimation(.snappy) { if model.openLabel == label { model.openLabel = nil } }
+        withAnimation(.snappy) { if model.session.openLabel == label { model.session.openLabel = nil } }
     }
 }
 

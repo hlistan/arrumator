@@ -60,9 +60,8 @@ struct Labels: AsyncParsableCommand {
             let runtime = try await options.runtime()
             let id = try await resolveDocument(document, runtime: runtime)
             if !(add.isEmpty && remove.isEmpty) {
-                let removed = Set(try remove.map(Labels.label).compactMap { DocumentLabel.normalized($0.value, kind: $0.kind) })
-                let current = try await runtime.services.documents.document(id: id)?.labels ?? []
-                try await runtime.review.edit(id, fileName: nil, labels: current.filter { !removed.contains($0) } + (try add.map(Labels.label)))
+                try await runtime.review.edit(id, fileName: nil,
+                                              labels: LabelEdit(adding: try add.map(Labels.label), removing: try remove.map(Labels.label)))
             }
             guard let row = try await Labels.rows([id], runtime: runtime).first else { return }
             options.emit(row) {

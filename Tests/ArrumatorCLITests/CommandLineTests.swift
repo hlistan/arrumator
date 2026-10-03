@@ -246,6 +246,10 @@ import UniformTypeIdentifiers
         let labels = try JSON.decoder.decode([DocumentLabel].self, from: JSONSerialization.data(withJSONObject: row?["labels"] ?? []))
         #expect(labels == [invoice, taxes, mine] && row?["labelled"] as? Bool == true,
                 "a tag is added by hand as any label, as written, and the document labelled stays so: \(added.text) \(added.stderr)")
+        let retyped = try JSONSerialization.jsonObject(with: try run(home, ["labels", String(ids[1]), "--json", "--add", "type=receipt"]).stdout)
+        let types = try JSON.decoder.decode([DocumentLabel].self, from: JSONSerialization.data(withJSONObject: (retyped as? [String: Any])?["labels"] ?? []))
+            .filter { $0.kind == .type }
+        #expect(types == [receipt], "a type added takes the place of the one there, as on a document's card: \(types)")
         let browsed = try run(home, ["labels", "browse", "--json", "tag=taxes 2024"])
         #expect(try documentIDs(browsed.stdout, under: "documents") == ids, "every document with the tag, however it is cased: \(browsed.text)")
         let stats = try JSONSerialization.jsonObject(with: try run(home, ["stats", "--json"]).stdout) as? [String: Any]

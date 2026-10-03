@@ -302,6 +302,8 @@ import Testing
             ("modelProfiles.standard.embedModel", { $0.modelProfiles["standard"]?.embedModel = "\n" }),
             ("modelProfiles.mine.visionModel", { $0.modelProfiles["mine"] = mine }),
             ("modelProfiles.smart.name", { $0.modelProfiles["smart"]?.name = "fast" }),
+            ("traceRawRetentionDays", { $0.traceRawRetentionDays = AppSettings.traceRawRetentionDaysRange.lowerBound - 1 }),
+            ("traceRawRetentionDays", { $0.traceRawRetentionDays = AppSettings.traceRawRetentionDaysRange.upperBound + 1 }),
         ]
         for (key, change) in refused {
             await #expect("settings with \(key) the app cannot use are refused, with the reason that names the key") {

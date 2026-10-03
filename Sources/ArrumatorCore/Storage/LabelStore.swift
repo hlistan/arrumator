@@ -96,13 +96,17 @@ public struct LabelStore: Sendable {
 
     /// Pairs of labels in use alike enough to be one, which the user has not decided about. Which labels of a kind look
     /// alike is brought up to date from when it was last asked, comparing only the labels added since (`LookAlikeMemo`);
-    /// one asking while another works it out waits for it. Stopping is thrown, the work done kept.
+    /// one asking while another works it out waits for it. Stopping is thrown, the work done kept. How many there are is
+    /// told to every subscriber of `LookAlikeMemo.suggestionCounts()`.
     public func suggestions() async throws -> [LabelSuggestion] {
-        try await consolidator().suggestions(by: lookAlikes, comparing: LabelSimilarity.lookAlike(_:_:atLeast:))
+        let found = try await consolidator().suggestions(by: lookAlikes, comparing: LabelSimilarity.lookAlike(_:_:atLeast:))
+        lookAlikes.publish(suggestions: found.count)
+        return found
     }
 
-    /// Works out which labels look alike, as `suggestions()` does, so that the first to ask for them seldom waits: what
-    /// the runtime does once the archive is open. Stopping ends it, keeping what it has done; a failure is logged.
+    /// Works out which labels look alike, as `suggestions()` does, so that the first to ask for them seldom waits and
+    /// how many there are is told to those who count them: what the runtime does once the archive is open, and at every
+    /// change to it after. Stopping ends it, keeping what it has done; a failure is logged.
     public func workOutLookAlikes() async {
         do { _ = try await suggestions() } catch {
             guard !(error is CancellationError || Task.isCancelled) else { return }

@@ -43,7 +43,7 @@ struct GeneralSettings: View {
         Form {
             Section {
                 pathRow(Wording.incomingFolder, path: model.settings?.incomingPath) { path in await model.update { $0.incomingPath = path } }
-                pathRow(Wording.archiveFolder, path: model.settings?.archivePath, busy: model.switchingArchive) { path in
+                pathRow(Wording.archiveFolder, path: model.archive?.path, busy: model.switchingArchive) { path in
                     await model.switchArchive(to: path)
                 }
             } header: {
@@ -143,7 +143,7 @@ struct ModelSettingsView: View {
     var body: some View {
         Form {
             Section(Wording.ollama) {
-                LabeledContent(Wording.status, value: model.ollama.summary)
+                LabeledContent(Wording.status, value: model.session.ollama.summary)
                 HStack {
                     TextField(Wording.server, text: $server).onSubmit { connect() }
                     Button(Wording.useServer) { connect() }.disabled(server == model.runtime?.ollama.baseURL.absoluteString)
@@ -190,8 +190,8 @@ struct ModelSettingsView: View {
         .formStyle(.grouped)
         .task(id: model.settings) { await loadProfiles() }
         // Asked again when the models change, once Ollama answers, and when a download ends.
-        .task(id: [inUse, model.ollama.isReady, downloads.finished] as [AnyHashable]) { await loadStatus() }
-        .task(id: [model.ollama.isReady, downloads.finished] as [AnyHashable]) { await loadInstalled() }
+        .task(id: [inUse, model.session.ollama.isReady, downloads.finished] as [AnyHashable]) { await loadStatus() }
+        .task(id: [model.session.ollama.isReady, downloads.finished] as [AnyHashable]) { await loadInstalled() }
         .onAppear { server = model.runtime?.ollama.baseURL.absoluteString ?? "" }
     }
 
@@ -219,13 +219,13 @@ struct ModelSettingsView: View {
     }
 
     private func loadStatus() async {
-        guard model.ollama.isReady, let profile = inUse else { return }
-        status = await model.load(Wording.checkModelsAction) { try await $0.models.status(for: profile) } ?? status
+        guard model.session.ollama.isReady, let profile = inUse else { return }
+        if let checked = await model.load(Wording.checkModelsAction, { try await $0.models.status(for: profile) }) { status = checked }
     }
 
     private func loadInstalled() async {
-        guard editsProfiles, model.ollama.isReady else { return }
-        installed = await model.load(Wording.checkModelsAction) { try await $0.models.installed() } ?? installed
+        guard editsProfiles, model.session.ollama.isReady else { return }
+        if let listed = await model.load(Wording.checkModelsAction, { try await $0.models.installed() }) { installed = listed }
     }
 }
 

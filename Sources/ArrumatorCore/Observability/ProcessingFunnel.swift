@@ -2,13 +2,36 @@ import Foundation
 import GRDB
 
 /// How much a stop matters: a copy an earlier version filed, leaving early, is the pipeline working; a failure is not.
-public enum FunnelSeverity: String, Sendable, Codable, Hashable {
+/// Ordered from what matters least to what matters most.
+public enum FunnelSeverity: String, Sendable, Codable, Hashable, CaseIterable, Comparable {
     /// The pipeline did its job by stopping here.
     case expected
     /// Nothing is wrong, but somebody has to act.
     case attention
     /// Something went wrong.
     case problem
+
+    public static func < (lhs: FunnelSeverity, rhs: FunnelSeverity) -> Bool {
+        (allCases.firstIndex(of: lhs) ?? 0) < (allCases.firstIndex(of: rhs) ?? 0)
+    }
+}
+
+/// Where documents of the window ended up, one entry per state: filed, or stopped for one reason, at whichever steps.
+public struct FunnelOutcome: Sendable, Hashable, Identifiable {
+    /// Where the documents are now; `.filed` for those filed.
+    public var status: DocumentStatus
+    public var reason: String
+    public var count: Int
+    public var severity: FunnelSeverity
+    public var id: DocumentStatus { status }
+    public var isFiled: Bool { status == .filed }
+
+    public init(status: DocumentStatus, reason: String, count: Int, severity: FunnelSeverity) {
+        self.status = status
+        self.reason = reason
+        self.count = count
+        self.severity = severity
+    }
 }
 
 /// Why a document stopped at a step instead of going further.
@@ -48,6 +71,8 @@ public struct FunnelStepStats: Sendable, Codable, Hashable, Identifiable {
     public var ofAll: Int
 
     public var dropped: Int { reached - passed }
+    /// How much the worst of the stops at this step matters; nil when none stopped here.
+    public var stopSeverity: FunnelSeverity? { stoppedHere.map(\.severity).max() }
     /// Share of the documents that reached this step and got past it.
     public var passRate: Double? { reached == 0 ? nil : Double(passed) / Double(reached) }
     /// Share of everything that arrived which reached this step.
@@ -81,6 +106,27 @@ public struct ProcessingFunnel: Sendable, Codable, Hashable {
     public var mainStop: (step: FunnelStepStats, stop: FunnelStop)? {
         steps.dropLast().compactMap { step in step.stoppedHere.first { !$0.isUnfinished && $0.status != .filed }.map { (step, $0) } }
             .max { $0.1.count < $1.1.count }
+    }
+
+    /// Where every document of the window ended up, one entry per state, each once: those filed first, then the rest
+    /// the most first, and of as many, in the order of `DocumentStatus`; none that no document ended up in. A document
+    /// filed whose steps were not kept, as after a rebuild from the archive, stops at a step as filed, and is counted
+    /// among those filed, never as a stop beside them.
+    public var outcomes: [FunnelOutcome] {
+        var stopped: [DocumentStatus: Int] = [:]
+        for stop in steps.flatMap(\.stoppedHere) where stop.status != .filed {
+            stopped[stop.status, default: 0] += stop.count
+        }
+        let order = { (status: DocumentStatus) in DocumentStatus.allCases.firstIndex(of: status) ?? 0 }
+        let rest = stopped.map { status, count in
+            let (reason, severity) = StatsService.stopReason(for: status)
+            return FunnelOutcome(status: status, reason: reason, count: count, severity: severity)
+        }
+        .sorted { ($0.count, order($1.status)) > ($1.count, order($0.status)) }
+        let filedReason = StatsService.stopReason(for: .filed)
+        let filed = FunnelOutcome(status: .filed, reason: filedReason.text, count: max(0, documents - rest.reduce(0) { $0 + $1.count }),
+                                  severity: filedReason.severity)
+        return ([filed] + rest).filter { $0.count > 0 }
     }
 
     /// The step that takes the longest at the median.

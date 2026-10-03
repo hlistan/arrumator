@@ -1,6 +1,41 @@
 import Foundation
 import GRDB
 
+/// What the user changes of a document's labels: the labels added and those taken off, never the whole set as a card
+/// last showed it, so that a change made meanwhile, by the user or by a reading, is kept.
+public struct LabelEdit: Sendable, Hashable {
+    public var adding: [DocumentLabel]
+    public var removing: [DocumentLabel]
+
+    public init(adding: [DocumentLabel] = [], removing: [DocumentLabel] = []) {
+        self.adding = adding
+        self.removing = removing
+    }
+
+    /// `labels` with this change made: those taken off gone, those added after the rest, each kept as
+    /// `DocumentLabel.normalized` keeps it, once. One added of a single-valued kind (`LabelKind.isSingle`) takes the place
+    /// of the one there, in its place, from the app and the command line alike, and only when it is written otherwise
+    /// (`DocumentLabel.distinctKey`): the one there given again changes nothing. Of several added of such a kind, the
+    /// first.
+    public func applied(to labels: [DocumentLabel]) -> [DocumentLabel] {
+        let removed = Set(removing.compactMap { DocumentLabel.normalized($0.value, kind: $0.kind) })
+        var kept = labels.filter { !removed.contains($0) }
+        var appended: [DocumentLabel] = []
+        var single = Set<LabelKind>()
+        for label in adding.compactMap({ DocumentLabel.normalized($0.value, kind: $0.kind) }) {
+            if label.kind.isSingle {
+                guard single.insert(label.kind).inserted else { continue }
+                if let place = kept.firstIndex(where: { $0.kind == label.kind }) {
+                    if kept[place].distinctKey != label.distinctKey { kept[place] = label }
+                    continue
+                }
+            }
+            appended.append(label)
+        }
+        return (kept + appended).distinct()
+    }
+}
+
 /// What the user can do with a document from its card, beside correcting its name and labels.
 public enum DocumentAction: String, Sendable, Hashable, CaseIterable {
     case undo, confirm, hold, readAgain
@@ -106,11 +141,12 @@ public struct ReviewActions: Sendable {
                                           payload: ["from": from, "to": destination.path])
     }
 
-    /// Applies the user's corrections: a new file name renames the file where it is, and `labels`, when given, become
-    /// the document's labels, each kept as `DocumentLabel.normalized` keeps it, once, and one of a single-valued kind. A
-    /// label of another kind than a tag labels a document not labelled yet; a tag, the user's own, does not
-    /// (`DocumentLabel.stored`).
-    public func edit(_ docID: Int64, fileName: String?, labels: [DocumentLabel]?) async throws {
+    /// Applies the user's corrections: a new file name renames the file where it is, and `labels`, when given, are
+    /// applied to the labels the document has when the change is made (`LabelEdit.applied(to:)`), read and written in
+    /// one transaction with the event that records them, so changes made one after another, such as two labels taken off
+    /// a card, each keep what the other did. A label of another kind than a tag labels a document not labelled yet; a
+    /// tag, the user's own, does not (`DocumentLabel.stored`).
+    public func edit(_ docID: Int64, fileName: String?, labels: LabelEdit?) async throws {
         let placer = services.filer.placer
         var doc = try await document(docID)
         let target = try fileName.map { name in
@@ -135,18 +171,23 @@ public struct ReviewActions: Sendable {
                 said.append("Renamed to “\(url.lastPathComponent)”")
             }
         }
-        if let labels {
-            let kept = labels.compactMap { DocumentLabel.normalized($0.value, kind: $0.kind) }.distinct()
-            if DocumentLabel.stored(kept, labelled: doc.isLabelled).labels != doc.labels {
-                let before = doc.labels ?? []
-                try await services.index.saveLabels(kept, docID: docID, labelled: doc.isLabelled)
-                edited["labels"] = kept.map { "\($0.kind.rawValue): \($0.value)" }.joined(separator: "; ")
-                said += Self.changes(from: before, to: kept)
+        let now = services.time.now()
+        try await services.database.writer.write { [edited, said] db in
+            var (edited, said) = (edited, said)
+            if let labels {
+                guard let current = try DocumentRecord.fetchOne(db, key: docID) else { throw IngestError.documentNotFound(docID) }
+                let before = current.labels ?? []
+                let after = labels.applied(to: before)
+                if DocumentLabel.stored(after, labelled: current.isLabelled).labels != current.labels {
+                    try IndexStore.saveLabels(db, after, docID: docID, labelled: current.isLabelled, at: now)
+                    edited["labels"] = after.map { "\($0.kind.rawValue): \($0.value)" }.joined(separator: "; ")
+                    said += Self.changes(from: before, to: after)
+                }
             }
+            guard !edited.isEmpty else { return }
+            try HistoryStore.insert(db, .corrected, at: now, actor: .user, doc: docID,
+                                    summary: said.isEmpty ? "Corrected the labels" : said.joined(separator: "; "), payload: edited)
         }
-        guard !edited.isEmpty else { return }
-        try await services.history.record(.corrected, actor: .user, doc: docID,
-                                          summary: said.isEmpty ? "Corrected the labels" : said.joined(separator: "; "), payload: edited)
     }
 
     /// What a correction changed of a document's labels, as History says it: “added sender “EDP”, type “receipt””,

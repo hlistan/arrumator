@@ -115,3 +115,10 @@ struct RuntimeHome {
     static let writableFolder = 0o755
     static let readOnlyFolder = 0o555
 }
+
+/// A subscriber to how many labels look alike (`LookAlikeMemo.suggestionCounts()`), as the app is one: every count it
+/// was sent, in order.
+actor SuggestionCounts {
+    private(set) var received: [Int] = []
+    func add(_ count: Int) { received.append(count) }
+}

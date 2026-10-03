@@ -88,7 +88,9 @@ public struct SearchTaskActions: Sendable {
             var changed: [String] = []
             if let title = change.title.map(DocumentLabel.oneLine) {
                 let kept = title.isEmpty ? nil : DocumentLabel.shortened(title, to: config.maxTitleChars)
-                if kept != record.title { record.title = kept; changed.append("name") }
+                // The name the task goes by now, as a field left as it was gives it back, is no change: it neither
+                // becomes the user's in place of the model's, nor is recorded.
+                if kept != record.title, kept != SearchTaskStore.name(record, config: config) { record.title = kept; changed.append("name") }
             }
             var reread: [String] = []
             if let prompt, prompt != record.prompt {

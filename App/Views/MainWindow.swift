@@ -1,4 +1,5 @@
 import ArrumatorCore
+import ArrumatorRuntime
 import SwiftUI
 
 /// The main window: a quiet sidebar of lists, and one page at a time.
@@ -6,16 +7,28 @@ struct MainWindow: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        NavigationSplitView {
-            Sidebar().navigationSplitViewColumnWidth(min: Style.sidebarMinWidth, ideal: Style.sidebarIdealWidth, max: Style.sidebarMaxWidth)
-        } detail: {
-            page.frame(maxWidth: .infinity, maxHeight: .infinity).background(Style.page)
+        Group {
+            if case let .failed(why) = model.phase {
+                StartFailed(why: why)
+            } else {
+                NavigationSplitView {
+                    Sidebar().navigationSplitViewColumnWidth(min: Style.sidebarMinWidth, ideal: Style.sidebarIdealWidth, max: Style.sidebarMaxWidth)
+                } detail: {
+                    VStack(spacing: 0) {
+                        if model.settings?.onboardingCompleted == true, model.session.work == .away, let archive = model.archive {
+                            ArchiveAway(path: archive.path)
+                        }
+                        page.frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                    .background(Style.page)
+                }
+            }
         }
         .showsLastError()
     }
 
     @ViewBuilder private var page: some View {
-        switch model.destination {
+        switch model.session.destination {
         case .incoming: IncomingPage()
         case .review: ReviewPage()
         case .processed: ProcessedPage()
@@ -25,6 +38,53 @@ struct MainWindow: View {
         case .history: HistoryPage()
         case .statistics: StatisticsView()
         }
+    }
+}
+
+/// Why the app could not start, in place of every page, and a way to try again: never the window that sets the app up,
+/// which would take a failure for an app not set up yet.
+private struct StartFailed: View {
+    @Environment(AppModel.self) private var model
+    let why: String
+
+    var body: some View {
+        VStack(spacing: Style.emptyStateSpacing) {
+            Image(systemName: RuntimeActivity.Mark.problem.symbol).font(.system(size: Style.emptyStateSymbolSize))
+                .foregroundStyle(Palette.problem).accessibilityHidden(true)
+            Text(Wording.notStarted).font(.title2.weight(.semibold))
+            Text(why).foregroundStyle(.secondary).multilineTextAlignment(.center).textSelection(.enabled)
+            Button(Wording.tryAgain) { Task { await model.retryStart() } }
+                .keyboardShortcut(.defaultAction)
+                .disabled(model.phase == .starting)
+        }
+        .padding(Style.pageHorizontalPadding)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Style.page)
+    }
+}
+
+/// Above every page while the archive's folder is not there, as on a disk not connected: what it is, and a way to
+/// open it again once it is back, or to file into another.
+private struct ArchiveAway: View {
+    @Environment(AppModel.self) private var model
+    let path: String
+
+    var body: some View {
+        HStack(spacing: Style.noticeSpacing) {
+            Image(systemName: RuntimeActivity.Mark.problem.symbol).foregroundStyle(Palette.attention).accessibilityHidden(true)
+            Text(Wording.archiveAwayNotice(path)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+            Button(Wording.tryAgain) { model.tryOpeningAgain() }
+            Button(Wording.chooseAnotherArchive) {
+                if let chosen = FolderPicker.choose(title: Wording.chooseArchive, startingAt: path) {
+                    Task { await model.switchArchive(to: chosen) }
+                }
+            }
+            .disabled(model.switchingArchive)
+        }
+        .font(.callout)
+        .padding(Style.archiveAwayInsets)
+        .background(.quaternary.opacity(Style.filterFieldFillOpacity))
     }
 }
 
@@ -73,7 +133,7 @@ struct Sidebar: View {
                 .overlay(alignment: .top) { if labelsScrolled { Divider() } }
             SidebarBar()
         }
-        .task(id: "\(model.labelSelection)|\(model.activity)") { await loadLabels() }
+        .task(id: "\(model.session.labelSelection)|\(model.activity)") { await loadLabels() }
     }
 
     /// The labels, in one list or kind by kind, and, while the filter has text, what it found and the button that
@@ -113,11 +173,11 @@ struct Sidebar: View {
     /// every label it finds. Those chosen come first, which keeps that order, as every document in view has them: they
     /// stay in sight however many other labels are as used.
     @ViewBuilder private func labels(_ listed: [LabelUsage], limit: Int?, showAll: @escaping () -> Void) -> some View {
-        let chosen = listed.filter { model.labelSelection.contains($0.label) }
-        let ordered = chosen + listed.filter { !model.labelSelection.contains($0.label) }
+        let chosen = listed.filter { model.session.labelSelection.contains($0.label) }
+        let ordered = chosen + listed.filter { !model.session.labelSelection.contains($0.label) }
         let shown = filter.isEmpty ? Array(ordered.prefix(limit ?? ordered.count)) : ordered
         ForEach(shown, id: \.label) { item in
-            SidebarLabel(usage: item, chosen: model.labelSelection.contains(item.label)) { keyed = nil }
+            SidebarLabel(usage: item, chosen: model.session.labelSelection.contains(item.label)) { keyed = nil }
                 .tag(item.label)
         }
         if shown.count < listed.count {
@@ -127,9 +187,12 @@ struct Sidebar: View {
     }
 
     private func loadLabels() async {
-        let selection = model.labelSelection
+        let selection = model.session.labelSelection
         guard let loaded = await model.load(Wording.loadLabelsAction, { try await $0.services.labels.usage(within: selection) }) else { return }
         usage = loaded
+        // With no labels, no filter is shown to take Filter Labels: the command is let go of, not left to put the cursor
+        // there whenever labels come.
+        if loaded.isEmpty, filter.isEmpty { model.labelFilterWanted = false }
     }
 }
 
@@ -151,9 +214,12 @@ private struct SidebarLists: View {
     @State private var end: ListsEnd?
     /// How tall the list estimates its rows at, those not laid out yet included.
     @State private var estimatedHeight: CGFloat = 0
+    /// Whether the cursor is in the filter: a field in a row of a list is outside the window's key view loop, so Edit ›
+    /// Filter Labels (Option-Command-F) puts it there (`AppModel.filterLabels()`).
+    @FocusState private var filtering: Bool
 
     var body: some View {
-        List(selection: Binding(get: { model.destination }, set: { if let d = $0 { model.go(d) } })) {
+        List(selection: Binding(get: { model.session.destination }, set: { if let d = $0 { model.go(d) } })) {
             Section {
                 ForEach(Destination.lists, id: \.self) { destination in
                     HStack(spacing: Style.sidebarSpinnerSpacing) {
@@ -188,6 +254,12 @@ private struct SidebarLists: View {
         .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { minY in
             Task { @MainActor in if top != minY { top = minY } }
         }
+        // Also when the command opened the window, before this list was there to hear it.
+        .task(id: "\(model.labelFilterWanted)|\(showsFilter)") {
+            guard model.labelFilterWanted, showsFilter else { return }
+            filtering = true
+            model.labelFilterWanted = false
+        }
     }
 
     /// Down to where the last row ends, once it is measured for the rows in view; until then what the list estimates.
@@ -214,18 +286,21 @@ private struct SidebarLists: View {
 
     private func count(_ destination: Destination) -> Int {
         switch destination {
-        case .incoming: model.ingest.queued
-        case .review: model.reviewCount
-        case .labels: model.labelSuggestionCount
+        case .incoming: model.session.ingest.queued
+        case .review: model.session.reviewCount
+        case .labels: model.session.labelSuggestionCount
         default: 0
         }
     }
 
     private var filterField: some View {
         HStack(spacing: Style.filterFieldSpacing) {
-            Image(systemName: "line.3.horizontal.decrease.circle").foregroundStyle(.secondary)
+            Image(systemName: "line.3.horizontal.decrease.circle").foregroundStyle(.secondary).accessibilityHidden(true)
             TextField(Wording.filterLabels, text: $filter).textFieldStyle(.plain)
                 .accessibilityLabel(Wording.filterLabels)
+                .focused($filtering)
+                // Escape clears what was typed, then leaves the field, as a search field does.
+                .onExitCommand { if filter.isEmpty { filtering = false } else { filter = "" } }
             if !filter.isEmpty {
                 Button { filter = "" } label: { Image(systemName: "xmark.circle.fill").accessibilityLabel(Wording.clearFilter) }
                     .buttonStyle(.plain).foregroundStyle(.tertiary).help(Wording.clearFilter)
@@ -286,6 +361,7 @@ private struct SidebarBar: View {
             Image(systemName: model.settings?.paused == true ? "play.fill" : "pause.fill")
         }
         .help(model.settings?.paused == true ? Wording.resumeFiling : Wording.pauseFiling)
+        .accessibilityLabel(model.settings?.paused == true ? Wording.resumeFiling : Wording.pauseFiling)
     }
 
     private var menu: some View {
@@ -297,9 +373,9 @@ private struct SidebarBar: View {
                                                             set: { grouped in Task { await model.update { $0.groupLabelsByKind = grouped } } }))
             Divider()
             Button(Wording.openIncomingFolder) { if let path = model.settings?.incomingURL.path { model.open(path) } }
-            Button(Wording.openArchiveFolder) { if let path = model.settings?.archiveURL.path { model.open(path) } }
+            Button(Wording.openArchiveFolder) { if let path = model.archive?.path { model.open(path) } }
             Button(Wording.switchArchive) {
-                if let chosen = FolderPicker.choose(title: Wording.chooseArchive, startingAt: model.settings?.archivePath) {
+                if let chosen = FolderPicker.choose(title: Wording.chooseArchive, startingAt: model.archive?.path) {
                     Task { await model.switchArchive(to: chosen) }
                 }
             }
@@ -310,6 +386,7 @@ private struct SidebarBar: View {
             Image(systemName: "ellipsis.circle")
         }
         .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+        .accessibilityLabel(Wording.moreActions).help(Wording.moreActions)
     }
 
     private func loadProfiles() async {

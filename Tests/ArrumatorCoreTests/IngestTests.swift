@@ -427,11 +427,11 @@ struct RefusingTrash: Trashing {
         let h = try await Harness.make()
         defer { h.env.cleanup() }
         let id = try #require(try await h.ingest("bill.txt", text: "EDP electricity July").id)
-        let corrected = StubAnalyzer.edpBill.filter { $0.kind != .sender && $0.kind != .type } + [
+        let corrected = LabelEdit(adding: [
             DocumentLabel(kind: .sender, value: "  EDP\nEnergia "), DocumentLabel(kind: .type, value: "receipt"),
             DocumentLabel(kind: .type, value: "invoice"), DocumentLabel(kind: .deadline, value: "tomorrow"),
             DocumentLabel(kind: .topic, value: "Electricity"),
-        ]
+        ], removing: StubAnalyzer.edpBill.filter { $0.kind == .sender })
         try await h.review.edit(id, fileName: "2026-07-05 EDP - Julho", labels: corrected)
         let edited = try #require(try await h.services.documents.document(id: id))
         #expect(edited.filename == "2026-07-05 EDP - Julho.txt" && FileManager.default.fileExists(atPath: edited.path),

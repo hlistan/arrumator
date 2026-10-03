@@ -90,7 +90,13 @@ extension Wording {
     /// Two labels that look alike.
     static func alike(_ value: String, _ other: String) -> String { "“\(value)” and “\(other)”" }
 
-    static func writtenAlike(_ kind: LabelKind) -> String { "Two \(labelKinds(kind).lowercased()) written alike. Are they one?" }
+    /// Why two labels are offered to be merged (`LabelSuggestion.Reason`), on their card.
+    static func alikeBecause(_ reason: LabelSuggestion.Reason, kind: LabelKind) -> String {
+        switch reason {
+        case .writtenAlike: "Two \(labelKinds(kind).lowercased()) written alike. Are they one?"
+        case .sameDigitsGroupedOtherwise: "Two \(labelKinds(kind).lowercased()) with the same digits, grouped otherwise. Are they one number?"
+        }
+    }
 
     /// Keeps one of two alike labels.
     static func use(_ value: String) -> String { "Use “\(value)”" }
@@ -380,8 +386,6 @@ extension Wording {
     static let typical = "Typical"
     static let slowest = "Slowest"
     static let whereFilesEndedUp = "Where files ended up"
-    /// The slice of files that were filed, where files ended up.
-    static let filedSlice = "Filed"
     static let wentOn = "Went on"
     static let typicalFile = "Typical file"
     static let slowestOneInTwenty = "Slowest one in twenty"

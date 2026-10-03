@@ -129,6 +129,32 @@ import Testing
         await runtime.stop()
     }
 
+    @Test func aRuntimeStartedTellsTheAppHowManyLabelsLookAlikeAtEveryChangeWithoutBeingAsked() async throws {
+        let home = try await RuntimeHome.make()
+        defer { home.cleanup() }
+        try await home.withoutOllama()
+        let runtime = try await home.open()
+        var ids: [Int64] = []
+        for (place, sender) in ["EDP Comercial", "EDP Comercail"].enumerated() {
+            var bill = DocumentRecord.arrived(path: home.folder("First").appendingPathComponent("bill \(place).pdf").path, sha256: "bill \(place)",
+                                              size: 1, uttype: "com.adobe.pdf", inode: nil, modified: nil, now: runtime.time.now())
+            bill.status = .filed
+            bill.labelsJson = JSON.string([DocumentLabel(kind: .sender, value: sender)])
+            ids.append(try #require(try await runtime.services.documents.save(bill).id))
+        }
+        let counts = SuggestionCounts()
+        let stream = runtime.services.lookAlikes.suggestionCounts()
+        let following = Task { for await count in stream { await counts.add(count) } }
+        defer { following.cancel() }
+        await runtime.start()
+        #expect(await Patience.until { await counts.received.last == 1 }, "once started, it says how many pairs look alike, unasked")
+        // The user gives a third sender written alike, which History records.
+        try await runtime.review.edit(ids[0], fileName: nil, labels: LabelEdit(adding: [DocumentLabel(kind: .sender, value: "EDP Comerciall")]))
+        #expect(await Patience.until { (await counts.received.last ?? 0) > 1 },
+                "and at the change, says how many there are now, without the app asking")
+        await runtime.stop()
+    }
+
     @Test func anArchiveWhoseVectorsCannotBeReadIsOpenedAndSearchedByWords() async throws {
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }

@@ -1,6 +1,20 @@
 import AppKit
 import ArrumatorCore
+import ArrumatorRuntime
 import SwiftUI
+
+extension RuntimeActivity.Mark {
+    /// The menu bar icon for the app's state.
+    var symbol: String {
+        switch self {
+        case .problem: "exclamationmark.triangle"
+        case .paused: "pause.circle"
+        case .filing: "tray.and.arrow.down.fill"
+        case .needsYou: "tray.full"
+        case .idle: "tray"
+        }
+    }
+}
 
 /// The visual language, after Things: one quiet list per page under a large title, rows without separators, and an
 /// item that opens in place as a card. Colour is kept for the few marks that carry meaning.
@@ -196,6 +210,8 @@ enum Style {
     static let filterFieldCornerRadius: CGFloat = 7
     /// How strongly the sidebar's label filter is filled.
     static let filterFieldFillOpacity = 0.6
+    /// Around what the main window says above every page while the archive is away.
+    static let archiveAwayInsets = EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16)
     /// Least space between a list's name in the sidebar and the spinner after it while it is at work, as Tasks while a
     /// search request is read.
     static let sidebarSpinnerSpacing: CGFloat = 6

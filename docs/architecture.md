@@ -222,10 +222,11 @@ or a question first needs them (`SearchService.loadVectors`). The app loads them
 files anything. Vectors that cannot be read stop nothing: they are logged, and search goes on by words, saying why.
 `start()` then starts the three queue workers and, as named background tasks, the Ollama supervision and the audit of
 its state, the two watcher pumps, the record-file writer, the settings subscription, hourly maintenance, and the
-working out of which labels look alike (`LabelStore.workOutLookAlikes`), so the app's first count of them seldom
-waits; on an index still to be rebuilt, as when a record file that cannot be read refused its rebuild, it starts
-nothing until the index is rebuilt (`rebuildIndex()`). The app does both as one step the runtime owns,
-`openAndStart()`, off the main actor, as macOS may hold the first read of the archive behind its prompt for access.
+working out of which labels look alike (`LabelStore.workOutLookAlikes`), once and at every change recorded after, which
+publishes how many there are (`LookAlikeMemo.suggestionCounts()`), so the app counts them without waiting; on an
+index still to be rebuilt, as when a record file that cannot be read refused its rebuild, it starts nothing until
+the index is rebuilt (`rebuildIndex()`). The app does both as one step the runtime owns, `openAndStart()`, off the
+main actor, as macOS may hold the first read of the archive behind its prompt for access.
 
 A runtime runs once. `stop()` cancels the step that starts it and every task, then waits: for the step, so nothing
 it goes on to start is left running; for the three queues, stopped together, as one worker may wait for another, as
@@ -349,6 +350,12 @@ Views never poll. `AppModel` holds one task per stream and mirrors the value:
 | `OllamaLifecycle.states()` | Whether Ollama is ready. |
 | `ArrumatorRuntime.workUpdates()` | Whether the runtime's work runs, or was refused as the index is not rebuilt from its archive or the archive is away. |
 | `SettingsStore.changes()` | Each change to the settings: one made through the store, and one another process made, found when the file is read again before a change. The settings in force are read once, beside it. |
+| `LookAlikeMemo.suggestionCounts()` | How many pairs of labels look alike and wait for the user, each time they are worked out. |
+
+What the app shows of the archive it is on, the values these streams last gave among it, is one `ArchiveSession`, which
+a switch of archives replaces whole; each stream writes into the session it was subscribed for. Which of these states
+the app says first, in the sidebar, the menu bar's line and its icon, is decided in Runtime (`RuntimeActivity`), and the
+app only words and draws it.
 
 A decision the user can audit is recorded in History; a state the user only watches is published on a stream
 ([§4.6](../AGENTS.md#4-hard-rules-non-negotiable)). What is happening now is decided in Core from the stream

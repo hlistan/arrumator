@@ -5,7 +5,7 @@ import SwiftUI
 /// it is, corrected, or read again.
 struct ReviewPage: View {
     @Environment(AppModel.self) private var model
-    @State private var documents: [DocumentRecord] = []
+    @State private var documents: [ListedDocument] = []
 
     var body: some View {
         Page(.review, notes: documents.isEmpty ? nil : Wording.reviewNotes) {
@@ -16,7 +16,7 @@ struct ReviewPage: View {
             }
         }
         .task(id: model.activity) {
-            documents = await model.load(Wording.loadReviewQueueAction) { try await $0.services.documents.reviewQueue() } ?? []
+            if let read = await model.load(Wording.loadReviewQueueAction, { try await $0.services.documents.reviewQueue() }) { documents = model.listed(read) }
         }
     }
 }
