@@ -449,7 +449,7 @@ enum EventStyle {
         case .analysed: "tag"
         case .filed: "checkmark.circle"
         case .needsReview: "questionmark.circle"
-        case .duplicate: "doc.on.doc"
+        case .duplicate, .foundInTwoPlaces: "doc.on.doc"
         case .error, .failed: "exclamationmark.triangle"
         case .retry: "arrow.clockwise"
         case .corrected, .userMoved, .userRenamed, .markedCorrect: "hand.point.up.left"

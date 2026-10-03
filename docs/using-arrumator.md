@@ -273,7 +273,9 @@ No tunable lives in code. Defaults are bundled in `Sources/ArrumatorCore/Resourc
   hold to be one document, in Incoming, in the archive or named to `arrumatorcli ingest`, `watcher.maxPackageItems`, at
   least 1, and how often the archive's folder is looked for while it is away, and a file taking long looked at,
   `watcher.awayPollSeconds`), `records` (the names of the archive's record files and of its system and history folders,
-  such as `records.labelRulesFileName`, `records.searchTasksFileName` and `records.conversationsFolderName`), `ingest`
+  such as `records.labelRulesFileName`, `records.searchTasksFileName` and `records.conversationsFolderName`, and how
+  many minutes after it was last written a record file's staged text is taken for one a crash left and removed,
+  `records.stagedLeftoverMinutes`, more than 0), `ingest`
   (attempts and retry delays, also how many starts a change in the archive that cannot be taken in is tried at, how
   often a document whose model is not installed looks again whether it is, `ingest.modelRecheckSeconds`, more than 0,
   how long a document waits for a reading given up on that does not stop to end before it fails rather than being

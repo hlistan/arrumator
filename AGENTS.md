@@ -118,11 +118,16 @@ These are rules you can check, not aspirations. Each row says how it is checked;
    folder not being there, never its documents removed: nothing in it is marked missing, nothing is made again where it
    was, the work waits, and it goes on by itself once the same folder is back (`FolderIdentity`: the volume's UUID and
    the folder's inode, never a device number). Record files from a folder other than the one the index was kept for are
-   merged with the index, never read as edits that replace it. Whether an archive is new is decided by what the user did
-   (finishing onboarding, switching to a folder), never by what its index lacks: at any other time an archive whose
-   folder is not there is away, never made again, read as empty or written into (`RecordsError.archiveNotThere`). Your
-   report says what the installed app loses. A forward migration in `AppDatabase.migrator` is the default. You may
-   rewrite or squash earlier migrations when that simplifies the schema, but the same conditions apply.
+   merged with the index, never read as edits that replace it. Which of two places or lists is the original is never
+   decided on a guess: without a signal that tells them apart, no identifier is stripped, nothing is adopted and no list
+   is dropped or rewritten; the document stays at one place by a stable choice, the other list keeps its entry as it is,
+   and the user is told in History and the Doctor (`TwoPlaces`). A file another process may still be writing, such as a
+   record file's staged text, is never taken for one a crash left until it is older than a tunable
+   (`records.stagedLeftoverMinutes`). Whether an archive is new is decided by what the user did (finishing onboarding,
+   switching to a folder), never by what its index lacks: at any other time an archive whose folder is not there is
+   away, never made again, read as empty or written into (`RecordsError.archiveNotThere`). Your report says what the
+   installed app loses. A forward migration in `AppDatabase.migrator` is the default. You may rewrite or squash earlier
+   migrations when that simplifies the schema, but the same conditions apply.
 3. **Never touch the real archive, the user's Trash, or the user's running app, while testing.** The default settings
    point at `~/Documents/Incoming` and `~/Documents/Archive`, so `ARRUMATOR_HOME` alone does **not** isolate you. Before
    you run the app or any CLI command other than `eval`, `--version` and `help`, set `ARRUMATOR_HOME` to a scratch

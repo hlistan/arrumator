@@ -106,6 +106,9 @@ extension RecordsConfig {
         if setAsideSuffix.isEmpty || setAsideSuffix.contains("/") {
             problems.append("records.setAsideSuffix must be one character or more, without /")
         }
+        if !(stagedLeftoverMinutes > 0) || !stagedLeftoverMinutes.isFinite {
+            problems.append("records.stagedLeftoverMinutes must be more than 0")
+        }
         return problems
     }
 

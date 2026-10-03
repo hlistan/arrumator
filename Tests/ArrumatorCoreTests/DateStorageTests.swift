@@ -24,7 +24,7 @@ import Testing
 
     @Test func textDatesFromEarlierReleasesAreConverted() throws {
         let queue = try DatabaseQueue()
-        try AppDatabase.migrator.migrate(queue, upTo: "v1_initial")
+        try AppDatabase.migrator(time: TestTime(.advances)).migrate(queue, upTo: "v1_initial")
         try queue.write { db in
             // A row as that release wrote it, with dates as GRDB's default strategy wrote them before the fix.
             try db.execute(sql: """
@@ -32,7 +32,7 @@ import Testing
                 VALUES ('b', '/tmp/b.pdf', 'b.pdf', 'h', 1, 'pdf', 'filed', '2026-09-22 18:23:10.902', '2026-09-22 18:23:32.667', 0, 0)
                 """)
         }
-        try AppDatabase.migrator.migrate(queue)
+        try AppDatabase.migrator(time: TestTime(.advances)).migrate(queue)
         try queue.read { db in
             #expect(try String.fetchOne(db, sql: "SELECT typeof(added_at) FROM documents") == "real", "a date an earlier release wrote as text becomes Unix seconds")
             let doc = try #require(try DocumentRecord.fetchOne(db))

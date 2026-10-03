@@ -148,6 +148,9 @@ public struct RecordsConfig: Sendable, Codable, Hashable {
     public var conversationsFolderName: String
     /// Added to the name of a database that could not be opened when it is moved aside.
     public var setAsideSuffix: String
+    /// Minutes since it was last written after which a record file's staged text (`StagedRecordFile`) is taken for one a
+    /// crash left and removed: one younger may be another process's, about to take its record file's place.
+    public var stagedLeftoverMinutes: Double
 }
 
 public struct IngestConfig: Sendable, Codable, Hashable {

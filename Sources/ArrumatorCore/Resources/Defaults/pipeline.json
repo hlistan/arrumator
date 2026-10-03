@@ -86,7 +86,8 @@
     "labelRulesFileName": "_labels.md",
     "searchTasksFileName": "_tasks.md",
     "conversationsFolderName": "Conversations",
-    "setAsideSuffix": "unreadable"
+    "setAsideSuffix": "unreadable",
+    "stagedLeftoverMinutes": 10
   },
   "ingest": {
     "maxAttempts": 3,

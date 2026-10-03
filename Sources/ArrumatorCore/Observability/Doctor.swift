@@ -70,6 +70,7 @@ public struct Doctor: Sendable {
         }
         if unreadableRecords.isEmpty { add("Record files", true, "none found that cannot be read") }
         for file in unreadableRecords { add("Record file", false, "\(file.path): \(file.reason)") }
+        await checkTwoPlaces(add)
         let local = OllamaEndpoint.isThisMac(ollamaURL)
         await checkAddress(ollamaURL, within: config.ollama.timeouts.resolve, add)
         if local {
@@ -123,6 +124,26 @@ extension Doctor {
     /// How the server at `url` is reached: a warning for each caution (`OllamaEndpoint.Caution`), and, for a `.local`
     /// name, what it stands for now: an error when that is beyond the local network, which no request is then sent to,
     /// and a warning when it does not resolve, as it is then trusted by its name alone.
+    /// Warns of the documents in more than one place whose copies are still there (`DocumentInTwoPlaces`), by the folders
+    /// they are in: the report is shared with a bug report, and a folder is named there, as a record file's path is,
+    /// never a document's file.
+    func checkTwoPlaces(_ add: (String, Bool, String, Bool) -> Void) async {
+        do {
+            var byFolders: [[String]: Int] = [:]
+            for (uid, place) in try await database.reader.read({ db in try TwoPlaces.all(db) }) {
+                let places = place.paths(stillCarrying: uid)
+                guard places.count > 1 else { continue }
+                byFolders[Set(places.map { ($0 as NSString).deletingLastPathComponent }).sorted(), default: 0] += 1
+            }
+            for (folders, count) in byFolders.sorted(by: { $0.key.lexicographicallyPrecedes($1.key) }) {
+                add("Document in two places", false, "\(Format.count(count, "document")) in each of \(folders.joined(separator: " and ")), "
+                    + "and nothing tells which is the copy: remove the copy", true)
+            }
+        } catch {
+            add("Documents in two places", false, error.localizedDescription, true)
+        }
+    }
+
     func checkAddress(_ url: URL, within seconds: Double, _ add: (String, Bool, String, Bool) -> Void) async {
         for caution in OllamaEndpoint.cautions(for: url) {
             switch caution {

@@ -1,4 +1,5 @@
 import Foundation
+import GRDB
 
 /// Applies the changes `ArchiveWatcher` reports, deciding what each is from what the disk and the index hold when it is
 /// applied, so a change applied twice, as after a restart, does nothing more. A file is told by its identity on disk,
@@ -106,6 +107,9 @@ public actor ArchiveReconciler {
         guard batch.isThere(url), let file = batch.disk.file(url) else { return }
         let identifier = Xattr.get(Xattr.documentID, from: url)
         let recordedHere = try await services.documents.documents(atOrInside: path).filter { $0.path == path }
+        // Another place of a document found in two of them, when nothing told which is the copy: left as it is until the
+        // user removes the copy (`DocumentInTwoPlaces`).
+        if recordedHere.isEmpty, let identifier, try await inTwoPlaces(identifier)?.paths.contains(path) == true { return }
         let here = recordedHere.first { $0.uid == identifier || (batch.keepsFileIDs && $0.inode == file.number) }
         // A document recorded here whose file this is not, as one filed here while another folder was the archive, is
         // missing: its file was another.
@@ -180,28 +184,13 @@ public actor ArchiveReconciler {
         let (from, oldName, returning) = (doc.path, doc.filename, doc.status == .missing)
         doc.path = path
         doc.inode = FileOnDisk(URL(fileURLWithPath: path))?.number
-        if returning { doc.status = try await statusBeforeMissing(docID) }
+        if returning { doc.status = try await services.database.reader.read { db in try MissingPayload.statusBefore(db, docID: docID) } }
         doc = try await services.documents.save(doc)
         try await services.index.updateFilename(docID: docID, filename: doc.filename)
         if returning { try await restoreVector(docID) }
-        let sameDirectory = (from as NSString).deletingLastPathComponent == (path as NSString).deletingLastPathComponent
-        let (kind, summary): (EventKind, String) = if from == path {
-            (.userMoved, "\(doc.filename) is back in the archive")
-        } else if sameDirectory {
-            (.userRenamed, "\(oldName) → \(doc.filename)")
-        } else {
-            (.userMoved, "\(oldName) moved to \(path)")
-        }
-        try await services.history.record(kind, actor: .user, doc: docID, summary: summary, payload: ["from": from, "to": path])
+        let event = FileEvent.followed(from: from, named: oldName, to: path, named: doc.filename)
+        try await services.history.record(event.kind, actor: .user, doc: docID, summary: event.summary, payload: event.payload)
         Log.info(.watch, "User moved document", ["doc": String(docID), "to": path])
-    }
-
-    /// The status a missing document had when its file went, as the History event that marked it missing keeps it
-    /// (`MissingPayload`); filed when no such event is the last of its file's, as when a rebuild found it missing.
-    private func statusBeforeMissing(_ docID: Int64) async throws -> DocumentStatus {
-        let last = try await services.history.events(limit: 1, kinds: [.missing, .userMoved, .userRenamed], docID: docID).first
-        guard let last, last.kind == .missing else { return MissingPayload.absent }
-        return JSON.decode(MissingPayload.self, from: last.payloadJson)?.had ?? MissingPayload.absent
     }
 
     /// Puts a document back into search by meaning, from the embedding the index kept of it, when search by meaning has
@@ -214,13 +203,25 @@ public actor ArchiveReconciler {
 
     /// What was at `path`, a file, a package or a folder, may be gone: each document recorded at it or inside it whose
     /// file is in the archive, and not there, is missing, as is one whose path now holds another document's file. An archive whose folder is not there, renamed or on a disk that
-    /// went, has nothing missing from it.
+    /// went, has nothing missing from it. A place of a document in two places that is gone is no longer one of its places,
+    /// whether the document was kept there, when it follows the file that is left, or elsewhere.
     private func gone(_ path: String, in batch: Batch) async throws {
+        guard batch.archiveIsThere else { return }
         for document in try await services.documents.documents(atOrInside: path)
         where DocumentStatus.withFileInArchive.contains(document.status) && !batch.holdsFile(of: document) {
-            guard batch.archiveIsThere else { return }
+            // A document in two places whose place was removed is at the other, as the user removed the copy.
+            if let other = try await inTwoPlaces(document.uid)?.paths(stillCarrying: document.uid).first {
+                try await follow(document, to: other)
+                continue
+            }
             try await markMissing(document)
         }
+        try await services.database.writer.write { db in try TwoPlaces.gone(db, path) }
+    }
+
+    /// Where the document `uid` is, if it was found in two places of the archive (`TwoPlaces`).
+    private func inTwoPlaces(_ uid: String) async throws -> DocumentInTwoPlaces? {
+        try await services.database.reader.read { db in try TwoPlaces.place(db, uid: uid) }
     }
 
     private func markMissing(_ document: DocumentRecord) async throws {
@@ -229,8 +230,8 @@ public actor ArchiveReconciler {
         doc.status = .missing
         _ = try await services.documents.save(doc)
         await services.vectors.remove(docID: docID)
-        try await services.history.record(.missing, actor: .user, doc: docID, summary: "\(doc.filename) was removed from the archive",
-                                          payload: MissingPayload(had: document.status))
+        let event = FileEvent.missing(document)
+        try await services.history.record(event.kind, actor: .user, doc: docID, summary: event.summary, payload: event.payload)
     }
 
     /// Takes a file new to the archive in, to be read and labelled where it is, unless the index has a document or a job
@@ -271,6 +272,44 @@ struct MissingPayload: Sendable, Codable, Hashable {
 
     /// The status the document had.
     var had: DocumentStatus { status ?? Self.absent }
+
+    /// The status document `docID`, missing, had when its file went, as the History event that marked it missing keeps
+    /// it, read in the transaction of `db`; filed when no such event is the last of its file's, as for one an earlier
+    /// version found missing.
+    static func statusBefore(_ db: Database, docID: Int64) throws -> DocumentStatus {
+        let last = try EventRecord.filter(Column("doc_id") == docID)
+            .filter([EventKind.missing, .userMoved, .userRenamed].map(\.rawValue).contains(Column("kind")))
+            .order(Column("at").desc, Column("id").desc).fetchOne(db)
+        guard let last, last.kind == .missing else { return absent }
+        return JSON.decode(MissingPayload.self, from: last.payloadJson)?.had ?? absent
+    }
+}
+
+/// What History records of a document whose file went from the archive or was found again, as the user moved,
+/// renamed, removed or put it back: the same whether the archive watcher saw it (`ArchiveReconciler`) or a rebuild
+/// found it (`ArchiveRecords.locateDocuments`).
+struct FileEvent {
+    let kind: EventKind
+    let summary: String
+    let payload: any Encodable & Sendable
+
+    /// `document`'s file went: the status it had is kept, to be taken again when its file is found.
+    static func missing(_ document: DocumentRecord) -> FileEvent {
+        FileEvent(kind: .missing, summary: "\(document.filename) was removed from the archive", payload: MissingPayload(had: document.status))
+    }
+
+    /// A document's file, `oldName` at `from`, is at `path` as `newName`: back where it was, renamed, or moved.
+    static func followed(from: String, named oldName: String, to path: String, named newName: String) -> FileEvent {
+        let sameDirectory = (from as NSString).deletingLastPathComponent == (path as NSString).deletingLastPathComponent
+        let (kind, summary): (EventKind, String) = if from == path {
+            (.userMoved, "\(newName) is back in the archive")
+        } else if sameDirectory {
+            (.userRenamed, "\(oldName) → \(newName)")
+        } else {
+            (.userMoved, "\(oldName) moved to \(path)")
+        }
+        return FileEvent(kind: kind, summary: summary, payload: ["from": from, "to": path])
+    }
 }
 
 extension ArchiveReconciler {

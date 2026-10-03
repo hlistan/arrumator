@@ -134,6 +134,9 @@ public enum EventKind: String, Sendable, Codable, CaseIterable {
     case settingsChanged, ollamaState, appStarted, paused, resumed
     /// The index was rebuilt from the archive's record files.
     case rebuilt
+    /// A document was found in more than one place of the archive, and nothing told which is a copy
+    /// (`DocumentInTwoPlaces`).
+    case foundInTwoPlaces
     /// The user merged a label into another, on every document and in every reading from then on.
     case labelsMerged
     /// The user took a label off every document and does not want it given again.

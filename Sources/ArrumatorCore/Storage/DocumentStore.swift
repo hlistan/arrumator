@@ -45,16 +45,12 @@ public struct DocumentFilter: Sendable, Hashable {
             sql += condition
             args += values
         }
+        // Both from the index of the labels documents have (`v24_documentLabels`), by its key.
         for label in labels {
-            let writings = try String.fetchAll(db, sql: """
-                SELECT DISTINCT json_extract(l.value, '$.value') FROM documents d, json_each(d.labels_json) l
-                WHERE d.labels_json IS NOT NULL AND json_extract(l.value, '$.kind') = ?
-                """, arguments: [label.kind.rawValue]).filter { LabelSimilarity.sameWriting($0, label.value) }
+            let writings = try String.fetchAll(db, sql: "SELECT DISTINCT value FROM document_labels WHERE kind = ?",
+                                               arguments: [label.kind.rawValue]).filter { LabelSimilarity.sameWriting($0, label.value) }
             guard !writings.isEmpty else { return (" AND 0", []) }
-            sql += """
-                 AND EXISTS (SELECT 1 FROM json_each(d.labels_json) s WHERE json_extract(s.value, '$.kind') = ? \
-                AND json_extract(s.value, '$.value') IN (\(Self.placeholders(writings.count))))
-                """
+            sql += " AND d.id IN (SELECT doc_id FROM document_labels WHERE kind = ? AND value IN (\(Self.placeholders(writings.count))))"
             args += [label.kind.rawValue]
             args += StatementArguments(writings)
         }

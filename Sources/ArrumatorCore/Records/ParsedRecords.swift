@@ -84,17 +84,24 @@ struct ParsedRecords: Sendable {
         /// Files read but not taken into the index, by path: their checksums are not remembered, so they are never
         /// written over as though the index held what they hold.
         var notTakenIn: Set<String> = []
+        /// The documents two lists name, by identifier, with where each list has them, when nothing told which list is a
+        /// copy's (`DocumentInTwoPlaces`).
+        var inTwoPlaces: [String: (document: DocumentRecord, paths: Set<String>)] = [:]
     }
 
     /// Puts the records into the index. The lists of documents to write again are those of the directories read, or of
-    /// every directory when `everyDirectory`, where the index has a document no list read names, and those whose entries
-    /// were given numbers of their own. Documents are only ever added or updated here: an entry missing from a file does
-    /// not delete a document, whose entry is written back instead. Other files replace their table when `replacing`, and
+    /// every directory when `everyDirectory`, where the index has a document no list read names, those whose entries
+    /// were given numbers of their own, and those that list a copy (`upsert`). An entry for a document another list names,
+    /// when nothing tells which is the copy's, is not taken in, and the document is said to be in two places
+    /// (`inTwoPlaces`); the rest of its list is taken in as any other, and the entry is written back as it is
+    /// (`ArchiveRecords.composed`). Documents are only ever added or updated here: an entry missing from a file does not
+    /// delete a document, whose entry is written back instead. Other files replace their table when `replacing`, and
     /// otherwise add and update their rows. An event keeps the job and trace in `links` when it is the same event. A
     /// conversation about a task the index does not have is not taken in.
     func apply(to db: Database, replacing: Bool, at now: Date, links: [Int64: EventLink], everyDirectory: Bool) throws -> Applied {
         var applied = Applied()
-        let (listed, renumbered) = try applyDocuments(db, at: now)
+        let (listed, rewrite, unsure) = try applyDocuments(db, at: now)
+        applied.inTwoPlaces = unsure
         for (month, entries) in history {
             if replacing {
                 try db.execute(sql: "DELETE FROM events WHERE strftime('%Y-%m', at, 'unixepoch') = ? AND id NOT IN (\(ArchiveRecords.ids(entries.map(\.id))))",
@@ -127,26 +134,43 @@ struct ParsedRecords: Sendable {
         }
         // After the tasks, whose conversations they are.
         applied.notTakenIn = try applyConversations(db, replacing: replacing)
-        applied.rewrite = renumbered
+        applied.rewrite = rewrite
         if everyDirectory || !documents.isEmpty {
             applied.rewrite.formUnion(try Self.unlisted(db, listed: listed, in: everyDirectory ? nil : documents.map(\.directory)))
         }
         return applied
     }
 
-    /// Adds or updates every document listed, and returns the numbers of their documents in the index and the lists
-    /// whose entries were given numbers of their own.
-    private func applyDocuments(_ db: Database, at now: Date) throws -> (listed: Set<Int64>, renumbered: Set<RecordKind>) {
+    /// Adds or updates every document listed, and returns the numbers of their documents in the index, the lists to write
+    /// again (those whose entries were given numbers of their own, and those that list a copy, written without it), and
+    /// the documents found in two lists when nothing told which is the copy's.
+    private func applyDocuments(_ db: Database, at now: Date)
+        throws -> (listed: Set<Int64>, rewrite: Set<RecordKind>, unsure: [String: (document: DocumentRecord, paths: Set<String>)]) {
         var listed: Set<Int64> = []
         var renumbered: Set<RecordKind> = []
+        var listingCopies: Set<RecordKind> = []
+        var unsure: [String: (document: DocumentRecord, paths: Set<String>)] = [:]
+        // Documents this read put in the index, and those already found in two places: where the index has one of them
+        // was itself read from a list, and tells nothing of which list is a copy's.
+        var readHere: Set<String> = []
+        let inTwoPlaces = try TwoPlaces.uids(db)
         for (directory, entries) in documents {
             // Each entry's number in its list, and the number of its document in the index.
             var numbers: [Int64: Int64] = [:]
             for entry in entries {
-                let id = try Self.upsert(entry, directory: directory, db: db, at: now)
-                listed.insert(id)
-                numbers[entry.id] = id
-                if id != entry.id { renumbered.insert(.documents(directory: directory.path)) }
+                let unsureOf = readHere.union(inTwoPlaces)
+                switch try Self.upsert(entry, directory: directory, db: db, at: now, unsureOf: unsureOf) {
+                case let .taken(id, inserted):
+                    if inserted { readHere.insert(entry.uid) }
+                    listed.insert(id)
+                    numbers[entry.id] = id
+                    if id != entry.id { renumbered.insert(.documents(directory: directory.path)) }
+                case .copy:
+                    listingCopies.insert(.documents(directory: directory.path))
+                case let .unsure(document):
+                    let place = directory.appendingPathComponent(entry.file).path
+                    unsure[entry.uid, default: (document, [document.path])].paths.insert(place)
+                }
             }
             // A list renumbered on reading counts by another archive's numbers: a copy in it is of the document it lists
             // under that number, or, when it lists none, of one of that archive's, which is nothing here.
@@ -162,7 +186,7 @@ struct ParsedRecords: Sendable {
             WHERE id IN (\(ArchiveRecords.ids(Array(listed)))) AND duplicate_of IS NOT NULL
               AND NOT EXISTS (SELECT 1 FROM documents original WHERE original.id = documents.duplicate_of)
             """)
-        return (listed, renumbered)
+        return (listed, renumbered.union(listingCopies), unsure)
     }
 
     /// Adds or updates the questions of each conversation about a task the index has, and returns the files of those
@@ -195,25 +219,53 @@ struct ParsedRecords: Sendable {
         return Set(found.compactMap { RecordKind(key: RecordKind.documentsPrefix + $0) })
     }
 
-    /// Adds or updates a document from its entry, keeping what the index caches about the file, and returns its number.
-    /// A document is the one its identity names: an entry whose number the index gives another document, as in a folder
-    /// copied in from another archive whose numbers also start at 1, is taken in under a number of its own.
-    private static func upsert(_ entry: DocumentEntry, directory: URL, db: Database, at now: Date) throws -> Int64 {
+    /// What reading one entry of a list of documents came to.
+    private enum Upsert {
+        /// The document it describes, under this number, added to the index when `inserted`.
+        case taken(Int64, inserted: Bool)
+        /// The entry of a copy of a document the index has elsewhere, which is not taken in.
+        case copy
+        /// An entry for a document the index has in another folder, when nothing tells which is the copy's: this one is
+        /// not taken in, and the document stays where the index has it.
+        case unsure(DocumentRecord)
+    }
+
+    /// Adds or updates a document from its entry, keeping what the index caches about the file. A document is the one
+    /// its identity names: an entry whose number the index gives another document, as in a folder copied in from another
+    /// archive whose numbers also start at 1, is taken in under a number of its own. An entry in another folder than the
+    /// one the index has its document in, while its file is still there, is a copy's, as in a folder copied in Finder
+    /// with its list: the document stays with its file, and the copy is taken in as a document of its own once its file
+    /// is found (`ArchiveReconciler`, `ArchiveRecords.locateDocuments`). That holds only when where the index has the
+    /// document tells it: not for a document of `unsureOf`, one this read itself put there from another list, or already
+    /// found in two places, which is in two places (`DocumentInTwoPlaces`). Its document's file gone from there, the entry
+    /// is the document's, moved.
+    private static func upsert(_ entry: DocumentEntry, directory: URL, db: Database, at now: Date, unsureOf: Set<String>) throws -> Upsert {
         var record = try entry.record(directory: directory, now: now)
-        if let existing = try DocumentRecord.filter(Column("uid") == entry.uid).fetchOne(db) {
-            record.id = existing.id
-            record.inode = existing.inode
-            record.contentJson = existing.contentJson
-            record.extractedAt = existing.extractedAt
-            record.embeddedAt = existing.embeddedAt
-            record.fileMtime = existing.fileMtime
-            record.lastTraceId = existing.lastTraceId
-            record.createdAt = existing.createdAt
-            try record.update(db)
-        } else {
+        guard let existing = try DocumentRecord.filter(Column("uid") == entry.uid).fetchOne(db) else {
             if try DocumentRecord.exists(db, key: entry.id) { record.id = nil }
             try record.insert(db)
+            return .taken(record.id ?? entry.id, inserted: true)
         }
-        return record.id ?? entry.id
+        if existing.url.deletingLastPathComponent().path != directory.path, existing.holdsItsFile {
+            return unsureOf.contains(entry.uid) ? .unsure(existing) : .copy
+        }
+        record.id = existing.id
+        record.inode = existing.inode
+        record.contentJson = existing.contentJson
+        record.extractedAt = existing.extractedAt
+        record.embeddedAt = existing.embeddedAt
+        record.fileMtime = existing.fileMtime
+        record.lastTraceId = existing.lastTraceId
+        record.createdAt = existing.createdAt
+        try record.update(db)
+        return .taken(record.id ?? entry.id, inserted: false)
+    }
+}
+
+extension DocumentRecord {
+    /// Whether its file is where the index has it: a file or package is there that carries no other document's
+    /// identifier (`Xattr.documentID`). One whose identifier a copy or a synchronisation left off is still taken for it.
+    var holdsItsFile: Bool {
+        FileManager.default.fileExists(atPath: path) && (Xattr.get(Xattr.documentID, from: url) ?? uid) == uid
     }
 }

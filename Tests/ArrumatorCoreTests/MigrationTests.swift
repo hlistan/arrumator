@@ -13,20 +13,21 @@ import ArrumatorTesting
                           "v8_undoForgets", "v9_foldersOfAnyDepth", "v10_folderKinds", "v11_labelsNotFolders",
                           "v12_labelRules", "v13_traceExchanges", "v14_searchTasks", "v15_taskEffort",
                           "v16_taskProfile", "v17_tags", "v18_taskConversations", "v19_unreadIndexRefusesRecords",
-                          "v20_queueWorkers", "v21_jobClaims", "v22_jobsWaitForTheirModel", "v23_endedJobsKeepNoText"]
+                          "v20_queueWorkers", "v21_jobClaims", "v22_jobsWaitForTheirModel", "v23_endedJobsKeepNoText",
+                          "v24_documentLabels", "v25_documentsInTwoPlaces"]
 
     /// An index as a release before this one made it, migrated up to `identifier`: its first migration ran before that
     /// one marked a new index as still to be rebuilt from its archive, so it is not.
     static func installed(upTo identifier: String) throws -> DatabaseQueue {
         let queue = try DatabaseQueue()
-        try AppDatabase.migrator.migrate(queue, upTo: try #require(shipped.first))
+        try AppDatabase.migrator(time: TestTime(.advances)).migrate(queue, upTo: try #require(shipped.first))
         try queue.write { db in try AppDatabase.setPendingRebuild(db, nil) }
-        try AppDatabase.migrator.migrate(queue, upTo: identifier)
+        try AppDatabase.migrator(time: TestTime(.advances)).migrate(queue, upTo: identifier)
         return queue
     }
 
     @Test func shippedIdentifiersNeverChange() {
-        let registered = AppDatabase.migrator.migrations
+        let registered = AppDatabase.migrator(time: TestTime(.advances)).migrations
         #expect(Array(registered.prefix(Self.shipped.count)) == Self.shipped,
                 "a shipped migration was renamed, removed or reordered; installed databases would re-run it and fail")
     }
@@ -47,7 +48,7 @@ import ArrumatorTesting
         for count in [1, 2] {
             let url = dir.appendingPathComponent("after-\(count).sqlite")
             let queue = try DatabaseQueue(path: url.path)
-            try AppDatabase.migrator.migrate(queue, upTo: Self.shipped[count - 1])
+            try AppDatabase.migrator(time: TestTime(.advances)).migrate(queue, upTo: Self.shipped[count - 1])
             try queue.close()
             stopped.append(url)
         }
@@ -65,7 +66,7 @@ import ArrumatorTesting
 
     @Test func anIndexThatHasReadNothingOfItsArchiveRefusesEveryChangeToWhatTheRecordFilesHold() throws {
         let queue = try DatabaseQueue()
-        try AppDatabase.migrator.migrate(queue)
+        try AppDatabase.migrator(time: TestTime(.advances)).migrate(queue)
         let changes = ["INSERT INTO events (at, kind, actor, summary, payload_json) VALUES (0, 'paused', 'user', 'Paused', '{}')",
                        "INSERT INTO label_rules (kind, value, action, created_at) VALUES ('topic', 'electricity', 'ignore', 0)",
                        "INSERT INTO search_tasks (prompt, state, effort, created_at, updated_at) VALUES ('bills', 'queued', 'medium', 0, 0)",
@@ -105,7 +106,7 @@ import ArrumatorTesting
                   (1, 3, 'place', 'ok', 0, 1, '{"calls":"not a model exchange"}');
                 """)
         }
-        try AppDatabase.migrator.migrate(queue)
+        try AppDatabase.migrator(time: TestTime(.advances)).migrate(queue)
         try queue.read { db in
             let outputs = try String.fetchAll(db, sql: "SELECT output_json FROM trace_steps ORDER BY seq")
             #expect(outputs[0] == #"{"answer":{"fileName":"EDP"},"exchange":[{"user":"the text"}]}"#,
@@ -123,7 +124,7 @@ import ArrumatorTesting
                 DELETE FROM record_dirty;
                 """)
         }
-        try AppDatabase.migrator.migrate(queue, upTo: "v15_taskEffort")
+        try AppDatabase.migrator(time: TestTime(.advances)).migrate(queue, upTo: "v15_taskEffort")
         try queue.write { db in
             let task = try #require(try Row.fetchOne(db, sql: "SELECT effort, assigned_model FROM search_tasks WHERE id = 1"))
             #expect(task["effort"] as String? == "medium" && task["assigned_model"] as String? == nil,
@@ -139,7 +140,7 @@ import ArrumatorTesting
             #expect(try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM record_dirty WHERE key = 'tasks'") == 1, "so does a change of model")
         }
         let empty = try DatabaseQueue()
-        try AppDatabase.migrator.migrate(empty, upTo: "v15_taskEffort")
+        try AppDatabase.migrator(time: TestTime(.advances)).migrate(empty, upTo: "v15_taskEffort")
         #expect(try empty.read { db in try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM record_dirty") } == 0,
                 "an index without tasks has no record of them to write")
     }
@@ -154,7 +155,7 @@ import ArrumatorTesting
                 DELETE FROM record_dirty;
                 """)
         }
-        try AppDatabase.migrator.migrate(queue)
+        try AppDatabase.migrator(time: TestTime(.advances)).migrate(queue)
         let marks = "SELECT version FROM record_dirty WHERE key = 'tasks'"
         try queue.write { db in
             #expect(try !db.columns(in: "search_tasks").contains { $0.name == "assigned_model" },
@@ -172,7 +173,7 @@ import ArrumatorTesting
             #expect(try Int.fetchOne(db, sql: marks) == 1, "and a change of effort still does")
         }
         let empty = try DatabaseQueue()
-        try AppDatabase.migrator.migrate(empty)
+        try AppDatabase.migrator(time: TestTime(.advances)).migrate(empty)
         #expect(try empty.read { db in try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM record_dirty") } == 0,
                 "an index without tasks has no record of them to write")
     }
@@ -192,7 +193,7 @@ import ArrumatorTesting
                 """)
         }
 
-        try AppDatabase.migrator.migrate(queue)
+        try AppDatabase.migrator(time: TestTime(.advances)).migrate(queue)
 
         try queue.write { db in
             #expect(try db.columns(in: "document_fts").map(\.name) == SearchService.columns && SearchService.columns.last == "tag",
@@ -224,7 +225,7 @@ import ArrumatorTesting
                 DELETE FROM record_dirty;
                 """)
         }
-        try AppDatabase.migrator.migrate(queue)
+        try AppDatabase.migrator(time: TestTime(.advances)).migrate(queue)
         let marks = "SELECT key FROM record_dirty ORDER BY key"
         try queue.write { db in
             #expect(try String.fetchAll(db, sql: marks).isEmpty, "no task had a conversation before, so no file needs writing")
@@ -262,7 +263,7 @@ import ArrumatorTesting
                   (6, 'reindex', '/Archive/filed.pdf', 'held', '{"content":{}}', 0, 7);
                 """)
         }
-        try AppDatabase.migrator.migrate(queue, upTo: "v22_jobsWaitForTheirModel")
+        try AppDatabase.migrator(time: TestTime(.advances)).migrate(queue, upTo: "v22_jobsWaitForTheirModel")
         let jobs = try queue.read { db in try Row.fetchAll(db, sql: "SELECT id, state, next_run_at FROM jobs ORDER BY id") }
         #expect(jobs.map { $0["state"] as String } == ["analysing", "cancelled", "pending", "cancelled", "pending", "pending"],
                 "each waits again at the stage after the last it finished, and a path keeps one active job: \(jobs)")
@@ -278,7 +279,7 @@ import ArrumatorTesting
                   (2, 'ingest', '/Incoming/bill.pdf', 'done', '{"sha256":"a","targetPath":"/Archive/bill.pdf"}', 0, 9);
                 """)
         }
-        try AppDatabase.migrator.migrate(queue, upTo: "v22_jobsWaitForTheirModel")
+        try AppDatabase.migrator(time: TestTime(.advances)).migrate(queue, upTo: "v22_jobsWaitForTheirModel")
         let states = try queue.read { db in try String.fetchAll(db, sql: "SELECT state FROM jobs ORDER BY id") }
         #expect(states == ["cancelled", "done"], "a held job whose file a later job filed is not taken up again: \(states)")
     }
@@ -293,7 +294,7 @@ import ArrumatorTesting
                   (3, 'ingest', '/Incoming/broken.pdf', 'failed', 'not json', 0, 0);
                 """, arguments: [read, read])
         }
-        try AppDatabase.migrator.migrate(queue, upTo: "v23_endedJobsKeepNoText")
+        try AppDatabase.migrator(time: TestTime(.advances)).migrate(queue, upTo: "v23_endedJobsKeepNoText")
         let payloads = try queue.read { db in try String.fetchAll(db, sql: "SELECT payload_json FROM jobs ORDER BY id") }
         #expect(payloads == [#"{"sha256":"a","outcome":{"embeddingModel":"m"},"targetPath":"/A/b.pdf"}"#, read, "not json"],
                 "an ended job keeps what it did but no text or embedding; a waiting one keeps all; one no JSON is kept as it is")
@@ -308,7 +309,7 @@ import ArrumatorTesting
                 DELETE FROM record_dirty;
                 """)
         }
-        try AppDatabase.migrator.migrate(queue)
+        try AppDatabase.migrator(time: TestTime(.advances)).migrate(queue)
         try queue.write { db in
             #expect(try String.fetchAll(db, sql: "SELECT worker FROM search_tasks WHERE worker IS NOT NULL").isEmpty
                         && (try String.fetchAll(db, sql: "SELECT worker FROM search_task_turns WHERE worker IS NOT NULL")).isEmpty,
@@ -321,7 +322,7 @@ import ArrumatorTesting
 
     @Test func theFullTextIndexHasTheColumnsSearchNames() throws {
         let queue = try DatabaseQueue()
-        try AppDatabase.migrator.migrate(queue)
+        try AppDatabase.migrator(time: TestTime(.advances)).migrate(queue)
         let columns = try queue.read { db in try db.columns(in: "document_fts").map(\.name) }
         #expect(columns == SearchService.columns, "`column:term` and the BM25 weights address columns by these names, in this order")
         #expect(columns[SearchService.bodyColumn] == "body", "snippets are cut from the text")
@@ -336,7 +337,7 @@ import ArrumatorTesting
                 INSERT INTO events (at, kind, actor, summary, payload_json) VALUES (0, 'arrived', 'system', 'bill.pdf', '{}');
                 """)
         }
-        try AppDatabase.migrator.migrate(queue)
+        try AppDatabase.migrator(time: TestTime(.advances)).migrate(queue)
         try queue.read { db in
             let gone = try !db.tableExists("logic") && !(try db.tableExists("brains"))
             #expect(gone, "an archive has no logic any more")
@@ -380,7 +381,7 @@ import ArrumatorTesting
         }
 
         // What the app does at launch.
-        try AppDatabase.migrator.migrate(queue)
+        try AppDatabase.migrator(time: TestTime(.advances)).migrate(queue)
 
         try queue.write { db in
             let doc = try #require(try DocumentRecord.fetchOne(db, key: 1))

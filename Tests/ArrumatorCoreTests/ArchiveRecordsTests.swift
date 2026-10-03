@@ -292,11 +292,14 @@ import Testing
     @Test func anArchiveWithRecordsIsRecognisedWithoutWalkingIt() async throws {
         let env = try await TestEnvironment.make()
         defer { env.cleanup() }
-        #expect(!ArchiveRecords.mayHoldRecords(archive: env.archive, config: env.config), "an archive that does not exist yet")
+        try FileManager.default.removeItem(at: env.archive)
+        #expect(throws: RecordsError.self, "an archive whose folder is not there is not known to hold none") {
+            try ArchiveRecords.mayHoldRecords(archive: env.archive, config: env.config)
+        }
         try FileManager.default.createDirectory(at: env.archive, withIntermediateDirectories: true)
-        #expect(!ArchiveRecords.mayHoldRecords(archive: env.archive, config: env.config), "an empty archive")
+        #expect(try !ArchiveRecords.mayHoldRecords(archive: env.archive, config: env.config), "an empty archive")
         try FileManager.default.createDirectory(at: env.layout.history, withIntermediateDirectories: true)
-        #expect(ArchiveRecords.mayHoldRecords(archive: env.archive, config: env.config), "one with the system folder")
+        #expect(try ArchiveRecords.mayHoldRecords(archive: env.archive, config: env.config), "one with the system folder")
     }
 
     private static func open(_ url: URL, busyTimeout: Double = 1, canRebuild: Bool) throws -> (AppDatabase, AppDatabase.Opening) {

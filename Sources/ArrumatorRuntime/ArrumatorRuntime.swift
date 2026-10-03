@@ -256,7 +256,7 @@ public final class ArrumatorRuntime: Sendable {
         index = paths.indexURL(for: archive)
         (database, _) = try AppDatabase.open(at: index, config: config.database, setAsideSuffix: config.records.setAsideSuffix,
                                              time: time) {
-            ArchiveRecords.mayHoldRecords(archive: archive, config: config)
+            try ArchiveRecords.mayHoldRecords(archive: archive, config: config)
         }
         registry = SelfChangeRegistry(ttl: config.watcher.selfChangeTTLSeconds, time: time)
         records = ArchiveRecords(database: database, archive: archive, config: config, registry: registry, time: time,

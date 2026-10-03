@@ -262,6 +262,32 @@ import Testing
                 "Statistics counts the rules and every label they and the vocabulary tidied, the earlier writing included")
     }
 
+    /// The labels in use as the documents' own labels count them, each once per document that has it.
+    private func counted(_ h: Harness) async throws -> [LabelKind: [LabelUsage]] {
+        let documents = try await h.services.documents.list(DocumentFilter(), limit: 50)
+        let labels = documents.flatMap { Set($0.labels ?? []) }
+        return Dictionary(grouping: Dictionary(grouping: labels, by: { $0 }).map { LabelUsage(label: $0.key, documents: $0.value.count) },
+                          by: \.label.kind).mapValues { $0.sorted { ($1.documents, $0.label.value) < ($0.documents, $1.label.value) } }
+    }
+
+    @Test func theLabelsInUseAreCountedFromAnIndexOfThemKeptInStepWithEveryChange() async throws {
+        let (h, ids) = try await archive()
+        defer { h.env.cleanup() }
+        let indexed = { try await h.env.database.reader.read { db in try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM document_labels") } }
+        #expect(try await h.services.labels.usage() == counted(h), "the labels documents were read with are counted as they have them")
+        _ = try await h.labels.merge(Self.label(.sender, "EDP Comercial"), into: "EDP")
+        _ = try await h.labels.ignore(Self.label(.jurisdiction, "Portugal"))
+        try await h.review.edit(try #require(ids["meo.txt"]), fileName: nil,
+                                labels: LabelEdit(adding: [Self.label(.tag, "Home")], removing: [Self.label(.sender, "MEO")]))
+        let usage = try await h.services.labels.usage()
+        #expect(usage == (try await counted(h)), "and after a merge, a label ignored and one edited by hand, as they have them then")
+        #expect(usage[.sender]?.map(\.label.value) == ["EDP"] && usage[.tag] == [LabelUsage(label: Self.label(.tag, "Home"), documents: 1)]
+                    && usage[.jurisdiction]?.contains { $0.label.value == "Portugal" } == false,
+                "the merged, the added and the ignored label each as the change left them: \(usage)")
+        #expect(try await indexed() == usage.values.joined().reduce(0) { $0 + $1.documents },
+                "the index of labels holds each label a document has once, and nothing else")
+    }
+
     @Test func ignoringALabelTakesItOffEveryDocument() async throws {
         let (h, ids) = try await archive()
         defer { h.env.cleanup() }

@@ -27,6 +27,13 @@ public actor ArchiveRecords {
     /// Called with each record file's URL between reading it and applying what it holds to the index, as `beforeWriting`
     /// is. Set by tests only.
     private var beforeApplying: (@Sendable (URL) async -> Void)?
+    /// Called with each record file's URL once its new text is in place and before its checksum is kept, inside the
+    /// transaction that keeps it: what a test does there is what another process could do at that moment. Set by tests
+    /// only.
+    private var afterReplacing: (@Sendable (URL) -> Void)?
+    /// Called with each record file's URL once its new text is staged beside it (`StagedRecordFile`) and before it takes
+    /// the file's place, as `beforeWriting` is. Set by tests only.
+    private var afterStaging: (@Sendable (URL) async -> Void)?
 
     /// - Parameter timeZone: the Mac's, which the moments and days written for people browsing the archive are in.
     public init(database: AppDatabase, archive: URL, config: PipelineConfig, registry: SelfChangeRegistry?,
@@ -72,6 +79,14 @@ public actor ArchiveRecords {
 
     func setBeforeApplying(_ hook: (@Sendable (URL) async -> Void)?) {
         beforeApplying = hook
+    }
+
+    func setAfterReplacing(_ hook: (@Sendable (URL) -> Void)?) {
+        afterReplacing = hook
+    }
+
+    func setAfterStaging(_ hook: (@Sendable (URL) async -> Void)?) {
+        afterStaging = hook
     }
 
     /// Whether the index has read nothing of the archive yet (`AppDatabase.PendingRebuild.unread`): until its rebuild
@@ -211,9 +226,13 @@ public actor ArchiveRecords {
     private func composed(_ kind: RecordKind, at url: URL) async throws -> String? {
         switch kind {
         case let .documents(directory):
+            // What the list holds now, for the entries of documents in two places it keeps as they are.
+            let listed = try RecordFile.text(at: url).map { try ParsedRecords(kind, url: url, text: $0).documents.flatMap(\.entries) } ?? []
             let entries = try await database.reader.read { db in
-                try DocumentRecord.fetchAll(db, sql: "SELECT * FROM documents WHERE rtrim(path, replace(path, '/', '')) = ? ORDER BY path",
-                                            arguments: [directory + "/"]).compactMap(DocumentEntry.init)
+                let entries = try DocumentRecord.fetchAll(db, sql: "SELECT * FROM documents WHERE rtrim(path, replace(path, '/', '')) = ? ORDER BY path",
+                                                          arguments: [directory + "/"]).compactMap(DocumentEntry.init)
+                let held = try Self.heldEntries(listed, besides: entries, db: db)
+                return held.isEmpty ? entries : (entries + held).sorted { $0.file < $1.file }
             }
             guard !entries.isEmpty else { return nil }
             return try FrontMatter.compose(RecordList(entries), body: RecordText.documents(entries, in: url.deletingLastPathComponent()))
@@ -280,42 +299,60 @@ public actor ArchiveRecords {
     }
 
     /// Writes `text` atomically to `url`, whose file held `held` when it was read (nil: there was none), and remembers
-    /// its checksum. A file that holds anything else by now was changed meanwhile, and is not written over.
+    /// its checksum. A file that holds anything else by now was changed meanwhile, and is not written over. The text is
+    /// written beside the file first, outside any transaction, so a slow or departing volume holds up no other writer of
+    /// the index; it then takes the file's place by a rename in the transaction that keeps its checksum, after checking
+    /// there that the file still holds `held`. So no process ever finds the file replaced and its checksum not kept,
+    /// which would take what the index wrote for an edit and merge it back over what was committed since (`read`).
     private func write(_ text: String, to url: URL, holding held: String?) async throws -> Rendering {
         let hash = FrontMatter.sha256(text)
         await registry?.expect([url.path, url.deletingLastPathComponent().path])
-        let current = try RecordFile.text(at: url).map(FrontMatter.sha256)
-        guard current == held else { return .changedMeanwhile }
-        if current != hash {
-            do {
-                try Data(text.utf8).write(to: url, options: .atomic)
-            } catch {
-                throw RecordsError.unwritable(url.path, error.localizedDescription)
+        let staged = held == hash ? nil : try stage(text, for: url)
+        defer { if let staged { try? FileManager.default.removeItem(at: staged) } }
+        if staged != nil { await afterStaging?(url) }
+        let afterReplacing = afterReplacing
+        return try await database.writer.write { db in
+            let current = try RecordFile.text(at: url).map(FrontMatter.sha256)
+            guard current == held else { return .changedMeanwhile }
+            if current != hash, let staged {
+                // rename(2) puts the new text in the file's place whole, or not at all, on one volume.
+                guard rename(staged.path, url.path) == 0 else { throw RecordsError.unwritable(url.path, String(cString: strerror(errno))) }
+                afterReplacing?(url)
             }
+            try Self.remember(db, path: url.path, hash: hash)
+            return current == hash ? .unchanged : .written
         }
-        try await remember(url, hash: hash)
-        return current == hash ? .unchanged : .written
+    }
+
+    /// Writes `text` into a hidden file beside `url` (`StagedRecordFile`), to take the file's place (`write`).
+    private func stage(_ text: String, for url: URL) throws -> URL {
+        let staged = StagedRecordFile.url(for: url)
+        do {
+            try Data(text.utf8).write(to: staged)
+        } catch {
+            throw RecordsError.unwritable(url.path, error.localizedDescription)
+        }
+        return staged
     }
 
     /// Removes the file at `url`, now that the index holds nothing for it, if it still holds `held`: what the index wrote
-    /// or has just read. One changed meanwhile is left to be read again.
+    /// or has just read. One changed meanwhile is left to be read again. As `write`, in the transaction that forgets its
+    /// checksum.
     private func remove(_ url: URL, holding held: String?) async throws -> Rendering {
         await registry?.expect([url.path, url.deletingLastPathComponent().path])
-        let current = try RecordFile.text(at: url).map(FrontMatter.sha256)
-        guard current == held else { return .changedMeanwhile }
-        if current != nil {
-            do {
-                try FileManager.default.removeItem(at: url)
-            } catch {
-                throw RecordsError.unwritable(url.path, error.localizedDescription)
+        return try await database.writer.write { db in
+            let current = try RecordFile.text(at: url).map(FrontMatter.sha256)
+            guard current == held else { return .changedMeanwhile }
+            if current != nil {
+                do {
+                    try FileManager.default.removeItem(at: url)
+                } catch {
+                    throw RecordsError.unwritable(url.path, error.localizedDescription)
+                }
             }
+            try db.execute(sql: "DELETE FROM record_files WHERE path = ?", arguments: [url.path])
+            return current == nil ? .unchanged : .written
         }
-        try await database.writer.write { db in try db.execute(sql: "DELETE FROM record_files WHERE path = ?", arguments: [url.path]) }
-        return current == nil ? .unchanged : .written
-    }
-
-    private func remember(_ url: URL, hash: String) async throws {
-        try await database.writer.write { db in try Self.remember(db, path: url.path, hash: hash) }
     }
 
     static func remember(_ db: Database, path: String, hash: String) throws {
@@ -343,6 +380,7 @@ public actor ArchiveRecords {
         for folder in walk.unlisted { noteUnreadable(folder) }
         // Nothing of an archive that is not there is read, taken for gone or written again.
         guard archiveIsThere else { throw RecordsError.archiveNotThere(archive.path) }
+        removeStaged(walk.staged)
         var merging = try await owesMerge()
         if merging { try await forgetFiles() }
         let known = try await knownHashes()
@@ -406,12 +444,18 @@ public actor ArchiveRecords {
     /// nil, the write that applies the file decides: it merges when the index has changes of its own for the file (its
     /// kind is marked), as a change committed after anything else was read would otherwise be replaced. A list of
     /// documents that leaves out a document the index has in its directory, or whose entries were given numbers of
-    /// their own, is marked again, to be written with them.
+    /// their own, is marked again, to be written with them. A file whose checksum the index holds by the time it is
+    /// applied is what the index wrote, as another process that wrote it meanwhile keeps its checksum in the transaction
+    /// that writes it (`write`): it holds nothing the index lacks, and is not applied, as what it holds may be older than
+    /// what the index committed since. A document found named by two lists, when nothing told which is the copy's, is
+    /// noted in the same transaction (`DocumentInTwoPlaces`).
     private func read(_ kind: RecordKind, url: URL, text: String, replacing: Bool?) async throws {
         let parsed = try ParsedRecords(kind, url: url, text: text)
         let now = time.now()
         await beforeApplying?(url)
         try await database.writer.write { db in
+            if let hash = parsed.hashes[url.path],
+               try String.fetchOne(db, sql: "SELECT hash FROM record_files WHERE path = ?", arguments: [url.path]) == hash { return }
             let replacing = try replacing ?? !(Bool.fetchOne(db, sql: "SELECT EXISTS (SELECT 1 FROM record_dirty WHERE key = ?)",
                                                               arguments: [kind.key]) ?? false)
             try db.execute(sql: "PRAGMA defer_foreign_keys = ON")
@@ -420,6 +464,25 @@ public actor ArchiveRecords {
             for (path, hash) in parsed.hashes where !applied.notTakenIn.contains(path) { try Self.remember(db, path: path, hash: hash) }
             if replacing { try db.execute(sql: "DELETE FROM record_dirty WHERE key = ?", arguments: [kind.key]) }
             for kind in applied.rewrite { try Self.mark(db, kind) }
+            try Self.noteInTwoPlaces(db, applied, at: now)
+        }
+    }
+
+    /// Of the entries a list holds, `listed`, those of documents in two places that the index keeps in another folder,
+    /// which the list keeps as they are, entry for entry, so neither of two lists loses a document on a guess
+    /// (`DocumentInTwoPlaces`); the rest of the list is written from the index, as any other.
+    static func heldEntries(_ listed: [DocumentEntry], besides entries: [DocumentEntry], db: Database) throws -> [DocumentEntry] {
+        guard !listed.isEmpty else { return [] }
+        let inTwoPlaces = try TwoPlaces.uids(db)
+        let here = Set(entries.map(\.uid))
+        return listed.filter { inTwoPlaces.contains($0.uid) && !here.contains($0.uid) }
+    }
+
+    /// Notes, in the transaction of `db`, the documents `applied` found named by two lists (`TwoPlaces`).
+    static func noteInTwoPlaces(_ db: Database, _ applied: ParsedRecords.Applied, at now: Date) throws {
+        for (uid, place) in applied.inTwoPlaces {
+            guard let id = place.document.id else { continue }
+            try TwoPlaces.note(db, uid: uid, document: id, name: place.document.filename, paths: place.paths, replacing: false, at: now)
         }
     }
 
@@ -474,109 +537,5 @@ public actor ArchiveRecords {
     static func mark(_ db: Database, _ kind: RecordKind) throws {
         try db.execute(sql: "INSERT INTO record_dirty(key, version) VALUES (?, 1) ON CONFLICT(key) DO UPDATE SET version = version + 1",
                        arguments: [kind.key])
-    }
-}
-
-extension ArchiveRecords {
-    // MARK: Finding record files
-
-    /// Why a folder the file system gives no listing of at all is not read.
-    static let notListed = "it cannot be listed"
-    /// Why an archive whose folder is not there is not read: what it holds is not known, as on a disk that is not
-    /// mounted or a cloud folder not connected, so it is neither taken for an archive without records nor written into.
-    static let notThere = "no folder is there"
-
-    /// What walking the archive found.
-    struct ArchiveWalk {
-        /// Every regular file in it, hidden files and package contents aside.
-        var files: [URL] = []
-        /// The record files among them, with the kind each holds.
-        var records: [(RecordKind, URL)] = []
-        /// The folders that are there but cannot be listed, each with why: what they hold is not known to be absent.
-        var unlisted: [UnreadableRecordFile] = []
-        /// The folders not looked into: those the watcher ignores. Incoming is never inside the archive
-        /// (`AppSettings.problems`).
-        var skipped: [String] = []
-
-        /// Whether `path` is in a folder that was not, or could not be, looked into.
-        func hides(_ path: String) -> Bool {
-            (skipped + unlisted.map(\.path)).contains { path.hasPrefix($0 + "/") }
-        }
-    }
-
-    /// Walks the archive at `root`, leaving out the folders `skip` ignores, as nothing in them is a document of the archive
-    /// or a record file.
-    static func walk(_ root: URL, skip: SkipRules) -> ArchiveWalk {
-        var walk = ArchiveWalk()
-        // The archive itself not there is no archive without record files, unlike a folder gone while it is walked.
-        guard isFolder(root) else {
-            walk.unlisted = [UnreadableRecordFile(path: root.standardizedFileURL.path, reason: notThere)]
-            return walk
-        }
-        let walker = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey],
-                                                    options: [.skipsHiddenFiles, .skipsPackageDescendants]) { url, error in
-            // One gone while the folder is walked is simply not there.
-            if (error as? CocoaError)?.code != .fileReadNoSuchFile {
-                walk.unlisted.append(UnreadableRecordFile(path: url.standardizedFileURL.path, reason: error.localizedDescription))
-            }
-            return true
-        }
-        guard let walker else {
-            walk.unlisted = [UnreadableRecordFile(path: root.standardizedFileURL.path, reason: notListed)]
-            return walk
-        }
-        for case let url as URL in walker {
-            // Listings resolve /var to /private/var; standardizing gives the paths the index stores.
-            let url = url.standardizedFileURL
-            let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isDirectoryKey])
-            if values?.isDirectory == true, skip.isIgnoredDirectory(named: url.lastPathComponent) {
-                walker.skipDescendants()
-                walk.skipped.append(url.path)
-            } else if values?.isRegularFile == true {
-                walk.files.append(url)
-            }
-        }
-        return walk
-    }
-
-    /// Whether the archive's folder is there: an archive whose folder is not is neither read nor written, nor filed into.
-    public nonisolated var archiveIsThere: Bool { Self.isFolder(archive) }
-
-    /// Whether a folder is at `url`.
-    static func isFolder(_ url: URL) -> Bool {
-        var isDirectory: ObjCBool = false
-        return FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) && isDirectory.boolValue
-    }
-
-    /// The archive walked, with every record file in it and the kind it holds: the lists of documents first, and the
-    /// search tasks before the conversations about them, as each refers to those before it.
-    func recordFiles() async -> ArchiveWalk {
-        var walk = Self.walk(archive, skip: SkipRules(watcher: config.watcher))
-        walk.records = walk.files.compactMap { url in kind(of: url).map { ($0, url) } }
-            .sorted { Self.readingOrder($0.0) < Self.readingOrder($1.0) }
-        return walk
-    }
-
-    private static func readingOrder(_ kind: RecordKind) -> Int {
-        switch kind {
-        case .documents: 0
-        case .history: 1
-        case .labelRules: 2
-        case .searchTasks: 3
-        case .conversation: 4
-        }
-    }
-
-    /// The kind of record file at `url` from where it is, or nil for a file that is none.
-    private func kind(of url: URL) -> RecordKind? {
-        let url = url.standardizedFileURL
-        if url.lastPathComponent == config.records.documentsFileName { return .documents(directory: url.deletingLastPathComponent().path) }
-        if url.path == layout.labelRules.standardizedFileURL.path { return .labelRules }
-        if url.path == layout.searchTasks.standardizedFileURL.path { return .searchTasks }
-        if url.deletingLastPathComponent().path == layout.conversations.standardizedFileURL.path {
-            return layout.task(ofConversationFile: url.lastPathComponent).map { .conversation(task: $0) }
-        }
-        guard url.deletingLastPathComponent().path == layout.history.standardizedFileURL.path else { return nil }
-        return layout.month(ofHistoryFile: url.lastPathComponent).map { .history(month: $0) }
     }
 }

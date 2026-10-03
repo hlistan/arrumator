@@ -82,6 +82,10 @@ first, so the database file alone holds everything when it is moved.
 - **Text and search**: extracted text and the full-text index are extracted again from the documents; the labels'
   columns of the full-text index, one per kind and the last for tags, are filled from the entries, without asking the
   model again.
+- **Which documents have each label**, by its kind and value, kept with each document's labels in the transaction that
+  changes them: how many documents have each label, what the sidebar and the model are shown, and which documents a
+  chosen label narrows the list to are counted from it, not by reading every document's labels. A rebuild fills it as
+  it reads the entries.
 - **Embeddings** of documents are computed again with the embedding model.
 - **The job queue** is rebuilt by looking at the Incoming folder, so each file waiting there is given the tag of the
   folder it is in again. A tag a document already has is in its entry.
@@ -109,10 +113,15 @@ Some working state is deliberately not kept in files, so a lost index loses it:
 
 1. A change is made in the database. Triggers on every recorded table mark the record files the change touches, in the
    same transaction, so no code path can forget one and a mark survives a crash.
-2. As soon as the transaction commits, the app writes each marked file from the index, and a command of
-   `arrumatorcli` writes them before it exits, also when it fails part way, atomically: to a temporary file
-   in the same directory, then renamed over the old one, which APFS guarantees is all or nothing. The file's SHA-256 is
-   kept in the index. A file changed again while it was being written stays marked and is written again. While the
+2. As soon as the transaction commits, the app writes each marked file from the index, and a command of `arrumatorcli`
+   writes them before it exits, also when it fails part way, atomically: to a hidden temporary file in the same
+   directory (`.<UUID>.<name of the record file>`, which a crash may leave, and which is removed when the archive is
+   read once it is older than `records.stagedLeftoverMinutes`, as a younger one may be another process's, and never
+   taken for a document), outside any transaction of the index, then renamed over the old one, which APFS guarantees is
+   all or nothing, in the transaction that keeps the file's SHA-256 in the index. So another process, the app or a
+   command, never finds the file replaced and its checksum not kept, and never reads back what the index wrote as an
+   edit, which could be older than what was committed since; and a slow disk holds up no other writer of the index for
+   longer than a rename. A file changed again while it was being written stays marked and is written again. While the
    archive's folder is not there, renamed or on a disk that went, nothing is written and no folder of it is made again
    where it no longer is: its files stay marked, and are written once it is back.
 3. When the app starts, and whenever the archive watcher sees a record file change that the app did not make, every
@@ -122,8 +131,12 @@ Some working state is deliberately not kept in files, so a lost index loses it:
    in: what the file changes wins, and what the index added is kept. Otherwise the file replaces what the index held
    for it. Which of the two is decided in the transaction that applies the file, so a change committed while the file
    was read is merged with it, never replaced. Removing a document's entry never removes the document; its entry is
-   written back. A rule for labels changed by hand is followed by readings from then on; the documents it concerns keep
-   the labels they have.
+   written back. An entry in the list of another folder than the one its document is in, while the document's file is
+   still where the index has it, is a copy's, as in a folder copied in Finder with its `_documents.md`: it moves no
+   document, and the list is written again without it; the copies themselves are taken in as new files. That is so
+   only while where the index has the document tells it, which it does not when it was itself read from a list, as
+   after the index was lost: see [documents in two places](#documents-in-two-places). A rule for
+   labels changed by hand is followed by readings from then on; the documents it concerns keep the labels they have.
    A file is written over or removed only when it holds what the app last wrote or has just read: one the index has
    no checksum for, such as a file another Mac synchronised, is read first.
    A file that is there but cannot be read, such as one edited into broken YAML, saved again as UTF-16 by an editor or
@@ -165,7 +178,9 @@ neither finds their documents nor reads their text again: rebuild the index in S
 it is rebuilt, however the archive looks when it is next opened. A database that is damaged or cannot be migrated is
 moved aside, never deleted, as `<name>.sqlite.unreadable-<date>`. That only happens when the archive has record files
 to rebuild from; otherwise the app stops and says why, rather than starting with an
-empty index. A database that cannot be opened only for the moment, because another process holds it longer than
+empty index. While the archive's folder is not there, it is not known to hold none: the app stops naming the folder,
+leaves the database as it is, and moves it aside to be rebuilt once the folder is back. A database that cannot be
+opened only for the moment, because another process holds it longer than
 `database.busyTimeout`, the disk is full or the file may not be read, is never moved aside: the app stops and says
 why, and starts once that has passed. A rebuild of an index that holds the archive, as on request, first writes
 every change not yet in the files. Documents are then updated in place from their entries and keep their numbers, so their
@@ -183,16 +198,39 @@ again, or run the command again.
 
 A rebuild reads every `_documents.md`, the history, the rules for labels, the search tasks and their conversations; a
 task's set keeps only the documents the archive still has entries for, and a conversation of a task `_tasks.md` does not
-have is left where it is, unread, and read again until its task is back; no new task is given its number. Documents are
-looked up by the identifier on their file, and follow it wherever it is in the archive, a file left where the entry
-says, as a copy without the identifier, being taken in as a document of its own; and one marked missing whose file is
-found again is filed again where it is; a file without the identifier where an entry not found elsewhere says its
-document is, as one a copy or a synchronisation left it off, is that document's. Files that have no entry, at the top of
-the archive or in a folder of yours at any depth, are taken in where they are and read by the model; the `System` folder
-and the folders the watcher ignores, such as a hidden one, are left out, and Incoming is never inside the archive
-([Configuration](using-arrumator.md#configuration)). Then, in the background and giving way to new arrivals, each
-document's text is extracted again and its embedding recomputed. The model is not asked again: labels come back from
-the entries. Search by words and by meaning fills in as that proceeds; filing works from the start.
+have is left where it is, unread, and read again until its task is back; no new task is given its number. Lists of a
+kind are read shallower folder first, then in the order of their paths. Documents are looked up by the identifier on
+their file, a package (such as an `.rtfd`) being one file, and follow it wherever it is in the archive, a file left
+where the entry says, as a copy without the identifier, being taken in as a document of its own. Of several files that
+carry one document's identifier, as copies made in Finder do, the one where its entry says is its file, then the very
+file the index last knew as its own; each other is a copy, taken in as a document of its own, with the identifier taken
+off it. When neither tells, the document is in two places ([below](#documents-in-two-places)). A document whose file is
+nowhere is marked missing, and one marked missing whose file is found again is where its file is now, with the status it
+had when its file went: History says each, as when the app sees it happen. A file without the identifier where an entry
+not found elsewhere says its document is, as one a copy or a synchronisation left it off, is that document's. An entry
+in the list of another folder than the one its document is in, while the document's file is still there, is a copy's, as
+when such a list is read back ([above](#keeping-files-and-index-together)), when the index had the document there before
+the rebuild: the document stays with its file, and that list is written again without the entry. Files that have no
+entry, at the top of the archive or in a folder of yours at any depth, are taken in where they are and read by the
+model; the `System` folder and the folders the watcher ignores, such as a hidden one, are left out, and Incoming is
+never inside the archive ([Configuration](using-arrumator.md#configuration)). Then, in the background and giving way to
+new arrivals, each document's text is extracted again and its embedding recomputed. The model is not asked again: labels
+come back from the entries. Search by words and by meaning fills in as that proceeds; filing works from the start.
+
+### Documents in two places
+
+A folder duplicated in Finder with its `_documents.md` while the index was lost, or a document's file copied while the
+index cannot tell its own file by its inode, leaves two places that carry one document, and nothing on disk tells
+which is the original: a copy keeps the document's identifier, its list names the same documents, and Finder and
+`FileManager.copyItem` keep the original's creation date. Arrumator decides nothing on that guess. The document stays at
+the place it was first found in: the folder whose list is read first, the shallower first and then in the order of
+their paths, which may be the copy's (`Bills copy` comes before `Bills`). No file loses the identifier, none is taken in
+as a new document, and neither list loses the document's entry: the other list keeps it as it is, entry for entry,
+while the rest of that list is read and written as any other, so a change to another document of its folder, or a
+document filed there, reaches it. History says once, for each document, which places carry it, and `arrumatorcli
+doctor` warns of them by folder until one is gone. Remove the copy: when the place the document is kept at is removed,
+it follows the file that is left, with the status it had; when the other place is removed, the document is in one
+place again, and its entry goes from that place's list.
 
 ## Archives from earlier versions
 

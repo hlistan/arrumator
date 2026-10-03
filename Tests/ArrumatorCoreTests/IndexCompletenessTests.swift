@@ -117,6 +117,35 @@ import Testing
         #expect(summary.documents == w.documents.count && queued == w.documents, "with every document, each queued to be read again")
     }
 
+    @Test func anIndexThatCannotBeOpenedWhileItsArchiveIsNotThereIsLeftAsItIsAndTheFolderNamed() async throws {
+        let w = try await RecordsWorld.make()
+        defer { w.h.env.cleanup() }
+        let url = w.h.env.root.appendingPathComponent("Indexes/damaged.sqlite")
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("not a database".utf8).write(to: url)
+        let away = try takeAway(w)
+        let (archive, config) = (w.h.env.archive, w.h.env.config)
+        #expect("the archive that is away is not taken for one without records to rebuild from: its folder is named") {
+            _ = try AppDatabase.open(at: url, config: config.database, setAsideSuffix: config.records.setAsideSuffix, time: w.h.env.time) {
+                try ArchiveRecords.mayHoldRecords(archive: archive, config: config)
+            }
+        } throws: { error in
+            guard case let RecordsError.archiveNotThere(path) = error else { return false }
+            return path == archive.standardizedFileURL.path
+        }
+        #expect(try String(contentsOf: url, encoding: .utf8) == "not a database", "and the index is left as it is")
+
+        try FileManager.default.moveItem(at: away, to: archive)
+        let (database, opening) = try AppDatabase.open(at: url, config: config.database, setAsideSuffix: config.records.setAsideSuffix,
+                                                       time: w.h.env.time) { try ArchiveRecords.mayHoldRecords(archive: archive, config: config) }
+        guard case .setAside = opening else {
+            Issue.record("once the archive is back, the index is set aside to be rebuilt from it, got \(opening)")
+            return
+        }
+        let summary = try #require(try await w.h.env.records(index: database).rebuildIfPending())
+        #expect(summary.documents == w.documents.count, "and rebuilt with every document")
+    }
+
     @Test func anIndexRefusedBeforeIsNotRebuiltFromNothingWhileItsArchiveIsNotThere() async throws {
         let w = try await RecordsWorld.make()
         defer { w.h.env.cleanup() }

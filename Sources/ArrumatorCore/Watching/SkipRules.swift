@@ -26,6 +26,7 @@ public struct SkipRules: Sendable {
     /// files are Markdown named with the managed-file prefix (`_documents.md`, history files), and so are those earlier
     /// versions left in folders; no document is given a name this refuses (`FilenameBuilder`).
     func ignoreReason(name: String) -> String? {
+        if StagedRecordFile.isStaged(name, watcher: watcher) { return "staged record file" }
         let fileExtension = (name as NSString).pathExtension.lowercased()
         if name.hasPrefix(watcher.managedFilePrefix), fileExtension == watcher.managedFileExtension { return "managed file" }
         if watcher.ignoredNames.contains(name) { return "ignored name" }

@@ -133,6 +133,31 @@ import Testing
 
     static let meanwhile = "Recorded while the file was read back"
 
+    @Test func aFileAnotherProcessJustWroteFromTheIndexIsNeverMergedBackOverANewerChange() async throws {
+        let w = try await RecordsWorld.make()
+        defer { w.h.env.cleanup() }
+        let url = w.topListing
+        let written = FrontMatter.sha256(try String(contentsOf: url, encoding: .utf8))
+        // Another process has written the list from the index, and has not yet kept its checksum.
+        try await w.h.env.database.writer.write { db in try db.execute(sql: "DELETE FROM record_files WHERE path = ?", arguments: [url.path]) }
+        // The app then tags a document, a change the list just written does not hold.
+        let doc = w.documents[0]
+        let tag = DocumentLabel(kind: .tag, value: "Home")
+        try await w.h.review.edit(doc, fileName: nil, labels: LabelEdit(adding: [tag]))
+        // Its flush reads the list, taking it for one the index has not read; meanwhile the other process keeps its checksum.
+        let database = w.h.env.database
+        let kept = Mutex(false)
+        await w.records.setBeforeApplying { read in
+            guard read.path == url.path, kept.withLock({ done in defer { done = true }; return !done }) else { return }
+            _ = try? await database.writer.write { db in try ArchiveRecords.remember(db, path: url.path, hash: written) }
+        }
+        try await w.records.flush()
+        #expect(kept.withLock { $0 }, "the other process kept the checksum of what it wrote while the list was read")
+        let labels = try #require(try await w.h.services.documents.document(id: doc)?.labels)
+        #expect(labels.contains(tag), "what the index wrote is never merged back over the change made since: \(labels)")
+        #expect(try String(contentsOf: url, encoding: .utf8).contains("value: Home"), "and the list is written with the change")
+    }
+
     @Test func aRuleMadeWhileTheRulesFileIsReadBackIsKeptBesideTheEdit() async throws {
         let w = try await RecordsWorld.make()
         defer { w.h.env.cleanup() }

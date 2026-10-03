@@ -31,7 +31,7 @@ public struct AppDatabase: Sendable {
         self.writer = writer
         self.observationRetry = observationRetry
         self.time = time
-        try Self.migrator.migrate(writer)
+        try Self.migrator(time: time).migrate(writer)
     }
 
     /// How the database was found when the app opened it.
@@ -127,14 +127,15 @@ public struct AppDatabase: Sendable {
 
     /// Opens (creating if needed) the on-disk database. One that is damaged or cannot be migrated is moved aside, never
     /// deleted, when `canRebuild` says the archive holds the records to rebuild it from; otherwise the error stands, so
-    /// the app stops instead of starting empty. One that cannot be opened for the moment (`isPassing`) is never set
+    /// the app stops instead of starting empty, as it does with what `canRebuild` throws, such as an archive that is
+    /// away (`ArchiveRecords.mayHoldRecords`), leaving the file as it is. One that cannot be opened for the moment (`isPassing`) is never set
     /// aside: rebuilding it would lose its traces and queue for a lock that would have been released. A new index, and
     /// the one that takes the place of one set aside, is to be rebuilt (`PendingRebuild.unread`), even when the archive
     /// seems to hold no records: whether it does is decided when it is opened, by walking it whole
     /// (`ArchiveRecords.rebuildIfPending`), as its records may not show yet, while a sync goes on or before macOS lets the
     /// app read the folder.
     public static func open(at url: URL, config: DatabaseConfig, setAsideSuffix: String, time: any TimeSource,
-                            canRebuild: () -> Bool) throws -> (AppDatabase, Opening) {
+                            canRebuild: () throws -> Bool) throws -> (AppDatabase, Opening) {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let existed = FileManager.default.fileExists(atPath: url.path)
         do {
@@ -142,7 +143,7 @@ public struct AppDatabase: Sendable {
             return (database, existed ? .existing : .created)
         } catch {
             if isPassing(error) { throw DatabaseOpeningError.unavailable(url.path, error.localizedDescription) }
-            guard existed, canRebuild() else { throw DatabaseOpeningError.unreadable(url.path, error.localizedDescription) }
+            guard existed, try canRebuild() else { throw DatabaseOpeningError.unreadable(url.path, error.localizedDescription) }
             let stamp = time.now().formatted(.iso8601.year().month().day().time(includingFractionalSeconds: false)
                 .timeSeparator(.omitted).dateTimeSeparator(.standard))
             let aside = url.deletingLastPathComponent().appendingPathComponent("\(url.lastPathComponent).\(setAsideSuffix)-\(stamp)")

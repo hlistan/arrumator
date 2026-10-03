@@ -68,12 +68,15 @@ public struct LabelStore: Sendable {
         try await database.reader.read { db in try Self.usage(db, within: DocumentFilter(labels: selection)) }
     }
 
+    /// Counted from the index of the labels documents have (`v24_documentLabels`), which answers it by its key, so asking
+    /// it for every reading and every change to History reads no document's labels; within a scope, of the documents in
+    /// it alone.
     static func usage(_ db: Database, within scope: DocumentFilter = DocumentFilter()) throws -> [LabelKind: [LabelUsage]] {
         let (conditions, args) = try scope.sql(db)
+        let labels = conditions.isEmpty ? "document_labels l" : "document_labels l JOIN documents d ON d.id = l.doc_id WHERE 1\(conditions)"
         let rows = try Row.fetchAll(db, sql: """
-            SELECT json_extract(l.value, '$.kind') AS kind, json_extract(l.value, '$.value') AS value, COUNT(DISTINCT d.id) AS documents
-            FROM documents d, json_each(d.labels_json) l WHERE d.labels_json IS NOT NULL\(conditions)
-            GROUP BY 1, 2 ORDER BY documents DESC, value
+            SELECT l.kind AS kind, l.value AS value, COUNT(*) AS documents FROM \(labels)
+            GROUP BY l.kind, l.value ORDER BY documents DESC, l.value
             """, arguments: args)
         var usage: [LabelKind: [LabelUsage]] = [:]
         for row in rows {
