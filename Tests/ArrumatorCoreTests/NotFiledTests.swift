@@ -293,9 +293,10 @@ struct RefusingOne: Trashing {
         let said = try await h.services.history.events(limit: 5, kinds: [.error]).map(\.summary)
         #expect(said == [FileOperationError.tooManyItems(library.spelledOnDisk.path, limit: 2).localizedDescription],
                 "History says why: \(said)")
-        #expect(throws: FileOperationError.self, "and the command line is refused before it reads anything") {
+        let refused = #expect(throws: FileOperationError.self, "and the command line is refused before it reads anything") {
             try h.services.arrival(inside, settings: try AppSettings.bundledDefaults())
         }
+        #expect(refused?.localizedDescription == said.first, "for the same reason")
     }
 
     @Test func aLinkNamedToBeFiledIsRefusedAndWhatItPointsToIsLeftAlone() async throws {

@@ -7,20 +7,30 @@ import Testing
 /// How the app starts, watches and stops an Ollama server of its own on this Mac (`OllamaLifecycle`): with a stand-in
 /// for `ollama serve` and a double for its API, never the user's Ollama.
 @Suite struct OllamaLifecycleTests {
-    /// A server whose version is answered as `answers` says, call by call: the first call is 0.
+    /// A server whose version is answered as `answers` says, call by call: the first call is 0. From call `holdingAt` on,
+    /// if given, it answers nothing until the request is cancelled, and says it got there (`held`): where a test that
+    /// counts calls stops what makes them, rather than leave it looking as fast as test time lets it while it waits.
     final class ScriptedServer: OllamaAPI {
         private let calls = Mutex(0)
         private let answers: @Sendable (Int) -> Result<String, OllamaError>
+        private let holdingAt: Int?
+        let held = Signal()
 
-        init(_ answers: @escaping @Sendable (Int) -> Result<String, OllamaError>) { self.answers = answers }
+        init(holdingAt: Int? = nil, _ answers: @escaping @Sendable (Int) -> Result<String, OllamaError>) {
+            self.holdingAt = holdingAt
+            self.answers = answers
+        }
 
         var baseURL: URL { MockOllama.server }
-        var versionCalls: Int { calls.withLock { $0 } }
 
         func version() async throws -> String {
             let call = calls.withLock { calls in
                 defer { calls += 1 }
                 return calls
+            }
+            if let holdingAt, call >= holdingAt {
+                held.fire()
+                try await TestTime(.blocks).sleep(seconds: 0)
             }
             return try answers(call).get()
         }
@@ -60,6 +70,27 @@ import Testing
         tune(&config)
         return OllamaLifecycle(api: api, config: config, management: .spawnServe, binaryOverride: server.executable.path,
                                address: MockOllama.server, time: time)
+    }
+
+    @Test func noServerIsSpawnedOnceTheProcessIsEndingAtOnce() async throws {
+        let folder = try folder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let server = try StandInServer(in: folder)
+        defer { for pid in server.started { kill(pid, SIGKILL) } }
+        let lifecycle = try lifecycle(ScriptedServer { _ in ScriptedServer.away }, spawning: server, time: TestTime(.blocks))
+        // A second Ctrl-C ends the command at once, as a start is about to spawn the server.
+        lifecycle.endSpawnedServerNow()
+        // Followed from a task of its own: a server spawned would be waited for, on time that never passes, for ever.
+        let starting = Task { await lifecycle.ensureRunning() }
+        defer { starting.cancel() }
+        let done = Signal()
+        Task {
+            _ = await starting.value
+            done.fire()
+        }
+        try #require(await Patience.until { done.fired }, "the start ends at once, spawning nothing that would outlive the process")
+        #expect(await starting.value == .unhealthy(CancellationError().localizedDescription), "and says it did not start")
+        await lifecycle.shutdown()
     }
 
     @Test func aStartAskedForWhileOneIsUnderWayWaitsForItAndStartsNoSecondServer() async throws {
@@ -108,16 +139,17 @@ import Testing
         let folder = try folder()
         defer { try? FileManager.default.removeItem(at: folder) }
         let server = try StandInServer(in: folder)
-        // Down whenever supervision looks, back by the time it would restart it: no restart is ever made.
-        let api = ScriptedServer { $0.isMultiple(of: 2) ? ScriptedServer.away : .success(ScriptedServer.version) }
+        // Down whenever supervision looks, back by the time it would restart it: no restart is ever made. Held once it
+        // has looked more times than it may restart in an hour.
+        let looks = try PipelineConfig.bundledDefaults().ollama.maxRestartsPerHour * 4
+        let api = ScriptedServer(holdingAt: looks) { $0.isMultiple(of: 2) ? ScriptedServer.away : .success(ScriptedServer.version) }
         let lifecycle = try lifecycle(api, spawning: server, time: TestTime(.advances))
         let log = StateLog()
         let states = await lifecycle.states()
         let following = Task { for await state in states { await log.add(state) } }
         defer { following.cancel() }
         await lifecycle.startMonitoring()
-        let looks = try PipelineConfig.bundledDefaults().ollama.maxRestartsPerHour * 4
-        try #require(await Patience.until { api.versionCalls >= looks }, "supervision looks again and again")
+        try #require(await Patience.until { api.held.fired }, "supervision looks again and again")
         await lifecycle.shutdown()
         #expect(server.started.isEmpty, "no server was started, as each time it answered again before")
         let seen = await log.states

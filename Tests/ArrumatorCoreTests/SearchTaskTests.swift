@@ -168,8 +168,8 @@ import Testing
                 "the task keeps what the model read its prompt as, and which model that was")
         #expect(Set(ready.documents) == (try w.ids("edp_2025_03.txt", "aguas_2025_05.txt")), "and the documents that plan finds")
         #expect(ready.name == "Utility invoices 2025" && ready.grouping == [.sender], "it goes by the model's name and arrangement")
-        #expect(await interpreter.calls.days == [TestTime.start.formatted(Date.ISO8601FormatStyle(timeZone: .current).year().month().day())],
-                "the model is told today's date, from the injected clock, to count “last year” from")
+        #expect(await interpreter.calls.days == [TestTime.startDay],
+                "the model is told today's date, from the injected clock in the pipeline's time zone, to count “last year” from")
         #expect(await interpreter.calls.vocabularies.first?[.sender]?.first?.label.value == "EDP Comercial",
                 "and the archive's labels, the most used first, to ask for them as the archive writes them")
         #expect(try await events(w.h, [.taskCreated, .taskPrepared]).map(\.kind) == [.taskCreated, .taskPrepared],

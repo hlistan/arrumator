@@ -1,7 +1,9 @@
 import ArrumatorCore
 import Foundation
 
-/// Offline stand-in for Ollama: scripted chat answers, deterministic bag-of-words embeddings, call recording.
+/// Offline stand-in for Ollama: scripted chat answers, deterministic bag-of-words embeddings, call recording. It can
+/// think before it answers (`think(_:)`), fail part way through a streamed answer (`failNextStream(afterWords:with:)`),
+/// fail its embeddings (`failEmbedding(with:)`) and hold every request open until it is cancelled (`hold()`).
 public actor MockOllama: OllamaAPI {
     public typealias ChatHandler = @Sendable (OllamaChatRequest) throws -> String
 
@@ -24,6 +26,9 @@ public actor MockOllama: OllamaAPI {
     private let remoteHosts: [String: String]
     private var showFailures: [String: any Error & Sendable] = [:]
     private var embedFailure: (any Error & Sendable)?
+    private var thoughts: String?
+    private var streamFailure: (words: Int, error: any Error & Sendable)?
+    private var holding = false
     private var versionFailure: OllamaError?
     private var listingFailure: OllamaError?
     public nonisolated let baseURL: URL
@@ -70,6 +75,25 @@ public actor MockOllama: OllamaAPI {
     /// Makes `embed` fail with `error` from now on.
     public func failEmbedding(with error: any Error & Sendable) { embedFailure = error }
 
+    /// Makes every answer think `thoughts` first, from now on, as a model that thinks: streamed, they grow a word at a
+    /// time before the first word of the answer, and the whole answer carries them beside its content.
+    public func think(_ thoughts: String) { self.thoughts = thoughts }
+
+    /// Makes the next streamed answer fail with `error` once `words` words of it have been streamed, as a server that
+    /// goes away part way through an answer, or at its end when it has no more words than that, so a failure asked for
+    /// always comes; the answers after it are whole again.
+    public func failNextStream(afterWords words: Int, with error: any Error & Sendable) { streamFailure = (words, error) }
+
+    /// Makes every request for an answer or an embedding, from now on, wait until it is cancelled and then throw
+    /// `CancellationError`, as a model that thinks for minutes: what a test holds a lane or a stage with.
+    public func hold() { holding = true }
+
+    /// Waits until the request is cancelled, when the mock holds requests.
+    private func holdIfAsked() async throws {
+        guard holding else { return }
+        try await TestTime(.blocks).sleep(seconds: 0)
+    }
+
     /// Makes `version` fail with `error` from now on, as a server that answers nothing.
     public func failVersion(with error: OllamaError) { versionFailure = error }
 
@@ -104,25 +128,35 @@ public actor MockOllama: OllamaAPI {
     /// the whole of it comes back.
     public func chat(_ request: OllamaChatRequest, partial: (@Sendable (OllamaChatResponse) async -> Void)?) async throws -> OllamaChatResponse {
         chatRequests.append(request)
+        try await holdIfAsked()
         let given = try handler(request)
         let cut = given.hasPrefix(Self.cutOff)
         let content = cut ? String(given.dropFirst(Self.cutOff.count)) : given
         if let partial {
-            var sofar = ""
-            for word in Self.words(content) {
-                sofar += word
-                await partial(OllamaChatResponse(model: request.model, message: .assistant(sofar), done: false, doneReason: nil,
+            let failure = streamFailure
+            streamFailure = nil
+            var streamed = 0
+            var message = OllamaMessage.assistant("")
+            let pieces = Self.words(thoughts ?? "").map { (thinking: true, word: $0) } + Self.words(content).map { (thinking: false, word: $0) }
+            for piece in pieces {
+                if let failure, streamed == failure.words { throw failure.error }
+                if piece.thinking { message.thinking = (message.thinking ?? "") + piece.word } else { message.content += piece.word }
+                streamed += 1
+                await partial(OllamaChatResponse(model: request.model, message: message, done: false, doneReason: nil,
                                                  totalDuration: nil, loadDuration: nil, promptEvalCount: nil, promptEvalDuration: nil,
                                                  evalCount: nil, evalDuration: nil))
             }
+            if let failure { throw failure.error }
         }
-        return OllamaChatResponse(model: request.model, message: .assistant(content), done: true,
+        var message = OllamaMessage.assistant(content)
+        message.thinking = thoughts
+        return OllamaChatResponse(model: request.model, message: message, done: true,
                                   doneReason: cut ? OllamaChatResponse.lengthReason : "stop", totalDuration: 1_000_000, loadDuration: 0, promptEvalCount: 10,
                                   promptEvalDuration: 500_000, evalCount: 5, evalDuration: 500_000)
     }
 
     /// `text` in pieces that each end after a space, which put back together are `text`.
-    static func words(_ text: String) -> [String] {
+    public static func words(_ text: String) -> [String] {
         var pieces: [String] = []
         var current = ""
         for character in text {
@@ -138,6 +172,7 @@ public actor MockOllama: OllamaAPI {
 
     public func embed(_ request: OllamaEmbedRequest) async throws -> OllamaEmbedResponse {
         embedRequests.append(request)
+        try await holdIfAsked()
         if let embedFailure { throw embedFailure }
         return OllamaEmbedResponse(model: request.model, embeddings: request.input.map { Self.hashEmbedding($0, dimension: dimension) },
                                    totalDuration: nil, loadDuration: nil, promptEvalCount: nil)

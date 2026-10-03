@@ -449,6 +449,8 @@ import Testing
     @Test func aServerThatCannotBeReachedIsAnErrorSoTheTaskWaits() async throws {
         let w = try await world { _ in throw OllamaError.unreachable("connection refused") }
         defer { w.env.cleanup() }
-        await #expect(throws: OllamaError.self, "the queue keeps the task and asks again later") { try await w.interpret("EDP invoices") }
+        await #expect(throws: OllamaError.unreachable("connection refused"), "the queue keeps the task and asks again later") {
+            try await w.interpret("EDP invoices")
+        }
     }
 }

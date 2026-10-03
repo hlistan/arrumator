@@ -34,6 +34,10 @@ public final class Doorbell: Sendable {
         for wake in woken { wake.fire(()) }
     }
 
+    /// Whether a wait is in progress: the worker it rings for has looked at its queue, found nothing it may take, and
+    /// waits.
+    var isWaitedOn: Bool { state.withLock { !$0.waiting.isEmpty } }
+
     /// Waits for a ring, or for `timeout` seconds of `time` when it is given. Cancellation ends the wait early too, and
     /// the worker then sees it and ends.
     public func wait(timeout: Double?, time: any TimeSource) async {

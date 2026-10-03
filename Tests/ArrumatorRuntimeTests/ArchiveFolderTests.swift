@@ -81,7 +81,6 @@ import Testing
     @Test func settingsAppliedWhileTheArchiveIsAwayMakeNoFolderWhereItWas() async throws {
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }
-        try await home.withoutOllama()
         try await archiveWithADocument(home)
         let runtime = try await home.open()
         await runtime.start()
@@ -96,7 +95,6 @@ import Testing
     @Test func aLaunchWhileTheArchiveIsAwayMakesNoFolderWhereItWasAndGoesOnByItselfOnceItIsBack() async throws {
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }
-        try await home.withoutOllama()
         try home.watchQuickly()
         try await archiveWithADocument(home)
         // The disk the archive is on is not connected when the app starts.
@@ -122,7 +120,6 @@ import Testing
     @Test func theArchiveGoingWhileTheAppRunsIsAwayUntilItIsBack() async throws {
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }
-        try await home.withoutOllama()
         try home.watchQuickly()
         try await archiveWithADocument(home)
         let runtime = try await home.open()
@@ -144,7 +141,6 @@ import Testing
     @Test func aFileInIncomingWaitsUnreadWhileTheArchiveGoneDuringTheRunIsAway() async throws {
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }
-        try await home.withoutOllama()
         try home.watchQuickly()
         let runtime = try await home.open()
         let follower = WorkFollower()
@@ -159,7 +155,13 @@ import Testing
         try Data("EDP electricity".utf8).write(to: bill)
         let jobs = { try await runtime.database.reader.read { db in try JobRecord.fetchAll(db) } }
         try #require(await Patience.until { (try? await jobs().count) == 1 }, "the file is queued")
-        try await Task.sleep(for: .milliseconds(500))
+        // Queued, the file is counted and rings the worker in one step of the coordinator, so a wait seen once the count
+        // is is one begun since: the worker has looked at the queue holding the file and taken nothing.
+        try #require(await Patience.until {
+            guard await runtime.coordinator.status.queued == 1 else { return false }
+            return await runtime.coordinator.waits
+        },
+                     "the worker has looked at the queue holding the file, and waits")
         #expect(try await jobs().map(\.state) == [.pending], "and waits unread while the archive is away: Incoming waits")
         #expect(await runtime.coordinator.archiveAway, "as the worker is paused, so a file it has in hand is not read on either")
         try FileManager.default.moveItem(at: home.folder("Away"), to: home.folder("First"))
@@ -171,7 +173,6 @@ import Testing
     @Test func anArchiveAwayAtLaunchIsOpenedAtOnceWhenTheUserTriesAgainOnceItIsBack() async throws {
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }
-        try await home.withoutOllama()
         try home.lookForTheArchiveOnlyWhenAsked()
         try await archiveWithADocument(home)
         try FileManager.default.moveItem(at: home.folder("First"), to: home.folder("Away"))
@@ -197,7 +198,6 @@ import Testing
     @Test func whileTheArchiveIsAwayTheAppIsStillToldHowManyLabelsLookAlike() async throws {
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }
-        try await home.withoutOllama()
         do {
             let first = try await home.open()
             for (place, sender) in ["EDP Comercial", "EDP Comercail"].enumerated() {
@@ -253,7 +253,6 @@ import Testing
     @Test func anIndexWithHistoryAndRulesButNoDocumentOfAnArchiveThatIsAwayIsNotMadeAnew() async throws {
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }
-        try await home.withoutOllama()
         do {
             let first = try await home.open()
             try await first.services.history.record(.paused, summary: Self.inTheArchive)

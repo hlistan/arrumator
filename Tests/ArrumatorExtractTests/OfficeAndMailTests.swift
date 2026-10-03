@@ -12,6 +12,7 @@ struct OfficeAndMailTests {
     @Test("docx through textutil, with core properties")
     func docx() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let url = try scratch.writeDocx("contrato.docx", text: """
         Contrato de arrendamento
         Data: 1 de março de 2025
@@ -34,6 +35,7 @@ struct OfficeAndMailTests {
     @Test("A template, a slide show or a document with macros is read as its family is, core properties included")
     func officeVariants() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let word = try scratch.writeDocx("modelo.dotm", text: "Modelo de carta de reclamação", title: "Reclamação", author: "Maria Santos")
         let letter = try await registry.extract(word, sha256: "x", context: try TestConfig.context(), trace: .disabled)
         #expect(letter.extractorName == "textutil", "a Word template with macros is read by textutil")
@@ -49,7 +51,9 @@ struct OfficeAndMailTests {
 
     @Test("textutil is told not to load what an HTML page or web archive refers to")
     func textutilArguments() throws {
-        let page = try Scratch().url("page.html")
+        let scratch = try Scratch()
+        defer { scratch.cleanup() }
+        let page = scratch.url("page.html")
         // `-noload`: "Do not load subsidiary resources" (man textutil), so reading a page never reaches the network
         // (AGENTS.md §4.1) whatever textutil does by default.
         #expect(TextutilExtractor.arguments(for: page) == ["-convert", "txt", "-noload", "-encoding", "UTF-8", "-stdout", page.path],
@@ -59,6 +63,7 @@ struct OfficeAndMailTests {
     @Test("xlsx: sheet names, shared and inline strings as TSV, limits")
     func xlsx() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let url = try scratch.writeZip("contas.xlsx", files: XLSXFixture.files)
         let content = try await registry.extract(url, sha256: "x", context: try TestConfig.context(), trace: .disabled)
         #expect(content.extractorName == "xlsx", "a .xlsx is read by the built-in reader")
@@ -85,6 +90,7 @@ struct OfficeAndMailTests {
     @Test("xlsx whose XML trapped CoreXLSX is read: two sheets of one relationship, a column of 14 letters, an empty target")
     func hostileWorkbooks() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let sameRelationship = XLSXFixture.files(replacing: "xl/workbook.xml", with: XLSXFixture.workbook(
             #"<sheet name="Faturas" sheetId="1" r:id="rId1"/><sheet name="Cópia" sheetId="2" r:id="rId1"/>"#))
         let url = try scratch.writeZip("same.xlsx", files: sameRelationship)
@@ -108,6 +114,7 @@ struct OfficeAndMailTests {
     @Test("xlsx sheet larger than zipEntryCapBytes is read up to the cap, and its rows stop at maxRows while parsed")
     func largeSheet() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let rows = (1...2_000).map { #"<row r="\#($0)"><c r="A\#($0)" t="inlineStr"><is><t>Linha \#($0)</t></is></c></row>"# }
         let files = XLSXFixture.files(replacing: "xl/worksheets/sheet1.xml", with: XLSXFixture.worksheet(rows.joined()))
         let url = try scratch.writeZip("large.xlsx", files: files)
@@ -149,6 +156,7 @@ struct OfficeAndMailTests {
     @Test("pptx: slides in numeric order, then notes")
     func pptx() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let url = try scratch.writeZip("deck.pptx", files: PPTXFixture.files)
         let content = try await registry.extract(url, sha256: "x", context: try TestConfig.context(), trace: .disabled)
         #expect(content.extractorName == "pptx", "a .pptx is read by the built-in reader")
@@ -168,6 +176,7 @@ struct OfficeAndMailTests {
     @Test("eml: RFC 2047 subject, KOI8-R quoted-printable body, RFC 2231 attachment name")
     func eml() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let url = try scratch.write("mail.eml", data: try EMLFixture.message())
         let content = try await registry.extract(url, sha256: "x", context: try TestConfig.context(), trace: .disabled)
         #expect(content.kind == .email, "an .eml is an e-mail")
@@ -181,6 +190,7 @@ struct OfficeAndMailTests {
     @Test("A text part sent inline with a name is the body; a file sent inline is listed; a message attached is one attachment")
     func mimeParts() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let inline = try scratch.write("inline.eml", data: EMLFixture.multipart([
             EMLFixture.part(["Content-Type: text/plain; charset=utf-8; name=\"mensagem.txt\"",
                              "Content-Disposition: inline; filename=\"mensagem.txt\""], body: "Segue a fatura de julho em anexo."),
@@ -220,6 +230,7 @@ struct OfficeAndMailTests {
           .timeLimit(.minutes(1)))
     func forwardsWithinForwards() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let levels = try TestConfig.pipeline().extraction.emailMaxPartDepth
         // The innermost message holds a text and a file of 4 MB; each around it forwards the one within, and says nothing.
         var message = EMLFixture.multipart([
@@ -245,6 +256,7 @@ struct OfficeAndMailTests {
     @Test("A message that only forwards another is read with the text of the one it forwards, marked as such")
     func forwardedOnly() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let inner = EMLFixture.multipart([
             EMLFixture.part(["Content-Type: text/plain; charset=utf-8"], body: "Código de reserva XYZ123."),
             EMLFixture.part(["Content-Type: application/pdf", "Content-Disposition: attachment; filename=\"bilhete.pdf\""], body: "%PDF-1.4"),
@@ -263,6 +275,7 @@ struct OfficeAndMailTests {
     @Test("Metadata and attachment names are composed and hold no control character, as the text is")
     func metadataNormalised() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         // A subject of decomposed letters with a terminal escape in it, and an attachment named in decomposed letters.
         let subject = Data("Informac\u{0327}a\u{0303}o\u{1B}[31m urgente".utf8).base64EncodedString()
         let url = try scratch.write("escape.eml", data: EMLFixture.multipart([
@@ -280,6 +293,7 @@ struct OfficeAndMailTests {
     @Test("eml with only an HTML body is stripped to text; .msg is metadata-only")
     func htmlAndMsg() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let html = try scratch.write("news.eml", """
         From: News <news@example.com>
         Subject: Weekly update
@@ -304,6 +318,7 @@ struct OfficeAndMailTests {
     @Test("A UTF-8 body the cap cuts inside a letter stays UTF-8, up to the last whole letter, and the cut is noted")
     func bodyCutInsideALetter() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let body = String(repeating: "Счёт на оплату готов ", count: 20)
         let bytes = Array(body.utf8)
         // A cap past the first 100 bytes that falls on the second byte of a Cyrillic letter.
@@ -329,6 +344,7 @@ struct OfficeAndMailTests {
           ])
     func emailDayAsWritten(date: String, day: String, sent: String) async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let url = try scratch.write("late.eml", data: EMLFixture.plain(body: "A sua reserva está confirmada.", date: date))
         for zone in try ["Asia/Tokyo", "America/Los_Angeles", "Europe/Lisbon"].map({ try #require(TimeZone(identifier: $0)) }) {
             let registry = try TestConfig.registry(calendar: TestConfig.calendar(.gregorian, in: zone))
@@ -342,6 +358,7 @@ struct OfficeAndMailTests {
     @Test("An e-mail longer than emailReadCapBytes is read up to it, and the cut is noted")
     func readCap() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let data = EMLFixture.plain(body: String(repeating: "Linha da mensagem.\n", count: 200) + "Fim da mensagem")
         let url = try scratch.write("long.eml", data: data)
         let cap = data.count / 2
@@ -357,6 +374,7 @@ struct OfficeAndMailTests {
     @Test("zip: entry listing without unpacking; other archives metadata-only")
     func archives() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let url = try scratch.writeZip("bundle.zip", files: ["fatura.pdf": "%PDF-1.4", "fotos/praia.jpg": "jpeg"])
         let content = try await registry.extract(url, sha256: "x", context: try TestConfig.context(), trace: .disabled)
         #expect(content.kind == .archive, "a .zip is an archive")

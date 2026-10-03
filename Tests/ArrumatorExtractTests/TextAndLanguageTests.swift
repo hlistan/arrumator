@@ -50,6 +50,7 @@ struct TextAndLanguageTests {
     @Test("KOI8-R and CP1251 are told apart by Russian bigrams")
     func cyrillicEncodings() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let koi8 = try #require(TextEncodingDetector.encoding(named: "koi8R"))
         let registry = try TestConfig.registry()
         let context = try TestConfig.context()
@@ -66,6 +67,7 @@ struct TextAndLanguageTests {
     @Test("Latin-1 Portuguese is not mistaken for Cyrillic; UTF-8 needs no guess")
     func latinAndUTF8() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let registry = try TestConfig.registry()
         let context = try TestConfig.context()
         let latin = try scratch.write("latin1.txt", "Informação: fatura nº 12, emissão 20/05/2026. Obrigação cumprida.",
@@ -86,6 +88,7 @@ struct TextAndLanguageTests {
     @Test("CSV keeps the header plus csvMaxRows rows as TSV, handling quotes and semicolons")
     func csv() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         var csv = "Data;Descrição;Valor\n"
         for index in 1...10 { csv += "0\(index % 9 + 1)/05/2026;\"Pagamento; ref \(index)\";\(index),50\n" }
         let url = try scratch.write("movimentos.csv", csv)
@@ -103,6 +106,7 @@ struct TextAndLanguageTests {
     @Test("A CRLF CSV's delimiter is its first line's; rows past csvMaxRows are noted, and no cell keeps a line break")
     func csvLinesAndCuts() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         // One semicolon on the header; more commas than that on the rows after it, which must not decide.
         let rows = ["Conta;Saldo", "Ordem;1,234,567.00", "\"Poupança\r\nhabitação\rjovem\";2,500,000.00", "Prazo;10,000.00"]
         let url = try scratch.write("saldos.csv", rows.joined(separator: "\r\n") + "\r\n")
@@ -133,6 +137,7 @@ struct TextAndLanguageTests {
     @Test("Short KOI8-R text is still decoded correctly")
     func shortKOI8() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let koi8 = try #require(TextEncodingDetector.encoding(named: "koi8R"))
         let url = try scratch.write("short.txt", "Счёт на оплату 15", encoding: koi8)
         let content = try await TestConfig.registry().extract(url, sha256: "x", context: try TestConfig.context(),

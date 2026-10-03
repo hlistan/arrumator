@@ -14,7 +14,6 @@ import Testing
     @Test func maintenanceTakesUpATaskAndAQuestionACommandLeftWhenItWasKilled() async throws {
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }
-        try await home.withoutOllama()
         try home.tune("maintenance", ["interval": .number(RuntimeHome.quickly)])
         let runtime = try await home.open()
         let task = try await runtime.searchTasks.create(prompt: "phone bills")

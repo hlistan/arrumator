@@ -10,7 +10,6 @@ import Testing
     @Test func anIndexWhoseRebuildWasRefusedStartsNothingUntilItIsRebuilt() async throws {
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }
-        try await home.withoutOllama()
         // The archive's list of documents, broken by hand, read by a new index.
         let listing = try home.writeList(TestRecordFiles.brokenList, in: home.folder("First"))
 
@@ -33,7 +32,6 @@ import Testing
     @Test func theAppIsToldWhetherTheWorkRunsNotThatItWasAskedToStart() async throws {
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }
-        try await home.withoutOllama()
         let listing = try home.writeList(TestRecordFiles.brokenList, in: home.folder("First"))
         let runtime = try await home.bootstrap()
         let follower = WorkFollower()
@@ -55,7 +53,6 @@ import Testing
     @Test func aRebuildStartsNothingTheAppHasNotStartedOrHasStopped() async throws {
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }
-        try await home.withoutOllama()
         let runtime = try await ArrumatorRuntime.bootstrap(appVersion: "test", environment: home.environment, echoLogsToStderr: false, resolver: StubResolver(), trash: home.trash)
         try await runtime.openArchive()
         func started() async throws -> Int { try await runtime.services.history.events(limit: 10, kinds: [.appStarted]).count }
@@ -114,7 +111,6 @@ import Testing
     @Test func aRuntimeStartedWorksOutWhichLabelsLookAlikeBeforeTheAppAsks() async throws {
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }
-        try await home.withoutOllama()
         let runtime = try await home.open()
         for (place, sender) in ["EDP Comercial", "EDP Comercail"].enumerated() {
             var bill = DocumentRecord.arrived(path: home.folder("First").appendingPathComponent("bill \(place).pdf").path, sha256: "bill \(place)",
@@ -132,7 +128,6 @@ import Testing
     @Test func aRuntimeStartedTellsTheAppHowManyLabelsLookAlikeAtEveryChangeWithoutBeingAsked() async throws {
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }
-        try await home.withoutOllama()
         let runtime = try await home.open()
         var ids: [Int64] = []
         for (place, sender) in ["EDP Comercial", "EDP Comercail"].enumerated() {
@@ -188,7 +183,6 @@ import Testing
     @Test func aSwitchAwayWhileAnArchiveIsFirstRebuiltLetsItsRebuildRunWhenItIsOpenedAgain() async throws {
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }
-        try await home.withoutOllama()
         let first = try await home.open()
         try await first.services.history.record(.paused, summary: Self.inTheFirst)
         try await first.records.flush()

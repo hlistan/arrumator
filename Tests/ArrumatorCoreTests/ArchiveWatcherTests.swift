@@ -400,16 +400,7 @@ final class Remounts: Sendable {
     static let volume = "the volume mounted again"
 }
 
-/// The volume the tests' temporary folders are on.
-enum Volume {
-    /// Whether it ignores case, as APFS does unless formatted otherwise, so that `bill.txt` finds `Bill.txt`.
-    static let ignoresCase: Bool = {
-        let probe = FileManager.default.temporaryDirectory.appendingPathComponent("arrumator-case-\(UUID().uuidString.lowercased())")
-        guard FileManager.default.createFile(atPath: probe.path, contents: nil) else { return false }
-        defer { try? FileManager.default.removeItem(at: probe) }
-        return FileManager.default.fileExists(atPath: probe.deletingLastPathComponent().appendingPathComponent(probe.lastPathComponent.uppercased()).path)
-    }()
-
+extension Volume {
     static let needsCaseInsensitive: Comment = "a rename that changes only case needs a volume that ignores case, as APFS does unless formatted otherwise"
 }
 

@@ -11,6 +11,7 @@ struct ImageAndVisionTests {
     @Test("Image OCR with EXIF capture date as fallback document date", .enabled(VisionOCR.unavailable) { await VisionOCR.available.value })
     func imageOCR() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let image = try Scratch.textImage([
             "Recibo de pagamento", "Farmácia Central, Lisboa", "Medicamentos e produtos de saúde",
             "Obrigado pela sua visita e volte sempre",
@@ -37,6 +38,7 @@ struct ImageAndVisionTests {
     @Test("Sparse OCR calls the vision model with the schema; organisations are verified against OCR text", .enabled(VisionOCR.unavailable) { await VisionOCR.available.value })
     func vlmVerification() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let url = try scratch.writeImage("logo.png", try Scratch.textImage(["CONTINENTE"], width: 2400, height: 1600,
                                                                            fontSize: 120))
         let reply = """
@@ -90,6 +92,7 @@ struct ImageAndVisionTests {
     @Test("An image without text becomes vlmOnly; thinking stays unset for models that cannot be told not to think")
     func vlmOnly() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let url = try scratch.writeImage("blank.png", try Scratch.textImage([], width: 800, height: 600))
         let reply = #"{"image_kind":"photo","description":"An empty white surface","visible_text_summary":"","organisations":["Ghost Inc"],"dates":[]}"#
         let vision = try TestConfig.visionOptions()
@@ -112,6 +115,7 @@ struct ImageAndVisionTests {
     @Test("The vision model is told about thinking what the options say, analysis.think, as the model allows")
     func vlmThinking() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let url = try scratch.writeImage("blank.png", try Scratch.textImage([], width: 800, height: 600))
         let reply = #"{"image_kind":"photo","description":"An empty white surface","visible_text_summary":"","organisations":[],"dates":[]}"#
         var vision = try TestConfig.visionOptions()
@@ -135,6 +139,7 @@ struct ImageAndVisionTests {
     @Test("A description the model fails to give is a warning; Ollama away or a stop is thrown, so the image waits for it")
     func vlmFailures() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let url = try scratch.writeImage("blank.png", try Scratch.textImage([], width: 800, height: 600))
         let context = try TestConfig.context(vision: TestConfig.visionOptions())
         let failures: [(MockOllama.ChatHandler, String)] = [({ _ in "I cannot answer that" }, "a reply that is not JSON"),
@@ -184,6 +189,7 @@ struct ImageAndVisionTests {
     @Test("An image that declares more pixels than extraction.image.maxPixels is read for its metadata alone, never decoded")
     func pixelBudget() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         // 360 KB on disk, 1.6 billion pixels declared.
         let url = try scratch.writeTIFF("huge.tiff", declaring: 40_000, by: 40_000)
         let recognizer = RecordingRecognizer()
@@ -202,6 +208,7 @@ struct ImageAndVisionTests {
     @Test("An image of exactly extraction.image.maxPixels is read; one pixel fewer allowed, and it is not")
     func pixelBudgetBoundary() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let url = try scratch.writeImage("page.png", try Scratch.textImage([], width: 800, height: 600))
         for (maxPixels, read) in [(800 * 600, true), (800 * 600 - 1, false)] {
             let recognizer = RecordingRecognizer()
@@ -221,6 +228,7 @@ struct ImageAndVisionTests {
     @Test("Every page of a multi-page TIFF is read, in order, as a scanned PDF's pages are")
     func multiPageTIFF() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let url = try scratch.writeTIFF("fax.tiff", pages: try [700, 800, 900].map { try Scratch.textImage([], width: $0, height: 500) })
         let recognizer = Self.pageReader()
         let content = try await TestConfig.registry(recognizer: recognizer)
@@ -237,6 +245,7 @@ struct ImageAndVisionTests {
     @Test("A TIFF longer than extraction.pdf.ocrAllIfAtMost has its first ocrHeadPages and its last page read, and says so")
     func longTIFF() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let url = try scratch.writeTIFF("scan.tiff", pages: try [700, 800, 900].map { try Scratch.textImage([], width: $0, height: 500) })
         let recognizer = Self.pageReader()
         let context = try TestConfig.context { extraction, _ in

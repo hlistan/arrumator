@@ -33,8 +33,7 @@ import Testing
             }
         }
         // The abandoned operation is cancelled without being waited for; it notices on its own task.
-        for _ in 0..<1_000 where !(await cancelled.raised) { await Task.yield() }
-        #expect(await cancelled.raised, "the exchange is cancelled, not left running behind the error")
+        #expect(await Patience.until { await cancelled.raised }, "the exchange is cancelled, not left running behind the error")
     }
 
     @Test func anExchangeWithinItsDeadlineReturnsItsAnswer() async throws {

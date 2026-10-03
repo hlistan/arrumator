@@ -10,7 +10,6 @@ import Testing
     @Test func aSettingChangedWhileTheAppRunsIsRecordedOnceNotTwice() async throws {
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }
-        try await home.withoutOllama()
         let runtime = try await home.open()
         await runtime.start()
         let elsewhere = home.folder("Elsewhere")
@@ -31,7 +30,6 @@ import Testing
     @Test func aSettingThatCannotBeAppliedKeepsNoOtherFromWorkingAndIsRecordedOnce() async throws {
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }
-        try await home.withoutOllama()
         // Incoming is a file, so it can be neither made nor watched.
         let incoming = home.folder("Incoming")
         try Data("not a folder".utf8).write(to: incoming)

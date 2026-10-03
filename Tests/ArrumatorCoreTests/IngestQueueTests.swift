@@ -304,14 +304,14 @@ actor IngestFollower {
         await h.coordinator.archive(isAway: true)
         await h.coordinator.enqueue(try h.env.drop("bill.txt", text: "EDP electricity"))
         await h.coordinator.start()
-        defer { Task { await h.coordinator.stop() } }
-        try await Task.sleep(for: .milliseconds(500))
-        #expect(try await h.jobs().map(\.state) == [.pending], "the archive away, the worker begins nothing: Incoming waits")
+        #expect(await Patience.until { await h.coordinator.waits }, "the worker looks at its queue and waits")
+        #expect((try? await h.jobs())?.map(\.state) == [.pending], "the archive away, the worker begins nothing: Incoming waits")
         #expect(await read.files.isEmpty, "and nothing is sent to the model")
         await h.coordinator.archive(isAway: false)
         #expect(await Patience.until { (try? await h.services.documents.list(DocumentFilter(statuses: [.filed]), limit: 5).count) == 1 },
                 "once it is back, the file is taken in by itself")
         #expect(await read.files.count == 1, "and read once")
+        await h.coordinator.stop()
     }
 
     @Test func aFileInHandWhenTheArchiveGoesAwayStopsAtItsNextStageWithoutSpendingAnAttempt() async throws {
@@ -321,15 +321,15 @@ actor IngestFollower {
         await away.set(h.coordinator)
         await h.coordinator.enqueue(try h.env.drop("bill.txt", text: "EDP electricity"))
         await h.coordinator.start()
-        defer { Task { await h.coordinator.stop() } }
         // The archive goes away while the model reads the file.
         #expect(await Patience.until { (try? await h.jobs().first?.lastError) != nil }, "the file in hand stops at its next stage")
-        let job = try #require(try await h.jobs().first)
-        #expect(job.state == .filing && job.attempt == 0, "before it is filed, waiting for the archive without spending an attempt")
-        #expect(try await h.services.documents.list(DocumentFilter(statuses: [.filed]), limit: 5).isEmpty, "nothing is filed")
+        let job = try? await h.jobs().first
+        #expect(job?.state == .filing && job?.attempt == 0, "before it is filed, waiting for the archive without spending an attempt")
+        #expect((try? await h.services.documents.list(DocumentFilter(statuses: [.filed]), limit: 5))?.isEmpty == true, "nothing is filed")
         await h.coordinator.archive(isAway: false)
         #expect(await Patience.until { (try? await h.services.documents.list(DocumentFilter(statuses: [.filed]), limit: 5).count) == 1 },
                 "once it is back, it is filed")
+        await h.coordinator.stop()
     }
 }
 

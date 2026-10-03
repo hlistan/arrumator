@@ -9,7 +9,7 @@ import Testing
     private static let server = "http://192.168.1.239:11434"
 
     @Test func theServerCanBeAnotherMachineOnTheLocalNetworkButNothingBeyondIt() async throws {
-        let home = try await RuntimeHome.make()
+        let home = try await RuntimeHome.make(ollama: .asBundled)
         defer { home.cleanup() }
         let runtime = try await home.open()
         #expect(runtime.ollama.baseURL.absoluteString == "http://127.0.0.1:11434", "this Mac until told otherwise")
@@ -17,7 +17,7 @@ import Testing
         #expect(runtime.ollama.baseURL.absoluteString == Self.server, "the app talks to the server the user chose")
         let saved = await runtime.settings.current.ollamaURL
         #expect(saved == Self.server, "and remembered")
-        await #expect(throws: OllamaError.self, "a server beyond the local network is refused") {
+        await #expect(throws: OllamaError.nonLocalHost("ollama.example.com"), "a server beyond the local network is refused") {
             try await runtime.useOllama(at: "http://ollama.example.com:11434")
         }
         let kept = await runtime.settings.current.ollamaURL

@@ -37,7 +37,6 @@ import Testing
     @Test func aSwitchThatFailsOnceItHasStoppedTheAppKeepsTheQueueAsItWas() async throws {
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }
-        try await home.withoutOllama()
         try home.watchQuickly()
         let runtime = try await home.open()
         await runtime.start()
@@ -68,7 +67,6 @@ import Testing
     @Test func aSwitchThatFailsBeforeTheAppStartedLeavesItFreeToStart() async throws {
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }
-        try await home.withoutOllama()
         // As during onboarding: the archive is open, and the app has not started the work yet.
         let runtime = try await home.open()
         let writing = await holdTheRecordOfTheSwitch(runtime)
@@ -89,7 +87,6 @@ import Testing
     @Test func aSwitchThatFailsAfterTheAppQuitStartsNothingAgain() async throws {
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }
-        try await home.withoutOllama()
         let runtime = try await home.open()
         await runtime.start()
         // The app quits while the record of the switch is written.
@@ -112,7 +109,6 @@ import Testing
     @Test func aSwitchThatFailsWhileTheArchiveIsReadReadsItBeforeTheWorkStartsAgain() async throws {
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }
-        try await home.withoutOllama()
         do {
             let earlier = try await home.open()
             try await earlier.services.history.record(.paused, summary: Self.kept)

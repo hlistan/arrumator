@@ -11,7 +11,6 @@ import Testing
     @Test func aFilePutIntoTheArchiveWhileTheAppRunsIsTakenIn() async throws {
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }
-        try await home.withoutOllama()
         try home.watchQuickly()
         let runtime = try await home.open()
         await runtime.start()
@@ -34,7 +33,6 @@ import Testing
     func aChangeNotAppliedIsReportedAgainAtTheNextStart(_ interruption: Interruption) async throws {
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }
-        try await home.withoutOllama()
         try home.watchQuickly()
         let first = try await home.open()
         let letter = home.folder("First").appendingPathComponent(Self.letter).standardizedFileURL
@@ -73,7 +71,6 @@ import Testing
     @Test func aRuleMadeWhileAnotherFolderIsTheArchiveIsKeptWhenTheEarlierOneIsBack() async throws {
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }
-        try await home.withoutOllama()
         try home.watchQuickly()
         let runtime = try await home.open()
         await runtime.start()

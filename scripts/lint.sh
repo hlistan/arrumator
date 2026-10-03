@@ -212,6 +212,21 @@ formatter.timeZone = TimeZone.current
 let style = Date.ISO8601FormatStyle(timeZone: .current)' \
   Sources/ArrumatorCore Sources/ArrumatorExtract
 
+gate test-sleeps "a test waits for the very condition it needs (Patience.until, a Signal or a Hold), never for a guessed time, which a loaded machine outlasts and an idle one wastes: no Task.sleep, Thread.sleep, sleep, usleep, a clock's sleep, the Mac's own clock's sleep, a semaphore's wait for a time or a run loop run until a time in Tests, but Patience's own pause between looks and the bound on a child process the CLI tests run; time in a test passes on a test clock (TestTime, SleepLog, a TimeSource of the test's own), which the test moves" \
+  '^Tests/Support/Patience\.swift:[0-9]+: +do \{ try await Task\.sleep\(for: look\) \} catch \{ break \}$|^Tests/[^:]+:[0-9]+: +(public )?func sleep\(seconds: Double\) async throws \{$|^Tests/ArrumatorCLITests/ChildProcess\.swift:[0-9]+: +if ended\.wait\(timeout: \.now\(\) \+ deadline\) == \.timedOut \{$' \
+  'Task(<[^>]*>)?\.sleep|Thread\.sleep|\busleep\(|(^|[^.A-Za-z_])sleep\(|\.sleep\((for|until|nanoseconds):|SystemTime\(\)\.sleep|\.wait\((timeout|wallTimeout): *(Dispatch(Wall)?Time)?\.now\(\)|RunLoop\b.*\.run\(|\.run\(until:' \
+  Tests/ArrumatorCoreTests/Sample.swift 'try await Task.sleep(for: .milliseconds(500))
+Thread.sleep(forTimeInterval: 0.5)
+usleep(1000)
+sleep(1)
+try await ContinuousClock().sleep(for: .seconds(1))
+try await SystemTime().sleep(seconds: 1)
+try await Task<Never, Never>.sleep(nanoseconds: 1_000_000)
+_ = semaphore.wait(timeout: .now() + 1)
+_ = semaphore.wait(timeout: DispatchTime.now() + 0.5)
+RunLoop.current.run(until: Date().addingTimeInterval(1))' \
+  Tests
+
 gate archive "a runtime acts on its own archive, ArrumatorRuntime.archive, which it is made with: only bootstrap and a switch of archives read the archive from the settings (and eval chooses its throw-away one before bootstrap), as after a switch the settings name the next archive, and the runtime left, stopped again, would write into it" \
   '^Sources/ArrumatorCore/Config/AppSettings[^/]*\.swift:|^Sources/ArrumatorRuntime/ArrumatorRuntime\.swift:[0-9]+: +let archive = current\.archiveURL$|^Sources/ArrumatorRuntime/ArrumatorRuntime\.swift:[0-9]+: +try await settings\.update \{ [$]0\.archivePath = target\.path \}$|^Sources/ArrumatorRuntime/ArrumatorRuntime\.swift:[0-9]+: +try await settings\.checkSaving \{ [$]0\.archivePath = chosen\.path \}$|^Sources/ArrumatorCLI/Eval\.swift:[0-9]+: +chosen\.archivePath = archive\.path$' \
   '\.archive(URL|Path)\b' \

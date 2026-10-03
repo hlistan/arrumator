@@ -170,6 +170,50 @@ import UniformTypeIdentifiers
         #expect(funnel?["windowDays"] as? Int == 30, "the period is stats.defaultWindowDays unless --days says otherwise")
     }
 
+    @Test func rebuildFindsTheArchivesDocumentsWhereverTheyAreAndAnswersInJSON() throws {
+        let home = try Home.make()
+        defer { home.cleanup() }
+        let ids = try file(home, [("bill.txt", [DocumentLabel(kind: .type, value: "invoice")]), ("letter.txt", [])])
+        #expect(try run(home, ["archive", "show"]).status == 0, "a first command makes the archive's index")
+        // Moved in Finder since, keeping the identifier on it.
+        let moved = home.archive.appendingPathComponent("Old/bill.txt")
+        try FileManager.default.createDirectory(at: moved.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.moveItem(at: home.archive.appendingPathComponent("bill.txt"), to: moved)
+        let rebuilt = try run(home, ["rebuild", "--json"])
+        #expect(rebuilt.status == 0, "the index is rebuilt from the archive's record files: \(rebuilt.stderr)")
+        let summary = try JSON.decoder.decode(RebuildSummary.self, from: rebuilt.stdout)
+        #expect(summary.documents == ids.count && summary.relocated == 1 && summary.missing == 0,
+                "every document is found, the one moved where it is now, as one JSON object: \(rebuilt.text)")
+        let found = try JSONSerialization.jsonObject(with: try run(home, ["labels", "browse", "--json", "type=invoice"]).stdout) as? [String: Any]
+        let paths = (found?["documents"] as? [[String: Any]])?.compactMap { $0["path"] as? String }
+        #expect(paths == [moved.path], "and the document is where it was moved to: \(String(describing: found))")
+    }
+
+    @Test func modelsAndReplayAnswerInJSONFromTheServerTheSettingsName() async throws {
+        let ollama = try LoopbackOllama()
+        defer { ollama.stop() }
+        try #require(await Patience.until { ollama.address != nil }, "the stand-in Ollama listens on the loopback address")
+        let home = try Home.make(ollamaURL: try #require(ollama.address))
+        defer { home.cleanup() }
+        let listed = try run(home, ["models", "list", "--json"])
+        #expect(try JSON.decoder.decode([InstalledModel].self, from: listed.stdout).isEmpty,
+                "the models the server has, one JSON list, empty as it lists none: \(listed.text) \(listed.stderr)")
+        let status = try JSONSerialization.jsonObject(with: try run(home, ["models", "--json"]).stdout) as? [String: Any]
+        let roles = (status?["models"] as? [[String: Any]])?.compactMap { $0["role"] as? String }
+        #expect(status?["profile"] as? String == (try settings(home)).profile && roles == ModelRole.allCases.map(\.rawValue),
+                "the profile in use and each of its models in its role: \(String(describing: status))")
+
+        let note = home.root.appendingPathComponent("note.txt")
+        try Data("A note to read again".utf8).write(to: note)
+        let document = try #require(try JSON.decoder.decode([DocumentRecord].self, from: try run(home, ["ingest", "--json", note.path]).stdout).first)
+        let replayed = try run(home, ["replay", "--json", String(try #require(document.id))])
+        #expect(replayed.status == 0, "a stored document is read again without touching its file: \(replayed.stderr)")
+        let readings = try JSONSerialization.jsonObject(with: replayed.stdout) as? [String: Any]
+        #expect(readings?["original"] is [String: Any] && readings?["replay"] is [String: Any],
+                "what it was read as and what it is read as now, side by side, as one JSON object: \(replayed.text)")
+        #expect(FileManager.default.fileExists(atPath: document.path), "and the file stays where it is")
+    }
+
     @Test func browsingLabelsTakesTheSidebarsSearchAndAnswersInJSON() throws {
         let home = try Home.make()
         defer { home.cleanup() }

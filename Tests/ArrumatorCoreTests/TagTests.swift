@@ -45,6 +45,19 @@ import Testing
                 "tags are not kept one vocabulary, but the user merges or removes them as labels of the kinds that are")
     }
 
+    @Test(.enabled(if: Volume.ignoresCase, "only a volume that ignores case finds a folder by its name in another case"))
+    func aFolderNamedInAnotherCaseNamesTheTagAsTheDiskKeepsIt() throws {
+        let env = try TestEnvironmentSync.make()
+        defer { env.cleanup() }
+        let incoming = try env.folder("Incoming")
+        let scan = incoming.appendingPathComponent("\(Self.folder)/scan.pdf")
+        try FileManager.default.createDirectory(at: scan.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("a document".utf8).write(to: scan)
+        let folders = IncomingFolders(incoming: incoming, watcher: env.config.watcher, labels: env.config.labels)
+        #expect(folders.tag(of: incoming.appendingPathComponent("\(Self.folder.lowercased())/scan.pdf"))?.label == Self.tag,
+                "the folder's name as the disk keeps it, however the path to a file spells it")
+    }
+
     @Test func theFolderAtTheTopOfIncomingNamesTheTagAndNothingElseDoes() throws {
         let env = try TestEnvironmentSync.make()
         defer { env.cleanup() }
@@ -62,8 +75,6 @@ import Testing
                 "a folder placed in Incoming gives its name, as it is written, to what is in it, kept at its path as the index writes paths")
         #expect(folders.tag(of: try put("Taxes 2024/Q1/receipts/deeper.pdf"))?.label == Self.tag,
                 "at any depth: only the top folder counts, and the folders inside it give nothing")
-        #expect(folders.tag(of: incoming.appendingPathComponent("taxes 2024/scan.pdf"))?.label == Self.tag,
-                "the folder's name as the disk keeps it, however the path to a file spells it")
         #expect(folders.tag(of: try put("loose.pdf")) == nil, "a file directly in Incoming gets none")
         let package = incoming.appendingPathComponent("Notes.rtfd", isDirectory: true)
         try FileManager.default.createDirectory(at: package, withIntermediateDirectories: true)

@@ -95,7 +95,8 @@ extension CommandLineTests {
         try #require(await Patience.until { !interrupted.isRunning }, "Ctrl-C ends it")
         #expect(interrupted.terminationReason == .exit && interrupted.terminationStatus == 128 + SIGINT, "having stopped")
         #expect(!FileManager.default.fileExists(atPath: second.path), "its throw-away home is removed when it is interrupted too")
-        #expect(waiting.server.started.allSatisfy { !StandInServer.runs($0) }, "and the server it started is stopped")
+        #expect(await Patience.until { waiting.server.started.allSatisfy { !StandInServer.runs($0) } },
+                "and the server it started is stopped: it was sent its signal, and ends as soon as it takes it")
     }
 
     /// Where a launched command's standard output goes, in its home.
@@ -109,9 +110,37 @@ extension CommandLineTests {
 
     /// What the home's log files hold.
     func logged(_ home: Home) throws -> String {
+        try logFiles(home).map { try String(contentsOf: $0, encoding: .utf8) }.joined()
+    }
+
+    private func logFiles(_ home: Home) throws -> [URL] {
         let logs = home.support.appendingPathComponent("Logs", isDirectory: true)
-        return try FileManager.default.contentsOfDirectory(at: logs, includingPropertiesForKeys: nil)
-            .map { try String(contentsOf: $0, encoding: .utf8) }.joined()
+        return try FileManager.default.contentsOfDirectory(at: logs, includingPropertiesForKeys: nil).sorted { $0.path < $1.path }
+    }
+
+    /// The process number of every `ollama serve` the command spawned, in order, as its log records each the moment it
+    /// is spawned: also one ended before it ran a line of its own, which the stand-in's list of starts never holds.
+    func spawnedServers(_ home: Home) throws -> [pid_t] {
+        try logFiles(home).flatMap { file in
+            try String(contentsOf: file, encoding: .utf8).split(separator: "\n").map { try JSONDecoder().decode(Logged.self, from: Data($0.utf8)) }
+        }
+        .filter { $0.msg == OllamaLifecycle.spawnedMessage.description }.compactMap { $0.fields[Self.pidField].flatMap { pid_t($0) } }
+    }
+
+    /// Of a line of the log (`LogEntry`), what says what happened.
+    private struct Logged: Decodable {
+        let msg: String
+        let fields: [String: String]
+    }
+
+    /// The field of `OllamaLifecycle.spawnedMessage` that holds the server's process number.
+    static let pidField = "pid"
+
+    /// Every server the command started, by its log or by the stand-in's list, has ended: each was sent its signal, and
+    /// a process ends as soon as it takes it, which is not at once.
+    func allEnded(_ home: Home, _ server: StandInServer) async throws -> Bool {
+        let started = Set(try spawnedServers(home) + server.started)
+        return await Patience.until { started.allSatisfy { !StandInServer.runs($0) } }
     }
 
     @Test func ctrlCStopsRunAsTheAppStopsAndEndsTheOllamaServerItStarted() async throws {
@@ -127,7 +156,7 @@ extension CommandLineTests {
         let said = (try? String(contentsOf: home.root.appendingPathComponent(Self.standardError), encoding: .utf8)) ?? ""
         #expect(running.terminationReason == .exit && running.terminationStatus == 128 + SIGINT,
                 "having stopped, it exits as a shell reports an interrupt: \(running.terminationReason.rawValue) \(running.terminationStatus) \(said)")
-        #expect(server.started.allSatisfy { !StandInServer.runs($0) }, "the Ollama server it started does not outlive it")
+        #expect(try await allEnded(home, server), "the Ollama server it started does not outlive it")
         #expect(try logged(home).contains("Arrumator stopped"), "its work was stopped as the app stops its own, not cut off")
     }
 
@@ -145,11 +174,11 @@ extension CommandLineTests {
         try #require(await Patience.until { !running.isRunning }, "the command ends")
         #expect(running.terminationReason == .exit && [128 + SIGINT, 128 + SIGTERM].contains(running.terminationStatus),
                 "with the status of a signal: \(running.terminationStatus)")
-        #expect(await Patience.until { server.started.allSatisfy { !StandInServer.runs($0) } },
+        #expect(try await allEnded(home, server),
                 "and the server it spawned, in a process group of its own that no signal to the command reaches, ends with it")
     }
 
-    @Test func aCommandStartsOllamaAsTheSettingsSayAndStopsItWhenItEnds() throws {
+    @Test func aCommandStartsOllamaAsTheSettingsSayAndStopsItWhenItEnds() async throws {
         let home = try Home.make()
         defer { home.cleanup() }
         let server = try spawningStandIn(home)
@@ -158,8 +187,11 @@ extension CommandLineTests {
         try Data("A note".utf8).write(to: file)
         let ingested = try run(home, ["ingest", "--json", file.path])
         #expect(ingested.status == 0, "the file waits for Ollama, which is no failure: \(ingested.stderr)")
-        #expect(server.started.count == 1, "the command starts Ollama as the settings say, not only the app: \(server.started)")
-        #expect(server.started.allSatisfy { !StandInServer.runs($0) }, "and stops it when it ends")
+        // Given up on after `quickStart`, the server may be stopped before it has run a line, so it is counted by the
+        // command's log, never by what the stand-in wrote.
+        let spawned = try spawnedServers(home)
+        #expect(spawned.count == 1, "the command starts Ollama as the settings say, not only the app: \(spawned)")
+        #expect(try await allEnded(home, server), "and stops it when it ends")
     }
 
     @Test func ingestShowsOneListAndExitsWithFailureWhenAFileCameToNothing() throws {

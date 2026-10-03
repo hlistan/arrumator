@@ -48,9 +48,12 @@ public actor OllamaLifecycle {
     private var starting: Task<Start, Never>?
     /// How many times `shutdown()` has run: a start begun before the last one starts nothing after it.
     private var shutdowns = 0
-    /// The process number of the server the app spawned and has not seen end, readable outside the actor, as a process
-    /// that must end at once ends it (`endSpawnedServerNow()`).
-    private let spawned = Mutex<pid_t?>(nil)
+    /// The server the app spawned and has not seen end, by its process number, readable outside the actor, as a process
+    /// that must end at once ends it (`endSpawnedServerNow()`), and whether one has: then no server is spawned again.
+    /// A spawn runs under its lock, so an end at once either comes first and spawns nothing, or finds the server spawned.
+    private let spawned = Mutex<(pid: pid_t?, endedNow: Bool)>((nil, false))
+    /// What the log says when the app spawns `ollama serve`, with the server's process number in `pid`.
+    public static let spawnedMessage: StaticString = "Spawned ollama serve"
     private var continuations: [UUID: AsyncStream<OllamaState>.Continuation] = [:]
     public private(set) var state: OllamaState = .unknown {
         didSet {
@@ -258,10 +261,14 @@ public actor OllamaLifecycle {
             let (id, status) = (ObjectIdentifier(proc), proc.terminationStatus)
             Task { await self?.processExited(id, status: status) }
         }
-        try p.run()
+        try spawned.withLock { spawned in
+            // The process is ending at once: a server spawned now would outlive it.
+            guard !spawned.endedNow else { throw CancellationError() }
+            try p.run()
+            spawned.pid = p.processIdentifier
+        }
         process = p
-        spawned.withLock { $0 = p.processIdentifier }
-        Log.info(.ollama, "Spawned ollama serve", ["binary": binary.path, "pid": String(p.processIdentifier)])
+        Log.info(.ollama, Self.spawnedMessage, ["binary": binary.path, "pid": String(p.processIdentifier)])
     }
 
     /// The server the app started has ended: unless it is one the app has since replaced, none runs.
@@ -269,7 +276,7 @@ public actor OllamaLifecycle {
         Log.warning(.ollama, "ollama serve exited", ["status": String(status)])
         guard let process, ObjectIdentifier(process) == id else { return }
         self.process = nil
-        spawned.withLock { $0 = nil }
+        spawned.withLock { $0.pid = nil }
         state = .stopped
     }
 
@@ -280,13 +287,18 @@ public actor OllamaLifecycle {
             Log.info(.ollama, "Stopped spawned ollama serve")
         }
         process = nil
-        spawned.withLock { $0 = nil }
+        spawned.withLock { $0.pid = nil }
     }
 
     /// Ends the server the app spawned at once, from outside the actor, as a command does when a second Ctrl-C ends it
-    /// before its stop could: the server runs in a process group of its own, which no signal to the command reaches.
+    /// before its stop could: the server runs in a process group of its own, which no signal to the command reaches. A
+    /// spawn under way is waited for, as it holds the lock, and none is spawned after it.
     public nonisolated func endSpawnedServerNow() {
-        if let pid = spawned.withLock({ $0 }) { kill(pid, SIGTERM) }
+        let pid = spawned.withLock { spawned in
+            spawned.endedNow = true
+            return spawned.pid
+        }
+        if let pid { kill(pid, SIGTERM) }
     }
 
     /// Supervises the server: periodic health checks and bounded restarts with backoff.

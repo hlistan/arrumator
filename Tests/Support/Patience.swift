@@ -2,17 +2,28 @@ import Foundation
 import Synchronization
 
 /// How a test waits for work running in the background, such as a started queue or a stream's subscriber, to make
-/// something so: never by sleeping, but by checking a condition until it holds or a deadline passes.
+/// something so: never by sleeping a guessed time, but by checking a condition until it holds or a deadline passes.
+/// This and the test clocks (`TestTime`, `SleepLog`) are the only waits a test makes (lint gate `test-sleeps`).
 public enum Patience {
-    /// How long a test waits before it fails.
-    public static let limit: Duration = .seconds(10)
+    /// How long a test waits before it fails: what tells a test that waits for ever from one that waits its turn, never
+    /// how fast the work is. A wait that is met returns at once, so only a broken test waits it out. It is longer than a
+    /// whole run of a test process on a loaded Mac (about 21 seconds for the core tests under load), as every test of a
+    /// process starts at once and the work a test waits for queues behind all of theirs: in such a run a test that waits
+    /// for nothing, such as one reading the app's version, has been seen to take eleven seconds, which a ten-second limit
+    /// failed tests on. It stays well under the minute of the suites' `.timeLimit`, so a wait that fails says so itself.
+    public static let limit: Duration = .seconds(30)
+    /// How long it gives the work between two looks. Looking again at once, by `Task.yield()`, keeps a thread of the
+    /// cooperative pool turning for every test that waits, and under a full parallel run those waiters starve the very
+    /// work they wait for, which then misses the deadline.
+    public static let look: Duration = .milliseconds(2)
 
-    /// Waits, yielding to the tasks that make it so, until `condition` holds or `limit` has passed; whether it held.
+    /// Waits until `condition` holds or `limit` has passed, giving the threads to the work that makes it so between
+    /// looks; whether it held. A task cancelled meanwhile looks once more and stops waiting.
     public static func until(_ condition: () async throws -> Bool) async rethrows -> Bool {
         let deadline = ContinuousClock.now.advanced(by: limit)
-        while ContinuousClock.now < deadline {
+        while ContinuousClock.now < deadline, !Task.isCancelled {
             if try await condition() { return true }
-            await Task.yield()
+            do { try await Task.sleep(for: look) } catch { break }
         }
         return try await condition()
     }

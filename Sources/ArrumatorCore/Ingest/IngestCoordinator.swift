@@ -12,6 +12,9 @@ public actor IngestCoordinator {
     /// Whether the archive is away (`archive(isAway:)`).
     public private(set) var archiveAway = false
     private let doorbell = Doorbell()
+    /// Whether the worker waits, having looked at its queue and found nothing it may take, as when it is paused or the
+    /// archive is away: what a test waits for before it asserts that nothing was taken.
+    var waits: Bool { doorbell.isWaitedOn }
     /// What deadlines gave up on while working on each job and that still runs (`LeftRunning`), and since when: a job
     /// is not started again while any of it goes on, so abandoned parses of one file never stack up; each that ends
     /// rings the doorbell. Work that has not ended after `ingest.abandonedWorkSeconds` never will be waited for: its

@@ -43,7 +43,7 @@ public struct Harness: Sendable {
             filer: DocumentFiler(database: env.database, placer: placer, index: IndexStore(database: env.database, time: env.time),
                                  registry: SelfChangeRegistry(ttl: config.watcher.selfChangeTTLSeconds, time: env.time), time: env.time),
             traces: TraceRecorder(database: env.database, appVersion: "test", time: env.time), vectors: VectorIndex(), trash: trash,
-            time: env.time, ollama: ollama, timeZone: .current, claims: claims, power: power)
+            time: env.time, ollama: ollama, timeZone: TestTime.zone, claims: claims, power: power)
     }
 
     /// The jobs this test process's workers hold: one for every pipeline the tests build, as the app has one.
@@ -85,7 +85,10 @@ public struct Harness: Sendable {
     }
 
     public var labels: LabelActions { LabelActions(database: env.database, time: env.time) }
-    public var search: SearchService { SearchService(database: env.database, vectors: VectorIndex(), embedder: nil, config: env.config.search, time: env.time) }
+    /// Search over the pipeline's index: the one vector index the pipeline fills, as the runtime shares one.
+    public var search: SearchService {
+        SearchService(database: env.database, vectors: services.vectors, embedder: nil, config: env.config.search, time: env.time)
+    }
 
     /// Drops `name` into Incoming, or a folder in it when `name` is a path, and runs the pipeline over it; the document
     /// it became.

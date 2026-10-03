@@ -11,6 +11,16 @@ public final class TestTime: TimeSource {
     /// 2026-07-05 12:00:00 UTC: a fixed day for everything a test stamps.
     public static let start = Date(timeIntervalSince1970: 1_783_252_800)
 
+    /// The time zone the pipeline a test builds reckons days in, whatever the Mac's: fourteen hours ahead of UTC, where
+    /// `start` is already 2026-07-06, so a day reckoned in UTC, or in the Mac's own zone, is told apart from it.
+    public static let zone: TimeZone = {
+        guard let zone = TimeZone(identifier: "Pacific/Kiritimati") else { preconditionFailure("a constant zone exists") }
+        return zone
+    }()
+
+    /// `start`'s day in `zone`.
+    public static let startDay = "2026-07-06"
+
     private let current: Mutex<Date>
     private let sleeping: Sleeping
 

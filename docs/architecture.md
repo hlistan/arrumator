@@ -525,7 +525,7 @@ shortened.
 | Q7 | Resumability | Ollama goes away for an hour. | Documents, requests and questions wait in their queues and cost no attempt. | `IngestTests`, `SearchTaskTests`, `ConversationTests` |
 | Q8 | Auditability | The user asks how a document got its labels. | Its trace shows each stage, the prompts, the raw answers and what consolidation changed. | `LabelingTests`, `DocumentAnalyzerTests` |
 | Q9 | Untrusted answers | The model answers with invalid JSON, a missing list or a value that is no label of its kind. | The answer is repaired or the value dropped; without a valid answer the document waits for the user. | `DocumentAnalyzerTests`, `SearchInterpreterTests`, `TaskAnswererTests` |
-| Q10 | Testability | `swift test` runs on a Mac without Ollama. | Every suite passes; nothing sleeps or reads the wall clock. | `scripts/verify.sh`; `MockOllama`, `StubOllamaServer` (the HTTP client over its own session), `TestTime` |
+| Q10 | Testability | `swift test` runs on a Mac without Ollama. | Every suite passes; nothing waits a guessed time or reads the wall clock: a test waits for its condition (`Patience`) on test time. | `scripts/verify.sh`; `scripts/lint.sh`, test-sleeps gate; `MockOllama`, `StubOllamaServer` (the HTTP client over its own session), `TestTime` |
 | Q11 | Changeability | A tunable changes. | One key in `Defaults/pipeline.json` and its field; a key no field reads fails the load. | `ConfigTests` |
 | Q12 | Accessibility | A row that opens on a click. | It opens with Return, Space and VoiceOver's default action. | Rows gate; [QA protocol](qa/protocol.md) |
 
@@ -546,6 +546,7 @@ evolutionary architecture, and what each protects.
 | Nothing is removed but a move's temporary copy, export staging, old logs, a record file the app wrote and a command's own throw-away folder. | `scripts/lint.sh`, delete gate |
 | What opens on a click or a double click opens from the keyboard. | `scripts/lint.sh`, rows gate |
 | A day or a moment Core and extraction read or write is in the time zone the runtime gives them (`ExtractorRegistry`, `ArchiveRecords`, `PipelineServices.timeZone`), and a day is Gregorian, never in the Mac's calendar. | `scripts/lint.sh`, calendar gate |
+| A test waits for the condition it needs, never a guessed time: nothing in `Tests/` sleeps but `Patience`'s pause between looks and the test clocks. | `scripts/lint.sh`, test-sleeps gate |
 | A runtime acts on its own archive: only `bootstrap` and a switch read the archive from the settings. | `scripts/lint.sh`, archive gate |
 | No `TODO`, `FIXME`, `HACK` or `XXX`. | `scripts/lint.sh`, debt gate |
 | The app icon is the project's own drawing. | `scripts/lint.sh`, icon gate |

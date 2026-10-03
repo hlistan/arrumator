@@ -79,6 +79,7 @@ struct ZipTests {
           arguments: Lie.allCases, ["zip", "xlsx", "pptx"])
     func refused(_ lie: Lie, as fileExtension: String) async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let url = try scratch.write("crafted.\(fileExtension)", data: lie.archive.data())
         let content = try await registry.extract(url, sha256: "x", context: try TestConfig.context(), trace: .disabled)
         #expect(content.warnings.map(\.code) == [.corrupted], "\(lie): refused as corrupted (\(content.warningSummary))")
@@ -89,6 +90,7 @@ struct ZipTests {
           arguments: Lie.allCases)
     func refusedDocx(_ lie: Lie) async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let url = try scratch.write("crafted.docx", data: lie.archive.data())
         let content = try await registry.extract(url, sha256: "x", context: try TestConfig.context(), trace: .disabled)
         #expect(content.metadata.keys.filter { $0.hasPrefix("doc:") }.isEmpty, "\(lie): no core property is read from it")
@@ -99,6 +101,7 @@ struct ZipTests {
           arguments: ["zip", "xlsx", "pptx", "docx"])
     func sizesThatOverflow(as fileExtension: String) async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let url = try scratch.write("crafted.\(fileExtension)", data: Self.sizesThatOverflow.data())
         let content = try await registry.extract(url, sha256: "x", context: try TestConfig.context(), trace: .disabled)
         #expect(content.metadata.keys.filter { $0.hasPrefix("doc:") }.isEmpty,
@@ -135,8 +138,9 @@ struct ZipTests {
     @Test("A package as each archiver on the Mac writes it, with a folder and an empty file, reads in full",
           arguments: Scratch.Archiver.allCases)
     func archivers(_ archiver: Scratch.Archiver) async throws {
-        let url = try Scratch().writeArchive("package.zip", files: Self.honestFiles, folders: Self.honestFolders,
-                                             with: archiver)
+        let scratch = try Scratch()
+        defer { scratch.cleanup() }
+        let url = try scratch.writeArchive("package.zip", files: Self.honestFiles, folders: Self.honestFolders, with: archiver)
         try await expectReadInFull(try Data(contentsOf: url), "as \(archiver) writes it")
     }
 
@@ -144,6 +148,7 @@ struct ZipTests {
     /// nothing refused.
     private func expectReadInFull(_ package: Data, _ written: String) async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let context = try TestConfig.context()
         let workbook = try await registry.extract(try scratch.write("package.xlsx", data: package), sha256: "x",
                                                   context: context, trace: .disabled)
@@ -174,6 +179,7 @@ struct ZipTests {
           .timeLimit(.minutes(1)), arguments: ["zip", "xlsx", "pptx", "docx"])
     func overlapping(as fileExtension: String) async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let url = try scratch.write("crafted.\(fileExtension)", data: Self.overlapping(aliases: Self.aliasCount).data())
         let content = try await registry.extract(url, sha256: "x", context: try TestConfig.context(), trace: .disabled)
         guard fileExtension != "docx" else {
@@ -189,6 +195,7 @@ struct ZipTests {
     @Test("An archive that lists more than zipMaxEntries is refused as too large")
     func limits() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let entries = ["a.txt", "b.txt", "c.txt"].map { ZipBuilder.Entry($0, "four") }
         let url = try scratch.write("three.zip", data: ZipBuilder(entries: entries).data())
         for (limit, warnings) in [(3, [WarningCode]()), (2, [.tooLarge])] {
@@ -202,6 +209,7 @@ struct ZipTests {
     @Test("An entry's name is UTF-8 when its bytes are, with the flag or without, else code page 437, and composed")
     func names() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let entries = [
             ZipBuilder.Entry(rawName: Array("Счёт.pdf".utf8), utf8Name: false),
             // "Façade.txt" in code page 437, where 0x87 is ç.
@@ -217,6 +225,7 @@ struct ZipTests {
     @Test("An encrypted entry is never read, and the entries after it are read as themselves")
     func encryptedEntries() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         var secret = ZipBuilder.Entry("docProps/custom.xml", "<sealed/>")
         secret.encrypted = true
         var sealedSlide = ZipBuilder.Entry("ppt/slides/slide3.xml", PPTXFixture.slide([["THREE"]]))
@@ -234,6 +243,7 @@ struct ZipTests {
     @Test("A deck of many entries is read in one pass over them, not one pass for each slide", .timeLimit(.minutes(1)))
     func manyEntries() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let slides = (1...1_000).map { ZipBuilder.Entry("ppt/slides/slide\($0).xml", PPTXFixture.slide([["Slide text \($0)"]])) }
         let padding = (1...19_000).map { ZipBuilder.Entry("ppt/media/image\($0).png") }
         let url = try scratch.write("long.pptx", data: ZipBuilder(entries: padding + slides).data())
@@ -245,6 +255,7 @@ struct ZipTests {
     @Test("An archive written entry by entry is listed with each entry's declared size and their total")
     func listed() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let entries = [ZipBuilder.Entry("fatura.pdf", "%PDF-1.4"), ZipBuilder.Entry("notas/leia.txt", "olá")]
         let url = try scratch.write("bundle.zip", data: ZipBuilder(entries: entries).data())
         let content = try await registry.extract(url, sha256: "x", context: try TestConfig.context(), trace: .disabled)

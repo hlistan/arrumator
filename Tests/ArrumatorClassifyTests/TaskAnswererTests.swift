@@ -160,6 +160,20 @@ import Testing
         #expect(asked.withLock { $0 } == 1, "asked once: retrying here would show the question as answered while nothing answers it")
     }
 
+    @Test func aModelThatThinksIsSaidToThinkUntilItsAnswerBeginsAndItsThoughtsAreNoAnswer() async throws {
+        let w = try await world { _ in try Self.answer() }
+        defer { w.env.cleanup() }
+        let thoughts = "Somo as duas faturas."
+        await w.mock.think(thoughts)
+        let (answer, written) = try await w.answer()
+        let thinking = written.prefix { $0.thinking }
+        #expect(thinking.count >= MockOllama.words(thoughts).count && thinking.allSatisfy { $0.text.isEmpty && $0.begun },
+                "while the model thinks, the question says so, as the model at work, and nothing of its thoughts is the answer: \(written)")
+        #expect(written.dropFirst(thinking.count).allSatisfy { !$0.thinking } && written.last?.text == answer.text,
+                "then the answer is given as it is written")
+        #expect(answer.text == "Somam **72,61 EUR**.", "and it holds none of the thoughts")
+    }
+
     @Test func whatIsWrittenSaysTheModelHasBegun() async throws {
         let w = try await world { _ in try Self.answer() }
         defer { w.env.cleanup() }
@@ -204,7 +218,9 @@ import Testing
         }
         #expect(throws: AnswerValidationError.invalid(["sources is missing; give \"\" or [] when there is nothing to give"]),
                 "and every list") { try validator.validate(#"{"answer": "Yes", "find": ""}"#) }
-        #expect(throws: AnswerValidationError.self, "and to be JSON") { try validator.validate("Yes, they do.") }
+        #expect("and to be JSON") { try validator.validate("Yes, they do.") } throws: { error in
+            if case .notJSON = error as? AnswerValidationError { true } else { false }
+        }
     }
 
     @Test func theAnswerIsReadAsItStreamsItsEscapesDecoded() {
@@ -288,7 +304,9 @@ import Testing
 
         let nothing = try await world { _ in MockOllama.cutOff }
         defer { nothing.env.cleanup() }
-        await #expect(throws: ModelAnswerError.self, "a model that thought until it ran out wrote no answer") { try await nothing.answer() }
+        await #expect("a model that thought until it ran out wrote no answer") { try await nothing.answer() } throws: { error in
+            if case .exhausted = error as? ModelAnswerError { true } else { false }
+        }
     }
 
     @Test func anAnswerThatCannotBeReadGoesBackOnceAndAModelThatIsMissingThrows() async throws {
@@ -302,7 +320,9 @@ import Testing
 
         let never = try await world { _ in "never JSON" }
         defer { never.env.cleanup() }
-        await #expect(throws: ModelAnswerError.self, "an answer never valid is no answer") { try await never.answer() }
+        await #expect("an answer never valid is no answer") { try await never.answer() } throws: { error in
+            if case .exhausted = error as? ModelAnswerError { true } else { false }
+        }
         #expect(try await never.step().status == .error, "and is traced as such")
 
         let missing = ModelProfile(name: "Gone", position: 4, chatModel: "absent:1b", visionModel: Self.chat, embedModel: "bge-m3")

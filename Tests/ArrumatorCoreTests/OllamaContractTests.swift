@@ -161,26 +161,26 @@ import Testing
             try OllamaClient.chatChunk(Data(#"{"error":"model runner has unexpectedly stopped"}"#.utf8), model: "qwen3.5:9b")
         }
         #expect(!OllamaError.answerFailed(model: "x", message: "y").isTransient, "and it is not asked again behind the user's back")
-        #expect(throws: OllamaError.self, "a line that is no answer is no answer") { try OllamaClient.chatChunk(Data("not json".utf8), model: "m") }
+        #expect("a line that is no answer is no answer") { try OllamaClient.chatChunk(Data("not json".utf8), model: "m") } throws: { error in
+            if case .decoding = error as? OllamaError { true } else { false }
+        }
         var streamed = OllamaChatRequest.sample(think: nil)
         streamed.stream = true
         #expect(streamed.body.serialized().contains(#""stream":true"#), "a request streamed says so")
     }
 
     @Test func theGateStreamsTheAnswerAsItGrowsAndAgainFromItsStartWhenItIsAskedAgain() async throws {
-        let away = Mutex(true)
-        let mock = MockOllama { _ in
-            // The server is away the first time it is asked, and answers the next.
-            if away.withLock({ wasAway in defer { wasAway = false }; return wasAway }) { throw OllamaError.unreachable("not yet") }
-            return "Duas faturas somam 72 EUR"
-        }
+        let mock = MockOllama { _ in "Duas faturas somam 72 EUR" }
+        // The server goes away two words into the first answer, and answers the next whole.
+        await mock.failNextStream(afterWords: 2, with: OllamaError.unreachable("gone"))
         let gate = InferenceGate(api: mock, retryDelays: [1], time: TestTime(.advances))
         let seen = Mutex<[String]>([])
         let whole = try await gate.chat(.sample(think: nil)) { sofar in seen.withLock { $0.append(sofar.message.content) } }
         #expect(whole.message.content == "Duas faturas somam 72 EUR" && whole.done == true, "the whole answer comes back")
-        #expect(seen.withLock { $0 } == ["Duas ", "Duas faturas ", "Duas faturas somam ", "Duas faturas somam 72 ", "Duas faturas somam 72 EUR"],
-                "each time it grew, the answer so far was given")
-        #expect(await mock.chatCount == 2, "after the server came back, asked again from its start")
+        #expect(seen.withLock { $0 } == ["Duas ", "Duas faturas ",
+                                         "Duas ", "Duas faturas ", "Duas faturas somam ", "Duas faturas somam 72 ", "Duas faturas somam 72 EUR"],
+                "each time it grew, the answer so far was given, and once the server was back, from its start, never after what was lost")
+        #expect(await mock.chatCount == 2, "after the server came back, asked again")
     }
 
     /// A server that cannot be reached, whatever is asked of it.
@@ -270,7 +270,7 @@ import Testing
         #expect(await slow.chatCount == 2 + delays.count, "is asked again after each of ollama.retryDelays, as a server slow for a while may answer")
         let away = MockOllama { _ in throw OllamaError.unreachable("connection refused") }
         let waiting = InferenceGate(api: away, retryDelays: delays, time: TestTime(.advances))
-        await #expect(throws: OllamaError.self, "a server that cannot be reached") { try await waiting.chat(own) }
+        await #expect(throws: OllamaError.unreachable("connection refused"), "a server that cannot be reached") { try await waiting.chat(own) }
         #expect(await away.chatCount == 1 + delays.count, "is asked again whatever time the request has of its own")
         #expect(!timedOut.isTransient(asking: own) && timedOut.isTransient(asking: .sample(think: nil))
                     && OllamaError.unreachable("x").isTransient(asking: own), "which is what decides it, for the gate and the caller alike")

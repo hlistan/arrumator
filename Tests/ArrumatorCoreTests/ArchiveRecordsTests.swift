@@ -30,13 +30,16 @@ import Testing
         defer { w.h.env.cleanup() }
         let history = try String(contentsOf: w.h.env.layout.historyFile(month: RecordKind.month(of: w.h.env.time.now())), encoding: .utf8)
         let event = try #require(try await w.h.services.history.events(limit: 1).first)
-        let zone = TimeZone.current
-        let parts = Calendar.current.dateComponents(in: zone, from: event.at)
+        // The records are written in the zone the runtime gives them, the Mac's in the app: here TestTime.zone, fourteen
+        // hours ahead of UTC, so an hour written in UTC, or in the zone of the Mac the test runs on, shows.
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TestTime.zone
+        let parts = calendar.dateComponents(in: TestTime.zone, from: event.at)
         let local = String(format: "%04d-%02d-%02dT%02d:%02d:%02d", parts.year ?? 0, parts.month ?? 0, parts.day ?? 0,
                            parts.hour ?? 0, parts.minute ?? 0, parts.second ?? 0)
         let line = try #require(history.components(separatedBy: "\n").first { $0.hasPrefix("- ") && $0.hasSuffix(" · " + event.summary) })
-        #expect(line.hasPrefix("- \(local)") && line.range(of: #"^- \S+([+-]\d{2}:\d{2}|Z) · "#, options: .regularExpression) != nil,
-                "the hour the Mac showed when it happened, with its offset, so nobody reads a UTC hour as their own: \(line)")
+        #expect(line.hasPrefix("- \(local)+14:00 · "),
+                "the hour shown where it happened, with its offset, so nobody reads a UTC hour as their own: \(line)")
     }
 
     @Test func aLostIndexIsRebuiltFromTheArchiveAlone() async throws {

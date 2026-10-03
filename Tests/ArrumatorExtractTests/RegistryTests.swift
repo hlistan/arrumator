@@ -46,6 +46,7 @@ struct RegistryTests {
     @Test("Files without an extension are recognised by their magic bytes")
     func sniffing() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let pdf = try scratch.writeTextPDF("download.pdf", pages: [[
             "Downloaded statement for March", "Opening balance, card payments and transfers for the month.",
         ]])
@@ -60,6 +61,7 @@ struct RegistryTests {
     @Test("A package is read whole: an .rtfd's text, its size what it holds")
     func package() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let notes = scratch.url("Notes.rtfd")
         try FileManager.default.createDirectory(at: notes, withIntermediateDirectories: true)
         let rtf = "{\\rtf1\\ansi A note about the boiler service.}"
@@ -73,6 +75,7 @@ struct RegistryTests {
     @Test("Source facts include kMDItemWhereFroms from the binary plist xattr")
     func whereFroms() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let url = try scratch.write("note.txt", "Plain note for the archive.")
         let origins = ["https://example.com/files/note.txt", "https://example.com/"]
         let plist = try PropertyListSerialization.data(fromPropertyList: origins, format: .binary, options: 0)
@@ -90,6 +93,7 @@ struct RegistryTests {
     @Test("Text is NFC-normalised and capped at maxIndexChars with a warning")
     func capping() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let decomposed = "Informac\u{0327}a\u{0303}o " + String(repeating: "texto longo ", count: 50)
         let url = try scratch.write("long.txt", decomposed)
         let context = try TestConfig.context { extraction, _ in extraction.maxIndexChars = 40 }
@@ -103,6 +107,7 @@ struct RegistryTests {
     @Test("Oversized files are metadata-only with tooLarge")
     func tooLarge() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let url = try scratch.writeTextPDF("big.pdf", pages: [["Big document"]])
         let context = try TestConfig.context { extraction, _ in extraction.largeFileBytes = 10 }
         let content = try await registry.extract(url, sha256: "x", context: context, trace: .disabled)
@@ -114,6 +119,7 @@ struct RegistryTests {
     @Test("Unknown binary data is metadata-only with unsupportedFormat")
     func unsupported() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let url = try scratch.write("blob.qqzz", data: Data((0..<512).map { UInt8(truncatingIfNeeded: $0 &* 37) }))
         let content = try await registry.extract(url, sha256: "x", context: try TestConfig.context(), trace: .disabled)
         #expect(content.warnings.map(\.code) == [.unsupportedFormat], "unknown data is filed with a warning, not failed")
@@ -124,6 +130,7 @@ struct RegistryTests {
     @Test("A recording is described by its duration in whole seconds; a duration no whole number holds is left out")
     func mediaDuration() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let url = scratch.url("nota.caf")
         let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 8_000, channels: 1))
         let silence = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 12_000))
@@ -140,6 +147,7 @@ struct RegistryTests {
     @Test("A Quick Look preview that outlasts its deadline is cancelled, not left running")
     func quickLookCancelledAtItsDeadline() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let url = try scratch.write("plano.svg", #"<svg xmlns="http://www.w3.org/2000/svg"/>"#)
         let inspected = try SourceInspector.inspect(url, sha256: "x")
         let thumbnails = StalledThumbnails()
@@ -163,6 +171,7 @@ struct RegistryTests {
             return true
         }
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let url = try scratch.write("note.txt", "text")
         let context = try TestConfig.context()
         let registry = registry

@@ -50,16 +50,20 @@ import Testing
             if try Bool.fetchOne(db, sql: "SELECT EXISTS (SELECT 1 FROM probe WHERE failing = 1)") == true { throw ReadFailed() }
             return try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM probe") ?? 0
         }
-        var values = database.values(of: observation, named: "probe").makeAsyncIterator()
-        #expect(await values.next() == 0, "the value now comes first")
+        let values = await Collected.reading(database.values(of: observation, named: "probe"))
+        try #require(await Patience.until { await values.all.count >= 1 }, "the stream sends the value it has now")
+        #expect(await values.all == [0], "the value now comes first")
         try await database.writer.write { db in try db.execute(sql: "INSERT INTO probe (failing) VALUES (1)") }
         #expect(await Patience.until { time.asked == [config.observationRetry] },
                 "a read that fails is followed by a wait of database.observationRetry seconds, not by the end of the stream: \(time.asked)")
         try await database.writer.write { db in try db.execute(sql: "UPDATE probe SET failing = 0") }
         time.end()
-        #expect(await values.next() == 1, "after the wait, it is observed again, from the value it has then")
+        try #require(await Patience.until { await values.all.count >= 2 }, "after the wait, the stream sends again")
+        #expect(await values.all == [0, 1], "after the wait, it is observed again, from the value it has then")
         try await database.writer.write { db in try db.execute(sql: "INSERT INTO probe (failing) VALUES (0)") }
-        #expect(await values.next() == 2, "and every change after is told as before")
+        try #require(await Patience.until { await values.all.count >= 3 }, "and goes on sending")
+        #expect(await values.all == [0, 1, 2], "and every change after is told as before")
+        await values.stop()
     }
 
     @Test func theIndexOfEarlierVersionsIsMovedWholeWhateverItsLogHeld() async throws {

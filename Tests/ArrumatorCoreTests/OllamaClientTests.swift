@@ -135,7 +135,9 @@ import Testing
             try await client.embed(OllamaEmbedRequest(model: "bge-m3", input: ["x"], keepAlive: nil, truncate: true, options: nil))
         }
         server.reply(to: "/api/tags", with: .json("not json"))
-        await #expect(throws: OllamaError.self, "an answer that is not what the API says") { try await client.tags() }
+        await #expect("an answer that is not what the API says") { try await client.tags() } throws: { error in
+            if case .decoding = error as? OllamaError { true } else { false }
+        }
     }
 
     /// A redirect could send the request, and the document it carries, to any host; the session follows none.

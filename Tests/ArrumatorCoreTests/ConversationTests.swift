@@ -213,17 +213,22 @@ import Testing
     @Test func aQuestionBeingAnsweredWhenTheAppStoppedIsAnsweredFirstAtTheNextStart() async throws {
         let w = try await world()
         defer { w.h.env.cleanup() }
-        let (queue, talk) = w.h.conversations(StubAnswerer(fallback: Self.reply), interpreter: StubInterpreter(plans: [:]))
+        let answerer = StubAnswerer(fallback: Self.reply)
+        let (queue, talk) = w.h.conversations(answerer, interpreter: StubInterpreter(plans: [:]))
         let first = try await talk.ask(w.task.id, question: Self.question)
         let second = try await talk.ask(w.task.id, question: "And the second?")
         _ = try await talk.store.begin(first.id, by: w.h.processes.current.description)
         #expect(try await turn(talk, first.id).state == .answering, "as the app left it")
         await queue.start()
-        let answered = await Patience.until { (try? await talk.store.turn(id: second.id))?.state == .answered }
+        let states = { await [first.id, second.id].asyncMap { (try? await talk.store.turn(id: $0))?.state } }
+        let answered = await Patience.until { await states() == [.answered, .answered] }
         await queue.stop()
-        #expect(answered, "both are answered once the queue starts again")
-        let traces = try await [first.id, second.id].asyncMap { try await turn(talk, $0).lastTrace ?? 0 }
-        #expect(traces[0] < traces[1], "the one interrupted first, in its place")
+        #expect(answered, "both are answered once the queue starts again, the interrupted one too")
+        #expect(await answerer.calls.questions == [Self.question, "And the second?"],
+                "the one interrupted is asked first, in its place, and each once")
+        let interrupted = try #require(try await turn(talk, first.id).lastTrace, "the interrupted question's answer was traced")
+        let next = try #require(try await turn(talk, second.id).lastTrace, "the second question's answer was traced")
+        #expect(interrupted < next, "and its answer was traced before the second's")
     }
 
     @Test func stoppingAQuestionKeepsWhatCameOfItsAnswerAndOneWaitingIsTakenOut() async throws {

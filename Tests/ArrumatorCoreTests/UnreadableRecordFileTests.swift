@@ -140,10 +140,12 @@ import Testing
         try await w.h.services.history.record(.paused, summary: "Paused while the archive is away")
         let away = w.h.env.root.appendingPathComponent("Away", isDirectory: true)
         try FileManager.default.moveItem(at: w.h.env.archive, to: away)
-        await #expect(throws: RecordsError.self, "the record files of an archive that is not there cannot be written") {
-            try await w.records.flush()
+        await #expect("the record files of an archive that is not there cannot be written") { try await w.records.flush() } throws: { error in
+            if case .notWritten = error as? RecordsError { true } else { false }
         }
-        await #expect(throws: RecordsError.self, "nor when its files are read back") { try await w.records.reconcile() }
+        await #expect("nor read back, as it is away") { try await w.records.reconcile() } throws: { error in
+            if case .archiveNotThere = error as? RecordsError { true } else { false }
+        }
         #expect(!FileManager.default.fileExists(atPath: w.h.env.archive.path), "and nothing is made where it was")
         #expect(await w.records.unreadableFiles().map(\.path) == [w.h.env.archive.standardizedFileURL.path],
                 "its folder is reported, as the doctor names it")

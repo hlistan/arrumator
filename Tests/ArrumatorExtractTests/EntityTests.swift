@@ -145,6 +145,7 @@ struct EntityTests {
           arguments: [Calendar.Identifier.buddhist, .japanese])
     func gregorianOnEveryMac(_ identifier: Calendar.Identifier) async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let registry = try TestConfig.registry(calendar: TestConfig.calendar(identifier, in: .gmt))
         let context = try TestConfig.context()
         let invoice = try scratch.write("fatura.txt", "Fatura FT 2026/0042\nData de emissão: 20/05/2026\nVence a 10/06/26\n")
@@ -175,6 +176,7 @@ struct EntityTests {
           arguments: ["D:20240520013000+02'00'", "D:20240520013000", "D:20240520233000-05'00'", "D:20240520"])
     func pdfDayAsWritten(written: String) async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let url = try scratch.writePDF("criado.pdf", creationDate: written)
         let newYork = try #require(TimeZone(identifier: "America/New_York"))
         let tokyo = try #require(TimeZone(identifier: "Asia/Tokyo"))
@@ -190,6 +192,7 @@ struct EntityTests {
     @Test("A recording's capture date is the day it writes, in its own offset, wherever the Mac is")
     func mediaDayAsWritten() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let silence = scratch.url("silencio.caf")
         let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 8_000, channels: 1))
         let buffer = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 8_000))
@@ -212,6 +215,7 @@ struct EntityTests {
     @Test("The identifier rules built for one configuration serve every file read with it, and a new one gets its own")
     func identifierRulesFollowTheConfiguration() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let url = try scratch.write("conta.txt", "Kundennummer: 4711 0815\nCustomer number: 12345678")
         let registry = try TestConfig.registry()
         let bundled = try TestConfig.context()

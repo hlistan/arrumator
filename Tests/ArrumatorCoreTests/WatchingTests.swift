@@ -34,10 +34,15 @@ import Testing
         try Data().write(to: incoming.appendingPathComponent(".DS_Store"))
         let time = TestTime(.advances)
         let watcher = IncomingWatcher(config: env.config.watcher, skip: SkipRules(watcher: env.config.watcher), time: time)
-        var files = await watcher.arrivals().makeAsyncIterator()
+        let arrivals = await watcher.arrivals()
+        let taken = Taken()
+        // Read from a task of its own, so a watcher that never sends fails the test instead of hanging the run.
+        let collecting = Task { for await arrival in arrivals { await taken.add(arrival) } }
+        defer { collecting.cancel() }
         try await watcher.start(root: incoming, excluding: [])
         defer { await watcher.stop() }
-        let stable = await files.next()
+        try #require(await Patience.until { await !taken.arrivals.isEmpty }, "the watcher sends what it took in")
+        let stable = await taken.arrivals.first
         #expect(stable.map(Self.paths) == [bill.path], "the document, once unchanged, and not the system file")
         let waited = time.now().timeIntervalSince(TestTime.start)
         let polls = Double(env.config.watcher.stabilityRequiredPolls)
@@ -89,8 +94,9 @@ import Testing
         let moved = incoming.appendingPathComponent("Taxes 2024", isDirectory: true)
         try FileManager.default.moveItem(at: elsewhere, to: moved)
         await watcher.handle([FSEvent(path: moved.path, flags: UInt32(kFSEventStreamEventFlagItemIsDir | kFSEventStreamEventFlagItemRenamed), id: 1)])
-        #expect(await Patience.until { await taken.names == ["scan.pdf", "receipt.pdf"] },
-                "every file in a folder that comes into Incoming is taken in, at any depth, once it has stopped changing")
+        let tookAll = await Patience.until { await taken.names == ["scan.pdf", "receipt.pdf"] }
+        let sent = await taken.arrivals
+        #expect(tookAll, "every file in a folder that comes into Incoming is taken in, at any depth, once it has stopped changing: \(sent)")
     }
 
     @Test func aPackageInIncomingIsOneDocumentWhetherFoundThereOrMovedInWhole() async throws {
@@ -165,7 +171,7 @@ import Testing
                                "Incoming named through a link is watched as FSEvents reports it, links resolved")
     }
 
-    @Test(.enabled(if: WatchingTests.temporaryVolumeIgnoresCase, "only a volume that ignores case finds Incoming written in another case"))
+    @Test(.enabled(if: Volume.ignoresCase, "only a volume that ignores case finds Incoming written in another case"))
     func incomingNamedInAnotherCaseIsWatchedAsTheDiskSpellsIt() async throws {
         let env = try TestEnvironmentSync.make()
         defer { env.cleanup() }
@@ -177,13 +183,6 @@ import Testing
         let scan = try env.file("Incoming/Taxes 2024/scan.pdf")
         #expect(folders.tag(of: scan)?.label == DocumentLabel(kind: .tag, value: "Taxes 2024"),
                 "and a file it reports in the disk's spelling is given the tag of its folder all the same")
-    }
-
-    /// Whether the volume of the temporary folder, where the tests write, ignores case, as a Mac's does unless it was
-    /// formatted otherwise.
-    static var temporaryVolumeIgnoresCase: Bool {
-        (try? FileManager.default.temporaryDirectory.resourceValues(forKeys: [.volumeSupportsCaseSensitiveNamesKey])
-            .volumeSupportsCaseSensitiveNames) == false
     }
 
     /// Starts a watcher on `root`, another spelling of `real`, and checks a file FSEvents reports in `real` is taken.
@@ -438,7 +437,10 @@ import Testing
 /// The names of the files the Incoming watcher took in.
 actor Taken {
     private(set) var names: Set<String> = []
+    /// Everything sent, in order.
+    private(set) var arrivals: [IncomingArrival] = []
     func add(_ arrival: IncomingArrival) {
+        arrivals.append(arrival)
         if case let .stable(url) = arrival { names.insert(url.lastPathComponent) }
     }
 }

@@ -55,7 +55,11 @@ import Testing
     }
 
     @Test func aFileWaitingForTheGenerationLaneStopsAtOnceWhileAnotherQueueHoldsIt() async throws {
-        let gate = InferenceGate(api: HeldOllama(), retryDelays: [], time: TestTime(.blocks))
+        // A model that takes every request for an answer and gives none until the request is cancelled, as one that
+        // thinks for minutes.
+        let held = MockOllama { _ in "" }
+        await held.hold()
+        let gate = InferenceGate(api: held, retryDelays: [], time: TestTime(.blocks))
         let ask = OllamaChatRequest.sample(think: nil)
         let reading = Signal()
         let h = try await Harness.make(analyzer: StubAnalyzer(during: { _ in
@@ -93,27 +97,4 @@ import Testing
     static let request = "electricity invoices"
     static let file = "bill.txt"
     static let text = "EDP electricity, July"
-}
-
-/// A server that takes every request for an answer and gives none until the request is cancelled, as a model that
-/// thinks for minutes.
-actor HeldOllama: OllamaAPI {
-    nonisolated var baseURL: URL { MockOllama.server }
-    func version() async throws -> String { "held" }
-    func tags() async throws -> [OllamaModelInfo] { [] }
-    func show(model: String) async throws -> OllamaShowResponse { MockOllama.shown(capabilities: ["completion"], thinking: nil) }
-
-    func chat(_ request: OllamaChatRequest, partial: (@Sendable (OllamaChatResponse) async -> Void)?) async throws -> OllamaChatResponse {
-        try await TestTime(.blocks).sleep(seconds: 1)
-        throw CancellationError()
-    }
-
-    func embed(_ request: OllamaEmbedRequest) async throws -> OllamaEmbedResponse {
-        try await TestTime(.blocks).sleep(seconds: 1)
-        throw CancellationError()
-    }
-
-    nonisolated func pull(model: String) -> AsyncThrowingStream<OllamaPullProgress, any Error> {
-        AsyncThrowingStream { $0.finish() }
-    }
 }

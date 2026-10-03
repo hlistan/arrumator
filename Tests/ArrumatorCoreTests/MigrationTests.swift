@@ -28,8 +28,8 @@ import ArrumatorTesting
 
     @Test func shippedIdentifiersNeverChange() {
         let registered = AppDatabase.migrator(time: TestTime(.advances)).migrations
-        #expect(Array(registered.prefix(Self.shipped.count)) == Self.shipped,
-                "a shipped migration was renamed, removed or reordered; installed databases would re-run it and fail")
+        #expect(registered == Self.shipped,
+                "a shipped migration was renamed, removed or reordered (installed databases would run it again and fail), or a new one is not listed: \(registered)")
     }
 
     @Test func anIndexIsNewFromTheTransactionThatMakesItWhereverAStopCameWhileItWasMade() async throws {

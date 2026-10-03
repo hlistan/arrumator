@@ -285,7 +285,7 @@ import Testing
         try Data("EDP electricity July".utf8).write(to: bill)
         let link = URL(fileURLWithPath: await h.env.settings.current.incomingPath).appendingPathComponent("bill.txt")
         var spellings = [link, bill.spelledOnDisk]
-        if WatchingTests.temporaryVolumeIgnoresCase { spellings.append(URL(fileURLWithPath: bill.spelledOnDisk.path.lowercased())) }
+        if Volume.ignoresCase { spellings.append(URL(fileURLWithPath: bill.spelledOnDisk.path.lowercased())) }
         var queued: Set<Int64> = []
         for named in spellings { queued.insert(try #require(await h.coordinator.enqueue(named), "queued as \(named.path)")) }
         let jobs = try await h.jobs()

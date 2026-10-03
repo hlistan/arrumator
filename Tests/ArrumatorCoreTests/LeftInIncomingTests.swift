@@ -154,7 +154,7 @@ struct RefusingUntil: Trashing {
             spelled = base.env.root.appendingPathComponent("My Archive", isDirectory: true)
             try FileManager.default.createSymbolicLink(at: spelled, withDestinationURL: real)
         } else {
-            guard WatchingTests.temporaryVolumeIgnoresCase else { return }
+            guard Volume.ignoresCase else { return }
             spelled = base.env.root.appendingPathComponent("ARCHIVE", isDirectory: true)
         }
         // The runtime's archive, as the settings name it.

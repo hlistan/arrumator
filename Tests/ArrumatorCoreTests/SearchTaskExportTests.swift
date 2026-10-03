@@ -232,8 +232,10 @@ import Testing
         let (w, tasks, id) = try await prepared()
         defer { w.h.env.cleanup() }
         let folder = try deep(w, leaving: 2)
-        await #expect(throws: SearchTaskError.self, "an export of which nothing could be made fails, saying where") {
+        await #expect("an export of which nothing could be made fails, saying where") {
             try await tasks.export(id, to: folder, format: .folder)
+        } throws: { error in
+            if case .exportFailed = error as? SearchTaskError { true } else { false }
         }
         #expect(try await recorded(tasks, id).isEmpty, "and nothing is recorded")
         #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path).isEmpty, "as nothing was left there")

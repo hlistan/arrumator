@@ -118,18 +118,18 @@ import Testing
         let env = try await TestEnvironment.make()
         defer { env.cleanup() }
         let app = env.settings
-        let heard = await app.changes()
+        let heard = await Collected.reading(await app.changes())
         try await SettingsStore.opened(paths: env.paths).update { $0.logLevel = .debug }
         try await app.update { $0.renameFiles = false }
         let saved = try await SettingsStore.opened(paths: env.paths).current
         #expect(saved.logLevel == .debug && !saved.renameFiles,
                 "the app's change is saved over the file as it is now, keeping the command's: \(saved.logLevel), \(saved.renameFiles)")
         #expect(await app.current.logLevel == .debug, "and the app goes on with the command's change too")
-        var changes = heard.makeAsyncIterator()
-        let found = await changes.next()
-        #expect(found?.logLevel == .debug && found?.renameFiles == true, "what the app follows hears of the change found in the file first")
-        let made = await changes.next()
-        #expect(made?.logLevel == .debug && made?.renameFiles == false, "and then of its own")
+        try #require(await Patience.until { await heard.all.count >= 2 }, "what the app follows hears of both changes")
+        let (found, made) = (await heard.all[0], await heard.all[1])
+        #expect(found.logLevel == .debug && found.renameFiles, "what the app follows hears of the change found in the file first")
+        #expect(made.logLevel == .debug && !made.renameFiles, "and then of its own")
+        await heard.stop()
     }
 
     @Test func aFileThatCannotBeReadIsNeverSavedOver() async throws {

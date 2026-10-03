@@ -24,7 +24,17 @@ struct RuntimeHome {
     /// An address on this Mac where no Ollama answers: port 9 is the discard service, which nothing serves here.
     static let nowhere = "http://127.0.0.1:9"
 
-    static func make() async throws -> RuntimeHome {
+    /// Which Ollama a scratch home's settings name.
+    enum Ollama {
+        /// An address where none answers, which the runtime never starts a server for: what every test gets unless it
+        /// says otherwise, as no model may be reached from `swift test` and no server started for it.
+        case nowhere
+        /// The bundled settings' own, as a fresh install has them: this Mac's Ollama, which the app starts. Only for a
+        /// test of those settings that starts nothing (`ArrumatorRuntime.start()` never runs on it).
+        case asBundled
+    }
+
+    static func make(ollama: Ollama = .nowhere) async throws -> RuntimeHome {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("arrumator-runtime-\(UUID().uuidString)",
                                                                                isDirectory: true)
         // Nothing of the process's own environment: the test runs the same however it was started.
@@ -35,19 +45,14 @@ struct RuntimeHome {
         try await SettingsStore.opened(paths: home.paths).update {
             $0.archivePath = home.folder("First").path
             $0.incomingPath = home.folder("Incoming").path
+            if case .nowhere = ollama {
+                $0.ollamaURL = Self.nowhere
+                $0.ollamaManagement = .external
+            }
         }
         // The archive the user has, set up as onboarding sets it up: the app never makes its folder at a later launch.
         try FileManager.default.createDirectory(at: home.folder("First"), withIntermediateDirectories: true)
         return home
-    }
-
-    /// Settings under which a started runtime finds no Ollama and starts none: what a test that runs the app's
-    /// background machinery (`ArrumatorRuntime.start()`) needs, as no model may be reached from `swift test`.
-    func withoutOllama() async throws {
-        try await SettingsStore.opened(paths: paths).update {
-            $0.ollamaURL = Self.nowhere
-            $0.ollamaManagement = .external
-        }
     }
 
     /// Everything the history files of the archive in `folder` hold, one after another; empty while it has none.

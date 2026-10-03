@@ -85,12 +85,16 @@ import Testing
         try await first.finishOnboarding()
         let again = try await home.open()
         #expect(again.index == first.index, "one folder has one index, before and after it exists")
-        await #expect(throws: ArchiveSwitchError.self, "another spelling of the archive is the archive") {
+        await #expect("another spelling of the archive is the archive, already open") {
             _ = try await again.switchArchive(to: home.folder("Aliased").path)
+        } throws: { error in
+            if case .alreadyOpen = error as? ArchiveSwitchError { true } else { false }
         }
         let link = home.root.appendingPathComponent("Link")
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: URL(fileURLWithPath: aliased))
-        await #expect(throws: ArchiveSwitchError.self, "and so is a link to it") { _ = try await again.switchArchive(to: link.path) }
+        await #expect("and so is a link to it") { _ = try await again.switchArchive(to: link.path) } throws: { error in
+            if case .alreadyOpen = error as? ArchiveSwitchError { true } else { false }
+        }
 
         let other = try await again.switchArchive(to: home.folder("Other").path).runtime
         let back = try await other.switchArchive(to: link.path).runtime
@@ -106,7 +110,6 @@ import Testing
     @Test func aSwitchThatFailsLeavesTheAppOnItsArchiveRunningWithItsQueueAndNothingRecorded() async throws {
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }
-        try await home.withoutOllama()
         try home.watchQuickly()
         let runtime = try await home.open()
         await runtime.start()
@@ -134,7 +137,6 @@ import Testing
     @Test func theFilesWaitingInIncomingGoToTheArchiveSwitchedTo() async throws {
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }
-        try await home.withoutOllama()
         try home.watchQuickly()
         let first = try await home.open()
         await first.start()
@@ -221,7 +223,6 @@ import Testing
     @Test func aSettingChangedWhileASwitchStopsTheAppIsKeptAndTheSettingsNameTheArchiveSwitchedTo() async throws {
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }
-        try await home.withoutOllama()
         let first = try await home.open()
         await first.start()
         let (stopped, letGo) = (Signal(), OneShot<Void>())
@@ -242,7 +243,6 @@ import Testing
     @Test func anOllamaServerChosenWhileASwitchStopsTheAppIsTheOneTheArchiveSwitchedToTalksTo() async throws {
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }
-        try await home.withoutOllama()
         let first = try await home.open()
         await first.start()
         let (stopped, letGo) = (Signal(), OneShot<Void>())
@@ -261,7 +261,6 @@ import Testing
     @Test func theServerTheEnvironmentNamesIsTheArchiveSwitchedTosToo() async throws {
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }
-        try await home.withoutOllama()
         var environment = home.environment
         environment.ollamaURL = Self.anotherServer
         let first = try await ArrumatorRuntime.bootstrap(appVersion: "test", environment: environment, echoLogsToStderr: false, resolver: StubResolver(), trash: home.trash)
@@ -277,7 +276,6 @@ import Testing
     @Test func aSwitchWhoseSettingsCannotBeSavedOnceRecordedSaysTheAppStayedAndStartsItAgain() async throws {
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }
-        try await home.withoutOllama()
         try home.watchQuickly()
         let first = try await home.open()
         await first.start()
@@ -313,10 +311,14 @@ import Testing
         let runtime = try await home.open()
         let file = home.root.appendingPathComponent("note.txt")
         try Data("x".utf8).write(to: file)
-        await #expect(throws: ArchiveSwitchError.self, "the archive already open is no switch") {
+        await #expect("the archive already open is no switch") {
             _ = try await runtime.switchArchive(to: home.folder("First").path)
+        } throws: { error in
+            if case .alreadyOpen = error as? ArchiveSwitchError { true } else { false }
         }
-        await #expect(throws: ArchiveSwitchError.self, "a file is no archive") { _ = try await runtime.switchArchive(to: file.path) }
+        await #expect("a file is no archive") { _ = try await runtime.switchArchive(to: file.path) } throws: { error in
+            if case .notAFolder = error as? ArchiveSwitchError { true } else { false }
+        }
         let incoming = await runtime.settings.current.incomingPath
         // Inside Incoming, its files would be filed again; around it, what waits there would be taken for its documents.
         for archive in [home.folder("Incoming").appendingPathComponent("Archive"), home.root] {

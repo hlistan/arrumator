@@ -10,7 +10,9 @@ struct XLSXTests {
     init() throws { registry = try TestConfig.registry() }
 
     private func extract(_ files: [String: String], _ name: String = "faturas.xlsx") async throws -> ExtractedContent {
-        let url = try Scratch().writeZip(name, files: files)
+        let scratch = try Scratch()
+        defer { scratch.cleanup() }
+        let url = try scratch.writeZip(name, files: files)
         return try await registry.extract(url, sha256: "x", context: try TestConfig.context(), trace: .disabled)
     }
 

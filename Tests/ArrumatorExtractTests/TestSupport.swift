@@ -10,7 +10,8 @@ import Testing
 import UniformTypeIdentifiers
 import Vision
 
-/// Test inputs generated at runtime into a private temporary directory.
+/// Test inputs generated at runtime into a private temporary directory, which the test removes when it ends
+/// (`cleanup()`, deferred where the scratch is made).
 struct Scratch {
     let directory: URL
 
@@ -21,6 +22,9 @@ struct Scratch {
     }
 
     func url(_ name: String) -> URL { directory.appendingPathComponent(name) }
+
+    /// Removes the directory and everything written into it.
+    func cleanup() { try? FileManager.default.removeItem(at: directory) }
 
     // MARK: Text files
 
@@ -468,6 +472,17 @@ enum VisionOCR {
         guard let image = try? Scratch.textImage(["Arrumator"], width: 800, height: 200, fontSize: 60),
               let lines = try? await RecognizeTextRequest().perform(on: image) else { return false }
         return !lines.isEmpty
+    }
+}
+
+/// OCR that reads nothing until it is cancelled, as on a page it never ends.
+struct EndlessRecognizer: TextRecognizing {
+    func documentsSupport(_ languages: [String]) -> Bool { true }
+
+    func recognize(_ image: CGImage, orientation: CGImagePropertyOrientation, engine: OCREngine, languages: [String],
+                   on device: OCRDevice) async throws -> ArrumatorExtract.RecognizedText {
+        try await TestTime(.blocks).sleep(seconds: 0)
+        throw CancellationError()
     }
 }
 

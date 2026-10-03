@@ -351,17 +351,25 @@ import Testing
                 "documents keep the labels the rule gave them")
         #expect(try await h.services.history.events(limit: 5, kinds: [.labelRuleForgotten]).first?.summary
                 == "Forgot: sender “EDP Comercial” → “EDP”", "History says which rule was forgotten")
-        await #expect(throws: LabelError.self, "a rule that is not there") { try await actions.forget(rule: 999) }
+        await #expect(throws: LabelError.ruleNotFound(999), "a rule that is not there") { try await actions.forget(rule: 999) }
     }
 
     @Test func aDecisionMustBeAboutLabelsOfTheirKind() async throws {
         let (h, _) = try await archive()
         defer { h.env.cleanup() }
         let actions = h.labels
-        await #expect(throws: LabelError.self, "no date") { try await actions.merge(Self.label(.date, "yesterday"), into: "2026-07-05") }
-        await #expect(throws: LabelError.self, "nothing to merge") { try await actions.merge(Self.label(.sender, "EDP"), into: " EDP ") }
-        await #expect(throws: LabelError.self, "one label") { try await actions.keepApart(Self.label(.sender, "EDP"), from: "edp") }
-        await #expect(throws: LabelError.self, "no language") { try await actions.ignore(Self.label(.language, "Klingonese")) }
+        await #expect(throws: LabelError.notALabel(.date, "yesterday"), "no date") {
+            try await actions.merge(Self.label(.date, "yesterday"), into: "2026-07-05")
+        }
+        await #expect(throws: LabelError.sameLabel(.sender, "EDP"), "nothing to merge") {
+            try await actions.merge(Self.label(.sender, "EDP"), into: " EDP ")
+        }
+        await #expect(throws: LabelError.sameLabel(.sender, "EDP"), "one label, however it is cased") {
+            try await actions.keepApart(Self.label(.sender, "EDP"), from: "edp")
+        }
+        await #expect(throws: LabelError.notALabel(.language, "Klingonese"), "no language") {
+            try await actions.ignore(Self.label(.language, "Klingonese"))
+        }
         #expect(try await h.services.labels.rules().isEmpty, "a refused decision makes no rule")
         #expect(try await h.services.history.events(limit: 50, kinds: [.labelsMerged, .labelIgnored, .labelsKeptApart]).isEmpty,
                 "and leaves no trace")
@@ -372,10 +380,12 @@ import Testing
     @Test func theAppRefreshesOnEveryRecordedChange() async throws {
         let (h, _) = try await archive()
         defer { h.env.cleanup() }
-        var changes = h.env.database.activity().makeAsyncIterator()
-        let first = try #require(await changes.next(), "the stream reports the history's state instead of ending")
+        let changes = await Collected.reading(h.env.database.activity())
+        try #require(await Patience.until { await changes.all.count >= 1 }, "the stream reports the history's state instead of ending")
         try await h.labels.ignore(Self.label(.topic, "electricity"))
-        let next = try #require(await changes.next(), "a decision about labels refreshes the app")
+        try #require(await Patience.until { await changes.all.count >= 2 }, "a decision about labels refreshes the app")
+        let (first, next) = (await changes.all[0], await changes.all[1])
         #expect(next > first, "the stream moves on to the history's new state")
+        await changes.stop()
     }
 }

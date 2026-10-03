@@ -11,11 +11,27 @@ import Testing
     @Test func quittingStopsTheRunningAppBeforeItEnds() async throws {
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }
-        try await home.withoutOllama()
+        // A bound no stop comes near, on the Mac's own clock: the stop's own end, not the machine's speed, decides.
+        try home.tune("ingest", ["quitTimeout": .number(RuntimeHome.longAfterAnyTest)])
         let runtime = try await home.open()
         await runtime.start()
         try await runtime.services.history.record(.paused, summary: "Paused just before quitting")
-        #expect(await runtime.stopBeforeQuitting(), "an app whose work stops at once stops well within ingest.quitTimeout")
+        // A task of the app's that goes on a while after it is stopped, as the settings being applied when it quits do.
+        let (stopped, letGo) = (Signal(), OneShot<Void>())
+        await runtime.tasks.run(Self.lingering) {
+            await withTaskCancellationHandler { await letGo.wait() } onCancel: { stopped.fire() }
+        }
+        // Followed from a task of its own, so a stop that never ends fails the test instead of hanging the run.
+        let quit = Signal()
+        let quitting = Task {
+            defer { quit.fire() }
+            return await runtime.stopBeforeQuitting()
+        }
+        try #require(await Patience.until { await runtime.tasks.awaiting == Self.lingering }, "quitting stops the work and waits for it")
+        #expect(stopped.fired && !quit.fired, "and does not return, which would let AppKit end the app, while the work still runs")
+        letGo.fire(())
+        try #require(await Patience.until { quit.fired }, "once the work has stopped, quitting returns")
+        #expect(await quitting.value, "saying it stopped before ingest.quitTimeout")
         #expect(try home.historyWritten(in: runtime.archive).contains("Paused just before quitting"),
                 "everything stopping does is done when it returns: the archive's history holds what happened last")
         let (ingest, tasks) = (await runtime.coordinator.status, await runtime.taskQueue.status)
@@ -30,7 +46,6 @@ import Testing
     @Test func aQuitWhileTheArchiveIsReadLeavesNothingStartedThenOrLater() async throws {
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }
-        try await home.withoutOllama()
         let runtime = try await home.bootstrap()
         let (reading, stopped, read) = (Signal(), Signal(), OneShot<Void>())
         // The archive is read as macOS reads a folder it holds behind its prompt for access: the read does not notice
@@ -58,7 +73,6 @@ import Testing
     @Test func aRuntimeStartsOnceHoweverOftenItIsToldTo() async throws {
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }
-        try await home.withoutOllama()
         let runtime = try await home.open()
         await runtime.start()
         await runtime.start()
@@ -76,7 +90,6 @@ import Testing
     @Test func stoppingWaitsForEveryTaskItStoppedToEnd() async throws {
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }
-        try await home.withoutOllama()
         let runtime = try await home.open()
         await runtime.start()
         // A task that goes on a while after it is stopped, as the settings being applied when the app quits do, which
@@ -141,7 +154,6 @@ import Testing
     @Test func quittingEndsTheOllamaServerTheAppStartedThoughTheRestOutlastsItsTime() async throws {
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }
-        try await home.withoutOllama()
         try home.tune("ingest", ["quitTimeout": .number(Self.shortQuit)])
         let runtime = try await home.bootstrap()
         let server = try home.standInServer()

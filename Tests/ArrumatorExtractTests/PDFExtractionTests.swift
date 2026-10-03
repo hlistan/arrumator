@@ -15,6 +15,7 @@ struct PDFExtractionTests {
     @Test("Text PDF: text layer, metadata, entities and label date")
     func textPDF() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let url = try scratch.writeTextPDF("invoice.pdf", pages: [
             ["EDP Comercial", "Fatura FT 2026/0042", "Data de emissão: 20/05/2026", "Data de vencimento: 10/06/2026",
              "NIF: 503 504 564", "IBAN PT50 0002 0123 1234 5678 9015 4", "Total a pagar: 45,90 €"],
@@ -45,6 +46,7 @@ struct PDFExtractionTests {
     @Test("Scanned Russian PDF is OCRed and key words are recovered", .enabled(VisionOCR.unavailable) { await VisionOCR.available.value })
     func scannedRussian() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let url = try scratch.writeImagePDF("scan-ru.pdf", pages: [[
             "ПАО Сбербанк", "Счёт на оплату № 1234 от 15 мая 2024 г.", "ИНН 7707083893 КПП 773601001",
             "Итого к оплате: 12 500,00 руб.", "Срок оплаты: 30.05.2024",
@@ -75,6 +77,7 @@ struct PDFExtractionTests {
     @Test("Scanned Portuguese PDF is OCRed and key words are recovered", .enabled(VisionOCR.unavailable) { await VisionOCR.available.value })
     func scannedPortuguese() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let url = try scratch.writeImagePDF("scan-pt.pdf", pages: [[
             "Autoridade Tributária e Aduaneira", "Data de emissão: 20 de maio de 2026", "NIF 999999990",
             "Total a pagar: 1.234,56 €", "Obrigado pela preferência",
@@ -91,6 +94,7 @@ struct PDFExtractionTests {
     @Test("Mixed PDF: text page plus scanned page", .enabled(VisionOCR.unavailable) { await VisionOCR.available.value })
     func mixed() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let text = try scratch.writeTextPDF("text.pdf", pages: [[
             "Relatório anual de atividades da associação de moradores do bairro.",
             "Este documento resume as atividades realizadas durante o ano.",
@@ -114,6 +118,7 @@ struct PDFExtractionTests {
     @Test("A page of figures keeps its text layer where OCR does not read it or reads less, and the pages left out are named")
     func textLayerKept() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let url = try scratch.writeTextPDF("extrato.pdf", pages: (1...4).map(Self.figures(page:)))
         let context = try TestConfig.context { extraction, _ in
             extraction.pdf.ocrAllIfAtMost = 1
@@ -149,6 +154,7 @@ struct PDFExtractionTests {
           arguments: [("Fatura FT 2026/0042", "ocr"), ("7", "ocr"), ("", "textLayer"), (" \n ", "textLayer"), ("\u{FFFD}", "textLayer")])
     func ocrOverTheTextLayer(ocrRead: String, source: String) async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let url = try scratch.writeTextPDF("fatura.pdf", pages: [Self.garbledLayer])
         let sink = MemoryTraceSink()
         let content = try await TestConfig.registry(recognizer: RecordingRecognizer { _ in ocrRead })
@@ -170,6 +176,7 @@ struct PDFExtractionTests {
     @Test("A scanned page OCR does not read, with no text layer, is named without saying a layer is kept")
     func scannedPagesWithoutLayerLeftOut() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let url = try scratch.writeImagePDF("digitalizado.pdf", pages: (1...4).map { ["Página \($0)"] })
         let context = try TestConfig.context { extraction, _ in
             extraction.pdf.ocrAllIfAtMost = 1
@@ -188,6 +195,7 @@ struct PDFExtractionTests {
     @Test("The pages whose text layer is not read are named")
     func textLayerPagesLeftOut() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let pages = (1...5).map { ["Relatório de atividades, capítulo \($0), sobre o trabalho feito durante o ano inteiro."] }
         let url = try scratch.writeTextPDF("relatorio.pdf", pages: pages)
         let context = try TestConfig.context { extraction, _ in
@@ -215,6 +223,7 @@ struct PDFExtractionTests {
     @Test("Encrypted PDF yields an encrypted warning, not an error")
     func encrypted() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let url = try scratch.writeTextPDF("secret.pdf", pages: [["Confidential"]], password: "s3cret")
         let content = try await registry.extract(url, sha256: "x", context: try TestConfig.context(), trace: .disabled)
         #expect(content.warnings.map(\.code) == [.encrypted], "a password-protected PDF is filed with a warning, not failed")
@@ -226,20 +235,24 @@ struct PDFExtractionTests {
     @Test("Corrupt PDF yields a corrupted warning, not an error")
     func corrupt() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let url = try scratch.write("broken.pdf", "%PDF-1.7\nthis is not a real pdf body\n%%EOF")
         let content = try await registry.extract(url, sha256: "x", context: try TestConfig.context(), trace: .disabled)
         #expect(content.warnings.map(\.code) == [.corrupted], "a broken PDF is filed with a warning, not failed")
         #expect(content.textOrigin == .metadataOnly, "a PDF PDFKit cannot open is described by its metadata alone")
     }
 
-    @Test("Per-file timeout is a hard ExtractionError.timeout")
+    @Test("Per-file timeout is a hard ExtractionError.timeout", .timeLimit(.minutes(1)))
     func timeout() async throws {
         let scratch = try Scratch()
+        defer { scratch.cleanup() }
         let url = try scratch.writeImagePDF("slow.pdf", pages: [["Página lenta"]])
-        // On time that runs out at once, whatever the file: the deadline, not the machine's speed, decides.
-        let expiring = try TestConfig.registry(time: TestTime(.advances))
+        // OCR that never ends, on time that runs out at once: the deadline, not the machine's speed, decides. A page's
+        // own OCR deadline is left unbounded, so only the file's can end the reading.
+        let expiring = try TestConfig.registry(recognizer: EndlessRecognizer(), time: TestTime(.advances))
+        let context = try TestConfig.context { extraction, _ in extraction.pdf.ocrPageTimeout = 0 }
         await #expect("a file that outlasts its deadline is a hard timeout, not a partial result") {
-            _ = try await expiring.extract(url, sha256: "x", context: try TestConfig.context(), trace: .disabled)
+            _ = try await expiring.extract(url, sha256: "x", context: context, trace: .disabled)
         } throws: { error in
             guard case .timeout? = error as? ExtractionError else { return false }
             return true
