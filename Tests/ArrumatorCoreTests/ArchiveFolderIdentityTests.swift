@@ -95,7 +95,6 @@ import Testing
     @Test func aMergeOwedForAnotherFolderIsDoneAfterAStopBeforeIt() async throws {
         let h = try await Harness.make()
         defer { h.env.cleanup() }
-        try await h.readyToWork()
         _ = try await h.labels.ignore(DocumentLabel(kind: .topic, value: "electricity"))
         try await h.env.records().flush()
         let watcher = ArchiveWatcher(config: h.env.config.watcher, skip: SkipRules(watcher: h.env.config.watcher),

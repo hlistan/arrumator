@@ -101,11 +101,13 @@ public enum HashService {
     /// SHA-256 of its bytes and, for a link, where it points, length first. So it is the same for a copy, wherever and
     /// under whatever name, however the disk orders or composes the names in it, and any change to what it holds, a
     /// byte, a name or an item added, changes it.
+    /// Read in a task that is cancelled, it stops between two reads with `CancellationError`.
     public static func sha256(of url: URL) throws -> String {
         guard Packages.isPackage(url) else { return hex(try digest(ofFile: url)) }
         var hasher = SHA256()
         let entries = try Packages.entries(of: url, limit: nil).sorted { Array($0.path.utf8).lexicographicallyPrecedes(Array($1.path.utf8)) }
         for entry in entries {
+            try Task.checkCancellation()
             hasher.update(data: Data([tag(entry.kind)]))
             hasher.update(data: lengthPrefixed(entry.path))
             switch entry.kind {
@@ -122,9 +124,16 @@ public enum HashService {
         defer { try? handle.close() }
         var hasher = SHA256()
         while let chunk = try handle.read(upToCount: chunkSize), !chunk.isEmpty {
+            try Task.checkCancellation()
             hasher.update(data: chunk)
         }
         return hasher.finalize()
+    }
+
+    /// `sha256(of:)`, worked out on the concurrent pool, never on the caller's actor, which a large file would hold for as
+    /// long as it is read (a worker's, whose status the app follows meanwhile), and stopped by its task's cancellation.
+    @concurrent public static func sha256Concurrently(of url: URL) async throws -> String {
+        try sha256(of: url)
     }
 
     private static func lengthPrefixed(_ text: String) -> Data {

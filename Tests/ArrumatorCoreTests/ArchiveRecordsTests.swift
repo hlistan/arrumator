@@ -382,7 +382,6 @@ import Testing
     @Test func whatWasDecidedWhileAnotherFolderWasTheArchiveIsKeptWhenTheEarlierOneIsBack() async throws {
         let h = try await Harness.make()
         defer { h.env.cleanup() }
-        try await h.readyToWork()
         let records = h.env.records()
         let (_, tasks) = h.searchTasks(StubInterpreter(plans: [:]))
         let (_, talk) = h.conversations(StubAnswerer(), interpreter: StubInterpreter(plans: [:]))

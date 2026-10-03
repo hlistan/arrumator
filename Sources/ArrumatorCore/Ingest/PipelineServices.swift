@@ -16,6 +16,10 @@ public struct PipelineServices: Sendable {
     /// Where an exact copy of a document in the archive goes once its original is read again in its place.
     public var trash: any Trashing
     public var time: any TimeSource
+    /// Which jobs the workers of this process hold, so that no job is worked on twice at once (`JobStore.nextDue`).
+    public var claims: JobClaims
+    /// The Mac's power as it is now (`PowerState.current`), which may keep the worker waiting (`PowerState.pauseReason`).
+    public var power: @Sendable () -> PowerState
     /// The Ollama server, asked whether it answers at all when a request to it timed out.
     public var ollama: any OllamaAPI
     /// The Mac's time zone, which today is in when a request or a question is read.
@@ -25,7 +29,8 @@ public struct PipelineServices: Sendable {
 
     public init(database: AppDatabase, archive: URL, config: PipelineConfig, settings: SettingsStore, extractor: any ContentExtracting,
                 analyzer: any DocumentAnalyzing, filer: DocumentFiler, traces: TraceRecorder, vectors: VectorIndex,
-                trash: any Trashing, time: any TimeSource, ollama: any OllamaAPI, timeZone: TimeZone) {
+                trash: any Trashing, time: any TimeSource, ollama: any OllamaAPI, timeZone: TimeZone, claims: JobClaims,
+                power: @escaping @Sendable () -> PowerState) {
         self.database = database
         self.archive = archive.standardizedFileURL
         self.config = config
@@ -37,6 +42,8 @@ public struct PipelineServices: Sendable {
         self.vectors = vectors
         self.trash = trash
         self.time = time
+        self.claims = claims
+        self.power = power
         self.ollama = ollama
         self.timeZone = timeZone
     }
@@ -116,7 +123,7 @@ public struct PipelineServices: Sendable {
         let current = document.labels ?? []
         let had = current.filter(\.kind.isUsersOwn).map { GivenTag(label: $0, source: .document) }
         let added = GivenTag.distinct(had + ruled.tags, limit: config.labels.maxPerKind).filter(\.isNew).map(\.label)
-        if !added.isEmpty { try await index.saveLabels(current + added, docID: docID, labelled: document.isLabelled) }
+        if !added.isEmpty { try await index.addLabels(added, docID: docID) }
         return given.filter { !$0.isNew } + ruled.tags
     }
 
@@ -151,8 +158,7 @@ public struct PipelineServices: Sendable {
         var doc = document
         let inArchive = isInArchive(doc)
         if !inArchive || [.undone, .held].contains(doc.status) {
-            doc.status = .processing
-            doc = try await documents.save(doc)
+            doc = try await documents.update(docID) { $0.status = .processing }
         }
         // What earlier stages found of it goes with the job, so it starts at the first stage it lacks (`IngestCoordinator`).
         var payload = JobPayload()
@@ -163,7 +169,7 @@ public struct PipelineServices: Sendable {
         let kept = (doc.labels ?? []).filter(\.kind.isUsersOwn).map { GivenTag(label: $0, source: .document) }
         let tags = kept + (inArchive ? [] : self.tags(for: doc.url, given: [], settings: settings))
         payload.tags = tags.isEmpty ? nil : tags
-        return try await jobs.enqueue(path: doc.path, kind: inArchive ? .reanalyse : .ingest, docID: docID, payload: payload)
+        return try await jobs.enqueue(path: doc.path, kind: inArchive ? .reanalyse : .ingest, docID: docID, payload: payload).id
     }
 
     /// Asks the model about a document and keeps what it says: the labels on the document and in the search index
@@ -172,13 +178,16 @@ public struct PipelineServices: Sendable {
     /// the labels it had: its tags, or what an earlier reading gave it.
     public func analyse(docID: Int64, jobID: Int64?, content: ExtractedContent, given: [GivenTag], settings: AppSettings,
                         trace: TraceContext) async throws -> AnalysisOutcome {
-        let tags = try await documents.document(id: docID)?.labels?.filter(\.kind.isUsersOwn) ?? []
+        // The labels as the reading begins: a kind the user changes while the model reads stays as the user left it.
+        let before = try await documents.document(id: docID)?.labels ?? []
+        let tags = before.filter(\.kind.isUsersOwn)
         let reading = try await read(content, tags: tags, settings: settings, trace: trace)
-        let outcome = reading.outcome
+        var outcome = reading.outcome
         let sources = GivenTag.sources(of: reading.tags, given: given)
         let note = GivenTag.note(sources).map { "; " + $0 } ?? ""
         if let labels = outcome.labels {
-            try await index.saveLabels(labels, docID: docID, labelled: true)
+            // Where the user changed nothing since the reading began: what the user did meanwhile is kept.
+            outcome.labels = try await index.saveReading(labels, before: before, docID: docID)
             let read = labels.filter { !$0.kind.isUsersOwn }
             try await history.record(.analysed, doc: docID, job: jobID, trace: trace.traceID,
                                      summary: (read.isEmpty ? "Nothing worth a label" : read.map(\.value).joined(separator: " · ")) + note,

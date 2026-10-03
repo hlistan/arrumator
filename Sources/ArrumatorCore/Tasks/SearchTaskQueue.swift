@@ -169,6 +169,7 @@ public actor SearchTaskQueue: ModelQueue {
     func recoverLeft() async throws -> Int { try await store.recoverLeft(processes) }
     func nextDue() async throws -> SearchTaskRecord? { try await store.nextDue() }
     func earliestDue() async throws -> Date? { try await store.earliestDue() }
+    func heldElsewhere() async throws -> Bool { try await store.heldElsewhere(processes) }
 
     // MARK: A task
 

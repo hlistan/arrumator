@@ -152,6 +152,13 @@ public struct TaskConversationStore: Sendable {
     /// Questions being answered by no process that still answers them (`ProcessWatching.hasLeft`), as when the app
     /// stopped or a command was killed, go back into the queue, in their place: they were due when they were taken, so
     /// they are due still. How many.
+    /// Whether a process other than this one, that still runs, is answering a question (`ProcessWatching.hasLeft`).
+    func heldElsewhere(_ processes: any ProcessWatching) async throws -> Bool {
+        try await database.reader.read { db in
+            try TaskTurnRecord.filter(Column("state") == TurnState.answering.rawValue).fetchAll(db)
+        }.contains { !processes.hasLeft($0.worker) }
+    }
+
     func recoverLeft(_ processes: any ProcessWatching) async throws -> Int {
         // Looked for first, so the worker's every look writes nothing when nothing was left, as is usual.
         let found = try await database.reader.read { db in

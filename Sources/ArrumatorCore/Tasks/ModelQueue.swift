@@ -62,6 +62,8 @@ protocol ModelQueue: Actor {
     func recoverLeft() async throws -> Int
     func nextDue() async throws -> Item?
     func earliestDue() async throws -> Date?
+    /// Whether a process other than this one, that still runs, has items of the queue in hand.
+    func heldElsewhere() async throws -> Bool
     /// Works on `item`; false when it could not be taken from the queue.
     func run(_ item: Item) async -> Bool
     /// Counts again the items waiting, and tells the status's subscribers.
@@ -154,7 +156,10 @@ extension ModelQueue {
                 await doorbell.wait(timeout: services.config.ingest.retryDelays.last, time: services.time)
                 continue
             }
-            let wait = await earliest().map { max(IngestCoordinator.minimumWait, $0.timeIntervalSince(services.time.now())) }
+            // Until the next item is due, or the doorbell rings, and while another process holds items, a while at most
+            // (`IdleWait`): an item due now was taken above, unless the queue could not be read, which waits for a ring.
+            let wait = IdleWait.seconds(untilDue: await earliest(), heldElsewhere: await anyHeldElsewhere(),
+                                        recheck: services.config.ingest.heldElsewhereRecheckSeconds, now: services.time.now())
             await doorbell.wait(timeout: wait, time: services.time)
         }
     }
@@ -177,6 +182,14 @@ extension ModelQueue {
             guard !Cancellation.stops(error) else { return nil }
             Log.error(.search, "Could not read the queue", ["queue": name, "error": error.localizedDescription])
             return nil
+        }
+    }
+
+    private func anyHeldElsewhere() async -> Bool {
+        do { return try await heldElsewhere() } catch {
+            guard !Cancellation.stops(error) else { return false }
+            Log.error(.search, "Could not read the queue", ["queue": name, "error": error.localizedDescription])
+            return false
         }
     }
 

@@ -242,6 +242,24 @@ public struct DocumentStore: Sendable {
     /// A document of `documents` the model has not labelled yet (`DocumentRecord.isLabelled`), as a condition.
     static let notLabelledSQL = "(labels_json IS NULL OR tags_only)"
 
+    /// Changes the document `id` as `change` says, read and written in one transaction, writing only the columns it
+    /// changed: a change made meanwhile to another column, by the worker, the user or another process, is kept, never
+    /// written over by what was read before it. The document as it is now; `IngestError.documentNotFound` when there is
+    /// none.
+    @discardableResult
+    public func update(_ id: Int64, _ change: @Sendable (inout DocumentRecord) throws -> Void) async throws -> DocumentRecord {
+        let now = time.now()
+        return try await database.writer.write { db in
+            guard let read = try DocumentRecord.fetchOne(db, key: id) else { throw IngestError.documentNotFound(id) }
+            var document = read
+            try change(&document)
+            guard document != read else { return read }
+            document.updatedAt = now
+            try document.updateChanges(db, from: read)
+            return document
+        }
+    }
+
     @discardableResult
     public func save(_ document: DocumentRecord) async throws -> DocumentRecord {
         let now = time.now()

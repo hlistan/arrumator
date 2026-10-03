@@ -45,25 +45,25 @@ import Testing
     @Test func jobsScheduledForLaterAreNotDueYet() async throws {
         let time = TestTime(.advances)
         let jobs = JobStore(database: try AppDatabase.inMemory(), time: time)
-        let id = try #require(try await jobs.enqueue(path: "/tmp/c.txt", kind: .ingest))
+        let id = try await jobs.enqueue(path: "/tmp/c.txt", kind: .ingest).id
         var job = try #require(try await jobs.job(id: id))
         job.nextRunAt = time.now().addingTimeInterval(30)
         try await jobs.update(job)
-        #expect(try await jobs.nextDue() == nil, "a job waiting out its retry delay is not taken early")
-        #expect(try await jobs.earliestDue() == TestTime.start.addingTimeInterval(30), "the worker sleeps until exactly then")
+        #expect(try await jobs.nextDue(claiming: Harness.claims) == nil, "a job waiting out its retry delay is not taken early")
+        #expect(try await jobs.earliestDue(claiming: Harness.claims) == TestTime.start.addingTimeInterval(30), "the worker sleeps until exactly then")
         time.advance(by: 31)
-        #expect(try await jobs.nextDue()?.id == id, "once its time has come, it is taken")
+        #expect(try await jobs.nextDue(claiming: Harness.claims)?.id == id, "once its time has come, it is taken")
     }
 
     @Test func aJobWaitingToRetryItsReadingIsScheduled() async throws {
         let jobs = JobStore(database: try AppDatabase.inMemory(), time: TestTime(.advances))
-        let id = try #require(try await jobs.enqueue(path: "/tmp/d.txt", kind: .ingest))
+        let id = try await jobs.enqueue(path: "/tmp/d.txt", kind: .ingest).id
         var job = try #require(try await jobs.job(id: id))
         let retryAt = Date(timeIntervalSince1970: 1_900_000_000)
         job.state = .analysing
         job.nextRunAt = retryAt
         try await jobs.update(job)
-        #expect(try await jobs.earliestDue() == retryAt,
+        #expect(try await jobs.earliestDue(claiming: Harness.claims) == retryAt,
                 "a reading that failed while Ollama was down is retried when its delay is over, not at the next unrelated file")
     }
 }

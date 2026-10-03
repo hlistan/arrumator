@@ -32,15 +32,19 @@ public struct Placer: Sendable {
             && builder.isSameName(current.lastPathComponent, as: plan.filename)
     }
 
-    /// Moves the document at `source` as `plan` says, under a free name (`FilenameBuilder.uniqueDestination`), in the
-    /// archive at `archive`, which is never made again where it is gone (`FileOperationError.folderMissing`), and tags it
-    /// with its identity. `fingerprint`, when given, is what the file was when it was read: one that has changed since is
-    /// not moved (`FileOperationError.sourceChanged`).
-    public func execute(_ plan: PlacementPlan, source: URL, archive: URL, sha256: String, fingerprint: FileFingerprint?,
+    /// Where `plan` puts a document: under a free name in its directory (`FilenameBuilder.uniqueDestination`), and the
+    /// collision suffix that name was given, if any.
+    public func destination(of plan: PlacementPlan) throws -> (url: URL, collision: Int?) {
+        try builder.uniqueDestination(directory: URL(fileURLWithPath: plan.directory, isDirectory: true), filename: plan.filename)
+    }
+
+    /// Moves the document at `source` to `destination` (`destination(of:)`), in the archive at `archive`, which is never
+    /// made again where it is gone (`FileOperationError.folderMissing`), and tags it with its identity. `fingerprint`,
+    /// when given, is what the file was when it was read: one that has changed since is not moved
+    /// (`FileOperationError.sourceChanged`).
+    public func execute(to destination: (url: URL, collision: Int?), source: URL, archive: URL, sha256: String, fingerprint: FileFingerprint?,
                         documentUID: String, originalName: String, filedAt: Date) throws -> MoveResult {
-        let (destination, collision) = try builder.uniqueDestination(directory: URL(fileURLWithPath: plan.directory, isDirectory: true),
-                                                                     filename: plan.filename)
-        let result = try operations.move(source, to: destination, within: archive, collision: collision, expectedSHA256: sha256,
+        let result = try operations.move(source, to: destination.url, within: archive, collision: destination.collision, expectedSHA256: sha256,
                                          fingerprint: fingerprint)
         let dest = URL(fileURLWithPath: result.to)
         do {

@@ -84,15 +84,17 @@ public struct ReviewActions: Sendable {
 
     /// Confirms the document as it is: its name and labels are right. One waiting for the user is filed.
     public func confirm(_ docID: Int64) async throws {
-        var doc = try await document(docID)
-        guard [.filed, .needsReview, .failed].contains(doc.status), services.isInArchive(doc) else {
-            throw IngestError.invalidState("only a document in the archive can be confirmed")
+        let services = services
+        let doc = try await services.documents.update(docID) { doc in
+            // Decided on the document as the transaction that changes it reads it.
+            guard [.filed, .needsReview, .failed].contains(doc.status), services.isInArchive(doc) else {
+                throw IngestError.notInArchive(docID)
+            }
+            var analysis = doc.analysis ?? DocumentAnalysis()
+            analysis.problems = []
+            doc.status = .filed
+            doc.analysisJson = try JSON.string(analysis)
         }
-        var analysis = doc.analysis ?? DocumentAnalysis()
-        analysis.problems = []
-        doc.status = .filed
-        doc.analysisJson = try JSON.string(analysis)
-        doc = try await services.documents.save(doc)
         try await services.history.record(.markedCorrect, actor: .user, doc: docID, summary: "Confirmed \(doc.filename)")
     }
 
@@ -110,9 +112,7 @@ public struct ReviewActions: Sendable {
 
     /// Keeps the document where it is; the watcher and queue leave it alone.
     public func hold(_ docID: Int64) async throws {
-        var doc = try await document(docID)
-        doc.status = .held
-        _ = try await services.documents.save(doc)
+        try await services.documents.update(docID) { $0.status = .held }
         try await services.history.record(.needsReview, actor: .user, doc: docID, summary: "Left for later")
     }
 
@@ -132,9 +132,13 @@ public struct ReviewActions: Sendable {
         await services.filer.registry.expect([from, destination.path])
         _ = try placer.operations.move(doc.url, to: destination, within: incoming, collision: collision, expectedSHA256: doc.sha256,
                                        fingerprint: nil)
-        doc.path = destination.path
-        doc.status = .undone
-        doc = try await services.documents.save(doc)
+        // What the file is in Incoming, which a copy to another volume changes, so a rescan knows it for this document.
+        let moved = try? FileFingerprint.of(destination)
+        doc = try await services.documents.update(docID) { doc in
+            doc.path = destination.path
+            doc.status = .undone
+            if let moved { (doc.size, doc.inode, doc.fileMtime) = (moved.size, moved.inode, moved.modified) }
+        }
         try await services.index.updateFilename(docID: docID, filename: destination.lastPathComponent)
         await services.vectors.remove(docID: docID)
         try await services.history.record(.undone, actor: .user, doc: docID, summary: "\(from) → Incoming",
@@ -161,11 +165,12 @@ public struct ReviewActions: Sendable {
                 await services.filer.registry.expect([doc.path, url.path])
                 _ = try placer.operations.move(doc.url, to: url, within: doc.url.deletingLastPathComponent(), collision: collision,
                                                expectedSHA256: doc.sha256, fingerprint: nil)
-                doc.path = url.path
-                var analysis = doc.analysis ?? DocumentAnalysis()
-                analysis.fileName = (url.lastPathComponent as NSString).deletingPathExtension
-                doc.analysisJson = try JSON.string(analysis)
-                doc = try await services.documents.save(doc)
+                doc = try await services.documents.update(docID) { doc in
+                    doc.path = url.path
+                    var analysis = doc.analysis ?? DocumentAnalysis()
+                    analysis.fileName = (url.lastPathComponent as NSString).deletingPathExtension
+                    doc.analysisJson = try JSON.string(analysis)
+                }
                 try await services.index.updateFilename(docID: docID, filename: doc.filename)
                 edited["fileName"] = url.lastPathComponent
                 said.append("Renamed to “\(url.lastPathComponent)”")

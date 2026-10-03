@@ -248,7 +248,8 @@ public actor ArchiveReconciler {
                             ["path": path, "error": error.localizedDescription])
             }
         }
-        try await services.jobs.enqueue(path: path, kind: .adopt)
+        // A file already queued, as found by a rescan, is recorded once.
+        guard try await services.jobs.enqueue(path: path, kind: .adopt).isNew else { return }
         try await services.history.record(.adopted, actor: .user, summary: "\(url.lastPathComponent) added to the archive",
                                           payload: ["path": path])
         await coordinator.wake()

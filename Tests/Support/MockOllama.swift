@@ -16,7 +16,7 @@ public actor MockOllama: OllamaAPI {
     public private(set) var chatRequests: [OllamaChatRequest] = []
     public private(set) var embedRequests: [OllamaEmbedRequest] = []
     private let handler: ChatHandler
-    private let installed: [String]
+    private var installed: [String]
     private let dimension: Int
     private let defaultCapabilities: [String]
     private let capabilities: [String: [String]]
@@ -77,6 +77,9 @@ public actor MockOllama: OllamaAPI {
         if let versionFailure { throw versionFailure }
         return "mock"
     }
+
+    /// Lists `model` among those installed from now on, as after the user downloaded it.
+    public func install(_ model: String) { installed.append(model) }
 
     /// Makes `tags` fail with `error` from now on, as a server that cannot list its models.
     public func failListing(with error: OllamaError) { listingFailure = error }

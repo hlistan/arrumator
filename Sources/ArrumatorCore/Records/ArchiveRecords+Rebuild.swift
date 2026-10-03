@@ -251,7 +251,7 @@ extension ArchiveRecords {
         let recordedAt = Set(documents.filter { $0.status != .missing && found[$0.uid] == nil }.map(\.path))
         let jobs = JobStore(database: database, time: time)
         for path in untracked where !layout.isSystem(URL(fileURLWithPath: path)) && !recordedAt.contains(path) {
-            if try await jobs.enqueue(path: path, kind: .adopt) != nil { summary.adopted += 1 }
+            if try await jobs.enqueue(path: path, kind: .adopt).isNew { summary.adopted += 1 }
         }
     }
 
@@ -259,7 +259,7 @@ extension ArchiveRecords {
         let jobs = JobStore(database: database, time: time)
         for document in try await DocumentStore(database: database, time: time).list(DocumentFilter(), limit: Int.max)
         where document.status != .missing && FileManager.default.fileExists(atPath: document.path) {
-            if try await jobs.enqueue(path: document.path, kind: .reindex, docID: document.id) != nil { summary.queued += 1 }
+            if try await jobs.enqueue(path: document.path, kind: .reindex, docID: document.id).isNew { summary.queued += 1 }
         }
     }
 }

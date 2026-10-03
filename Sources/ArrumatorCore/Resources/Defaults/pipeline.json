@@ -90,6 +90,9 @@
   },
   "ingest": {
     "maxAttempts": 3,
+    "modelRecheckSeconds": 60,
+    "abandonedWorkSeconds": 600,
+    "heldElsewhereRecheckSeconds": 30,
     "retryDelays": [
       2,
       8,

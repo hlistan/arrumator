@@ -16,6 +16,49 @@ import Testing
         return (coordinator, ReviewActions(services: services, coordinator: coordinator))
     }
 
+    /// How a file moved before a crash is known where it went: by the identity the move gave it, or, when the crash came
+    /// before that, by its bytes; and a file there that says it is another document, or whose path another document's row
+    /// holds, is not taken for it.
+    enum KnownBy: String, CaseIterable { case identity, bytes, anotherIdentity, anotherRow }
+
+    @Test(arguments: KnownBy.allCases)
+    func aFileMovedBeforeACrashIsRecordedWhereItWentOnlyWhenItIsThatDocument(_ known: KnownBy) async throws {
+        let base = try await Harness.make()
+        defer { base.env.cleanup() }
+        let retry = 30.0
+        let h = base.with { $0.ingest.retryDelays = NonEmpty(retry, []) }
+        try await base.env.database.writer.write { db in
+            try db.execute(sql: """
+                CREATE TEMP TRIGGER record_cut_off_once BEFORE UPDATE OF path ON documents
+                WHEN NEW.path != OLD.path AND (SELECT COUNT(*) FROM events WHERE kind = '\(EventKind.retry.rawValue)') = 0
+                BEGIN SELECT RAISE(ABORT, 'the process ended'); END
+                """)
+        }
+        let id = try #require(await h.coordinator.enqueue(try base.env.drop("bill.txt", text: "EDP electricity July")))
+        await h.coordinator.drain()
+        let moved = base.env.archive.appendingPathComponent(StubAnalyzer.edpFileName + ".txt").standardizedFileURL
+        switch known {
+        case .identity: break
+        case .bytes: #expect(removexattr(moved.path, Xattr.documentID, 0) == 0, "the crash came before the file was given its identity")
+        case .anotherIdentity: try Xattr.set(Xattr.documentID, UUID().uuidString, on: moved)
+        case .anotherRow:
+            try await h.services.documents.save(.arrived(path: moved.path, sha256: "another", size: 1, uttype: "public.plain-text",
+                                                         inode: nil, modified: nil, now: base.env.time.now()))
+        }
+        base.env.time.advance(by: retry)
+        await h.coordinator.drain()
+        let job = try #require(try await h.services.jobs.job(id: id))
+        let docID = try #require(job.docId)
+        let document = try #require(try await h.services.documents.document(id: docID))
+        if [.anotherIdentity, .anotherRow].contains(known) {
+            #expect(job.state != .done && document.path != moved.path,
+                    "a file that says it is another document is never recorded as this one: \(job.state)")
+        } else {
+            #expect(job.state == .done && document.status == .filed && document.path == moved.path,
+                    "known by its \(known), the file is recorded where it went")
+        }
+    }
+
     @Test func aReadingThatGivesNoNameLeavesADocumentInTheArchiveTheNameItHasThere() async throws {
         let h = try await Harness.make()
         defer { h.env.cleanup() }

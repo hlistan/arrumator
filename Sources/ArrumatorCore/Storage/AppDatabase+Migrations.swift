@@ -632,7 +632,7 @@ extension AppDatabase {
         }
 
         for register in [registerSearchTaskMigrations, registerTagMigrations, registerConversationMigrations, registerRecordMigrations,
-                         registerQueueMigrations] { register(&m) }
+                         registerQueueMigrations, registerJobMigrations] { register(&m) }
 
         return m
     }

@@ -277,18 +277,19 @@ public final class ArrumatorRuntime: Sendable {
                             operations: FileOperations(trash: trash, sameVolume: FileOperations.onOneVolume))
         let extractor = try ExtractorRegistry(ollama: GatedOllama(gate: gate), recognizer: VisionTextRecognizer(),
                                               shell: ShellRunner(time: time), time: time, calendar: .autoupdatingCurrent)
+        let processes = try SystemProcesses()
         services = PipelineServices(
             database: database, archive: archive, config: config, settings: settings, extractor: extractor, analyzer: analyzer,
             filer: DocumentFiler(database: database, placer: placer, index: IndexStore(database: database, time: time),
                                  registry: registry, time: time),
-            traces: traces, vectors: vectors, trash: trash, time: time, ollama: GatedOllama(gate: gate), timeZone: .autoupdatingCurrent)
+            traces: traces, vectors: vectors, trash: trash, time: time, ollama: GatedOllama(gate: gate), timeZone: .autoupdatingCurrent,
+            claims: JobClaims(processes: processes), power: PowerState.current)
         coordinator = IngestCoordinator(services: services)
         settingsActions = SettingsActions(store: settings, history: services.history)
         profiles = ModelProfileActions(settings: settingsActions, bundled: try AppSettings.bundledDefaults().modelProfiles, database: database)
         review = ReviewActions(services: services, coordinator: coordinator)
         labels = LabelActions(database: database, time: time)
         interpreter = SearchPromptInterpreter(gate: gate, models: models, library: prompts.library)
-        let processes = try SystemProcesses()
         taskQueue = SearchTaskQueue(services: services, interpreter: interpreter, processes: processes)
         answerer = TaskAnswerer(gate: gate, models: models, library: prompts.library)
         conversationQueue = TaskConversationQueue(services: services, answerer: answerer, interpreter: interpreter, search: search,

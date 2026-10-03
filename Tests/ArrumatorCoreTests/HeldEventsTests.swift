@@ -49,7 +49,7 @@ import Testing
         let w = try await RecordsWorld.make()
         defer { w.h.env.cleanup() }
         let (database, _) = try w.newIndex()
-        let job = try #require(try await JobStore(database: database, time: w.h.env.time).enqueue(path: w.topListing.path, kind: .ingest))
+        let job = try await JobStore(database: database, time: w.h.env.time).enqueue(path: w.topListing.path, kind: .ingest).id
         do {
             try await HistoryStore(database: database, time: w.h.env.time).record(.arrived, job: job, summary: "arrived")
             Issue.record("an event about a job was recorded in an index that holds nothing of its archive")

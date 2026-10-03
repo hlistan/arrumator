@@ -52,7 +52,7 @@ struct Ingest: AsyncParsableCommand {
         var docs: [DocumentRecord] = []
         for (url, id) in jobs {
             let job = try await runtime.services.jobs.job(id: id)
-            if let doc = job?.docId ?? job?.payload.copyOf, let document = try await runtime.services.documents.document(id: doc) {
+            if let doc = job?.docId ?? (try? job?.payload)?.copyOf, let document = try await runtime.services.documents.document(id: doc) {
                 docs.append(document)
                 if job?.state == .failed { failed.append((url, job?.lastError ?? "it could not be filed")) }
             } else {

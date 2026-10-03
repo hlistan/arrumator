@@ -49,7 +49,6 @@ import Testing
     @Test func aFileWithAnIdentifierTheIndexDoesNotKnowIsTakenIn() async throws {
         let h = try await Harness.make()
         defer { h.env.cleanup() }
-        try await h.readyToWork()
         let letter = try h.env.put("From another archive/letter.txt", text: IngestTests.bill)
         let foreign = UUID().uuidString
         try Xattr.set(Xattr.documentID, foreign, on: letter)
@@ -233,7 +232,6 @@ import Testing
     @Test func aCopyWhoseIdentifierCannotBeTakenOffStaysOneDocumentWhenRenamed() async throws {
         let h = try await Harness.make()
         defer { h.env.cleanup() }
-        try await h.readyToWork()
         let original = try await h.ingest("bill.txt", text: IngestTests.bill)
         let copy = h.env.archive.appendingPathComponent("bill copy.txt").standardizedFileURL
         try FileManager.default.copyItem(at: original.url, to: copy)
@@ -358,7 +356,6 @@ import Testing
     @Test func aCopyWhoseIdentifierCannotBeTakenOffStaysOneDocumentAfterTheIndexIsRebuilt() async throws {
         let w = try await RecordsWorld.make()
         defer { w.h.env.cleanup() }
-        try await w.h.readyToWork()
         let original = try #require(try await w.h.services.documents.document(id: w.documents[0]))
         let copy = w.h.env.archive.appendingPathComponent("bill copy.txt").standardizedFileURL
         try FileManager.default.copyItem(at: original.url, to: copy)

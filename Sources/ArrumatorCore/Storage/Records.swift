@@ -179,7 +179,7 @@ public struct EventRecord: ArrumatorRecord, Identifiable, Hashable {
 /// the worker's live status (`IngestStatus.current`) says which. The rest are how it ended: `duplicate` for a file that
 /// was an exact copy of a document in the archive, which is read again in its place.
 public enum JobState: String, Sendable, Codable, CaseIterable {
-    case pending, hashing, extracting, analysing, filing, done, duplicate, needsReview, failed, held, cancelled
+    case pending, hashing, extracting, analysing, filing, done, duplicate, needsReview, failed, cancelled
 
     public var isActive: Bool { [.pending, .hashing, .extracting, .analysing, .filing].contains(self) }
 }
@@ -206,6 +206,10 @@ public struct JobRecord: ArrumatorRecord, Identifiable, Hashable {
     public var payloadJson: String
     public var createdAt: Date
     public var updatedAt: Date
+    /// The claim of the worker that has the job in hand (`JobClaims`), and its process as `ProcessTag` writes it; nil
+    /// for a job no worker has.
+    public var claim: String?
+    public var claimedBy: String?
     public mutating func didInsert(_ inserted: InsertionSuccess) { id = inserted.rowID }
 }
 

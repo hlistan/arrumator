@@ -7,6 +7,13 @@ public struct PowerState: Sendable, Hashable, Codable {
     public var thermal: ThermalLevel
     public var lowPowerMode: Bool
 
+    public init(onBattery: Bool, batteryPercent: Int?, thermal: ThermalLevel, lowPowerMode: Bool) {
+        self.onBattery = onBattery
+        self.batteryPercent = batteryPercent
+        self.thermal = thermal
+        self.lowPowerMode = lowPowerMode
+    }
+
     public static func current() -> PowerState {
         var onBattery = false
         var percent: Int?

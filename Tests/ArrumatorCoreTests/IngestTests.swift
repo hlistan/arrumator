@@ -296,16 +296,8 @@ struct RefusingTrash: Trashing {
         #expect(await waits.coordinator.status.waitingForOllama, "and the app shows it is waiting for Ollama")
     }
 
-    @Test func aMissingModelHoldsTheDocument() async throws {
-        let h = try await Harness.make(analyzer: StubAnalyzer(error: OllamaError.modelNotFound("ministral-3:14b")))
-        defer { h.env.cleanup() }
-        await h.coordinator.enqueue(try h.env.drop("bill.txt", text: "EDP electricity July"))
-        await h.coordinator.drain()
-        #expect(try await h.jobs().map(\.state) == [.held], "held until the model is downloaded")
-    }
-
     @Test func aDocumentThatKeepsFailingIsParkedInTheArchiveAndWaitsForTheUser() async throws {
-        let base = try await Harness.make(analyzer: StubAnalyzer(error: IngestError.invalidState("boom")))
+        let base = try await Harness.make(analyzer: StubAnalyzer(error: TestFailure("boom")))
         defer { base.env.cleanup() }
         let h = base.with { $0.ingest.retryDelays = NonEmpty(0, []) }
         let (services, coordinator) = (h.services, h.coordinator)

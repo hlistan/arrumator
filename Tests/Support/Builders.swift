@@ -1,4 +1,5 @@
 import ArrumatorCore
+import Foundation
 
 /// Record files as the user, by hand, may leave them, for the tests of reading them back and of rebuilding from them.
 public enum TestRecordFiles {
@@ -44,4 +45,11 @@ public enum TestRecordFiles {
 public enum TestSettingChange {
     public static let make: @Sendable (inout AppSettings) -> Void = { $0.renameFiles = false }
     public static let summary = "Changed renameFiles to false"
+}
+
+/// A failure of a test's own, none the app knows: one a stage throws to be tried again, as anything else that fails is.
+public struct TestFailure: LocalizedError, Equatable {
+    public let reason: String
+    public init(_ reason: String) { self.reason = reason }
+    public var errorDescription: String? { reason }
 }

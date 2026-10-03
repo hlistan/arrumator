@@ -99,8 +99,7 @@ import Testing
 
     static let lingering = "lingering"
 
-    @Test(.enabled("the worker waits while the Mac is too hot to work") { try Harness.workerRuns() })
-    func stoppingTellsEveryQueueToStopBeforeItWaitsForAny() async throws {
+    @Test func stoppingTellsEveryQueueToStopBeforeItWaitsForAny() async throws {
         // The search task queue reads a request until it is stopped; the file the ingest worker reads meanwhile cannot be
         // stopped until that request is, as a file that waits for the generation lane the request holds.
         let (holding, requestStopped, waiting) = (Signal(), OneShot<Void>(), Signal())
@@ -109,7 +108,6 @@ import Testing
             await requestStopped.wait()
         }))
         defer { h.env.cleanup() }
-        try await h.readyToWork()
         let (queue, tasks) = h.searchTasks(StubInterpreter(plans: [:]) { _ in
             holding.fire()
             try await withTaskCancellationHandler { try await TestTime(.blocks).sleep(seconds: 1) } onCancel: { requestStopped.fire(()) }

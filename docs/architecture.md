@@ -274,8 +274,8 @@ stateDiagram-v2
     cancelled --> [*]
 ```
 
-*The stages of an ingest job (`JobState`). A job is also `held` when the model it needs is missing, and `failed` when
-a stage has failed `ingest.maxAttempts` times; both are left out of the drawing because any stage can end that way.*
+*The stages of an ingest job (`JobState`). A job is also `failed` when a stage has failed `ingest.maxAttempts` times,
+which is left out of the drawing because any stage can end that way.*
 
 1. **Queued.** `IncomingWatcher` emits a file, or a package whole (`Packages`), once it has stopped changing. It
    watches Incoming as the file system spells it, as FSEvents reports paths, and leaves out the archive kept inside it;
@@ -283,7 +283,9 @@ a stage has failed `ingest.maxAttempts` times; both are left out of the drawing 
    `watcher.unopenableWaitSeconds` for it, which `IngestCoordinator.receive` records in History.
    `IngestCoordinator.enqueue` takes the document a path belongs to, at its path as the file system spells it
    (`URL.spelledOnDisk`), the one form a path in Incoming is queued, looked up and recorded in; decides its tags from
-   the folder it is in; inserts a job (one active job per path, by a unique index) and records its arrival.
+   the folder it is in; inserts a job (one active job per path, by a unique index) and records its arrival. A file
+   already queued arrives once: the job waiting for it is given the tags the new request adds (`JobStore.enqueue`),
+   which its worker, should it have the job in hand, takes up at its next save.
 2. **Hashed.** SHA-256 of the file, or of what a package holds. An exact copy of a document the archive holds is
    handed over to that document, which is read again, and the copy goes to the Trash
    ([exact copies](how-it-works.md#exact-copies)).
@@ -292,8 +294,11 @@ a stage has failed `ingest.maxAttempts` times; both are left out of the drawing 
    vocabulary with the archive's (`LabelConsolidator`).
 5. **Filed.** `DocumentFiler` builds the name, moves the file, and records the document row, the History event and the
    job's destination in one transaction. The move and its record run in a task of their own, so a stop that arrives
-   between them cannot separate them. A file no longer as it was hashed (`JobPayload.fingerprint`) is not moved
-   (`FileOperationError.sourceChanged`): its job goes back to the start, as a new arrival, for one of its attempts. One
+   between them cannot separate them; where the file goes is kept with the job before it moves
+   (`JobPayload.plannedPath`), so a job a crash cut off between the two finds the file there, by its identity or its
+   bytes, and records it there, rather than failing on a source that is gone. A file no longer as it was hashed
+   (`JobPayload.fingerprint`) is not moved (`FileOperationError.sourceChanged`): its job goes back to the start, as a
+   new arrival, for one of its attempts. One
    whose name stays its own where it is (`Placer.keeps`) is not moved at all. Across volumes the move is a checked copy,
    after which the file goes to the Trash; a file the Trash refuses stays, its copy goes there instead
    (`FileOperations.move`), and, as a refusal that will not change, it is not tried again: it is left in Incoming,
@@ -301,17 +306,29 @@ a stage has failed `ingest.maxAttempts` times; both are left out of the drawing 
    refuses is. A move makes the folders below the archive it needs, never the archive's own folder: one that is gone
    is `FileOperationError.folderMissing`, and the job waits for it, as for Ollama, spending no attempt.
 
-After each stage the job row is saved with what the stage found (`JobPayload`), which is what lets a job resume.
+After each stage the job row is saved with what the stage found (`JobPayload`), which is what lets a job resume. A job
+that has ended keeps neither its document's text nor its embedding, which the document's row and the index keep. A
+payload that cannot be read is never taken for an empty one: its job fails, saying why, and a rescan queues the file
+afresh.
 
 | What happened to a stage | What the worker does |
 |---|---|
 | The worker was stopped. | Nothing more is saved. The job keeps its stage and is taken first at the next start. |
-| The model is not installed. | The job is `held`, and History says which model is missing. |
+| The model is not installed. | The job waits at its stage, its row saying which model to download and how, and looks every `ingest.modelRecheckSeconds` whether the server lists it, starting no trace until it does. No attempt is spent, and History says once which model is missing. |
 | Ollama is away, timed out or answered with a server error. | The job waits the last of `ingest.retryDelays` and is tried again. No attempt is spent. |
 | Anything else failed. | One attempt is spent and the job waits its `ingest.retryDelays` step. After `ingest.maxAttempts` the file is parked in the archive as failed, where it waits for the user. |
 
 The queue has one order, the order jobs were queued in (`JobStore.nextDue`); when a job is due only gates it. Reading
-documents again after a rebuild always gives way to new arrivals.
+documents again after a rebuild always gives way to new arrivals. A worker takes a job in the write that claims it
+(`JobClaims`: a claim of its own and its `ProcessTag`, as the task queues keep theirs), and saves each stage only
+while the claim holds, so `arrumatorcli` beside the app never works on the job the app has in hand. A job is let go
+when its worker stops; one a process that has since ended held is taken again. A job whose stage a deadline gave up
+on, as a parse PDFKit does not let be cancelled, is not started again while that work still runs (`LeftRunning`), so
+abandoned runs of one file never stack up; work that has not ended after `ingest.abandonedWorkSeconds` fails its
+job, saying why. While paused the worker waits for the doorbell, which resuming and every change of the settings ring;
+while the Mac's power keeps it waiting, `power.recheckSeconds`; while the archive's folder is not there, the last of
+`ingest.retryDelays`; otherwise until the next job is due, or a job a process that has ended held, and while another
+process holds a job, `ingest.heldElsewhereRecheckSeconds` at most, as the task and question queues wait (`IdleWait`).
 
 ### A change the user makes in the archive
 

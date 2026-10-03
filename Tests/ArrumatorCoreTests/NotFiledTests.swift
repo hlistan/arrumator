@@ -47,6 +47,53 @@ struct RefusingOne: Trashing {
 @Suite struct NotFiledTests {
     static let bill = "EDP electricity July"
 
+    /// The pipeline over a model that fails to read every file, tried again without delay, and waiting for what is away
+    /// the last of `ingest.retryDelays`.
+    private static func failing() async throws -> (base: Harness, h: Harness) {
+        let base = try await Harness.make(analyzer: StubAnalyzer(error: TestFailure("boom")))
+        return (base, base.with { $0.ingest.retryDelays = NonEmpty(0, [0, 30]) })
+    }
+
+    @Test func aFileThatKeepsFailingWaitsForTheArchiveToBeSetAsideThereNeverLeftInIncoming() async throws {
+        let (base, h) = try await Self.failing()
+        defer { base.env.cleanup() }
+        let url = try base.env.drop("bad.txt", text: "x")
+        let id = try #require(await h.coordinator.enqueue(url))
+        try FileManager.default.removeItem(at: base.env.archive)
+        await h.coordinator.drain()
+        let waiting = try #require(try await h.services.jobs.job(id: id))
+        #expect(waiting.state.isActive && waiting.nextRunAt == base.env.time.now().addingTimeInterval(base.env.config.ingest.retryDelays.last),
+                "its last attempt spent, it waits for the archive's folder to set it aside there: \(waiting.state)")
+        let docID = try #require(waiting.docId)
+        let document = try #require(try await h.services.documents.document(id: docID))
+        #expect(document.status == .processing && FileManager.default.fileExists(atPath: url.path),
+                "rather than being left in Incoming as failed for good")
+
+        try FileManager.default.createDirectory(at: base.env.archive, withIntermediateDirectories: true)
+        base.env.time.advance(by: base.env.config.ingest.retryDelays.last)
+        await h.coordinator.drain()
+        let parked = try #require(try await h.services.documents.document(id: docID))
+        #expect(parked.status == .failed && base.env.archive.holds(parked.path), "once the folder is back, it is set aside in the archive")
+    }
+
+    @Test func aFailureToRecordAFileThatKeepsFailingIsInHistory() async throws {
+        let (base, h) = try await Self.failing()
+        defer { base.env.cleanup() }
+        let id = try #require(await h.coordinator.enqueue(try base.env.drop("bad.txt", text: "x")))
+        try await base.env.database.writer.write { db in
+            try db.execute(sql: """
+                CREATE TEMP TRIGGER failing_cannot_be_recorded BEFORE UPDATE OF status ON documents WHEN NEW.status = 'failed'
+                BEGIN SELECT RAISE(ABORT, 'the index is full'); END
+                """)
+        }
+        await h.coordinator.drain()
+        let job = try #require(try await h.services.jobs.job(id: id))
+        #expect(job.state == .failed, "the job fails")
+        let said = try await h.services.history.events(limit: 5, kinds: [.failed]).map(\.summary)
+        #expect(said.count == 1 && said.allSatisfy { $0.hasPrefix("bad.txt failed (boom), and that could not be recorded with it: ") },
+                "and that what it failed with could not be recorded is said in History, not only in the log: \(said)")
+    }
+
     /// Every move crosses a volume.
     private static let otherVolume: FileOperations.VolumeCheck = { _, _ in false }
 
@@ -194,7 +241,7 @@ struct RefusingOne: Trashing {
         let matcher = SearchPlanMatcher(database: h.env.database, archive: h.env.archive, limit: 10)
         let plan = SearchPlan(title: "", labels: [DocumentLabel(kind: .sender, value: "EDP Comercial")], words: [], grouping: [])
         #expect(try await matcher.documents(plan) == [filed.id], "a search task finds the document in the archive, not the one left in Incoming")
-        await #expect(throws: IngestError.invalidState("only a document in the archive can be confirmed"),
+        await #expect(throws: IngestError.notInArchive(try #require(left.id)),
                       "nor can one left in Incoming be confirmed as filed") {
             try await h.review.confirm(try #require(left.id))
         }

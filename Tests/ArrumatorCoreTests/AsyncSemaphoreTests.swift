@@ -54,8 +54,7 @@ import Testing
         nextAsks.cancel()
     }
 
-    @Test(.enabled("the worker waits while the Mac is too hot to work") { try Harness.workerRuns() })
-    func aFileWaitingForTheGenerationLaneStopsAtOnceWhileAnotherQueueHoldsIt() async throws {
+    @Test func aFileWaitingForTheGenerationLaneStopsAtOnceWhileAnotherQueueHoldsIt() async throws {
         let gate = InferenceGate(api: HeldOllama(), retryDelays: [], time: TestTime(.blocks))
         let ask = OllamaChatRequest.sample(think: nil)
         let reading = Signal()
@@ -64,7 +63,6 @@ import Testing
             _ = try await gate.chat(ask)
         }))
         defer { h.env.cleanup() }
-        try await h.readyToWork()
         // The search task queue reads a request, holding the lane for as long as the model thinks.
         let holding = Signal()
         let (queue, tasks) = h.searchTasks(StubInterpreter(plans: [:]) { _ in

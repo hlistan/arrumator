@@ -274,7 +274,12 @@ No tunable lives in code. Defaults are bundled in `Sources/ArrumatorCore/Resourc
   least 1, and how often the archive's folder is looked for while it is away, and a file taking long looked at,
   `watcher.awayPollSeconds`), `records` (the names of the archive's record files and of its system and history folders,
   such as `records.labelRulesFileName`, `records.searchTasksFileName` and `records.conversationsFolderName`), `ingest`
-  (attempts and retry delays, also how many starts a change in the archive that cannot be taken in is tried at, and how
+  (attempts and retry delays, also how many starts a change in the archive that cannot be taken in is tried at, how
+  often a document whose model is not installed looks again whether it is, `ingest.modelRecheckSeconds`, more than 0,
+  how long a document waits for a reading given up on that does not stop to end before it fails rather than being
+  read again beside it, `ingest.abandonedWorkSeconds`, more than 0, how long an idle worker, of Incoming or of tasks
+  and questions, waits at most while another process, as `arrumatorcli` beside the app, holds items of its queue,
+  before it looks again whether that process still runs, `ingest.heldElsewhereRecheckSeconds`, more than 0, and how
   long quitting waits for the file in hand, the request being read and the question being answered to stop,
   `ingest.quitTimeout`, after which the `ollama serve` the app started is stopped all the same), `extraction` (OCR and
   extraction limits, among them how much of an e-mail is read, `extraction.emailReadCapBytes`, and of its body,

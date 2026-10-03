@@ -130,7 +130,7 @@ enum Wording {
         case .extracting: "Reading its text"
         case .analysing: "Being read by the model"
         case .filing: "Filing"
-        case .done, .duplicate, .needsReview, .failed, .held, .cancelled: "Finishing"
+        case .done, .duplicate, .needsReview, .failed, .cancelled: "Finishing"
         }
     }
 

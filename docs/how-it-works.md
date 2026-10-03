@@ -308,12 +308,15 @@ their card:
 A document that waits keeps its own name: what the model read of it is in doubt. Confirm one as it is
 (**Looks Right**), correct its name or labels, or have it read again. A file that keeps failing to be processed at all
 (`ingest.maxAttempts`) is parked in the archive the same way, with status failed, so Incoming stays clean and nothing
-is lost; one that cannot be moved into the archive either stays in Incoming, failed, saying why.
+is lost; one that cannot be moved into the archive either stays in Incoming, failed, saying why, and one that cannot be
+moved there because the archive's folder is not there waits for it to be.
 
 While Ollama cannot be reached a document waits where it stopped, an image whose text is too sparse to tell what it
-is included, which is described when Ollama is back rather than filed without its description; a missing model holds
-a document until the model is downloaded; neither costs it an attempt. A server that answers, but with a failure (an
-error of its own or an empty reply) each time it is asked, as a model may for one image, costs an attempt each time,
+is included, which is described when Ollama is back rather than filed without its description; a document whose model
+is not installed waits in the Incoming queue, saying which model to download and how, and looks every
+`ingest.modelRecheckSeconds` whether Ollama lists it, until the model is downloaded, History saying it once; neither
+costs it an attempt. A server that answers, but with a failure (an error of its own or an empty reply) each time it is
+asked, as a model may for one image, costs an attempt each time,
 and so does a request that times out while the server still answers when asked for its version; a timeout while it
 answers nothing is Ollama away. Such a document is parked as failed after `ingest.maxAttempts`, with the reason, for
 you to read again, rather than tried again for ever. A description the vision model fails to give, an answer that is
@@ -379,10 +382,16 @@ taken over it.
 
 Reading a document again (`review retry`, **Read Again**) labels and names it again where it is, from the text read of
 it before (from its file, when the file changed since it was read), keeping its tags; putting an exact copy of it into
-Incoming does the same, reading its text from its file again too ([exact copies](#exact-copies)). A reading that gives
-no name leaves it the name it has, and one that names it as it is named, but for case or the collision suffix
-(`naming.collisionFormat`) a taken name gave it, moves nothing. A document you undid is back in Incoming, held; read
-again, it is filed at the top of the archive.
+Incoming does the same, reading its text from its file again too ([exact copies](#exact-copies)). You win over a
+reading under way: a label you change while the model reads, of any kind, as a sender corrected or a tag given or taken
+away, stays as you left it, and the reading fills in only the kinds you did not touch. A reading that gives no name
+leaves it the name it has, and one that names it as it is named, but for case or the collision suffix
+(`naming.collisionFormat`) a taken name gave it, moves nothing. A document you undid is back in Incoming, held, and a
+rescan leaves it there while the file is that document; read again, it is filed at the top of the archive. Another file
+put in its place, as a scanner saving under the same name, is taken as a new arrival, and the one undone is missing. This
+is unlike a document left in Incoming as failed, whose file saved again is that document arriving again: a failed one
+is the app's attempt at the file there, which a new save of it takes up again, while one you undid or left for later is
+your decision about the file it was, which a file put in its place does not inherit, with its tags and its History.
 
 ## Search tasks
 

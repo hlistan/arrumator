@@ -37,6 +37,30 @@ import Testing
                 "an item no running process holds is left, as is this process's own between items; one launchd holds is not")
     }
 
+    @Test func anIdleQueueLooksAgainAfterAWhileWhileAnotherProcessHoldsItsItems() async throws {
+        let w = try await tasksSuite.world()
+        defer { w.h.env.cleanup() }
+        let (queue, tasks) = w.h.searchTasks(StubInterpreter(plans: [:]))
+        let (talkQueue, talk) = w.h.conversations(StubAnswerer(fallback: ConversationTests.reply), interpreter: StubInterpreter(plans: [:]))
+        let asked = try await tasks.create(prompt: SearchTaskTests.prompt)
+        let question = try await talk.ask(asked.id, question: ConversationTests.question)
+        let command = w.h.processes.start(pid: TestProcesses.otherPID)
+        _ = try await tasks.store.begin(asked.id, by: command.description)
+        _ = try await talk.store.begin(question.id, by: command.description)
+        let held = (try await queue.heldElsewhere(), try await talkQueue.heldElsewhere())
+        #expect(held.0 && held.1, "a running command holds a task and a question")
+        let recheck = w.h.env.config.ingest.heldElsewhereRecheckSeconds
+        #expect(IdleWait.seconds(untilDue: nil, heldElsewhere: true, recheck: recheck, now: TestTime.start) == recheck,
+                "so an idle queue, with nothing due, looks again after ingest.heldElsewhereRecheckSeconds, not only when rung")
+        #expect(IdleWait.seconds(untilDue: TestTime.start.addingTimeInterval(5), heldElsewhere: true, recheck: recheck, now: TestTime.start) == 5,
+                "or sooner, when an item is due sooner")
+        w.h.processes.end(command)
+        let released = (try await queue.heldElsewhere(), try await talkQueue.heldElsewhere())
+        #expect(!released.0 && !released.1, "once it has ended, nothing is held elsewhere")
+        #expect(IdleWait.seconds(untilDue: nil, heldElsewhere: false, recheck: recheck, now: TestTime.start) == nil,
+                "and the idle queue waits for the doorbell alone")
+    }
+
     @Test func aTaskACommandWasReadingWhenItWasKilledIsReadByTheNextCommandAndByTheRunningApp() async throws {
         let w = try await tasksSuite.world()
         defer { w.h.env.cleanup() }

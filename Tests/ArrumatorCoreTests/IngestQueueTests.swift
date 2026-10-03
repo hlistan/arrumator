@@ -1,6 +1,7 @@
 @testable import ArrumatorCore
 import ArrumatorTesting
 import Foundation
+import Synchronization
 import Testing
 
 /// The ingest queue takes files in the order they arrived (`JobStore.nextDue`). A file stopped part way, as when the app
@@ -8,17 +9,14 @@ import Testing
 /// be tried again holds up none behind it. Quitting stops the queues before the app ends, and a stop never separates a
 /// move into the archive from its record.
 @Suite struct IngestQueueTests {
-    /// The pipeline over files read by an analyzer that holds the reading `holding` names until the worker is stopped,
-    /// with an archive to file into and a worker that runs on battery too.
-    private func world(_ holding: Holding) async throws -> (h: Harness, analyzer: StubAnalyzer) {
+    /// The pipeline over files read by an analyzer that holds the reading `holding` names until the worker is stopped.
+    func world(_ holding: Holding) async throws -> (h: Harness, analyzer: StubAnalyzer) {
         let analyzer = StubAnalyzer(during: { try await holding.read($0) })
         let h = try await Harness.make(analyzer: analyzer)
-        try await h.readyToWork()
         return (h, analyzer)
     }
 
-    @Test(.enabled("the worker waits while the Mac is too hot to work") { try Harness.workerRuns() })
-    func aFileStoppedPartWayCarriesOnFirstAtTheNextStartBeforeTheFilesThatArrivedAfterIt() async throws {
+    @Test func aFileStoppedPartWayCarriesOnFirstAtTheNextStartBeforeTheFilesThatArrivedAfterIt() async throws {
         let holding = Holding()
         let (h, analyzer) = try await world(holding)
         defer { h.env.cleanup() }
@@ -46,7 +44,7 @@ import Testing
         await h.coordinator.stop()
         let stopped = try await h.jobs()
         #expect(stopped.map(\.state) == [.analysing, .pending, .pending], "the file in hand stays at the stage it was stopped in")
-        #expect(stopped.first?.payload.content != nil && stopped.first?.attempt == 0 && stopped.first?.lastError == nil,
+        #expect(try stopped.first?.payload.content != nil && stopped.first?.attempt == 0 && stopped.first?.lastError == nil,
                 "with what was read of it kept, and no attempt spent and no error recorded: being stopped is no failure")
         let afterStop = await h.coordinator.status
         #expect(afterStop.current == nil, "a stopped worker has nothing in hand")
@@ -85,8 +83,7 @@ import Testing
         #expect(extracted == 3, "a file stopped while the model read it carries on from its last finished stage: it is not extracted again")
     }
 
-    @Test(.enabled("the worker waits while the Mac is too hot to work") { try Harness.workerRuns() })
-    func whatAFileInTheQueueAndTheOneInHandShowIsTheTagTheyWillBeGivenThroughAStopAndARestart() async throws {
+    @Test func whatAFileInTheQueueAndTheOneInHandShowIsTheTagTheyWillBeGivenThroughAStopAndARestart() async throws {
         let holding = Holding()
         let (h, _) = try await world(holding)
         defer { h.env.cleanup() }
@@ -120,7 +117,7 @@ import Testing
 
     @Test func aFileWaitingToBeTriedAgainHoldsUpNoneBehindItAndThenTakesItsPlaceByWhenItArrived() async throws {
         let stumbles = Stumbles(once: "a.txt")
-        let analyzer = StubAnalyzer(during: { if await stumbles.stumble($0) { throw IngestError.invalidState("the model stumbled") } })
+        let analyzer = StubAnalyzer(during: { if await stumbles.stumble($0) { throw TestFailure("the model stumbled") } })
         let h = try await Harness.make(analyzer: analyzer)
         defer { h.env.cleanup() }
         let jobs = h.services.jobs
@@ -130,6 +127,8 @@ import Testing
         let waiting = try #require(try await jobs.job(id: a))
         #expect(waiting.state == .analysing && waiting.attempt == 1 && waiting.lastError == "the model stumbled",
                 "the file whose reading failed waits to be tried again from that stage")
+        #expect(waiting.nextRunAt == h.env.time.now().addingTimeInterval(h.env.config.ingest.retryDelays.first),
+                "after the first of ingest.retryDelays")
         let meanwhile = try await h.jobs().map(\.state)
         #expect(meanwhile == [.analysing, .done], "and the file behind it is filed meanwhile")
         let readFirst = await analyzer.calls.files
@@ -137,13 +136,13 @@ import Testing
 
         // While it waits, the index is rebuilt (the filed document is read again for search) and another file arrives.
         let filed = try #require(try await h.services.documents.list(DocumentFilter(statuses: [.filed]), limit: 5).first)
-        let reindex = try #require(try await jobs.enqueue(path: filed.path, kind: .reindex, docID: filed.id))
+        let reindex = try await jobs.enqueue(path: filed.path, kind: .reindex, docID: filed.id).id
         let c = try #require(await h.coordinator.enqueue(try h.env.drop("c.txt", text: "EDP electricity, September")))
-        let beforeItsTime = try await jobs.nextDue()?.id
+        let beforeItsTime = try await Self.next(in: jobs)
         #expect(beforeItsTime == c,
                 "a file that arrives meanwhile is not held up by the one waiting, and reading again for search gives way to it")
         h.env.time.advance(by: try #require(waiting.nextRunAt).timeIntervalSince(h.env.time.now()))
-        let atItsTime = try await jobs.nextDue()?.id
+        let atItsTime = try await Self.next(in: jobs)
         #expect(atItsTime == a,
                 "once its time has come, the file that waited takes its place by when it arrived: before the file that came after it")
         await h.coordinator.drain()
@@ -155,10 +154,38 @@ import Testing
         #expect(drained == [.done, .done, .done, .done], "nothing is left in the queue")
     }
 
+    @Test func aFileQueuedAgainWithATagIsGivenItWhetherItWaitsOrIsInHandAndArrivesOnce() async throws {
+        let holding = Holding()
+        let (h, _) = try await world(holding)
+        defer { h.env.cleanup() }
+        let (waiting, inHand) = (try h.env.drop("waiting.txt", text: IngestTests.bill), try h.env.drop("inhand.txt", text: IngestTests.bill + " 2"))
+        await h.coordinator.enqueue(inHand)
+        await h.coordinator.enqueue(waiting)
+        await holding.hold("inhand.txt")
+        let app = Task { await h.coordinator.drain() }
+        #expect(await Patience.until { await holding.held == "inhand.txt" }, "the worker has the first file in hand, the model reading it")
+
+        // `arrumatorcli ingest --tag Taxes` for both, as a rescan finds them again too.
+        for url in [inHand, waiting] {
+            await h.coordinator.enqueue(url, tags: ["Taxes"])
+            await h.coordinator.enqueue(url)
+        }
+        let tag = DocumentLabel(kind: .tag, value: "Taxes")
+        #expect(try await h.jobs().map(\.tags) == [[tag], [tag]], "each job, the one in hand too, does all the requests asked")
+        await holding.letGo()
+        await app.value
+        await h.coordinator.drain()
+        let filed = try await h.services.documents.list(DocumentFilter(statuses: [.filed]), limit: 5)
+        #expect(filed.count == 2 && filed.allSatisfy { $0.labels?.contains(tag) == true },
+                "both are filed with the tag, given while one was in hand and the other waited: \(filed.map { $0.labels ?? [] })")
+        let arrivals = try await h.services.history.events(limit: 10, kinds: [.arrived]).count
+        #expect(arrivals == 2, "and each file arrived once, however often it was asked for")
+    }
+
     @Test func whichFileIsInHandAndWhichWaitIsWhatTheStatusSaysOfThem() async throws {
         let store = JobStore(database: try AppDatabase.inMemory(), time: TestTime(.advances))
         func job(_ name: String, _ state: JobState) async throws -> JobRecord {
-            let id = try #require(try await store.enqueue(path: "/Incoming/\(name)", kind: .ingest))
+            let id = try await store.enqueue(path: "/Incoming/\(name)", kind: .ingest).id
             var job = try #require(try await store.job(id: id))
             job.state = state
             try await store.update(job)
@@ -246,7 +273,7 @@ import Testing
             _ = await Patience.until { await stopper.holds }
             return try await h.services.filer.file(document, archive: h.services.archive, analysis: DocumentAnalysis(fileName: StubAnalyzer.edpFileName, model: "stub"),
                                                    status: .filed, directory: h.env.archive, inPlace: false, fingerprint: fingerprint,
-                                                   actor: .system, settings: settings, trace: trace, event: nil, recording: nil)
+                                                   actor: .system, settings: settings, trace: trace, event: nil, keeping: nil)
         }
         await stopper.hold(filing)
         let filed = await filing.result
@@ -268,15 +295,12 @@ actor IngestFollower {
     func add(_ status: IngestStatus) { received.append(status) }
 }
 
-/// Holds the model's reading of a file, when told to, until the worker is stopped, as a model still thinking when the
-/// app quits; what it holds now.
+/// While the archive is away the worker begins nothing, and a file in hand stops at its next stage.
 @Suite struct ArchiveAwayIngestTests {
-    @Test(.enabled("the worker waits while the Mac is too hot to work") { try Harness.workerRuns() })
-    func whileTheArchiveIsAwayNothingInIncomingIsReadOrSentToTheModelAndOnceBackItIsFiled() async throws {
+    @Test func whileTheArchiveIsAwayNothingInIncomingIsReadOrSentToTheModelAndOnceBackItIsFiled() async throws {
         let read = Reads()
         let h = try await Harness.make(analyzer: StubAnalyzer(during: { await read.add($0) }))
         defer { h.env.cleanup() }
-        try await h.readyToWork()
         await h.coordinator.archive(isAway: true)
         await h.coordinator.enqueue(try h.env.drop("bill.txt", text: "EDP electricity"))
         await h.coordinator.start()
@@ -290,12 +314,10 @@ actor IngestFollower {
         #expect(await read.files.count == 1, "and read once")
     }
 
-    @Test(.enabled("the worker waits while the Mac is too hot to work") { try Harness.workerRuns() })
-    func aFileInHandWhenTheArchiveGoesAwayStopsAtItsNextStageWithoutSpendingAnAttempt() async throws {
+    @Test func aFileInHandWhenTheArchiveGoesAwayStopsAtItsNextStageWithoutSpendingAnAttempt() async throws {
         let away = AwayOnRead()
         let h = try await Harness.make(analyzer: StubAnalyzer(during: { _ in await away.go() }))
         defer { h.env.cleanup() }
-        try await h.readyToWork()
         await away.set(h.coordinator)
         await h.coordinator.enqueue(try h.env.drop("bill.txt", text: "EDP electricity"))
         await h.coordinator.start()
@@ -327,18 +349,27 @@ actor Reads {
     func add(_ file: String) { files.append(file) }
 }
 
+/// Holds the model's reading of a file, when told to, until it is let go or the worker is stopped, as a model still
+/// thinking when the app quits; what it holds now.
 actor Holding {
     private var holding: String?
     private(set) var held: String?
+    private var release: AsyncStream<Void>.Continuation?
 
     func hold(_ file: String) { holding = file }
+
+    /// Lets the reading held go on, as a model that has finished thinking.
+    func letGo() { release?.finish() }
 
     func read(_ file: String) async throws {
         guard file == holding else { return }
         holding = nil
         held = file
         defer { held = nil }
-        try await TestTime(.blocks).sleep(seconds: 1)
+        let (until, release) = AsyncStream<Void>.makeStream()
+        self.release = release
+        for await _ in until {}
+        try Task.checkCancellation()
     }
 }
 
@@ -376,5 +407,19 @@ struct StopAfterPlacing: TraceSink {
 
     func append(traceID: Int64, step: TraceStep) async {
         if step.stage == .place { await stopper.stop() }
+    }
+}
+
+/// Reads a file as the plain extractor does, under a deadline of a second that passes at once the first time, as a PDF that
+/// PDFKit parses past its time: the first reading waits at `hold`, unaware of being cancelled, until the test opens it.
+struct Stuck: ContentExtracting {
+    let hold: Hold
+
+    func extract(_ url: URL, sha256: String, context: ExtractionContext, trace: TraceContext) async throws -> ExtractedContent {
+        // Only the first reading runs out of time; a later one is waited for.
+        try await Deadline.run(1, time: TestTime(hold.arrivals == 0 ? .advances : .blocks), expired: { DeadlineExceeded(seconds: 1) }) {
+            await hold.arrive()
+            return try await PlainTestExtractor().extract(url, sha256: sha256, context: context, trace: trace)
+        }
     }
 }

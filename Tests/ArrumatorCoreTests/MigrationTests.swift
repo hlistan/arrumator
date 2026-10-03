@@ -13,7 +13,7 @@ import ArrumatorTesting
                           "v8_undoForgets", "v9_foldersOfAnyDepth", "v10_folderKinds", "v11_labelsNotFolders",
                           "v12_labelRules", "v13_traceExchanges", "v14_searchTasks", "v15_taskEffort",
                           "v16_taskProfile", "v17_tags", "v18_taskConversations", "v19_unreadIndexRefusesRecords",
-                          "v20_queueWorkers"]
+                          "v20_queueWorkers", "v21_jobClaims", "v22_jobsWaitForTheirModel", "v23_endedJobsKeepNoText"]
 
     /// An index as a release before this one made it, migrated up to `identifier`: its first migration ran before that
     /// one marked a new index as still to be rebuilt from its archive, so it is not.
@@ -247,6 +247,56 @@ import ArrumatorTesting
             #expect(try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM search_task_turns") == 0, "a task's questions go with it")
             #expect(try String.fetchAll(db, sql: marks) == ["conversation:4", "tasks"], "and its conversation's file is marked, to be removed")
         }
+    }
+
+    @Test func aJobHeldForAMissingModelWaitsForItAtTheStageItReachedOneJobAPath() throws {
+        let queue = try Self.installed(upTo: "v21_jobClaims")
+        try queue.write { db in
+            try db.execute(sql: """
+                INSERT INTO jobs (id, kind, source_path, state, payload_json, created_at, updated_at) VALUES
+                  (1, 'ingest', '/Incoming/read.pdf', 'held', '{"sha256":"a","content":{}}', 0, 7),
+                  (2, 'ingest', '/Incoming/twice.pdf', 'held', '{}', 0, 7),
+                  (3, 'ingest', '/Incoming/twice.pdf', 'held', '{"sha256":"b"}', 0, 8),
+                  (4, 'ingest', '/Incoming/again.pdf', 'held', '{}', 0, 7),
+                  (5, 'ingest', '/Incoming/again.pdf', 'pending', '{}', 0, 9),
+                  (6, 'reindex', '/Archive/filed.pdf', 'held', '{"content":{}}', 0, 7);
+                """)
+        }
+        try AppDatabase.migrator.migrate(queue, upTo: "v22_jobsWaitForTheirModel")
+        let jobs = try queue.read { db in try Row.fetchAll(db, sql: "SELECT id, state, next_run_at FROM jobs ORDER BY id") }
+        #expect(jobs.map { $0["state"] as String } == ["analysing", "cancelled", "pending", "cancelled", "pending", "pending"],
+                "each waits again at the stage after the last it finished, and a path keeps one active job: \(jobs)")
+        #expect(jobs.first?["next_run_at"] as Double? == 7, "due at once, as it was when it was held")
+    }
+
+    @Test func aJobHeldForAMissingModelWhoseFileALaterJobFiledStaysEnded() throws {
+        let queue = try Self.installed(upTo: "v21_jobClaims")
+        try queue.write { db in
+            try db.execute(sql: """
+                INSERT INTO jobs (id, kind, source_path, state, payload_json, created_at, updated_at) VALUES
+                  (1, 'ingest', '/Incoming/bill.pdf', 'held', '{"sha256":"a","content":{}}', 0, 7),
+                  (2, 'ingest', '/Incoming/bill.pdf', 'done', '{"sha256":"a","targetPath":"/Archive/bill.pdf"}', 0, 9);
+                """)
+        }
+        try AppDatabase.migrator.migrate(queue, upTo: "v22_jobsWaitForTheirModel")
+        let states = try queue.read { db in try String.fetchAll(db, sql: "SELECT state FROM jobs ORDER BY id") }
+        #expect(states == ["cancelled", "done"], "a held job whose file a later job filed is not taken up again: \(states)")
+    }
+
+    @Test func jobsThatEndedBeforeKeepNoTextOrEmbeddingAndWaitingOnesKeepTheirs() throws {
+        let queue = try Self.installed(upTo: "v22_jobsWaitForTheirModel")
+        let read = #"{"sha256":"a","content":{"text":"EDP"},"outcome":{"embedding":[1,0],"embeddingModel":"m"},"targetPath":"/A/b.pdf"}"#
+        try queue.write { db in
+            try db.execute(sql: """
+                INSERT INTO jobs (id, kind, source_path, state, payload_json, created_at, updated_at) VALUES
+                  (1, 'ingest', '/Incoming/done.pdf', 'done', ?, 0, 0), (2, 'ingest', '/Incoming/waits.pdf', 'filing', ?, 0, 0),
+                  (3, 'ingest', '/Incoming/broken.pdf', 'failed', 'not json', 0, 0);
+                """, arguments: [read, read])
+        }
+        try AppDatabase.migrator.migrate(queue, upTo: "v23_endedJobsKeepNoText")
+        let payloads = try queue.read { db in try String.fetchAll(db, sql: "SELECT payload_json FROM jobs ORDER BY id") }
+        #expect(payloads == [#"{"sha256":"a","outcome":{"embeddingModel":"m"},"targetPath":"/A/b.pdf"}"#, read, "not json"],
+                "an ended job keeps what it did but no text or embedding; a waiting one keeps all; one no JSON is kept as it is")
     }
 
     @Test func anItemInHandWhenTheQueuesLearntTheirWorkersHasNoneAndGoesBackIntoTheQueue() throws {

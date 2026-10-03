@@ -28,15 +28,41 @@ public struct IndexStore: Sendable {
         }
     }
 
-    /// Makes a document's labels its own: on its row, which writes them into its record file, and in the full-text
-    /// index, in one transaction. `labelled` says whether they label it, as when the model read it; a document's tags
-    /// alone do not (`DocumentLabel.stored`).
-    public func saveLabels(_ labels: [DocumentLabel], docID: Int64, labelled: Bool) async throws {
+    /// Saves what the model read of a document, `read`, where the user has not changed it since the reading began: the
+    /// labels the document had then, `before`, are compared kind by kind with those it has when it is saved, read in the
+    /// same transaction, and a kind the user changed meanwhile, as a sender corrected or a tag given or taken away, stays
+    /// as the user left it. The user's own labels (tags) are always as the document has them. The reading fills in the
+    /// rest. The labels saved.
+    @discardableResult
+    public func saveReading(_ read: [DocumentLabel], before: [DocumentLabel], docID: Int64) async throws -> [DocumentLabel] {
         let now = time.now()
-        try await database.writer.write { db in try Self.saveLabels(db, labels, docID: docID, labelled: labelled, at: now) }
+        return try await database.writer.write { db in
+            guard let document = try DocumentRecord.fetchOne(db, key: docID) else { throw IngestError.documentNotFound(docID) }
+            let current = document.labels ?? []
+            let ofKind = { (labels: [DocumentLabel], kind: LabelKind) in Set(labels.filter { $0.kind == kind }) }
+            let users = Set(LabelKind.allCases.filter { $0.isUsersOwn || ofKind(before, $0) != ofKind(current, $0) })
+            let labels = (read.filter { !users.contains($0.kind) } + current.filter { users.contains($0.kind) }).distinct()
+            try Self.saveLabels(db, labels, docID: docID, labelled: true, at: now)
+            return labels
+        }
     }
 
-    /// Saves a document's labels inside an existing transaction, so a change to many documents commits as one.
+    /// Adds `added` to a document's labels, those it has not already, as they are when the transaction reads them, so
+    /// a change made meanwhile is kept.
+    public func addLabels(_ added: [DocumentLabel], docID: Int64) async throws {
+        let now = time.now()
+        try await database.writer.write { db in
+            guard let document = try DocumentRecord.fetchOne(db, key: docID) else { throw IngestError.documentNotFound(docID) }
+            let current = document.labels ?? []
+            let new = added.filter { !current.contains($0) }
+            guard !new.isEmpty else { return }
+            try Self.saveLabels(db, current + new, docID: docID, labelled: document.isLabelled, at: now)
+        }
+    }
+
+    /// Makes a document's labels its own, inside a transaction of the caller's that reads what it changes: on its row,
+    /// which writes them into its record file, and in the full-text index. `labelled` says whether they label it, as when
+    /// the model read it; a document's tags alone do not (`DocumentLabel.stored`).
     static func saveLabels(_ db: Database, _ labels: [DocumentLabel], docID: Int64, labelled: Bool, at now: Date) throws {
         let stored = DocumentLabel.stored(labels, labelled: labelled)
         let assignments = LabelKind.allCases.map { "\($0.rawValue) = ?" }.joined(separator: ", ")

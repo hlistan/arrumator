@@ -91,7 +91,7 @@ import Testing
         let queued = try await h.jobs()
         #expect(queued.map(\.tags) == [[Self.tag], [Self.tag], []],
                 "the tag is decided when a file is queued, from where it is in Incoming, and kept with its job before it is read")
-        #expect(queued.first?.payload.tags == [Self.given(h)], "with the folder that gave it")
+        #expect(try queued.first?.payload.tags == [Self.given(h)], "with the folder that gave it")
         await h.coordinator.drain()
 
         let documents = try await h.services.documents.list(DocumentFilter(), limit: 10)

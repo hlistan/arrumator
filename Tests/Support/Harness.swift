@@ -27,11 +27,13 @@ public struct Harness: Sendable {
     /// The pipeline's services over `env`, with `config` in force, moving files as `sameVolume` tells a rename from a
     /// copy to another volume: as the disk says, unless a test makes every move cross a volume; with `trash` as the Trash,
     /// the environment's own unless a test gives one that refuses; with `extractor` reading files, and `ollama` as the
-    /// server probed when a request to it timed out.
+    /// server probed when a request to it timed out; taking jobs with `claims`, this process's unless a test plays
+    /// another; and on the Mac's `power`, cool and on mains unless a test says otherwise.
     public static func services(_ env: TestEnvironment, analyzer: any DocumentAnalyzing,
                                 extractor: any ContentExtracting = PlainTestExtractor(), ollama: any OllamaAPI = MockOllama { _ in "" },
                                 config: PipelineConfig, sameVolume: @escaping FileOperations.VolumeCheck = FileOperations.onOneVolume,
-                                trash: (any Trashing)? = nil) -> PipelineServices {
+                                trash: (any Trashing)? = nil, claims: JobClaims = Harness.claims,
+                                power: @escaping @Sendable () -> PowerState = { Harness.cool }) -> PipelineServices {
         let trash = trash ?? env.trash
         let placer = Placer(builder: FilenameBuilder(config: config.naming, reserved: SkipRules(watcher: config.watcher)),
                             operations: FileOperations(trash: trash, sameVolume: sameVolume))
@@ -41,9 +43,14 @@ public struct Harness: Sendable {
             filer: DocumentFiler(database: env.database, placer: placer, index: IndexStore(database: env.database, time: env.time),
                                  registry: SelfChangeRegistry(ttl: config.watcher.selfChangeTTLSeconds, time: env.time), time: env.time),
             traces: TraceRecorder(database: env.database, appVersion: "test", time: env.time), vectors: VectorIndex(), trash: trash,
-            time: env.time, ollama: ollama, timeZone: .current)
+            time: env.time, ollama: ollama, timeZone: .current, claims: claims, power: power)
     }
 
+    /// The jobs this test process's workers hold: one for every pipeline the tests build, as the app has one.
+    public static let claims = JobClaims(processes: TestProcesses())
+
+    /// A Mac on mains, at a temperature it works at: what keeps no worker waiting.
+    public static let cool = PowerState(onBattery: false, batteryPercent: nil, thermal: .nominal, lowPowerMode: false)
     /// The same pipeline over `database`, as after the index was lost and made again.
     public func over(_ database: AppDatabase) -> Harness {
         let env = env.with(database: database)
@@ -56,20 +63,6 @@ public struct Harness: Sendable {
         change(&config)
         return Harness(env: env, services: Self.services(env, analyzer: services.analyzer, extractor: services.extractor, ollama: services.ollama,
                                                        config: config), processes: processes)
-    }
-
-    /// Whether the worker takes files on this Mac now, with pausing on battery turned off as `readyToWork()` turns it
-    /// off: a Mac too hot to work makes it wait.
-    public static func workerRuns() throws -> Bool {
-        var settings = try AppSettings.bundledDefaults()
-        settings.pauseOnBattery = false
-        return PowerState.current().pauseReason(settings: settings, config: try PipelineConfig.bundledDefaults().power) == nil
-    }
-
-    /// Readies the worker to file: an archive to file into, and pausing on battery turned off.
-    public func readyToWork() async throws {
-        try await env.settings.update { $0.pauseOnBattery = false }
-        try FileManager.default.createDirectory(at: env.archive, withIntermediateDirectories: true)
     }
 
     public var review: ReviewActions { ReviewActions(services: services, coordinator: coordinator) }

@@ -37,3 +37,22 @@ public final class TestTime: TimeSource {
         }
     }
 }
+
+/// Time that a test reads as `TestTime` and that never passes on its own: every sleep is recorded, then waits until its
+/// task is cancelled. What a worker asked to wait for, when the test needs to know how long it would have waited.
+public final class SleepLog: TimeSource {
+    private let time: TestTime
+    private let asked = Mutex<[Double]>([])
+
+    public init(_ time: TestTime) { self.time = time }
+
+    /// Every sleep asked for, in seconds, in the order asked.
+    public var sleeps: [Double] { asked.withLock { $0 } }
+
+    public func now() -> Date { time.now() }
+
+    public func sleep(seconds: Double) async throws {
+        asked.withLock { $0.append(seconds) }
+        try await TestTime(.blocks).sleep(seconds: seconds)
+    }
+}

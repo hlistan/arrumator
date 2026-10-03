@@ -26,6 +26,9 @@ public struct PipelineConfig: Sendable, Codable, Hashable, ValidatedConfiguratio
     public var problems: [String] {
         var problems: [String] = []
         if ingest.maxAttempts < 1 { problems.append("ingest.maxAttempts must be at least 1") }
+        if !(ingest.modelRecheckSeconds > 0) { problems.append("ingest.modelRecheckSeconds must be more than 0") }
+        if !(ingest.abandonedWorkSeconds > 0) { problems.append("ingest.abandonedWorkSeconds must be more than 0") }
+        if !(ingest.heldElsewhereRecheckSeconds > 0) { problems.append("ingest.heldElsewhereRecheckSeconds must be more than 0") }
         if analysis.repairAttempts < 0 { problems.append("analysis.repairAttempts cannot be negative") }
         if analysis.excerptTailDivisor < 2 { problems.append("analysis.excerptTailDivisor must be at least 2, so the head keeps the most") }
         if labels.maxPerKind < 1 { problems.append("labels.maxPerKind must be at least 1") }
@@ -154,6 +157,14 @@ public struct IngestConfig: Sendable, Codable, Hashable {
     /// Seconds before each retry of a failed job, the last one for every retry after; also how long a job waits for
     /// Ollama to come back.
     public var retryDelays: NonEmpty<Double>
+    /// Seconds a job whose model is not installed waits before it looks again whether it is, spending no attempt.
+    public var modelRecheckSeconds: Double
+    /// Seconds a job waits for work a deadline gave up on, which does not notice cancellation, to end before the job
+    /// fails rather than being worked on again beside it.
+    public var abandonedWorkSeconds: Double
+    /// Seconds an idle worker, of the ingest queue or the queues of tasks and questions, waits at most while another
+    /// process holds items of its queue, before it looks again whether that process still runs (`IdleWait`).
+    public var heldElsewhereRecheckSeconds: Double
     /// Seconds the app, when it quits, waits for its work to stop, so the document in hand and the request being read
     /// stop where they carry on at the next start. A stop that takes longer goes on while the app quits.
     public var quitTimeout: Double
