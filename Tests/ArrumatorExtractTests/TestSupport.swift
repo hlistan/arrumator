@@ -103,6 +103,25 @@ struct Scratch {
         return url
     }
 
+    /// A PDF of one empty page whose document information gives `creationDate` as written (`D:20240520013000+02'00'`),
+    /// which Core Graphics writes no other way than its own: written by hand, its objects, cross-reference table and
+    /// trailer as ISO 32000-1 §7.5 lays them out.
+    @discardableResult
+    func writePDF(_ name: String, creationDate: String) throws -> URL {
+        let objects = ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+                       "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] >>", "<< /CreationDate (\(creationDate)) >>"]
+        var pdf = "%PDF-1.4\n"
+        var offsets: [Int] = []
+        for (number, object) in objects.enumerated() {
+            offsets.append(pdf.utf8.count)
+            pdf += "\(number + 1) 0 obj\n\(object)\nendobj\n"
+        }
+        let table = pdf.utf8.count
+        pdf += "xref\n0 \(objects.count + 1)\n0000000000 65535 f \n" + offsets.map { String(format: "%010d 00000 n \n", $0) }.joined()
+        pdf += "trailer\n<< /Size \(objects.count + 1) /Root 1 0 R /Info 4 0 R >>\nstartxref\n\(table)\n%%EOF\n"
+        return try write(name, data: Data(pdf.utf8))
+    }
+
     /// A "scanned" PDF: each page is only a full-page raster image of the text, no text layer.
     @discardableResult
     func writeImagePDF(_ name: String, pages: [[String]]) throws -> URL {
@@ -393,6 +412,7 @@ enum FixtureError: Error {
     case encoding(String)
     case render
     case zip(Int32)
+    case missing(String)
 }
 
 // MARK: Configuration
@@ -400,22 +420,34 @@ enum FixtureError: Error {
 enum TestConfig {
     static func pipeline() throws -> PipelineConfig { try PipelineConfig.bundledDefaults() }
 
-    static func context(vision: VisionModelOptions? = nil,
+    /// What the pipeline extracts with, waiting for Ollama unless `whenOllamaIsAway` says otherwise.
+    static func context(vision: VisionModelOptions? = nil, whenOllamaIsAway: WhenOllamaIsAway = .wait,
                         _ adjust: (inout ExtractionConfig, inout EntityConfig) -> Void = { _, _ in }) throws -> ExtractionContext {
         let pipeline = try pipeline()
         var extraction = pipeline.extraction
         var entities = pipeline.entities
         adjust(&extraction, &entities)
-        return ExtractionContext(config: extraction, entities: entities, vision: vision)
+        return ExtractionContext(config: extraction, entities: entities, vision: vision, whenOllamaIsAway: whenOllamaIsAway)
     }
 
     /// The registry the app wires, with Vision's own recognizer and the real shell. Its deadlines are measured on time
     /// that never comes (`TestTime(.blocks)`), so real OCR and tools finish however slow the machine; pass
-    /// `TestTime(.advances)` for deadlines that expire at once.
+    /// `TestTime(.advances)` for deadlines that expire at once. It takes `calendar` for the Mac's, whatever this Mac's is.
     static func registry(ollama: (any OllamaAPI)? = nil, recognizer: any TextRecognizing = VisionTextRecognizer(),
-                         time: TestTime = TestTime(.blocks)) throws -> ExtractorRegistry {
-        try ExtractorRegistry(ollama: ollama, recognizer: recognizer, shell: ShellRunner(time: time), time: time)
+                         time: TestTime = TestTime(.blocks), calendar: Calendar = TestConfig.calendar) throws -> ExtractorRegistry {
+        try ExtractorRegistry(ollama: ollama, recognizer: recognizer, shell: ShellRunner(time: time), time: time,
+                              calendar: calendar)
     }
+
+    /// The calendar a Mac set to `identifier` in `zone` has.
+    static func calendar(_ identifier: Calendar.Identifier, in zone: TimeZone) -> Calendar {
+        var calendar = Calendar(identifier: identifier)
+        calendar.timeZone = zone
+        return calendar
+    }
+
+    /// The Mac's calendar the tests' registry has unless one says otherwise: Gregorian, in UTC.
+    static let calendar = calendar(.gregorian, in: .gmt)
 
     /// A vision model of its own, asked as the pipeline asks the profile's (`PipelineConfig.extractionContext`).
     static func visionOptions() throws -> VisionModelOptions {
@@ -471,4 +503,86 @@ extension ExtractedContent {
 extension MockOllama {
     /// What a model that can describe images reports, as the vision extractor checks before asking it.
     static let visionCapabilities = ["completion", "vision", "thinking"]
+}
+
+// MARK: Labelled numbers
+
+/// Account and policy numbers written in the many ways a label, a number sign and a number are written together: each
+/// label `StableKeys` had before its labels were configuration (429517b), in the spellings its patterns allowed (with and
+/// without dots, spaces and accents, with `º`, `°` and `o`), before a number that starts with a digit and one that starts
+/// with letters, after a space and after a colon; and sentences in which a label should, or should not, take a number.
+enum LabelledNumberVariants {
+    /// The number sign as `n.º` is written: `n` or `n.`, a space or none, `º`, `o` or `°`, and a dot or none after it.
+    static func ordinals(trailingDot: Bool = true) -> [String] {
+        combinations(["n", "n.", "N", "N."], ["", " "], ["º", "o", "°"], trailingDot ? ["", "."] : [""])
+    }
+
+    static var accountLabels: [String] {
+        combinations(["account "], ["no", "no.", "number", "nr", "nr.", "#"])
+            + combinations(["customer "], ["no", "no.", "number", "id", "ref", "reference", "#"])
+            + combinations(["client "], ["no", "no.", "number", "id", "#"])
+            + ["contract account"]
+            + combinations(["member ", "membership ", "subscriber "], ["no", "no.", "number", "id"])
+            + combinations(["número ", "numero ", "Número "], ["", "de "], ["cliente", "conta"])
+            + combinations(ordinals(), ["", " "], ["", "de "], ["cliente", "conta"])
+            + combinations(["código ", "codigo ", "referência ", "referencia "], ["", "de "], ["cliente"])
+            + combinations(["cliente "], ordinals(trailingDot: false))
+            + ["CPE", "CIL", "лицевой счёт", "лицевой счет", "Лицевой счёт", "л/с", "номер лицевого счёта",
+               "номер лицевого счета", "номер клиента", "номер абонента", "абонентский номер", "код клиента", "клиент№",
+               "клиент №"]
+    }
+
+    static var policyLabels: [String] {
+        combinations(["policy "], ["no", "no.", "number", "nr", "nr.", "#"])
+            + combinations(["contract "], ["no", "no.", "number", "nr", "nr.", "ref", "reference", "#"])
+            + combinations(["agreement "], ["no", "no.", "number", "#"])
+            + ["apólice", "apolice", "Apólice"]
+            + combinations(["número ", "numero "], ["", "de ", "do ", "da "], ["contrato", "apólice", "apolice"])
+            + combinations(ordinals(), ["", " "], ["", "de ", "do ", "da "], ["contrato", "apólice"])
+            + combinations(["contrato "], ordinals(trailingDot: false))
+            + ["contrato número", "contrato numero", "полис", "страховой полис", "номер договора", "номер полиса"]
+            // A contract's title between договор and its sign, and one of four words, which is too far.
+            + combinations(["договор"], contractTitles + [" на оказание услуг связи"], ["№", " №", "N", " N"] + contractSigns)
+    }
+
+    /// The titles of none to three words that may stand between договор and its number sign.
+    static let contractTitles = ["", " аренды", " оказания услуг", " купли продажи квартиры"]
+    /// The number signs written with an N after a contract's title, a space before each.
+    static let contractSigns = [" Nº", " N°", " No", " N º"]
+    /// The numbers after a label: one that starts with a digit, one that starts with letters.
+    static let numbers = ["12/2024-77", "AB-2024/77"]
+
+    /// Sentences around a label, as documents have them.
+    static let sentences = [
+        "Договор NDA-2024 подписан сторонами", "Договор Nr. 1234/56", "Договор No 12345678", "Договор N 2024/15",
+        "Договор N12/2024", "договор NOVA2024 заключён", "Customer number: 12345678", "Номер договора: 77-2024/15",
+        "ДОГОВОР АРЕНДЫ № 12/2024", "Договор купли-продажи № 45/2023", "Кредитный договор № 625/0018-0123456",
+        "Договор страхования № 001SB2024", "Договор № ДП-12/2024", "Policy No. AB-123456", "Apólice n.º AB-123456",
+        "Apólice n.ºAB-123456", "N.o de cliente 12345678", "No. de cliente: 12345678", "Cliente No. 12345678",
+        "Contrato No. 2024/0099", "Nº. de contrato: 2024/0099", "nºcliente 12345678", "клиент№ 12345678",
+        "Nº do contrato 2024/0099", "N.º da apólice 2024/0099", "NIF: 999 999 990", "Contribuinte n.º 999999990",
+        "Contribuinte n.o 999999990", "Contribuinte nº999999990", "Lugar no cliente do mês: 2024/77",
+        "Policy #A1234567", "Account #AC-998877", "Договор №АБ-123/2024", "Клиент №А-1234567", "Contrato nºCT2024001",
+    ]
+
+    /// What stands between a label and its number: a space, a colon, or nothing.
+    static let separators = [" ", ": ", ""]
+
+    /// `label` before each number, after each separator, inside a sentence.
+    static func texts(for label: String) -> [String] {
+        combinations(["Texto \(label)"], separators, numbers.map { "\($0) fim" })
+    }
+
+    /// The keys `StableKeys` found in each of `texts` before (429517b), as tokens in their order: captured once from that
+    /// commit's patterns, which are no longer in the code.
+    static func before() throws -> [String: [String]] {
+        guard let url = Bundle.module.url(forResource: "labelled-numbers-before", withExtension: "json", subdirectory: "Resources")
+        else { throw FixtureError.missing("labelled-numbers-before.json") }
+        return try JSONDecoder().decode([String: [String]].self, from: Data(contentsOf: url))
+    }
+
+    /// Each string of the first list followed by each of the next, and so on.
+    private static func combinations(_ lists: [String]...) -> [String] {
+        lists.dropFirst().reduce(lists.first ?? []) { heads, tails in heads.flatMap { head in tails.map { head + $0 } } }
+    }
 }

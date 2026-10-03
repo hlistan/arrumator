@@ -17,6 +17,7 @@ public actor ArchiveRecords {
     let config: PipelineConfig
     private let registry: SelfChangeRegistry?
     let time: any TimeSource
+    private let timeZone: TimeZone
     /// Why each record file that cannot be read cannot, by its path, as it was last found.
     private var unreadable: [String: String] = [:]
     /// Whether a flush, a read-back or a rebuild runs, and those waiting for their turn, the first first.
@@ -29,8 +30,10 @@ public actor ArchiveRecords {
     /// is. Set by tests only.
     private var beforeApplying: (@Sendable (URL) async -> Void)?
 
+    /// - Parameter timeZone: the Mac's, which the moments and days written for people browsing the archive are in.
     public init(database: AppDatabase, archive: URL, settings: SettingsStore, config: PipelineConfig, registry: SelfChangeRegistry?,
-                time: any TimeSource) {
+                time: any TimeSource, timeZone: TimeZone) {
+        self.timeZone = timeZone
         self.database = database
         self.archive = archive.standardizedFileURL
         self.settings = settings
@@ -223,13 +226,13 @@ public actor ArchiveRecords {
                                          arguments: [month]).compactMap(EventEntry.init)
             }
             guard !entries.isEmpty else { return nil }
-            return try FrontMatter.compose(RecordList(entries), body: RecordText.history(entries, month: month))
+            return try FrontMatter.compose(RecordList(entries), body: RecordText.history(entries, month: month, in: timeZone))
         case .labelRules:
             let entries = try await database.reader.read { db in
                 try LabelRule.order(Column("id")).fetchAll(db).compactMap(LabelRuleEntry.init)
             }
             guard !entries.isEmpty else { return nil }
-            return try FrontMatter.compose(RecordList(entries), body: RecordText.labelRules(entries))
+            return try FrontMatter.compose(RecordList(entries), body: RecordText.labelRules(entries, in: timeZone))
         case .searchTasks:
             let entries = try await database.reader.read { db in try SearchTaskStore.entries(db) }
             guard !entries.isEmpty else { return nil }
@@ -245,7 +248,7 @@ public actor ArchiveRecords {
                 return (entries, name, documents)
             }
             guard let name, !entries.isEmpty else { return nil }
-            return try FrontMatter.compose(RecordList(entries), body: RecordText.conversation(entries, task: name, documents: documents))
+            return try FrontMatter.compose(RecordList(entries), body: RecordText.conversation(entries, task: name, documents: documents, in: timeZone))
         }
     }
 

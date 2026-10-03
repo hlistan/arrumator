@@ -2,18 +2,21 @@ import ArrumatorCore
 import Foundation
 import UniformTypeIdentifiers
 
-/// Word processing and web formats through `/usr/bin/textutil -convert txt` (doc, docx, rtf, rtfd, odt, html,
-/// webarchive), plus Dublin Core title/creator/dates from `docProps/core.xml` for docx.
+/// Word processing and web formats through `/usr/bin/textutil -convert txt` (doc, docx and its templates and
+/// documents with macros, rtf, rtfd, odt, html, webarchive), plus Dublin Core title/creator/dates from
+/// `docProps/core.xml` for the Office Open XML ones.
 struct TextutilExtractor: FileExtractor {
     let shell: ShellRunner
 
     let name = "textutil"
     let version = 1
     var supportedTypes: [UTType] {
-        [.rtf, .rtfd, .flatRTFD, .html, .webArchive, Self.docx, Self.doc, Self.odt, Self.wordML].compactMap { $0 }
+        [.rtf, .rtfd, .flatRTFD, .html, .webArchive, Self.doc, Self.odt, Self.wordML].compactMap { $0 } + Self.wordprocessingML
     }
 
-    private static let docx = UTType("org.openxmlformats.wordprocessingml.document")
+    /// Word's Office Open XML documents and templates, with macros or without, which textutil reads alike.
+    private static let wordprocessingML = ["document", "document.macroenabled", "template", "template.macroenabled"]
+        .compactMap { UTType("org.openxmlformats.wordprocessingml.\($0)") }
     private static let doc = UTType("com.microsoft.word.doc")
     private static let odt = UTType("org.oasis-open.opendocument.text")
     private static let wordML = UTType("com.microsoft.word.wordml")
@@ -36,7 +39,7 @@ struct TextutilExtractor: FileExtractor {
         } catch {
             return .metadataOnly(kind: .textDocument, warnings: [ExtractionWarning(.toolFailed, String(describing: error))])
         }
-        let core = Self.docx.map { job.type.conforms(to: $0) } == true
+        let core = Self.wordprocessingML.contains { job.type.conforms(to: $0) }
             ? OOXMLCoreProperties.metadata(of: job.url, config: config, prefix: "doc") : (metadata: [:], warnings: [])
         var metadata = core.metadata
         metadata["textutil:ms"] = String(Int(result.durationMs))

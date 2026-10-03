@@ -249,7 +249,8 @@ public final class ArrumatorRuntime: Sendable {
             ArchiveRecords.mayHoldRecords(archive: archive, config: config)
         }
         registry = SelfChangeRegistry(ttl: config.watcher.selfChangeTTLSeconds, time: time)
-        records = ArchiveRecords(database: database, archive: archive, settings: settings, config: config, registry: registry, time: time)
+        records = ArchiveRecords(database: database, archive: archive, settings: settings, config: config, registry: registry, time: time,
+                                 timeZone: .autoupdatingCurrent)
         self.ollama = ollama
         gate = InferenceGate(api: ollama, retryDelays: config.ollama.retryDelays, time: time)
         models = ModelManager(api: ollama, config: config.ollama)
@@ -265,12 +266,12 @@ public final class ArrumatorRuntime: Sendable {
         let placer = Placer(builder: FilenameBuilder(config: config.naming, reserved: skip),
                             operations: FileOperations(trash: trash, sameVolume: FileOperations.onOneVolume))
         let extractor = try ExtractorRegistry(ollama: GatedOllama(gate: gate), recognizer: VisionTextRecognizer(),
-                                              shell: ShellRunner(time: time), time: time)
+                                              shell: ShellRunner(time: time), time: time, calendar: .autoupdatingCurrent)
         services = PipelineServices(
             database: database, archive: archive, config: config, settings: settings, extractor: extractor, analyzer: analyzer,
             filer: DocumentFiler(database: database, placer: placer, index: IndexStore(database: database, time: time),
                                  registry: registry, time: time),
-            traces: traces, vectors: vectors, trash: trash, time: time)
+            traces: traces, vectors: vectors, trash: trash, time: time, ollama: GatedOllama(gate: gate), timeZone: .autoupdatingCurrent)
         coordinator = IngestCoordinator(services: services)
         settingsActions = SettingsActions(store: settings, history: services.history)
         profiles = ModelProfileActions(settings: settingsActions, bundled: try AppSettings.bundledDefaults().modelProfiles, database: database)

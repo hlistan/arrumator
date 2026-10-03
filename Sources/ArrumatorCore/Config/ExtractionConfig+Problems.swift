@@ -11,8 +11,11 @@ extension ExtractionConfig {
             ("pdf.ocrHeadPages", pdf.ocrHeadPages), ("pdf.ocrAllIfAtMost", pdf.ocrAllIfAtMost),
             ("archiveMaxEntries", archiveMaxEntries), ("pptxMaxSlides", pptxMaxSlides),
             ("xlsx.maxSheets", xlsx.maxSheets), ("xlsx.maxRows", xlsx.maxRows), ("xlsx.maxColumns", xlsx.maxColumns),
+            ("emailForwardsRead", emailForwardsRead),
         ]
+        // The vision model's own deadline: at 0 a description would wait as long as the client does, which is for ever.
+        let deadline = image.vlmTimeout > 0 ? [] : ["extraction.image.vlmTimeout must be more than 0"]
         return limits.filter { $0.value < 1 }.map { "extraction.\($0.key) must be at least 1" }
-            + counts.filter { $0.value < 0 }.map { "extraction.\($0.key) cannot be negative" }
+            + counts.filter { $0.value < 0 }.map { "extraction.\($0.key) cannot be negative" } + deadline
     }
 }

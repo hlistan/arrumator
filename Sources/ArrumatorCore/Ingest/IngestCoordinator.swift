@@ -284,7 +284,7 @@ public actor IngestCoordinator {
         guard let docID = job.docId, let sha = payload.sha256 else { throw IngestError.documentNotPersisted }
 
         if job.state == .extracting {
-            let context = try services.config.extractionContext(settings: settings)
+            let context = try services.config.extractionContext(settings: settings, whenOllamaIsAway: .wait)
             let content = try await services.extractor.extract(source, sha256: sha, context: context, trace: trace)
             payload.content = content
             try await storeExtraction(docID: docID, content: content)
@@ -333,7 +333,7 @@ public actor IngestCoordinator {
             return
         }
         try await save(&job, payload, state: .extracting)
-        let context = try services.config.extractionContext(settings: settings)
+        let context = try services.config.extractionContext(settings: settings, whenOllamaIsAway: .wait)
         let content = try await services.extractor.extract(document.url, sha256: document.sha256, context: context, trace: trace)
         try await storeExtraction(docID: docID, content: content)
         let senders = document.labels(.sender)

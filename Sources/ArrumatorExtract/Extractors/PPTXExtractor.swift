@@ -2,13 +2,15 @@ import ArrumatorCore
 import Foundation
 import UniformTypeIdentifiers
 
-/// PowerPoint decks: `<a:t>` runs of `ppt/slides/slideN.xml` in slide order (up to `pptxMaxSlides`), then the
-/// speaker notes, plus core properties.
+/// PowerPoint decks, and their templates and slide shows, with macros or without, which keep their slides in the same
+/// parts (ECMA-376 Part 1, §13): `<a:t>` runs of `ppt/slides/slideN.xml` in slide order (up to `pptxMaxSlides`), then
+/// the speaker notes, plus core properties.
 struct PPTXExtractor: FileExtractor {
     let name = "pptx"
     let version = 1
     var supportedTypes: [UTType] {
-        [UTType("org.openxmlformats.presentationml.presentation")].compactMap { $0 }
+        ["presentation", "presentation.macroenabled", "template", "template.macroenabled", "slideshow", "slideshow.macroenabled"]
+            .compactMap { UTType("org.openxmlformats.presentationml.\($0)") }
     }
 
     func extract(_ job: ExtractionJob) async throws -> ExtractionDraft {

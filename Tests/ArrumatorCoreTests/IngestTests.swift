@@ -23,6 +23,21 @@ extension Harness {
     }
 }
 
+/// An extractor that throws each of `failures` in turn, one a call, and then reads files as `PlainTestExtractor` does;
+/// it counts its calls.
+actor ScriptedExtractor: ContentExtracting {
+    private var failures: [any Error & Sendable]
+    private(set) var calls = 0
+
+    init(failures: [any Error & Sendable]) { self.failures = failures }
+
+    func extract(_ url: URL, sha256: String, context: ExtractionContext, trace: TraceContext) async throws -> ExtractedContent {
+        calls += 1
+        if !failures.isEmpty { throw failures.removeFirst() }
+        return try await PlainTestExtractor().extract(url, sha256: sha256, context: context, trace: trace)
+    }
+}
+
 /// A Trash that takes nothing, as that of a volume without one.
 struct RefusingTrash: Trashing {
     static let reason = "the volume has no Trash"
@@ -209,6 +224,76 @@ struct RefusingTrash: Trashing {
                 "the job waits where it stopped, and waiting for Ollama costs no attempt")
         #expect(await h.coordinator.status.waitingForOllama, "the app shows it is waiting for Ollama")
         #expect(FileManager.default.fileExists(atPath: url.path), "nothing is moved meanwhile")
+    }
+
+    @Test func aFileWhoseExtractionWaitsForOllamaIsExtractedAgainWithoutSpendingAnAttempt() async throws {
+        let extractor = ScriptedExtractor(failures: [OllamaError.unreachable("connection refused")])
+        let h = try await Harness.make(extractor: extractor)
+        defer { h.env.cleanup() }
+        await h.coordinator.enqueue(try h.env.drop("scan.txt", text: Self.bill))
+        await h.coordinator.drain()
+        let waiting = try await h.jobs()
+        #expect(waiting.map(\.state) == [.extracting] && waiting.first?.attempt == 0,
+                "an image Ollama was away to describe waits where it stopped, and waiting costs no attempt")
+        #expect(await h.coordinator.status.waitingForOllama, "the app shows it is waiting for Ollama")
+
+        h.env.time.advance(by: h.env.config.ingest.retryDelays.last)
+        await h.coordinator.drain()
+        #expect(try await h.jobs().map(\.state) == [.done], "once Ollama is back the file is extracted again, and filed")
+        #expect(await extractor.calls == 2, "it was extracted again from the start, not filed with what it had")
+    }
+
+    @Test("A server that answers each time with a failure for one file spends its attempts; one away spends none",
+          arguments: [OllamaError.http(status: 500, body: "llama runner process has terminated"), .emptyResponse])
+    func aFailureTheServerRepeatsEndsTheJob(answered: OllamaError) async throws {
+        let failing = ScriptedExtractor(failures: Array(repeating: answered, count: 10))
+        let base = try await Harness.make(extractor: failing)
+        defer { base.env.cleanup() }
+        let h = base.with { $0.ingest.retryDelays = NonEmpty(0, []) }
+        await h.coordinator.enqueue(try base.env.drop("scan.txt", text: Self.bill))
+        for _ in 0..<h.services.config.ingest.maxAttempts { await h.coordinator.drain() }
+        #expect(try await base.jobs().map(\.state) == [.failed],
+                "\(answered.localizedDescription): a failure the server answers with again and again ends the job, not every 30 s for ever")
+        #expect(await failing.calls == h.services.config.ingest.maxAttempts, "after its attempts, each of which it spent")
+        #expect(await !h.coordinator.status.waitingForOllama, "Ollama answered, so nothing waits for it")
+
+        let away = ScriptedExtractor(failures: Array(repeating: OllamaError.unreachable("connection refused"), count: 10))
+        let waits = try await Harness.make(extractor: away)
+        defer { waits.env.cleanup() }
+        await waits.coordinator.enqueue(try waits.env.drop("scan.txt", text: Self.bill))
+        for _ in 0..<(waits.services.config.ingest.maxAttempts + 2) {
+            await waits.coordinator.drain()
+            waits.env.time.advance(by: waits.services.config.ingest.retryDelays.last)
+        }
+        let jobs = try await waits.jobs()
+        #expect(jobs.map(\.state) == [.extracting] && jobs.first?.attempt == 0, "Ollama away, however often, spends no attempt")
+        #expect(await away.calls == waits.services.config.ingest.maxAttempts + 2, "and the file is tried again each time it is due")
+    }
+
+    @Test func aTimeoutWaitsOnlyWhileOllamaAnswersNothingElseEither() async throws {
+        let timedOut = OllamaError.timeout("chat")
+        let answering = ScriptedExtractor(failures: Array(repeating: timedOut, count: 10))
+        let base = try await Harness.make(extractor: answering)
+        defer { base.env.cleanup() }
+        let h = base.with { $0.ingest.retryDelays = NonEmpty(0, []) }
+        await h.coordinator.enqueue(try base.env.drop("scan.txt", text: Self.bill))
+        for _ in 0..<h.services.config.ingest.maxAttempts { await h.coordinator.drain() }
+        #expect(try await base.jobs().map(\.state) == [.failed],
+                "a read that times out each time while Ollama answers its version ends after its attempts, not every 30 s for ever")
+
+        let silent = MockOllama { _ in "" }
+        await silent.failVersion(with: .unreachable("connection refused"))
+        let away = ScriptedExtractor(failures: Array(repeating: timedOut, count: 10))
+        let waits = try await Harness.make(extractor: away, ollama: silent)
+        defer { waits.env.cleanup() }
+        await waits.coordinator.enqueue(try waits.env.drop("scan.txt", text: Self.bill))
+        for _ in 0..<(waits.services.config.ingest.maxAttempts + 2) {
+            await waits.coordinator.drain()
+            waits.env.time.advance(by: waits.services.config.ingest.retryDelays.last)
+        }
+        let jobs = try await waits.jobs()
+        #expect(jobs.map(\.state) == [.extracting] && jobs.first?.attempt == 0, "a timeout while Ollama answers nothing is Ollama away")
+        #expect(await waits.coordinator.status.waitingForOllama, "and the app shows it is waiting for Ollama")
     }
 
     @Test func aMissingModelHoldsTheDocument() async throws {

@@ -6,15 +6,20 @@ import UniformTypeIdentifiers
 ///
 /// Resolves the file's type (extension → file-system content type → magic bytes), dispatches to the per-format
 /// extractor (exact type match first, then the most specific conformance; previewable unknown types go through
-/// Quick Look) under `ExtractionConfig.perFileTimeout`, then NFC-normalises and caps the text, detects the
-/// language, extracts entities and resolves the document date. Files above `largeFileBytes` are metadata-only.
+/// Quick Look) under `ExtractionConfig.perFileTimeout`, then NFC-normalises and caps the text, normalises each metadata
+/// value and attachment name as one line, detects the language, extracts entities and resolves the document date.
+/// Files above `largeFileBytes` are metadata-only.
 /// Soft problems become warnings; `ExtractionError` is thrown only for unreadable files, timeouts and
-/// cancellation. Records `extract` and `entities` trace steps (extractors add `ocr` and `vlm`).
+/// cancellation, and an `OllamaError` that passes (`isTransient`) when the vision model was to describe an image, which
+/// the job waits for as it does to be read. Records `extract` and `entities` trace steps (extractors add `ocr` and
+/// `vlm`).
 public struct ExtractorRegistry: ContentExtracting {
     private let extractors: [any FileExtractor]
     private let previewer: QuickLookExtractor
     private let metadataOnly = MetadataOnlyExtractor()
+    private let entityExtractors = EntityExtractors()
     private let time: any TimeSource
+    private let calendar: Calendar
 
     /// - Parameters:
     ///   - ollama: the Ollama client images with sparse text are described with; without it such images get a
@@ -22,12 +27,16 @@ public struct ExtractorRegistry: ContentExtracting {
     ///   - recognizer: reads text in images (`VisionTextRecognizer` in the app).
     ///   - shell: runs `textutil`.
     ///   - time: what every deadline of extraction is measured by.
-    public init(ollama: (any OllamaAPI)?, recognizer: any TextRecognizing, shell: ShellRunner, time: any TimeSource) throws {
+    ///   - calendar: the Mac's calendar (`Calendar.autoupdatingCurrent` in the app), whose time zone a day is reckoned
+    ///     in when it is read; of whatever kind it is, every day is Gregorian (`GregorianCalendar`).
+    public init(ollama: (any OllamaAPI)?, recognizer: any TextRecognizing, shell: ShellRunner, time: any TimeSource,
+                calendar: Calendar) throws {
         self.time = time
+        self.calendar = calendar
         let ocr = OCRService(recognizer: recognizer)
         let prompts = try VisionPrompts.bundled()
         let vision = ollama.map { VisionDescriber(ollama: $0, prompts: prompts, time: time) }
-        previewer = QuickLookExtractor(ocr: ocr, metadataOnly: metadataOnly)
+        previewer = QuickLookExtractor(ocr: ocr, metadataOnly: metadataOnly, thumbnails: QuickLookThumbnails())
         extractors = [
             PDFExtractor(ocr: ocr),
             ImageExtractor(ocr: ocr, vision: vision),
@@ -50,7 +59,9 @@ public struct ExtractorRegistry: ContentExtracting {
         let config = context.config
         let tooLarge = inspected.source.byteSize > config.largeFileBytes
         let extractor: any FileExtractor = tooLarge ? metadataOnly : extractor(for: inspected.type)
-        let job = ExtractionJob(url: url, source: inspected.source, type: inspected.type, context: context, trace: trace, time: time)
+        let gregorian = GregorianCalendar(timeZone: calendar.timeZone)
+        let job = ExtractionJob(url: url, source: inspected.source, type: inspected.type, context: context, trace: trace,
+                                time: time, calendar: gregorian)
         let input = ExtractTraceInput(filename: inspected.source.originalFilename, utType: inspected.type.identifier,
                                       byteSize: inspected.source.byteSize, whereFroms: inspected.source.whereFroms,
                                       extractor: extractor.name, extractorVersion: extractor.version,
@@ -70,6 +81,14 @@ public struct ExtractorRegistry: ContentExtracting {
                     try await extractor.extract(job)
                 }
                 used = extractor
+            } catch let error as OllamaError where error.isTransient {
+                // Ollama away while an image was to be described: the job waits for it, as it does to be read.
+                await trace.record(.extract, status: .error, startedAt: started, input: input,
+                                   error: error.localizedDescription)
+                Log.warning(.extract, "Extraction waits for Ollama", [
+                    "file": inspected.source.originalFilename, "extractor": extractor.name, "error": error.localizedDescription,
+                ])
+                throw error
             } catch {
                 if let failure = Self.hardFailure(error) {
                     await trace.record(.extract, status: .error, startedAt: started, input: input,
@@ -89,7 +108,7 @@ public struct ExtractorRegistry: ContentExtracting {
             }
         }
         return await finish(draft, extractor: used, input: input, inspected: inspected, context: context,
-                            trace: trace, started: started)
+                            calendar: gregorian, trace: trace, started: started)
     }
 
     // MARK: Dispatch
@@ -120,8 +139,8 @@ public struct ExtractorRegistry: ContentExtracting {
     // MARK: Assembly
 
     private func finish(_ draft: ExtractionDraft, extractor: any FileExtractor, input: ExtractTraceInput,
-                        inspected: InspectedFile, context: ExtractionContext, trace: TraceContext,
-                        started: Date) async -> ExtractedContent {
+                        inspected: InspectedFile, context: ExtractionContext, calendar: GregorianCalendar,
+                        trace: TraceContext, started: Date) async -> ExtractedContent {
         let config = context.config
         var warnings = draft.warnings
         var timings = draft.timings
@@ -143,10 +162,10 @@ public struct ExtractorRegistry: ContentExtracting {
 
         let entitiesStarted = Date()
         let now = time.now()
-        let scan = EntityExtractor(config: context.entities).scan(text, now: now, calendar: .current)
+        let scan = entityExtractors.extractor(for: context.entities).scan(text, now: now, calendar: calendar)
         let evidence = DateEvidence(firstPageLength: draft.firstPageLength, metadataDates: draft.metadataDates,
                                     fileCreated: inspected.source.createdAt, fileModified: inspected.source.modifiedAt,
-                                    now: now, calendar: .current)
+                                    now: now, calendar: calendar)
         let resolution = DocumentDateResolver(config: context.entities).resolve(scan.dateCandidates, in: text,
                                                                                 evidence: evidence)
         let entities = Entities(dates: resolution.ranked, documentDate: resolution.chosen, stableKeys: scan.stableKeys)
@@ -156,8 +175,9 @@ public struct ExtractorRegistry: ContentExtracting {
         let content = ExtractedContent(
             source: inspected.source, kind: draft.kind, textOrigin: draft.textOrigin, text: text,
             textTruncated: truncated, pageCount: draft.pageCount, pagesOCRed: draft.pagesOCRed, ocr: draft.ocr,
-            language: language, entities: entities, structure: draft.structure, metadata: draft.metadata,
-            visual: draft.visual, attachments: draft.attachments, warnings: warnings, timings: timings,
+            language: language, entities: entities, structure: draft.structure,
+            metadata: draft.metadata.mapValues(TextNormalizer.line), visual: draft.visual,
+            attachments: draft.attachments.map(TextNormalizer.line), warnings: warnings, timings: timings,
             extractorName: extractor.name, extractorVersion: extractor.version)
 
         let previewChars = config.tracePreviewChars

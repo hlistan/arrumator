@@ -196,7 +196,7 @@ table in [AGENTS.md §5](../AGENTS.md#5-boundaries).
 | `Search/` | Full-text search fused with search by meaning. | `SearchService`, `VectorIndex`, `SearchPlanMatcher` |
 | `Vocabulary/` | Keeping labels one vocabulary. | `LabelConsolidator`, `LabelSimilarity` |
 | `Observability/` | What the pipeline did, in numbers; the doctor; the diagnostics export. | `StatsService`, `ProcessingFunnel`, `Doctor`, `DiagnosticsExporter` |
-| `Domain/`, `System/`, `Logging/` | Deadlines, retries, the worker's doorbell, identifiers; power state; structured logs. | `Deadline`, `Retry`, `Doorbell`, `AsyncSemaphore`, `PowerState`, `Log` |
+| `Domain/`, `System/`, `Logging/` | Deadlines, retries, the worker's doorbell, identifiers and the words that label them; power state; structured logs. | `Deadline`, `Retry`, `Doorbell`, `AsyncSemaphore`, `PowerState`, `Log` |
 
 ### The other modules
 
@@ -467,6 +467,7 @@ evolutionary architecture, and what each protects.
 | Quitting has one path: work at quit runs before AppKit lets the app end, and nothing else in the app stops the runtime. | `scripts/lint.sh`, quit gate |
 | Only `SystemTrash` calls `trashItem`; everything else, a move across volumes among it, goes through `Trashing`. | `scripts/lint.sh`, trash gate |
 | What opens on a click opens from the keyboard. | `scripts/lint.sh`, rows gate |
+| A day or a moment Core and extraction read or write is in the time zone the runtime gives them (`ExtractorRegistry`, `ArchiveRecords`, `PipelineServices.timeZone`), and a day is Gregorian, never in the Mac's calendar. | `scripts/lint.sh`, calendar gate |
 | A runtime acts on its own archive: only `bootstrap` and a switch read the archive from the settings. | `scripts/lint.sh`, archive gate |
 | No `TODO`, `FIXME`, `HACK` or `XXX`. | `scripts/lint.sh`, debt gate |
 | The app icon is the project's own drawing. | `scripts/lint.sh`, icon gate |

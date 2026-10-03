@@ -1,7 +1,10 @@
 @testable import ArrumatorCore
 import ArrumatorTesting
+import CoreGraphics
 import Foundation
+import ImageIO
 import Testing
+import UniformTypeIdentifiers
 
 /// `arrumatorcli` as scripts and agents run it (AGENTS.md §4.6): the built command, in a scratch home whose settings
 /// name scratch folders (§4.3) and an address where no Ollama answers, so nothing needs a model and nothing reaches the
@@ -365,6 +368,30 @@ import Testing
         for line in lines {
             #expect((try? JSONSerialization.jsonObject(with: Data(line.utf8))) is [String: Any], "every line is a JSON object: \(line)")
         }
+    }
+}
+
+/// What `extract` shows of a file.
+extension CommandLineTests {
+    /// Whether to wait for Ollama is the pipeline's decision; `extract` shows what is read now.
+    @Test func extractReadsAnImageWithoutItsDescriptionWhileOllamaIsAway() throws {
+        let home = try Home.make()
+        defer { home.cleanup() }
+        // A blank page: no text for OCR to read, so the vision model is asked to describe it.
+        let image = home.root.appendingPathComponent("blank.png")
+        let context = try #require(CGContext(data: nil, width: 400, height: 300, bitsPerComponent: 8, bytesPerRow: 0,
+                                             space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue))
+        context.setFillColor(gray: 1, alpha: 1)
+        context.fill(CGRect(x: 0, y: 0, width: 400, height: 300))
+        let destination = try #require(CGImageDestinationCreateWithURL(image as CFURL, UTType.png.identifier as CFString, 1, nil))
+        CGImageDestinationAddImage(destination, try #require(context.makeImage()), nil)
+        #expect(CGImageDestinationFinalize(destination), "the fixture writes a PNG")
+
+        let result = try run(home, ["extract", "--json", image.path])
+        #expect(result.status == 0, "extract shows what it read, though Ollama is away: \(result.stderr)")
+        let content = try JSON.decoder.decode(ExtractedContent.self, from: result.stdout)
+        #expect(content.warnings.contains { $0.code == .vlmFailed && $0.detail.hasPrefix("Ollama is away") },
+                "and notes that the image could not be described: \(content.warnings)")
     }
 }
 

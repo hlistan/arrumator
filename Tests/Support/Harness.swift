@@ -1,16 +1,18 @@
 import ArrumatorCore
 import Foundation
 
-/// The ingest pipeline over a `TestEnvironment`, with the plain-text extractor and an analyzer double: what the
-/// suites that file documents share.
+/// The ingest pipeline over a `TestEnvironment`, with the plain-text extractor, or a double of its own, and an analyzer
+/// double: what the suites that file documents share.
 public struct Harness: Sendable {
     public let env: TestEnvironment
     public let services: PipelineServices
     public let coordinator: IngestCoordinator
 
-    public static func make(analyzer: any DocumentAnalyzing = StubAnalyzer()) async throws -> Harness {
+    /// `ollama` is the server the pipeline probes when a request to it timed out: one that answers, unless a test says.
+    public static func make(analyzer: any DocumentAnalyzing = StubAnalyzer(), extractor: any ContentExtracting = PlainTestExtractor(),
+                            ollama: any OllamaAPI = MockOllama { _ in "" }) async throws -> Harness {
         let env = try await TestEnvironment.make()
-        return Harness(env: env, services: services(env, analyzer: analyzer, config: env.config))
+        return Harness(env: env, services: services(env, analyzer: analyzer, extractor: extractor, ollama: ollama, config: env.config))
     }
 
     public init(env: TestEnvironment, services: PipelineServices) {
@@ -20,28 +22,31 @@ public struct Harness: Sendable {
     }
 
     /// The pipeline's services over `env`, with `config` in force, moving files as `sameVolume` tells a rename from a
-    /// copy to another volume: as the disk says, unless a test makes every move cross a volume; and with `trash` as the
-    /// Trash, the environment's own unless a test gives one that refuses.
-    public static func services(_ env: TestEnvironment, analyzer: any DocumentAnalyzing, config: PipelineConfig,
-                                sameVolume: @escaping FileOperations.VolumeCheck = FileOperations.onOneVolume,
+    /// copy to another volume: as the disk says, unless a test makes every move cross a volume; with `trash` as the Trash,
+    /// the environment's own unless a test gives one that refuses; with `extractor` reading files, and `ollama` as the
+    /// server probed when a request to it timed out.
+    public static func services(_ env: TestEnvironment, analyzer: any DocumentAnalyzing,
+                                extractor: any ContentExtracting = PlainTestExtractor(), ollama: any OllamaAPI = MockOllama { _ in "" },
+                                config: PipelineConfig, sameVolume: @escaping FileOperations.VolumeCheck = FileOperations.onOneVolume,
                                 trash: (any Trashing)? = nil) -> PipelineServices {
         let trash = trash ?? env.trash
         let placer = Placer(builder: FilenameBuilder(config: config.naming, reserved: SkipRules(watcher: config.watcher)),
                             operations: FileOperations(trash: trash, sameVolume: sameVolume))
         return PipelineServices(
-            database: env.database, archive: env.archive, config: config, settings: env.settings, extractor: PlainTestExtractor(),
+            database: env.database, archive: env.archive, config: config, settings: env.settings, extractor: extractor,
             analyzer: analyzer,
             filer: DocumentFiler(database: env.database, placer: placer, index: IndexStore(database: env.database, time: env.time),
                                  registry: SelfChangeRegistry(ttl: config.watcher.selfChangeTTLSeconds, time: env.time), time: env.time),
             traces: TraceRecorder(database: env.database, appVersion: "test", time: env.time), vectors: VectorIndex(), trash: trash,
-            time: env.time)
+            time: env.time, ollama: ollama, timeZone: .current)
     }
 
     /// The same pipeline with `change` made to its configuration, such as retries without delay.
     public func with(_ change: (inout PipelineConfig) -> Void) -> Harness {
         var config = services.config
         change(&config)
-        return Harness(env: env, services: Self.services(env, analyzer: services.analyzer, config: config))
+        return Harness(env: env, services: Self.services(env, analyzer: services.analyzer, extractor: services.extractor, ollama: services.ollama,
+                                                       config: config))
     }
 
     /// Whether the worker takes files on this Mac now, with pausing on battery turned off as `readyToWork()` turns it

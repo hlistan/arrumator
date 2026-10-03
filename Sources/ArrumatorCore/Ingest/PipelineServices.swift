@@ -16,12 +16,16 @@ public struct PipelineServices: Sendable {
     /// Where an exact copy of a document in the archive goes once its original is read again in its place.
     public var trash: any Trashing
     public var time: any TimeSource
+    /// The Ollama server, asked whether it answers at all when a request to it timed out.
+    public var ollama: any OllamaAPI
+    /// The Mac's time zone, which today is in when a request or a question is read.
+    public var timeZone: TimeZone
     /// Which labels looked alike when last worked out, shared by every `LabelStore` this makes (`labels`).
     public let lookAlikes = LookAlikeMemo()
 
     public init(database: AppDatabase, archive: URL, config: PipelineConfig, settings: SettingsStore, extractor: any ContentExtracting,
                 analyzer: any DocumentAnalyzing, filer: DocumentFiler, traces: TraceRecorder, vectors: VectorIndex,
-                trash: any Trashing, time: any TimeSource) {
+                trash: any Trashing, time: any TimeSource, ollama: any OllamaAPI, timeZone: TimeZone) {
         self.database = database
         self.archive = archive.standardizedFileURL
         self.config = config
@@ -33,6 +37,8 @@ public struct PipelineServices: Sendable {
         self.vectors = vectors
         self.trash = trash
         self.time = time
+        self.ollama = ollama
+        self.timeZone = timeZone
     }
 
     public var documents: DocumentStore { DocumentStore(database: database, time: time) }

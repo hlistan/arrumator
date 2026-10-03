@@ -1,6 +1,7 @@
 import ArrumatorCore
 import Foundation
 import ImageIO
+import NaturalLanguage
 import UniformTypeIdentifiers
 
 /// Photos, scans and screenshots: EXIF `DateTimeOriginal`, OCR on an orientation-corrected, downscaled image,
@@ -12,7 +13,7 @@ struct ImageExtractor: FileExtractor {
     let vision: VisionDescriber?
 
     let name = "image"
-    let version = 2
+    let version = 3
     var supportedTypes: [UTType] { [.jpeg, .png, .heic, .heif, .tiff, .webP, .gif, .bmp] }
 
     func extract(_ job: ExtractionJob) async throws -> ExtractionDraft {
@@ -122,7 +123,8 @@ struct ImageExtractor: FileExtractor {
     }
 
     /// Asks the vision model, when one is configured, to describe the page at `index` of an image whose text is too
-    /// sparse to identify it.
+    /// sparse to identify it. A description the model fails to give is a warning; Ollama away is thrown, for the job to
+    /// wait for, or noted as a warning where the context says so (`WhenOllamaIsAway`).
     private func describe(page index: Int, of source: CGImageSource, into draft: inout ExtractionDraft,
                           job: ExtractionJob) async throws {
         let config = job.config.image
@@ -141,9 +143,14 @@ struct ImageExtractor: FileExtractor {
             draft.warnings.append(ExtractionWarning(.vlmFailed, "cannot encode the image for the vision model"))
             return
         }
-        let outcome = await vision.describe(jpeg: jpeg, ocrText: draft.text, options: options, timeout: config.vlmTimeout)
+        let outcome = try await vision.describe(jpeg: jpeg, ocrText: draft.text, options: options, timeout: config.vlmTimeout)
         draft.timings["vlm"] = outcome.durationMs
         await Self.recordVLM(outcome, startedAt: vlmStarted, pixels: (small.width, small.height), on: job.trace)
+        if let away = outcome.waitsFor {
+            guard job.context.whenOllamaIsAway == .note else { throw away }
+            draft.warnings.append(ExtractionWarning(.vlmFailed, "Ollama is away: \(away.localizedDescription)"))
+            return
+        }
         if let summary = outcome.summary {
             draft.visual = summary
             if draft.text.isEmpty { draft.textOrigin = .vlmOnly }
@@ -168,8 +175,20 @@ struct ImageExtractor: FileExtractor {
     /// Too little text for OCR alone to identify the image (thresholds from `ExtractionConfig.Image`).
     static func isSparse(text: String, confidence: Double, config: ExtractionConfig.Image) -> Bool {
         let characters = text.count { !$0.isWhitespace }
-        let words = text.split(whereSeparator: \.isWhitespace).count
-        return characters < config.sparseChars || words < config.sparseWords || confidence < config.lowConfidence
+        return characters < config.sparseChars || words(in: text) < config.sparseWords || confidence < config.lowConfidence
+    }
+
+    /// The words of `text` as NaturalLanguage tells them apart in every script, those written without spaces between
+    /// words (Chinese, Japanese, Thai) among them, in which splitting at spaces finds a whole line one word.
+    private static func words(in text: String) -> Int {
+        let tokenizer = NLTokenizer(unit: .word)
+        tokenizer.string = text
+        var count = 0
+        tokenizer.enumerateTokens(in: text.startIndex..<text.endIndex) { _, _ in
+            count += 1
+            return true
+        }
+        return count
     }
 
     // MARK: Trace

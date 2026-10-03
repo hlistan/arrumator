@@ -242,22 +242,32 @@ No tunable lives in code. Defaults are bundled in `Sources/ArrumatorCore/Resourc
   wait for more of its answer and, but for a download, how long the whole of it may take, and 0 is no timeout; the
   most bytes one answer may hold, a reply or all the lines of an answer streamed, and one line of a download's
   progress, `ollama.maxResponseBytes`; how long what the server said of where a model runs is trusted,
-  `ollama.modelLocationMaxAge`, 0 to ask before every request), `watcher` (when a file in Incoming has stopped
-  changing, what is never taken in, how long one that has stopped changing but cannot be opened is waited for before
-  History says so, `watcher.unopenableWaitSeconds`, 0 or more, and the most items a package may hold to be one
-  document, in Incoming or named to `arrumatorcli ingest`, `watcher.maxPackageItems`, at least 1), `records` (the
-  names of the archive's record files and of its system and history folders, such as `records.labelRulesFileName`,
+  `ollama.modelLocationMaxAge`, 0 to ask before every request), `watcher` (when a file in Incoming has stopped changing,
+  what is never taken in, how long one that has stopped changing but cannot be opened is waited for before History says
+  so, `watcher.unopenableWaitSeconds`, 0 or more, and the most items a package may hold to be one document, in Incoming
+  or named to `arrumatorcli ingest`, `watcher.maxPackageItems`, at least 1), `records` (the names of the archive's
+  record files and of its system and history folders, such as `records.labelRulesFileName`,
   `records.searchTasksFileName` and `records.conversationsFolderName`), `ingest` (attempts and retry delays, and how
   long quitting waits for the file in hand, the request being read and the question being answered to stop,
   `ingest.quitTimeout`, after which the `ollama serve` the app started is stopped all the same), `extraction` (OCR and
   extraction limits, among them how much of an e-mail is read, `extraction.emailReadCapBytes`, and of its body,
-  `extraction.emailBodyCapBytes`, how many pixels an image may declare, `extraction.image.maxPixels`, beyond which it is
-  read for its metadata alone, how many pages of a scanned PDF or a TIFF OCR reads: all when there are at most
-  `extraction.pdf.ocrAllIfAtMost`, else the first `extraction.pdf.ocrHeadPages` and the last, and what a ZIP file, an
-  archive or an Office document, may hold: at most `extraction.zipMaxEntries` entries, each read up to
-  `extraction.zipEntryCapBytes`; an archive, workbook or presentation that holds more, whose directory does not match
-  the file or whose entries share bytes of it, is read for its metadata alone, and a Word document is still converted
-  by `textutil`, without its title and author), `entities` (dates and identifiers), `analysis`
+  `extraction.emailBodyCapBytes`, how many messages deep one with no text of its own is read through the messages it
+  forwards, `extraction.emailForwardsRead`, how many pixels an image may declare, `extraction.image.maxPixels`, beyond
+  which it is read for its metadata alone, how many pages of a scanned PDF or a TIFF OCR reads: all when there are at
+  most `extraction.pdf.ocrAllIfAtMost`, else the first `extraction.pdf.ocrHeadPages` and the last (a scanned page's text
+  is what OCR reads of it, as its text layer may be glyphs named wrong, and its text layer only where OCR does not read
+  it, fails or reads nothing), of how many pages of a PDF the text layer is read, the first
+  `extraction.pdf.textLayerHeadPages` and the last `extraction.pdf.textLayerTailPages` (the pages either leaves out are
+  named in a warning), and what a ZIP file, an archive or an Office document, may hold: at most
+  `extraction.zipMaxEntries` entries, each read up to `extraction.zipEntryCapBytes`; an archive, workbook or
+  presentation that holds more, whose directory does not match the file or whose entries share bytes of it, is read for
+  its metadata alone, and a Word document is still converted by `textutil`, without its title and author), `entities`
+  (dates and identifiers: the words that label a document's date, its due date and a date of birth, and those after
+  which a number is an account or customer number, `entities.accountLabels`, or a policy or contract number,
+  `entities.policyLabels`, with a number sign between as `entities.numberSigns` writes it; each is a phrase matched
+  whatever its case, in which a space matches any white space, and none at all beside a dot or a sign (`n. º. de
+  cliente` matches `nºcliente`), a dot may be left out, and `*` is any one word, at most three of them (`договор * №`);
+  a phrase of `*` alone, or a number sign that holds one, is refused by name), `analysis`
   (what the model is shown and how it is asked, such as `analysis.excerptChars`, of which the end of the document gets
   `1 / analysis.excerptTailDivisor`, `analysis.repairAttempts`, the context a document, a search request and an image
   are read with, `analysis.numCtx`, one so that a model that reads and describes images stays loaded once, what a model

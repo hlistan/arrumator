@@ -34,9 +34,9 @@ struct Ingest: AsyncParsableCommand {
                 let sink = MemoryTraceSink()
                 let trace = TraceContext(traceID: 0, sink: sink)
                 let tags = runtime.services.tags(for: url, given: tag, settings: settings)
-                let content = try await runtime.services.extractor.extract(
-                    url, sha256: try HashService.sha256(of: url), context: try runtime.config.extractionContext(settings: settings),
-                    trace: trace)
+                let context = try runtime.config.extractionContext(settings: settings, whenOllamaIsAway: .wait)
+                let content = try await runtime.services.extractor.extract(url, sha256: try HashService.sha256(of: url), context: context,
+                                                                           trace: trace)
                 let reading = try await runtime.services.read(content, tags: tags.map(\.label), settings: settings, trace: trace)
                 let steps = await sink.steps
                 options.emit(DryRun(content: content, analysis: reading.outcome.analysis, labels: reading.outcome.labels, tags: tags,
@@ -102,9 +102,10 @@ struct Extract: AsyncParsableCommand {
         let runtime = try await options.runtime()
         let settings = await runtime.settings.current
         let url = URL(fileURLWithPath: file.expandingTilde)
-        let content = try await runtime.services.extractor.extract(
-            url, sha256: try HashService.sha256(of: url), context: try runtime.config.extractionContext(settings: settings),
-            trace: .disabled)
+        // What is read now: an image Ollama is away to describe is shown without its description, noted.
+        let context = try runtime.config.extractionContext(settings: settings, whenOllamaIsAway: .note)
+        let content = try await runtime.services.extractor.extract(url, sha256: try HashService.sha256(of: url), context: context,
+                                                                   trace: .disabled)
         let preview = runtime.config.interface.extractPreviewChars
         options.emit(content) {
             """

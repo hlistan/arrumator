@@ -4,10 +4,10 @@ import UniformTypeIdentifiers
 
 /// Plain text, Markdown, logs, JSON, XML, YAML and delimited tables. Reads at most `plainTextReadCapBytes`,
 /// detects the encoding (see `TextEncodingDetector`) and, for CSV/TSV, keeps the header plus `csvMaxRows` rows
-/// rendered as TSV.
+/// rendered as TSV, noting the rows left out.
 struct PlainTextExtractor: FileExtractor {
     let name = "plain-text"
-    let version = 1
+    let version = 2
     var supportedTypes: [UTType] {
         [.plainText, .commaSeparatedText, .tabSeparatedText, .delimitedText, .json, .xml, .yaml]
     }
@@ -31,7 +31,8 @@ struct PlainTextExtractor: FileExtractor {
         if job.type.conforms(to: .delimitedText) {
             let delimiter: Character = job.type.conforms(to: .tabSeparatedText) ? "\t"
                 : DelimitedText.detectDelimiter(decoded.text)
-            let rows = DelimitedText.rows(decoded.text, delimiter: delimiter, maxRows: config.csvMaxRows + 1)
+            let (rows, cut) = DelimitedText.rows(decoded.text, delimiter: delimiter, maxRows: config.csvMaxRows + 1)
+            if cut { draft.warnings.append(ExtractionWarning(.textTruncated, "kept the header and the first \(config.csvMaxRows) rows")) }
             let table = DelimitedText.tsv(rows)
             draft.kind = .spreadsheet
             draft.text = table

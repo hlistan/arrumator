@@ -100,6 +100,25 @@ struct TextAndLanguageTests {
         #expect(table.hasPrefix("Data\tDescrição\tValor\n"), "the table starts with its header row")
     }
 
+    @Test("A CRLF CSV's delimiter is its first line's; rows past csvMaxRows are noted, and no cell keeps a line break")
+    func csvLinesAndCuts() async throws {
+        let scratch = try Scratch()
+        // One semicolon on the header; more commas than that on the rows after it, which must not decide.
+        let rows = ["Conta;Saldo", "Ordem;1,234,567.00", "\"Poupança\r\nhabitação\rjovem\";2,500,000.00", "Prazo;10,000.00"]
+        let url = try scratch.write("saldos.csv", rows.joined(separator: "\r\n") + "\r\n")
+        let cut = try TestConfig.context { extraction, _ in extraction.csvMaxRows = 2 }
+        let content = try await TestConfig.registry().extract(url, sha256: "x", context: cut, trace: .disabled)
+        #expect(content.text.split(separator: "\n") == ["Conta\tSaldo", "Ordem\t1,234,567.00", "Poupança habitação jovem\t2,500,000.00"],
+                "the semicolon of the first line separates the cells, and a cell's line breaks, CR and CRLF too, are spaces")
+        #expect(content.warnings.map(\.detail) == ["kept the header and the first 2 rows"],
+                "the rows left out are noted, so the model knows it saw part of the table (\(content.warningSummary))")
+
+        let whole = try TestConfig.context { extraction, _ in extraction.csvMaxRows = 3 }
+        let all = try await TestConfig.registry().extract(url, sha256: "x", context: whole, trace: .disabled)
+        #expect(all.text.split(separator: "\n").count == 4, "with room for every row, every row is kept")
+        #expect(all.warnings.isEmpty, "and nothing is noted, the line break that ends the file being no row (\(all.warningSummary))")
+    }
+
     @Test("Russian plausibility separates real text from KOI8-R/CP1251 mix-ups, even for short samples")
     func plausibility() throws {
         let koi8 = try #require(TextEncodingDetector.encoding(named: "koi8R"))

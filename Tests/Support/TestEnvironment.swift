@@ -65,7 +65,7 @@ public struct TestEnvironment: Sendable {
     /// index made anew over the same archive. The archive is one the test made, not the app.
     public func records(index: AppDatabase? = nil) -> ArchiveRecords {
         ArchiveRecords(database: index ?? database, archive: archive, settings: settings, config: config, registry: nil,
-                       time: time)
+                       time: time, timeZone: .current)
     }
 
     /// Writes a text file into the archive at `path`, below its top, as the user would put one there.

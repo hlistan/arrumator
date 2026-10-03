@@ -1,10 +1,12 @@
 import Foundation
 
 extension PipelineConfig {
-    /// What extraction is given for a file under `settings`: its tunables, and the vision model of the profile in use when
-    /// images may be described. The ingest pipeline and `arrumatorcli ingest --dry-run` extract alike with it.
-    public func extractionContext(settings: AppSettings) throws -> ExtractionContext {
-        ExtractionContext(config: extraction, entities: entities, vision: settings.enableVLM ? try visionOptions(settings: settings) : nil)
+    /// What extraction is given for a file under `settings`: its tunables, the vision model of the profile in use when
+    /// images may be described, and what it does when Ollama is away as it describes one. The ingest pipeline and
+    /// `arrumatorcli ingest --dry-run` extract alike with it, waiting for Ollama; `arrumatorcli extract` notes it.
+    public func extractionContext(settings: AppSettings, whenOllamaIsAway: WhenOllamaIsAway) throws -> ExtractionContext {
+        ExtractionContext(config: extraction, entities: entities, vision: settings.enableVLM ? try visionOptions(settings: settings) : nil,
+                          whenOllamaIsAway: whenOllamaIsAway)
     }
 
     /// Images are described with the context and keep-alive documents are read with (`analysis.numCtx`,

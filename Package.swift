@@ -63,7 +63,7 @@ let package = Package(
         .target(name: "ArrumatorTesting", dependencies: ["ArrumatorCore"], path: "Tests/Support", swiftSettings: strict),
         .testTarget(name: "ArrumatorCoreTests", dependencies: ["ArrumatorCore", "ArrumatorTesting"], swiftSettings: strict),
         .testTarget(name: "ArrumatorExtractTests", dependencies: ["ArrumatorExtract", "ArrumatorCore", "ArrumatorTesting"],
-                    swiftSettings: strict),
+                    resources: [.copy("Resources")], swiftSettings: strict),
         .testTarget(name: "ArrumatorClassifyTests", dependencies: ["ArrumatorClassify", "ArrumatorCore", "ArrumatorTesting"],
                     swiftSettings: strict),
         .testTarget(name: "ArrumatorRuntimeTests", dependencies: ["ArrumatorRuntime", "ArrumatorCore", "ArrumatorTesting"],

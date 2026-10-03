@@ -90,6 +90,11 @@ gate rows "what opens or acts on a click opens from the keyboard and VoiceOver t
   'onTapGesture( \{|\(perform:)' \
   App
 
+gate calendar "a day Core and extraction read or write is Gregorian, in a time zone the runtime gives them: no Calendar.current, autoupdatingCurrent, TimeZone.current or timeZone: .current, whose calendar on a Buddhist or Japanese Mac puts 2026 in 2569 or 8; only the date detector's own zone is read as the process's" \
+  '^[^:]+:[0-9]+: *//|^Sources/ArrumatorExtract/Analysis/DateScanner\.swift:[0-9]+: .*match\.timeZone \?\? TimeZone\.current\)' \
+  'Calendar\.current|autoupdatingCurrent|TimeZone\.current|(calendar|timeZone): \.current' \
+  Sources/ArrumatorCore Sources/ArrumatorExtract
+
 gate archive "a runtime acts on its own archive, ArrumatorRuntime.archive, which it is made with: only bootstrap and a switch of archives read the archive from the settings (and eval chooses its throw-away one before bootstrap), as after a switch the settings name the next archive, and the runtime left, stopped again, would write into it" \
   '^Sources/ArrumatorCore/Config/AppSettings[^/]*\.swift:|^Sources/ArrumatorRuntime/ArrumatorRuntime\.swift:[0-9]+: +let archive = current\.archiveURL$|^Sources/ArrumatorRuntime/ArrumatorRuntime\.swift:[0-9]+: +try await settings\.update \{ [$]0\.archivePath = target\.path \}$|^Sources/ArrumatorCLI/Eval\.swift:[0-9]+: +chosen\.archivePath = archive\.path$' \
   '\.archive(URL|Path)\b' \

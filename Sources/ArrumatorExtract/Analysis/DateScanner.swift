@@ -13,7 +13,8 @@ public struct DateCandidate: Sendable, Hashable, Encodable {
 /// Finds full dates in text of any language: a day, a month named in any language in any of its forms and a year
 /// (`15 мая 2024 г.`, `20 de maio de 2026`, `May 20, 2026`, `3. März 2025`), year-month-day with CJK markers
 /// (`2025年3月5日`, `2025년 3월 5일`), ISO `YYYY-MM-DD`, and numeric dates, day first (`15.05.2024`, `15/05/24`,
-/// `24. 9. 2026`) or year first with dots and spaces (`2026. 9. 7.`).
+/// `24. 9. 2026`, each end of `01/03/2024-31/03/2024`) or year first with dots and spaces (`2026. 9. 7.`), in the decimal
+/// digits of any script (`٢٠/٠٥/٢٠٢٦`). Every day is Gregorian.
 /// Month-first numeric dates are accepted only when day-first is impossible. `NSDataDetector` adds any remaining date
 /// expressions that carry both a day number and a four-digit year.
 struct DateScanner: Sendable {
@@ -44,7 +45,7 @@ struct DateScanner: Sendable {
                                               matched: ns.substring(with: match.range)))
             }
         }
-        for match in Self.detector?.matches(in: text, range: full) ?? [] where !overlaps(match.range) {
+        for match in Self.detector.matches(in: text, range: full) where !overlaps(match.range) {
             let matched = ns.substring(with: match.range)
             // Month-year phrases ("May 2024") come back as the 1st of the month; only full dates count.
             let matchedRange = NSRange(location: 0, length: (matched as NSString).length)
@@ -52,10 +53,10 @@ struct DateScanner: Sendable {
                   Self.dayNumber.firstMatch(in: matched, range: matchedRange) != nil else {
                 continue
             }
-            var calendar = Calendar(identifier: .gregorian)
-            calendar.timeZone = match.timeZone ?? .current
-            accepted.append(DateCandidate(day: CalendarDay(date: date, calendar: calendar), location: match.range.location,
-                                          length: match.range.length, matched: matched))
+            // The detector reads a date written without a zone in the process's time zone, so its day is read there.
+            let day = GregorianCalendar(timeZone: match.timeZone ?? TimeZone.current).day(of: date)
+            accepted.append(DateCandidate(day: day, location: match.range.location, length: match.range.length,
+                                          matched: matched))
         }
         return accepted.sorted { $0.location < $1.location }
     }
@@ -73,46 +74,66 @@ struct DateScanner: Sendable {
         // «15» мая 2024 г. | 20 de maio de 2026 | 1st of May 2024 | 3. März 2025 | 1er avril 2025 | 15-mai-2024
         Pattern(regex: regex(#"(?<![\p{L}\p{N}])["«“]?(\d{1,2})(?:st|nd|rd|th|er|e|º|°|-?го|-?е)?["»”]?[\s./-]*"#
                              + #"(?:de\s+|of\s+)?(\p{L}+)\.?,?[\s./-]*(?:de\s+)?(\d{4})(?!\d)"#), monthWord: 1) { g, _ in
-            guard let day = Int(g[0]), let month = MonthNames.month(for: g[1]), let year = Int(g[2]) else { return nil }
+            guard let day = number(g[0]), let month = MonthNames.month(for: g[1]), let year = number(g[2]) else { return nil }
             return CalendarDay(year: year, month: month, day: day)
         },
         // May 20, 2026 | Sept. 3 2025
         Pattern(regex: regex(#"(?<![\p{L}\p{N}])(\p{L}+)\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})(?!\d)"#), monthWord: 0) { g, _ in
-            guard let month = MonthNames.month(for: g[0]), let day = Int(g[1]), let year = Int(g[2]) else { return nil }
+            guard let month = MonthNames.month(for: g[0]), let day = number(g[1]), let year = number(g[2]) else { return nil }
             return CalendarDay(year: year, month: month, day: day)
         },
         // 2025年3月5日 | 2025년 3월 5일
         Pattern(regex: regex(#"(?<!\d)(\d{4})\s*[年년]\s*(\d{1,2})\s*[月월]\s*(\d{1,2})\s*[日일]"#)) { g, _ in
-            guard let year = Int(g[0]), let month = Int(g[1]), let day = Int(g[2]) else { return nil }
+            guard let year = number(g[0]), let month = number(g[1]), let day = number(g[2]) else { return nil }
             return CalendarDay(year: year, month: month, day: day)
         },
         // 2026. 9. 7. (year first, as Hungarian or Korean write it; before day first, which would read its end)
         Pattern(regex: regex(#"(?<![\d.,/-])(\d{4})\.\h(\d{1,2})\.\h(\d{1,2})\.?(?!\d)"#)) { g, _ in
-            guard let year = Int(g[0]), let month = Int(g[1]), let day = Int(g[2]) else { return nil }
+            guard let year = number(g[0]), let month = number(g[1]), let day = number(g[2]) else { return nil }
             return CalendarDay(year: year, month: month, day: day)
         },
         // 24. 9. 2026 (day first, as Czech, Slovak or German write it)
         Pattern(regex: regex(#"(?<![\d.,/-])(\d{1,2})\.\h(\d{1,2})\.\h(\d{4})(?!\d)"#)) { g, _ in
-            guard let day = Int(g[0]), let month = Int(g[1]), let year = Int(g[2]) else { return nil }
+            guard let day = number(g[0]), let month = number(g[1]), let year = number(g[2]) else { return nil }
             return CalendarDay(year: year, month: month, day: day)
         },
         // 2026-05-20 | 2026.05.20 | 2026/05/20
         Pattern(regex: regex(#"(?<![\d.,/-])(\d{4})([-./])(\d{1,2})\2(\d{1,2})(?![\d])"#)) { g, _ in
-            guard let year = Int(g[0]), let month = Int(g[2]), let day = Int(g[3]) else { return nil }
+            guard let year = number(g[0]), let month = number(g[2]), let day = number(g[3]) else { return nil }
             return CalendarDay(year: year, month: month, day: day)
         },
-        // 20.05.2026 | 20/05/26 | 20-05-2026 (day first; month first only when the first number exceeds 12)
-        Pattern(regex: regex(#"(?<![\d.,/-])(\d{1,2})([./-])(\d{1,2})\2(\d{4}|\d{2})(?![\d]|[.,/-]\d)"#)) { g, pivot in
-            guard var day = Int(g[0]), var month = Int(g[2]), var year = Int(g[3]) else { return nil }
+        // 20.05.2026 | 20/05/26 | 20-05-2026 (day first; month first only when the first number exceeds 12), and each
+        // end of a range written without spaces, 01/03/2024-31/03/2024
+        Pattern(regex: regex(#"(?:(?<![\d.,/-])|(?<=[./-]\d{2}-|[./-]\d{4}-))(\d{1,2})([./-])(\d{1,2})\2(\d{4}|\d{2})"#
+                             + #"(?:(?![\d]|[.,/-]\d)|(?=-\d{1,2}\2\d{1,2}\2\d))"#)) { g, pivot in
+            guard var day = number(g[0]), var month = number(g[2]), var year = number(g[3]) else { return nil }
             if g[3].count == 2 { year += (year + 2000 <= pivot) ? 2000 : 1900 }
             if month > 12, day <= 12 { swap(&day, &month) }
             return CalendarDay(year: year, month: month, day: day)
         },
     ]
 
-    private static let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.date.rawValue)
+    private static let detector: NSDataDetector = {
+        do {
+            return try NSDataDetector(types: NSTextCheckingResult.CheckingType.date.rawValue)
+        } catch {
+            preconditionFailure("No date detector: \(error)")
+        }
+    }()
     private static let fourDigitYear = regex(#"(?<!\d)\d{4}(?!\d)"#)
     private static let dayNumber = regex(#"(?<!\d)\d{1,2}(?!\d)"#)
+
+    /// The number `digits` writes, in the decimal digits of any script (`٢٠٢٦`, `२०२६`, `２０２６`), as `\d` matches them;
+    /// `Int(_:)` reads ASCII digits alone.
+    private static func number(_ digits: String) -> Int? {
+        guard !digits.isEmpty else { return nil }
+        var value = 0
+        for character in digits {
+            guard let digit = character.wholeNumberValue, (0...9).contains(digit) else { return nil }
+            value = value * 10 + digit
+        }
+        return value
+    }
 
     private static func regex(_ pattern: String) -> NSRegularExpression {
         do {

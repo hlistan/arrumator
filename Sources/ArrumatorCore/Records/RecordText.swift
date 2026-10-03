@@ -18,15 +18,15 @@ enum RecordText {
         return lines.joined(separator: "\n") + "\n"
     }
 
-    static func history(_ entries: [EventEntry], month: String) -> String {
+    static func history(_ entries: [EventEntry], month: String, in zone: TimeZone) -> String {
         var lines = ["# History \(month)", "", note, ""]
         for e in entries {
-            lines.append("- \(time(e.at)) · \(e.kind.rawValue) · \(e.summary)")
+            lines.append("- \(time(e.at, in: zone)) · \(e.kind.rawValue) · \(e.summary)")
         }
         return lines.joined(separator: "\n") + "\n"
     }
 
-    static func labelRules(_ entries: [LabelRuleEntry]) -> String {
+    static func labelRules(_ entries: [LabelRuleEntry], in zone: TimeZone) -> String {
         var lines = ["# Labels", "", note, "", "| Kind | Label | Decision | Since |", "|---|---|---|---|"]
         for e in entries {
             let decision = switch e.action {
@@ -35,7 +35,7 @@ enum RecordText {
             case .keepApart: "kept apart from \(e.target ?? "")"
             }
             lines.append("| \(e.kind.rawValue) | \(cell(e.value)) | \(cell(decision)) | "
-                + "\(e.created.formatted(day)) |")
+                + "\(e.created.formatted(Date.ISO8601FormatStyle(timeZone: zone).year().month().day())) |")
         }
         return lines.joined(separator: "\n") + "\n"
     }
@@ -52,13 +52,13 @@ enum RecordText {
 
     /// A task's conversation: each question as a quote under when it was asked, its answer below it, then the documents
     /// it draws on and those it found, by name where the index has them, else by number.
-    static func conversation(_ entries: [ConversationTurnEntry], task: String, documents: [Int64: String]) -> String {
+    static func conversation(_ entries: [ConversationTurnEntry], task: String, documents: [Int64: String], in zone: TimeZone) -> String {
         func named(_ ids: [Int64]) -> String {
             ids.map { id in documents[id].map { "\($0) (\(id))" } ?? "document \(id)" }.joined(separator: "; ")
         }
         var lines = ["# \(task)", "", note]
         for e in entries {
-            lines += ["", "## \(time(e.asked))", ""]
+            lines += ["", "## \(time(e.asked, in: zone))", ""]
             lines += e.question.components(separatedBy: .newlines).map { "> " + $0 }
             if let answer = e.answer { lines += ["", answer] }
             if let sources = e.sources, !sources.isEmpty { lines += ["", "Drawn from: " + named(sources)] }
@@ -71,15 +71,12 @@ enum RecordText {
         return lines.joined(separator: "\n") + "\n"
     }
 
-    /// A moment as the Mac showed it, with its offset from UTC ("2026-10-02T11:40:58+01:00"): read by a person, a bare
-    /// UTC hour passes for their own.
-    private static func time(_ date: Date) -> String {
-        date.formatted(Date.ISO8601FormatStyle(timeZone: .current).year().month().day()
+    /// A moment as the Mac showed it, in its time zone `zone`, with its offset from UTC ("2026-10-02T11:40:58+01:00"):
+    /// read by a person, a bare UTC hour passes for their own.
+    private static func time(_ date: Date, in zone: TimeZone) -> String {
+        date.formatted(Date.ISO8601FormatStyle(timeZone: zone).year().month().day()
             .time(includingFractionalSeconds: false).timeZone(separator: .colon))
     }
-
-    /// A day as the Mac's calendar has it.
-    private static let day = Date.ISO8601FormatStyle(timeZone: .current).year().month().day()
 
     /// A table cell: a pipe or a line break would end it.
     private static func cell(_ text: String?) -> String {

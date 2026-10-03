@@ -13,7 +13,9 @@ extension IngestCoordinator {
         }
         let message = error.localizedDescription
         let config = services.config.ingest
-        let ollamaDown = (error as? OllamaError).map { $0.isTransient } ?? false
+        // Ollama away costs no attempt, however long it is away; a server that answers, but with a failure or not in time,
+        // as it may for one image or one document alone, does, so the job ends rather than coming back for ever.
+        let ollamaDown = await ollamaIsAway(error)
         let lastError = job.lastError
         job.lastError = message
         job.setPayload(payload)
@@ -67,6 +69,16 @@ extension IngestCoordinator {
         await parkFailedDocument(job: job, message: message, trace: trace)
         await services.traces.finish(trace, outcome: "failed", docID: job.docId)
         Log.error(.ingest, "Job failed", ["job": String(job.id ?? 0), "error": message])
+    }
+
+    /// Whether `error` says Ollama is away: it could not be reached, or it did not answer in time and does not answer a
+    /// probe for its version either, which a server busy with one request it cannot finish does.
+    private func ollamaIsAway(_ error: any Error) async -> Bool {
+        guard let error = error as? OllamaError else { return false }
+        if error.isAway { return true }
+        guard error.timedOut else { return false }
+        // A probe: its failure is the answer, whatever it is.
+        return (try? await services.ollama.version()) == nil
     }
 
     /// Saves what a failure did to a job and records it in the history. Both are already the failure path, so neither

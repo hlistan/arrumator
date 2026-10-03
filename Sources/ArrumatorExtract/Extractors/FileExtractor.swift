@@ -11,8 +11,8 @@ protocol FileExtractor: Sendable {
     var version: Int { get }
     /// Types handled by this extractor. The registry prefers an exact match, then the most specific conformance.
     var supportedTypes: [UTType] { get }
-    /// Extracts content. Soft problems become warnings on the draft; only `ExtractionError` and
-    /// `CancellationError` are thrown.
+    /// Extracts content. Soft problems become warnings on the draft; only `ExtractionError`, `CancellationError`
+    /// and, from the vision model, an `OllamaError` that passes are thrown.
     func extract(_ job: ExtractionJob) async throws -> ExtractionDraft
 }
 
@@ -25,6 +25,8 @@ struct ExtractionJob: Sendable {
     let trace: TraceContext
     /// What deadlines are measured by.
     let time: any TimeSource
+    /// What the day of a date the file holds is reckoned in: the Mac's time zone, in the Gregorian calendar.
+    let calendar: GregorianCalendar
 
     var config: ExtractionConfig { context.config }
 

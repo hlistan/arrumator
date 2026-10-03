@@ -131,12 +131,16 @@ What the runs showed about telling the model of the archive:
 
 ## Image descriptions and the model's context
 
-An image is described by the model only when OCR finds too little text in it. Image descriptions used to be requested
-without a context size, so Ollama applied its own default. Measured on the server with `gemma4:e2b`, a description
-request without `num_ctx` reloaded the model at 131,072 tokens (1.9 s). The next request to read a document, asked with
-12,288, reloaded it again (1.4 s). That is about 3 s spent on reloading per described image, and more for larger
-models. Every vision request now sends the context documents are read with, `analysis.numCtx` (12,288), so a model
-that reads documents and describes images stays loaded once.
+An image is described by the model only when OCR finds too little text in it: fewer than
+`extraction.image.sparseChars` characters or `extraction.image.sparseWords` words, the words told apart by
+NaturalLanguage in any script, Chinese and Japanese, written without spaces, among them. Rules and runs of symbols are
+no words, so a picture of a few words between them (`*** TOTAL *** --- OBRIGADO ---`) is described, where counting
+what stands between spaces once took it for text enough. Image descriptions used to be
+requested without a context size, so Ollama applied its own default. Measured on the server with `gemma4:e2b`, a
+description request without `num_ctx` reloaded the model at 131,072 tokens (1.9 s). The next request to read a
+document, asked with 12,288, reloaded it again (1.4 s). That is about 3 s spent on reloading per described image,
+and more for larger models. Every vision request now sends the context documents are read with, `analysis.numCtx`
+(12,288), so a model that reads documents and describes images stays loaded once.
 
 The corpora don't show this: OCR found enough text in each of their images, so no run described one.
 

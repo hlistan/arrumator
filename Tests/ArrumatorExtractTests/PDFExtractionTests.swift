@@ -105,6 +105,113 @@ struct PDFExtractionTests {
         #expect(content.text.contains("Anexo digitalizado"), "the scanned page is read by OCR")
     }
 
+    /// A statement's page: a few words and lines of figures, a text layer too few of whose characters are letters to be
+    /// trusted as the page's text (`extraction.pdf.minLetterShare`).
+    private static func figures(page: Int) -> [String] {
+        ["Página \(page)"] + (1...12).map { "0\($0 % 9 + 1)/0\(page)/2026 \(page)\($0)4,50 1\($0)8,90 -2\($0)7,15" }
+    }
+
+    @Test("A page of figures keeps its text layer where OCR does not read it or reads less, and the pages left out are named")
+    func textLayerKept() async throws {
+        let scratch = try Scratch()
+        let url = try scratch.writeTextPDF("extrato.pdf", pages: (1...4).map(Self.figures(page:)))
+        let context = try TestConfig.context { extraction, _ in
+            extraction.pdf.ocrAllIfAtMost = 1
+            extraction.pdf.ocrHeadPages = 1
+        }
+        let blind = RecordingRecognizer()
+        let content = try await TestConfig.registry(recognizer: blind).extract(url, sha256: "x", context: context, trace: .disabled)
+        #expect(content.metadata["pdf:imagePages"] == "1,2,3,4", "every page of figures is taken for a scan")
+        #expect(await blind.widths.count == 2, "OCR reads the first page and the last alone")
+        for page in 1...4 {
+            #expect(content.text.contains("Página \(page)\n"), "page \(page)'s text layer is kept: OCR did not read it or read nothing")
+            #expect(content.text.contains("\(page)34,50"), "and its figures with it")
+        }
+        #expect(content.textOrigin == .textLayer, "all the text is the layer's")
+        #expect(content.warnings.map(\.detail) == ["scanned pages 2–3 not read by OCR: their text layer is kept"],
+                "the pages OCR did not read are named (\(content.warningSummary))")
+
+        let page = "Extrato integral da conta à ordem, lido na imagem da página. "
+            + String(repeating: "Movimento de 01/07/2026, transferência recebida de 1.234,50 euros. ", count: 8)
+        let reader = RecordingRecognizer { _ in page }
+        let read = try await TestConfig.registry(recognizer: reader).extract(url, sha256: "x", context: context, trace: .disabled)
+        #expect(read.text.components(separatedBy: "Extrato integral").count == 3, "where OCR reads anything, the first and last pages are its text")
+        #expect(read.text.contains("Página 2\n") && read.text.contains("Página 3\n"), "the pages it did not read keep their layer")
+        #expect(!read.text.contains("Página 1\n") && !read.text.contains("Página 4\n"), "and the pages it read are not given twice")
+        #expect(read.textOrigin == .mixed, "the text is OCR's and the layer's")
+    }
+
+    /// A text layer whose glyphs name the wrong characters: one character for each glyph, so more than OCR reads of
+    /// the page, and too few of them letters for it to be trusted (`extraction.pdf.minLetterShare`).
+    private static let garbledLayer = Array(repeating: "1$ 7# 2% &9 4@ 0! 3* 5^ 8&", count: 6)
+
+    @Test("A scanned page's text is what OCR read of it, however little; its text layer only where OCR read nothing",
+          arguments: [("Fatura FT 2026/0042", "ocr"), ("7", "ocr"), ("", "textLayer"), (" \n ", "textLayer"), ("\u{FFFD}", "textLayer")])
+    func ocrOverTheTextLayer(ocrRead: String, source: String) async throws {
+        let scratch = try Scratch()
+        let url = try scratch.writeTextPDF("fatura.pdf", pages: [Self.garbledLayer])
+        let sink = MemoryTraceSink()
+        let content = try await TestConfig.registry(recognizer: RecordingRecognizer { _ in ocrRead })
+            .extract(url, sha256: "x", context: try TestConfig.context(), trace: TraceContext(traceID: 8, sink: sink))
+        let layer = PageTextQuality(try #require(PDFDocument(url: url)?.page(at: 0)?.string)).readable
+        if source == "ocr" {
+            #expect(content.text == ocrRead, "OCR read \(ocrRead.count) characters of a page whose layer has \(layer), and its reading wins")
+            #expect(content.textOrigin == .ocr, "so the page's text is OCR's")
+        } else {
+            #expect(content.text.hasPrefix("1$ 7# 2%"), "OCR read nothing readable, so the page keeps the text layer it has")
+            #expect(content.textOrigin == .textLayer, "and the page's text is its layer's")
+        }
+        let input = try #require(await sink.steps.first { $0.stage == .ocr }?.input)
+        let ocrChars = PageTextQuality(ocrRead).readable
+        #expect(input.contains(#""imagePageTexts":[{"ocrChars":\#(ocrChars),"page":1,"source":"\#(source)","textLayerChars":\#(layer)}]"#),
+                "the trace says what each held and which the page's text is: \(input)")
+    }
+
+    @Test("A scanned page OCR does not read, with no text layer, is named without saying a layer is kept")
+    func scannedPagesWithoutLayerLeftOut() async throws {
+        let scratch = try Scratch()
+        let url = try scratch.writeImagePDF("digitalizado.pdf", pages: (1...4).map { ["Página \($0)"] })
+        let context = try TestConfig.context { extraction, _ in
+            extraction.pdf.ocrAllIfAtMost = 1
+            extraction.pdf.ocrHeadPages = 1
+        }
+        let sink = MemoryTraceSink()
+        let content = try await TestConfig.registry(recognizer: RecordingRecognizer { _ in "Página digitalizada lida por OCR" })
+            .extract(url, sha256: "x", context: context, trace: TraceContext(traceID: 9, sink: sink))
+        #expect(content.warnings.map(\.detail) == ["scanned pages 2–3 not read by OCR"],
+                "pages with no text of their own are named, and no layer is said to be kept (\(content.warningSummary))")
+        let input = try #require(await sink.steps.first { $0.stage == .ocr }?.input)
+        #expect(input.contains(#""page":2"#) && input.contains(#""source":"none""#), "and the trace says page 2 has no text: \(input)")
+        #expect(!input.contains(#""source":"textLayer""#), "no page is said to keep a text layer it does not have: \(input)")
+    }
+
+    @Test("The pages whose text layer is not read are named")
+    func textLayerPagesLeftOut() async throws {
+        let scratch = try Scratch()
+        let pages = (1...5).map { ["Relatório de atividades, capítulo \($0), sobre o trabalho feito durante o ano inteiro."] }
+        let url = try scratch.writeTextPDF("relatorio.pdf", pages: pages)
+        let context = try TestConfig.context { extraction, _ in
+            extraction.pdf.textLayerHeadPages = 1
+            extraction.pdf.textLayerTailPages = 1
+        }
+        let content = try await registry.extract(url, sha256: "x", context: context, trace: .disabled)
+        #expect(content.text.contains("capítulo 1,") && content.text.contains("capítulo 5,"), "the first page and the last are read")
+        #expect(!content.text.contains("capítulo 3,"), "the pages between are not")
+        #expect(content.warnings.map(\.detail) == ["pages 2–4 not read: the text of 2 of 5 pages is read"],
+                "and they are named, so the model knows it saw part of the document (\(content.warningSummary))")
+    }
+
+    @Test("A page whose crop box no count of pixels can hold is not drawn for OCR, and stops nothing")
+    func boundlessPage() throws {
+        let config = try TestConfig.pipeline().extraction
+        for size in [CGSize(width: CGFloat.infinity, height: 100), CGSize(width: 100, height: CGFloat.infinity)] {
+            let page = PDFPage()
+            page.setBounds(CGRect(origin: .zero, size: size), for: .mediaBox)
+            page.setBounds(CGRect(origin: .zero, size: size), for: .cropBox)
+            #expect(PDFPageRenderer.render(page, config: config)?.dpi == nil, "a page \(size) is left unread, not converted to pixels that trap")
+        }
+    }
+
     @Test("Encrypted PDF yields an encrypted warning, not an error")
     func encrypted() async throws {
         let scratch = try Scratch()

@@ -40,6 +40,7 @@ public struct PipelineConfig: Sendable, Codable, Hashable, ValidatedConfiguratio
         }
         problems += ollama.problems
         problems += extraction.problems
+        problems += entities.problems
         if database.observationRetry <= 0 { problems.append("database.observationRetry must be more than 0") }
         if watcher.unopenableWaitSeconds < 0 { problems.append("watcher.unopenableWaitSeconds cannot be negative") }
         if watcher.maxPackageItems < 1 { problems.append("watcher.maxPackageItems must be at least 1") }
@@ -239,32 +240,10 @@ public struct ExtractionConfig: Sendable, Codable, Hashable {
     public var zipMaxEntries: Int
     /// Maximum MIME multipart nesting depth parsed in e-mails.
     public var emailMaxPartDepth: Int
+    /// How many messages deep an e-mail with no text of its own is read through the messages it forwards.
+    public var emailForwardsRead: Int
     /// Maximum characters of text previews and metadata values written to trace steps.
     public var tracePreviewChars: Int
-}
-
-public struct EntityConfig: Sendable, Codable, Hashable {
-    public struct Scores: Sendable, Codable, Hashable {
-        public var label: Double
-        public var firstPortion: Double
-        public var plausibleYear: Double
-        public var dueLabel: Double
-        public var birthLabel: Double
-        public var crowdedLine: Double
-        public var matchesMetadata: Double
-    }
-    public var dateLabels: [String]
-    public var dueLabels: [String]
-    public var birthLabels: [String]
-    public var labelWindowChars: Int
-    public var yearsBack: Int
-    public var yearsForward: Int
-    public var scores: Scores
-    public var firstPortionShare: Double
-    /// Number of dates on one line from which the line counts as crowded (tables, statements).
-    public var crowdedLineDates: Int
-    /// Minimum score for a date found in the text to be chosen over metadata dates.
-    public var minTextDateScore: Double
 }
 
 /// Reading a document with the local model: what it sees of it, how it is asked, and what its answer may be.

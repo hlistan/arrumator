@@ -3,19 +3,28 @@ import Foundation
 
 /// Detection, validation and normalisation of stable identifiers, which the model is shown with the document:
 /// IBAN (mod-97), Portuguese NIF (mod-11), Russian ИНН/ОГРН/ОГРНИП (checksums), КПП, БИК, 20-digit Russian
-/// accounts, EU VAT numbers, and labelled account/customer and policy/contract numbers (EN/RU/PT).
+/// accounts, EU VAT numbers, and account/customer and policy/contract numbers after the words
+/// `EntityConfig.accountLabels` and `policyLabels` list, a number sign as `EntityConfig.numberSigns` writes it between.
 ///
 /// Identifiers that collide with ordinary numbers (NIF vs. phone numbers, ИНН, account numbers) are only accepted
 /// after a label; checksummed identifiers with a distinctive shape (IBAN, compact EU VAT) are accepted anywhere.
 /// Pure and deterministic; the regex patterns and checksum algorithms are the definition of each identifier format.
-public enum StableKeys {
+public struct StableKeys: Sendable {
+    /// The rules the configuration's words make, compiled once.
+    private let labelled: [Rule]
+
+    /// - Parameter labels: the words that label account and policy numbers, and how a number sign is written.
+    public init(labels: EntityConfig) {
+        labelled = Self.labelledRules(labels)
+    }
+
     /// All stable keys in `text`, in order of first appearance, normalised and deduplicated. A value found both as a
     /// specific kind (e.g. `ruAccount`) and as a generic labelled number keeps only the specific kind.
-    public static func detect(in text: String) -> [StableKey] {
+    public func detect(in text: String) -> [StableKey] {
         let ns = text as NSString
         let range = NSRange(location: 0, length: ns.length)
         var found: [(location: Int, key: StableKey)] = []
-        for rule in rules {
+        for rule in Self.rules + labelled {
             for match in rule.regex.matches(in: text, range: range) {
                 let groups = (1..<match.numberOfRanges).map { index -> String in
                     let group = match.range(at: index)
@@ -29,8 +38,8 @@ public enum StableKeys {
         found.sort { $0.location < $1.location }
         var seen = Set<StableKey>()
         let ordered = found.map(\.key).filter { seen.insert($0).inserted }
-        let specificValues = Set(ordered.filter { !genericKinds.contains($0.kind) }.map(\.value))
-        return ordered.filter { !genericKinds.contains($0.kind) || !specificValues.contains($0.value) }
+        let specificValues = Set(ordered.filter { !Self.genericKinds.contains($0.kind) }.map(\.value))
+        return ordered.filter { !Self.genericKinds.contains($0.kind) || !specificValues.contains($0.value) }
     }
 
     /// Canonical form: whitespace removed, uppercased, trailing separators trimmed.
@@ -132,31 +141,14 @@ public enum StableKeys {
 
     private static let genericKinds: Set<StableKeyKind> = [.accountNumber, .policyOrContract]
 
-    /// Separator between a label and its value: optional "n.º", "№", "No.", "Nr.", "#", "número", colon, dashes.
-    private static let separator = #"(?:\s*(?:n\.?\s?[ºo°]\.?|№|nr\.?|no\.?|#|n[úu]mero|номер))?[\s:.#-]*"#
+    /// Separator between a label and its value: a number sign as `numberSigns` writes it (`n.º`, `№`, `No.`), if any,
+    /// then colons, dots, dashes and white space.
+    private static func separator(_ numberSigns: [String]) -> String {
+        (LabelPhrases.alternation(numberSigns).map { #"(?:\s*"# + $0 + ")?" } ?? "") + #"[\s:.#-]*"#
+    }
 
     /// Generic labelled identifier: starts alphanumeric, may contain `/ . -` and single spaces between digits.
     private static let labelledValue = #"([A-Z0-9А-ЯЁ](?:[A-Z0-9А-ЯЁ/.-]|(?<=\d) (?=\d)){3,30})"#
-
-    private static let accountLabels = [
-        #"account\s+(?:no\.?|number|nr\.?|#)"#, #"customer\s+(?:no\.?|number|id|ref(?:erence)?|#)"#,
-        #"client\s+(?:no\.?|number|id|#)"#, #"contract\s+account"#, #"member(?:ship)?\s+(?:no\.?|number|id)"#,
-        #"subscriber\s+(?:no\.?|number|id)"#,
-        #"n[úu]mero\s+(?:de\s+)?(?:cliente|conta)"#, #"n\.?\s?[ºo°]\.?\s*(?:de\s+)?(?:cliente|conta)"#,
-        #"c[óo]digo\s+(?:de\s+)?cliente"#, #"cliente\s+n\.?\s?[ºo°]"#, #"refer[êe]ncia\s+(?:de\s+)?cliente"#,
-        #"CPE"#, #"CIL"#,
-        #"лицевой\s+сч[её]т"#, #"л/с"#, #"номер\s+(?:лицевого\s+сч[её]та|клиента|абонента)"#,
-        #"абонентский\s+номер"#, #"код\s+клиента"#, #"клиент\s*№"#,
-    ]
-
-    private static let policyLabels = [
-        #"policy\s+(?:no\.?|number|nr\.?|#)"#, #"contract\s+(?:no\.?|number|nr\.?|ref(?:erence)?|#)"#,
-        #"agreement\s+(?:no\.?|number|#)"#,
-        #"ap[óo]lice"#, #"n[úu]mero\s+(?:de\s+|do\s+|da\s+)?(?:contrato|ap[óo]lice)"#,
-        #"n\.?\s?[ºo°]\.?\s*(?:de\s+|do\s+|da\s+)?(?:contrato|ap[óo]lice)"#, #"contrato\s+(?:n\.?\s?[ºo°]|n[úu]mero)"#,
-        #"(?:страховой\s+)?полис"#, #"номер\s+(?:договора|полиса)"#,
-        #"договор(?:\s+[а-яё]+){0,3}?\s*(?=№|N\s?[º°o]?\s*\d)"#,
-    ]
 
     private static let vatCountries = "AT|BE|BG|CY|CZ|DE|DK|EE|EL|ES|FI|FR|HR|HU|IE|IT|LT|LU|LV|MT|NL|PL|PT|RO|SE|SI|SK|XI"
 
@@ -191,10 +183,6 @@ public enum StableKeys {
         Rule(regex: regex(#"(?<![\p{L}\p{N}])(?:р/сч?|л/сч?|к/сч?|р\.\s?с\.|(?:расч[её]тный|лицевой|корреспондентский|корр\.?)\s+сч[её]т|сч[её]т)[\s:№.-]*((?:\d\s?){19}\d)(?!\d)"#)) { g in
             [StableKey(kind: .ruAccount, value: normalize(g[0]))]
         },
-        // Portuguese NIF/NIPC after its label, optionally written with the PT VAT prefix or grouped by threes.
-        Rule(regex: regex(#"(?<![\p{L}\p{N}])(?:NIF/NIPC|NIPC|N\.?\s?I\.?\s?F\.?|contribuinte|n[úu]mero\s+de\s+identifica[çc][ãa]o\s+fiscal)"# + separator + #"(?:PT\s?)?(\d{3}\s?\d{3}\s?\d{3})(?!\d)"#)) { g in
-            isValidPortugueseNIF(g[0]) ? [StableKey(kind: .ptNIF, value: normalize(g[0]))] : []
-        },
         // EU VAT after a VAT label (country prefix may be separated by a space).
         Rule(regex: regex(#"(?<![\p{L}\p{N}])(?i:VAT|IVA|TVA|USt|UID|BTW)(?i:[\s-]*(?:reg(?:istration)?\.?\s*)?(?:No\.?|Nr\.?|Number|ID|IdNr\.?|n\.?\s?[ºo°]))?[\s:.#-]*("# + vatCountries + #")\s?([0-9A-Z+*]{2,12})(?![\p{L}\p{N}])"#, caseInsensitive: false)) { g in
             vatKeys(country: g[0], body: g[1])
@@ -203,13 +191,26 @@ public enum StableKeys {
         Rule(regex: regex(#"(?<![\p{L}\p{N}])("# + vatCountries + #")([0-9A-Z+*]{8,12})(?![\p{L}\p{N}])"#, caseInsensitive: false)) { g in
             vatKeys(country: g[0], body: g[1])
         },
-        Rule(regex: regex(#"(?<![\p{L}\p{N}])(?:"# + accountLabels.joined(separator: "|") + ")" + separator + labelledValue)) { g in
-            labelledKey(.accountNumber, g[0])
-        },
-        Rule(regex: regex(#"(?<![\p{L}\p{N}])(?:"# + policyLabels.joined(separator: "|") + ")" + separator + labelledValue)) { g in
-            labelledKey(.policyOrContract, g[0])
-        },
     ]
+
+    /// The rules whose labels or number signs `labels` gives: the Portuguese NIF after its own name, and a number after
+    /// one of the words that label an account or a policy number, matched as whole words.
+    private static func labelledRules(_ labels: EntityConfig) -> [Rule] {
+        let separator = separator(labels.numberSigns)
+        // Portuguese NIF/NIPC after its label, optionally written with the PT VAT prefix or grouped by threes.
+        let nif = Rule(regex: regex(#"(?<![\p{L}\p{N}])(?:NIF/NIPC|NIPC|N\.?\s?I\.?\s?F\.?|contribuinte|n[úu]mero\s+de\s+identifica[çc][ãa]o\s+fiscal)"# + separator + #"(?:PT\s?)?(\d{3}\s?\d{3}\s?\d{3})(?!\d)"#)) { g in
+            isValidPortugueseNIF(g[0]) ? [StableKey(kind: .ptNIF, value: normalize(g[0]))] : []
+        }
+        let numbers = [(labels.accountLabels, StableKeyKind.accountNumber), (labels.policyLabels, .policyOrContract)].compactMap { words, kind in
+            // A label that ends in a letter ends a word, so `договор n` is not the start of `договор NDA-2024`.
+            LabelPhrases.alternation(words, endingWords: true).map { label in
+                Rule(regex: LabelPhrases.regex(#"(?<![\p{L}\p{N}])"# + label + separator + labelledValue)) { g in
+                    labelledKey(kind, g[0])
+                }
+            }
+        }
+        return [nif] + numbers
+    }
 
     private static func vatKeys(country: String, body: String) -> [StableKey] {
         let vat = normalize(country + body)

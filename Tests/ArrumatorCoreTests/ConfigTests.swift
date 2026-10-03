@@ -57,12 +57,12 @@ import Testing
         let config = try PipelineConfig.bundledDefaults()
         var settings = try AppSettings.bundledDefaults()
         settings.modelProfiles[settings.profile]?.visionModel = "an-image-model"
-        let vision = try #require(try config.extractionContext(settings: settings).vision, "images are described while enableVLM is on")
+        let vision = try #require(try config.extractionContext(settings: settings, whenOllamaIsAway: .wait).vision, "images are described while enableVLM is on")
         #expect(vision.model == "an-image-model", "by the vision model of the profile in use")
         #expect(vision.numCtx == config.analysis.numCtx && vision.keepAlive == config.ollama.keepAlive.chat,
                 "with the context and keep-alive documents are read with, so a model that does both is loaded once, not again for each image")
         settings.enableVLM = false
-        #expect(try config.extractionContext(settings: settings).vision == nil, "and none is described when the user turned it off")
+        #expect(try config.extractionContext(settings: settings, whenOllamaIsAway: .wait).vision == nil, "and none is described when the user turned it off")
     }
 
     @Test func everyFullTextColumnHasItsWeight() throws {

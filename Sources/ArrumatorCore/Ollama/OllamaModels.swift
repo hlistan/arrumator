@@ -67,6 +67,27 @@ public enum OllamaError: Error, LocalizedError, Equatable {
         }
     }
 
+    /// Whether the server could not be reached: work waits for it, however long, spending nothing of its own. A server
+    /// that answers with a failure, `http` 5xx or an empty reply, is transient too, worth asking again at once, but one
+    /// that keeps failing so for one item fails that item (`IngestCoordinator`); so does an answer that keeps timing out
+    /// while the server answers a probe (`timedOut`).
+    public var isAway: Bool {
+        switch self {
+        case .unreachable: true
+        case let .locationUnknown(_, because): because.isAway
+        default: false
+        }
+    }
+
+    /// Whether the server did not answer in time, which is the server away only when it answers nothing else either.
+    public var timedOut: Bool {
+        switch self {
+        case .timeout: true
+        case let .locationUnknown(_, because): because.timedOut
+        default: false
+        }
+    }
+
     /// Whether asking `request` again may get the answer this failure kept from coming: a transient failure, except a
     /// timeout of a request with a `timeout` of its own, such as a search task's effort gives. That request took longer
     /// than it may and would take as long again, holding the one model that generates all the while, so it is a failed

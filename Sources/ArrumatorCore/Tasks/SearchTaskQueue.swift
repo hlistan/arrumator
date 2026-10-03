@@ -276,7 +276,7 @@ public actor SearchTaskQueue {
     /// Reads the task's prompt and keeps what it found, or why it found nothing; the outcome the trace ends with.
     private func interpret(_ record: SearchTaskRecord, id: Int64, profile: ModelProfile, trace: TraceContext) async throws -> String {
         let vocabulary = try await services.labels.usage()
-        let today = services.time.now().formatted(Date.ISO8601FormatStyle(timeZone: .current).year().month().day())
+        let today = services.time.now().formatted(Date.ISO8601FormatStyle(timeZone: services.timeZone).year().month().day())
         let interpretation = try await interpreter.interpret(record.prompt, effort: record.effort, profile: profile, vocabulary: vocabulary,
                                                              today: today, config: services.config, trace: trace)
         guard let plan = interpretation.plan else {

@@ -352,7 +352,7 @@ public actor TaskConversationQueue {
                                              output: { ContextTrace($0) }) {
             try await builder.context(for: record.question, set: set, earlier: earlier)
         }
-        let today = services.time.now().formatted(Date.ISO8601FormatStyle(timeZone: .current).year().month().day())
+        let today = services.time.now().formatted(Date.ISO8601FormatStyle(timeZone: services.timeZone).year().month().day())
         let answer = try await answerer.answer(record.question, context: chosen.shown, effort: task.effort, profile: profile, today: today,
                                                config: services.config, trace: trace) { [weak self] progress in
             await self?.progressed(id, progress)

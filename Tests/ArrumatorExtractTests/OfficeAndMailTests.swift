@@ -31,6 +31,22 @@ struct OfficeAndMailTests {
         #expect(content.warnings.map(\.code) == [], "a well-formed .docx is read without warnings")
     }
 
+    @Test("A template, a slide show or a document with macros is read as its family is, core properties included")
+    func officeVariants() async throws {
+        let scratch = try Scratch()
+        let word = try scratch.writeDocx("modelo.dotm", text: "Modelo de carta de reclamação", title: "Reclamação", author: "Maria Santos")
+        let letter = try await registry.extract(word, sha256: "x", context: try TestConfig.context(), trace: .disabled)
+        #expect(letter.extractorName == "textutil", "a Word template with macros is read by textutil")
+        #expect(letter.text.contains("Modelo de carta"), "and its text is read (\(letter.warningSummary))")
+        #expect(letter.metadata["doc:title"] == "Reclamação", "with its core-properties title, as a .docx's")
+        let deck = try await registry.extract(try scratch.writeZip("deck.ppsx", files: PPTXFixture.files), sha256: "x",
+                                              context: try TestConfig.context(), trace: .disabled)
+        #expect(deck.extractorName == "pptx" && deck.text.contains("Quarterly review"), "a slide show is read as a presentation")
+        let book = try await registry.extract(try scratch.writeZip("contas.xltx", files: XLSXFixture.files), sha256: "x",
+                                              context: try TestConfig.context(), trace: .disabled)
+        #expect(book.extractorName == "xlsx" && book.text.contains("EDP Comercial\t45.9"), "a workbook template is read as a workbook")
+    }
+
     @Test("textutil is told not to load what an HTML page or web archive refers to")
     func textutilArguments() throws {
         let page = try Scratch().url("page.html")
@@ -162,6 +178,105 @@ struct OfficeAndMailTests {
         #expect(content.entities.documentDate?.date == "2024-05-15", "an e-mail is dated the day it was sent")
     }
 
+    @Test("A text part sent inline with a name is the body; a file sent inline is listed; a message attached is one attachment")
+    func mimeParts() async throws {
+        let scratch = try Scratch()
+        let inline = try scratch.write("inline.eml", data: EMLFixture.multipart([
+            EMLFixture.part(["Content-Type: text/plain; charset=utf-8; name=\"mensagem.txt\"",
+                             "Content-Disposition: inline; filename=\"mensagem.txt\""], body: "Segue a fatura de julho em anexo."),
+            EMLFixture.part(["Content-Type: application/pdf", "Content-Disposition: attachment; filename=\"fatura.pdf\""], body: "%PDF-1.4"),
+        ]))
+        let named = try await registry.extract(inline, sha256: "x", context: try TestConfig.context(), trace: .disabled)
+        #expect(named.text.contains("Segue a fatura de julho"), "a part shown inline is the body, though it has a name")
+        #expect(named.attachments == ["fatura.pdf"], "and is not listed as an attachment")
+
+        // As Apple Mail sends a file: shown inline, with its name.
+        let shown = try scratch.write("shown.eml", data: EMLFixture.multipart([
+            EMLFixture.part(["Content-Type: text/plain; charset=utf-8"], body: "Segue a fatura de julho."),
+            EMLFixture.part(["Content-Type: application/pdf; name=\"Fatura_FT2026-0042.pdf\"",
+                             "Content-Disposition: inline; filename=\"Fatura_FT2026-0042.pdf\""], body: "%PDF-1.4"),
+        ]))
+        let file = try await registry.extract(shown, sha256: "x", context: try TestConfig.context(), trace: .disabled)
+        #expect(file.attachments == ["Fatura_FT2026-0042.pdf"], "a file sent inline with its name is attached all the same")
+        #expect(file.text.contains("Attachments: Fatura_FT2026-0042.pdf\n\nSegue a fatura de julho."),
+                "and the model reads its name beside the body: \(file.text)")
+
+        let forwarded = try scratch.write("forwarded.eml", data: EMLFixture.multipart([
+            EMLFixture.part(["Content-Type: text/html; charset=utf-8"], body: "<p>Reencaminho a reserva abaixo.</p>"),
+            EMLFixture.part(["Content-Type: message/rfc822", "Content-Disposition: attachment; filename=\"Reserva.eml\""],
+                            body: String(decoding: EMLFixture.multipart([
+                                EMLFixture.part(["Content-Type: text/plain; charset=utf-8"], body: "Código de reserva XYZ123."),
+                                EMLFixture.part(["Content-Type: application/pdf", "Content-Disposition: attachment; filename=\"bilhete.pdf\""],
+                                                body: "%PDF-1.4"),
+                            ], boundary: "INNER"), as: UTF8.self)),
+        ]))
+        let message = try await registry.extract(forwarded, sha256: "x", context: try TestConfig.context(), trace: .disabled)
+        #expect(message.text.contains("Reencaminho a reserva"), "the message's own body is its body, though it is HTML")
+        #expect(!message.text.contains("Código de reserva"), "the text of a message attached to it is not taken for its body")
+        #expect(message.attachments == ["Reserva.eml"], "the message attached is one attachment, its own attachments inside it")
+    }
+
+    @Test("Messages forwarded within messages are read extraction.emailForwardsRead deep, each parsed once",
+          .timeLimit(.minutes(1)))
+    func forwardsWithinForwards() async throws {
+        let scratch = try Scratch()
+        let levels = try TestConfig.pipeline().extraction.emailMaxPartDepth
+        // The innermost message holds a text and a file of 4 MB; each around it forwards the one within, and says nothing.
+        var message = EMLFixture.multipart([
+            EMLFixture.part(["Content-Type: text/plain; charset=utf-8"], body: "O texto mais fundo."),
+            EMLFixture.part(["Content-Type: application/pdf", "Content-Disposition: attachment; filename=\"grande.pdf\""],
+                            body: String(repeating: "QUJD", count: 1_000_000)),
+        ], boundary: "LEVEL-\(levels)-END", subject: "Nível \(levels)")
+        for level in (1..<levels).reversed() {
+            message = EMLFixture.multipart([EMLFixture.part(["Content-Type: message/rfc822"], body: String(decoding: message, as: UTF8.self))],
+                                           boundary: "LEVEL-\(level)-END", subject: "Nível \(level)")
+        }
+        let url = try scratch.write("fwd.eml", data: message)
+        let context = try TestConfig.context()
+        let content = try await registry.extract(url, sha256: "x", context: context, trace: .disabled)
+        let forwards = context.config.emailForwardsRead
+        #expect(content.text.components(separatedBy: "Attached message:").count - 1 == forwards,
+                "the messages forwarded are read \(forwards) deep, no deeper: \(content.text.prefix(600))")
+        #expect(content.text.contains("Subject: Nível \(forwards + 1)\n"), "down to the last one read")
+        #expect(content.text.contains("Attachments: Nível \(forwards + 2)"), "which lists the one it forwards by its subject")
+        #expect(!content.text.contains("O texto mais fundo"), "and the text past them is not read")
+    }
+
+    @Test("A message that only forwards another is read with the text of the one it forwards, marked as such")
+    func forwardedOnly() async throws {
+        let scratch = try Scratch()
+        let inner = EMLFixture.multipart([
+            EMLFixture.part(["Content-Type: text/plain; charset=utf-8"], body: "Código de reserva XYZ123."),
+            EMLFixture.part(["Content-Type: application/pdf", "Content-Disposition: attachment; filename=\"bilhete.pdf\""], body: "%PDF-1.4"),
+        ], boundary: "INNER", subject: "Reserva confirmada")
+        let url = try scratch.write("fwd.eml", data: EMLFixture.multipart([
+            EMLFixture.part(["Content-Type: message/rfc822"], body: String(decoding: inner, as: UTF8.self)),
+        ], subject: "Fwd: Reserva confirmada"))
+        let content = try await registry.extract(url, sha256: "x", context: try TestConfig.context(), trace: .disabled)
+        #expect(content.attachments == ["Reserva confirmada"], "the message attached, which has no name, is listed by its subject")
+        #expect(content.text.contains("Attached message:\nFrom: Loja <loja@example.com>\nSubject: Reserva confirmada\nDate: 2025-06-02\n"
+                                      + "Attachments: bilhete.pdf\n\nCódigo de reserva XYZ123."),
+                "with no text of its own, the message is read with the text of the one it forwards, marked: \(content.text)")
+        #expect(content.metadata[MetadataKey.emailSubject] == "Fwd: Reserva confirmada", "its own headers stay its metadata")
+    }
+
+    @Test("Metadata and attachment names are composed and hold no control character, as the text is")
+    func metadataNormalised() async throws {
+        let scratch = try Scratch()
+        // A subject of decomposed letters with a terminal escape in it, and an attachment named in decomposed letters.
+        let subject = Data("Informac\u{0327}a\u{0303}o\u{1B}[31m urgente".utf8).base64EncodedString()
+        let url = try scratch.write("escape.eml", data: EMLFixture.multipart([
+            EMLFixture.part(["Content-Type: text/plain; charset=utf-8"], body: "Segue em anexo."),
+            EMLFixture.part(["Content-Type: application/pdf",
+                             "Content-Disposition: attachment; filename*=UTF-8''Informac%CC%A7a%CC%83o.pdf"], body: "%PDF-1.4"),
+        ], subject: "=?UTF-8?B?\(subject)?="))
+        let content = try await registry.extract(url, sha256: "x", context: try TestConfig.context(), trace: .disabled)
+        let read = try #require(content.metadata[MetadataKey.emailSubject])
+        #expect(Array(read.utf8) == Array("Informação[31m urgente".utf8), "the subject is composed, and its escape is gone: \(read)")
+        let name = try #require(content.attachments.first)
+        #expect(Array(name.utf8) == Array("Informação.pdf".utf8), "and the attachment's name is composed: \(name)")
+    }
+
     @Test("eml with only an HTML body is stripped to text; .msg is metadata-only")
     func htmlAndMsg() async throws {
         let scratch = try Scratch()
@@ -199,6 +314,29 @@ struct OfficeAndMailTests {
         let kept = String(decoding: bytes[..<(cap - 1)], as: UTF8.self).trimmingCharacters(in: .whitespaces)
         #expect(content.text.hasSuffix(kept), "the body is read as the UTF-8 it is, not as Latin-1, up to the letter the cap cut")
         #expect(content.warnings.map(\.detail) == ["body: first \(cap) bytes"], "the cut is noted, so the model knows it read part")
+    }
+
+    @Test("An e-mail is dated the day its Date header gives, in the zone it is written in, wherever the Mac is",
+          arguments: [
+              // Half past midnight on 2 June in Kiribati is still 1 June in every zone from UTC-10 to UTC+13.
+              ("Tue, 2 Jun 2026 00:30:00 +1400", "2026-06-02", "2026-06-01T10:30:00Z"),
+              // UT and Z are UTC (RFC 5322 §4.3), which no Mac east or west of it keeps.
+              ("Wed, 15 Jul 2026 23:30:00 UT", "2026-07-15", "2026-07-15T23:30:00Z"),
+              ("Wed, 15 Jul 2026 23:30:00 Z", "2026-07-15", "2026-07-15T23:30:00Z"),
+              // EST is -0500 in July too (§4.3): the name is no zone with summer time.
+              ("Wed, 15 Jul 2026 23:30:00 EST", "2026-07-15", "2026-07-16T04:30:00Z"),
+              ("Wed, 15 Jul 2026 00:30:00 GMT+1", "2026-07-15", "2026-07-14T23:30:00Z"),
+          ])
+    func emailDayAsWritten(date: String, day: String, sent: String) async throws {
+        let scratch = try Scratch()
+        let url = try scratch.write("late.eml", data: EMLFixture.plain(body: "A sua reserva está confirmada.", date: date))
+        for zone in try ["Asia/Tokyo", "America/Los_Angeles", "Europe/Lisbon"].map({ try #require(TimeZone(identifier: $0)) }) {
+            let registry = try TestConfig.registry(calendar: TestConfig.calendar(.gregorian, in: zone))
+            let content = try await registry.extract(url, sha256: "x", context: try TestConfig.context(), trace: .disabled)
+            #expect(content.text.contains("Date: \(day)\n"), "\(date), on a Mac in \(zone.identifier): the model reads the day written")
+            #expect(content.entities.documentDate?.date == day, "and that day dates the e-mail")
+            #expect(content.metadata[MetadataKey.emailDate] == sent, "the moment it was sent is kept whole, in UTC")
+        }
     }
 
     @Test("An e-mail longer than emailReadCapBytes is read up to it, and the cut is noted")
@@ -334,17 +472,30 @@ enum PPTXFixture {
 enum EMLFixture {
     static let subject = "Fatura de julho"
 
-    /// A message whose only part is `body`, as UTF-8 plain text.
-    static func plain(body: String) -> Data {
+    /// A message sent on `date` whose only part is `body`, as UTF-8 plain text.
+    static func plain(body: String, date: String = "Mon, 2 Jun 2025 09:00:00 +0000") -> Data {
         Data("""
         From: Loja <loja@example.com>
         Subject: \(subject)
-        Date: Mon, 2 Jun 2025 09:00:00 +0000
+        Date: \(date)
         Content-Type: text/plain; charset=utf-8
         Content-Transfer-Encoding: 8bit
 
         \(body)
         """.utf8)
+    }
+
+    /// One part of a multipart message: its header lines, a blank line and `body`.
+    static func part(_ headers: [String], body: String) -> String {
+        (headers + ["", body]).joined(separator: "\r\n")
+    }
+
+    /// A multipart/mixed message of `parts` between `boundary` lines, with CRLF line ends, as mailers write it.
+    static func multipart(_ parts: [String], boundary: String = "PARTS", subject: String = subject) -> Data {
+        let headers = ["From: Loja <loja@example.com>", "Subject: \(subject)", "Date: Mon, 2 Jun 2025 09:00:00 +0000",
+                       "MIME-Version: 1.0", "Content-Type: multipart/mixed; boundary=\"\(boundary)\""]
+        let body = parts.map { "--\(boundary)\r\n" + $0 }.joined(separator: "\r\n") + "\r\n--\(boundary)--"
+        return Data((headers + ["", body]).joined(separator: "\r\n").utf8)
     }
 
     static func message() throws -> Data {

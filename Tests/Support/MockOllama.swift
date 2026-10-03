@@ -23,6 +23,7 @@ public actor MockOllama: OllamaAPI {
     private let thinking: [String: OllamaShowResponse.Thinking]
     private let remoteHosts: [String: String]
     private var showFailures: [String: OllamaError] = [:]
+    private var versionFailure: OllamaError?
 
     /// `capabilities` are what `show` reports for every model, as Ollama lists them ("completion", "vision", …),
     /// `modelCapabilities` what it reports for particular models instead, and `modelThinking` how a particular model
@@ -55,7 +56,13 @@ public actor MockOllama: OllamaAPI {
     /// Makes `show` fail with `error` for `model` from now on, as a server that cannot say what the model can do.
     public func failShowing(_ model: String, with error: OllamaError) { showFailures[model] = error }
 
-    public func version() async throws -> String { "mock" }
+    /// Makes `version` fail with `error` from now on, as a server that answers nothing.
+    public func failVersion(with error: OllamaError) { versionFailure = error }
+
+    public func version() async throws -> String {
+        if let versionFailure { throw versionFailure }
+        return "mock"
+    }
 
     public func tags() async throws -> [OllamaModelInfo] {
         installed.map { OllamaModelInfo(name: $0, model: $0, remoteModel: nil, remoteHost: remoteHosts[$0], size: 1, digest: nil, modifiedAt: nil,

@@ -356,7 +356,7 @@ import Testing
                 "the folder's tag first, then those given on the command line, each once")
         let many = h.services.tags(for: url, given: (1...10).map { "Box \($0)" }, settings: settings)
         #expect(many.count == h.env.config.labels.maxPerKind && many.first == Self.given(h), "at most labels.maxPerKind, the folder's first")
-        let content = try await h.services.extractor.extract(url, sha256: "x", context: try h.env.config.extractionContext(settings: settings),
+        let content = try await h.services.extractor.extract(url, sha256: "x", context: try h.env.config.extractionContext(settings: settings, whenOllamaIsAway: .wait),
                                                              trace: .disabled)
         let reading = try await h.services.read(content, tags: given.map(\.label), settings: settings, trace: .disabled)
         #expect(reading.outcome.labels == StubAnalyzer.edpBill + [Self.tag, Self.mine], "a dry run shows them beside what the model gives")

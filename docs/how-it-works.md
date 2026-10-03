@@ -78,16 +78,23 @@ app-managed file.
 Nothing in reading a document is tied to a language. The extractor tells the language of the text among all that
 Apple's NaturalLanguage knows. Its dates are found with month names in every language the system has a calendar for,
 in each form it writes them (`15 мая 2024`, `3. März 2025`, `2025年3月5日`), and in numeric forms from day first to
-year first. OCR asks Vision for the document's own language first, then the hints in `extraction.ocrLanguages`, and
-lets Vision detect any other it reads. A script Vision does not read in images is still read from a PDF's text layer,
-an e-mail or a text file. The model reads the document as written and describes it in labels that do not depend on its
-language: names and numbers as the document writes them, topics, objects and jurisdictions in English, dates, amounts
-and
-languages in ISO forms. Documents in different languages are therefore found by the same labels. The file name's
-description is in the document's own language.
+year first, in the digits of any script (`٢٠/٠٥/٢٠٢٦`), each end of a range such as `01/03/2024-31/03/2024` too. Every
+date is a day of the Gregorian calendar, as ISO dates are, whatever calendar the Mac is set to (Buddhist, Japanese,
+Persian). A file's own dates, which have no zone, are the day they were in the Mac's time zone; a PDF's creation date,
+a recording's capture date and an e-mail's Date header are the day they write, in the zone they are written in, which
+is the day the writer's clock showed. Account and customer numbers, and
+policy and contract numbers, are those after the words `entities.accountLabels` and `entities.policyLabels` list, in
+each way they are written ([Configuration](using-arrumator.md#configuration)), which you can add to for another
+language. OCR asks Vision for the document's own language first, then the hints in
+`extraction.ocrLanguages`, and lets Vision detect any other it reads. A script Vision does not read in images is still
+read from a PDF's text layer, an e-mail or a text file. The model reads the document as written and describes it in
+labels that do not depend on its language: names and numbers as the document writes them, topics, objects and
+jurisdictions in English, dates, amounts and languages in ISO forms. Documents in different languages are therefore
+found by the same labels. The file name's description is in the document's own language.
 
 OCR runs on Vision's default device, the Neural Engine or GPU. When that fails, as it can when the Neural Engine's
-model does not compile, the page is read again on the CPU, and so is every later page until the app restarts. The
+model does not compile, the page is read again on the CPU; once the CPU has read a page the default device could not,
+so is every later page until the app restarts, while a page neither reads leaves the default device in use. The
 document's trace records which device read each page.
 
 ## Reading a document
@@ -302,8 +309,14 @@ A document that waits keeps its own name: what the model read of it is in doubt.
 (`ingest.maxAttempts`) is parked in the archive the same way, with status failed, so Incoming stays clean and nothing
 is lost; one that cannot be moved into the archive either stays in Incoming, failed, saying why.
 
-While Ollama cannot be reached a document waits where it stopped, and a missing model holds it until the model is
-downloaded; neither costs it an attempt.
+While Ollama cannot be reached a document waits where it stopped, an image whose text is too sparse to tell what it
+is included, which is described when Ollama is back rather than filed without its description; a missing model holds
+a document until the model is downloaded; neither costs it an attempt. A server that answers, but with a failure (an
+error of its own or an empty reply) each time it is asked, as a model may for one image, costs an attempt each time,
+and so does a request that times out while the server still answers when asked for its version; a timeout while it
+answers nothing is Ollama away. Such a document is parked as failed after `ingest.maxAttempts`, with the reason, for
+you to read again, rather than tried again for ever. A description the vision model fails to give, an answer that is
+not one or an image the server refuses, is noted with the document, which is read without it.
 
 ## Exact copies
 

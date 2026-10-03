@@ -334,12 +334,23 @@ public struct ExtractionContext: Sendable {
     public var config: ExtractionConfig
     public var entities: EntityConfig
     public var vision: VisionModelOptions?
+    public var whenOllamaIsAway: WhenOllamaIsAway
 
-    public init(config: ExtractionConfig, entities: EntityConfig, vision: VisionModelOptions?) {
+    public init(config: ExtractionConfig, entities: EntityConfig, vision: VisionModelOptions?, whenOllamaIsAway: WhenOllamaIsAway) {
         self.config = config
         self.entities = entities
         self.vision = vision
+        self.whenOllamaIsAway = whenOllamaIsAway
     }
+}
+
+/// What extraction does when Ollama cannot be reached to describe an image whose text is too sparse to tell what it is.
+public enum WhenOllamaIsAway: Sendable {
+    /// Throw Ollama's error, so the document's job waits for Ollama, as it does to be read, rather than being filed
+    /// without the description for good: the ingest pipeline.
+    case wait
+    /// Read the image without its description, and note why: `arrumatorcli extract`, which shows what is read now.
+    case note
 }
 
 public struct VisionModelOptions: Sendable {

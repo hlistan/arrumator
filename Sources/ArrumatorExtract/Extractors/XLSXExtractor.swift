@@ -12,9 +12,10 @@ import UniformTypeIdentifiers
 struct XLSXExtractor: FileExtractor {
     let name = "xlsx"
     let version = 2
+    /// Workbooks and their templates, with macros or without, which keep their sheets in the same parts.
     var supportedTypes: [UTType] {
-        [UTType("org.openxmlformats.spreadsheetml.sheet"), UTType("org.openxmlformats.spreadsheetml.sheet.macroenabled")]
-            .compactMap { $0 }
+        ["sheet", "sheet.macroenabled", "template", "template.macroenabled"]
+            .compactMap { UTType("org.openxmlformats.spreadsheetml.\($0)") }
     }
 
     func extract(_ job: ExtractionJob) async throws -> ExtractionDraft {

@@ -132,21 +132,50 @@ struct ImageAndVisionTests {
         }
     }
 
-    @Test("Vision failures become warnings, never errors")
+    @Test("A description the model fails to give is a warning; Ollama away or a stop is thrown, so the image waits for it")
     func vlmFailures() async throws {
         let scratch = try Scratch()
         let url = try scratch.writeImage("blank.png", try Scratch.textImage([], width: 800, height: 600))
         let context = try TestConfig.context(vision: TestConfig.visionOptions())
-        let failures: [MockOllama.ChatHandler] = [{ _ in throw OllamaError.unreachable("connection refused") },
-                                                  { _ in "I cannot answer that" }]
-        for handler in failures {
+        let failures: [(MockOllama.ChatHandler, String)] = [({ _ in "I cannot answer that" }, "a reply that is not JSON"),
+                                                            ({ _ in throw OllamaError.http(status: 400, body: "bad image") }, "a request the server refuses")]
+        for (handler, failure) in failures {
             let ollama = MockOllama(capabilities: MockOllama.visionCapabilities, handler: handler)
             let content = try await TestConfig.registry(ollama: ollama).extract(
                 url, sha256: "x", context: context, trace: .disabled)
-            #expect(content.hasWarning(.vlmFailed), "an unreachable model or a reply that is not JSON is a warning (\(content.warningSummary))")
+            #expect(content.hasWarning(.vlmFailed), "\(failure) is a warning (\(content.warningSummary))")
             #expect(content.visual == nil, "a failed description leaves no visual summary behind")
             #expect(content.textOrigin == .none, "an image with no text and no description has no text origin")
         }
+
+        let away = MockOllama(capabilities: MockOllama.visionCapabilities) { _ in throw OllamaError.unreachable("connection refused") }
+        let sink = MemoryTraceSink()
+        await #expect(throws: OllamaError.unreachable("connection refused"),
+                      "Ollama away is the job's to wait for, not a reason to file the image without its description for good") {
+            _ = try await TestConfig.registry(ollama: away).extract(url, sha256: "x", context: context, trace: TraceContext(traceID: 6, sink: sink))
+        }
+        let vlm = try #require(await sink.steps.first { $0.stage == .vlm }, "the request that failed is in the trace")
+        #expect(vlm.error?.contains("not reachable") == true, "with why it failed: \(vlm.error ?? "")")
+        let shown = try await TestConfig.registry(ollama: away).extract(
+            url, sha256: "x", context: try TestConfig.context(vision: TestConfig.visionOptions(), whenOllamaIsAway: .note), trace: .disabled)
+        #expect(shown.warnings.contains { $0.code == .vlmFailed && $0.detail.hasPrefix("Ollama is away") },
+                "where only what is read now is shown, the image is read without its description, noted (\(shown.warningSummary))")
+
+        let unshown = MockOllama(capabilities: MockOllama.visionCapabilities) { _ in "{}" }
+        await unshown.failShowing(try TestConfig.visionOptions().model, with: .unreachable("connection refused"))
+        await #expect(throws: OllamaError.unreachable("connection refused"), "so is Ollama away when the model's capabilities are asked") {
+            _ = try await TestConfig.registry(ollama: unshown).extract(url, sha256: "x", context: context, trace: .disabled)
+        }
+        #expect(await unshown.chatRequests.isEmpty, "and the model is not asked before Ollama is back")
+
+        let stopped = MockOllama(capabilities: MockOllama.visionCapabilities) { _ in throw CancellationError() }
+        await #expect("a stop while the model describes the image stops the job, not as a warning") {
+            _ = try await TestConfig.registry(ollama: stopped).extract(url, sha256: "x", context: context, trace: .disabled)
+        } throws: { error in
+            guard case .cancelled? = error as? ExtractionError else { return false }
+            return true
+        }
+
         let unconfigured = try await TestConfig.registry().extract(url, sha256: "x", context: try TestConfig.context(),
                                                                  trace: .disabled)
         #expect(unconfigured.hasWarning(.vlmSkipped), "without a vision model, the trace says the description was skipped")
@@ -219,6 +248,35 @@ struct ImageAndVisionTests {
         #expect(content.pagesOCRed == [1, 3], "and they are the pages OCR read")
         #expect(content.warnings.filter { $0.code == .textTruncated }.map(\.detail) == ["read 2 of 3 pages"],
                 "the page left out is noted, so the model knows it saw part of the document")
+    }
+
+    @Test("Words are counted in every script, so a receipt in Chinese or Japanese is no sparser than one in Portuguese")
+    func sparseInEveryScript() throws {
+        let config = try TestConfig.pipeline().extraction.image
+        let receipts = [
+            ("Chinese", "北京市朝阳区超市购物小票，商品名称：牛奶两盒，面包一袋，苹果三斤，鸡蛋一盒。合计金额人民币八十六元五角，现金支付一百元，找零十三元五角，欢迎再次光临本店，谢谢惠顾。"),
+            ("Japanese", "東京都渋谷区のスーパーマーケットの領収書です。牛乳二本、食パン一斤、りんご三個、卵一パックをお買い上げいただきました。合計金額は千二百八十円、お預かり二千円、お釣りは七百二十円です。"),
+            ("Portuguese", "Continente Bom Dia Lisboa, talão de compra: leite meio-gordo, pão de forma, maçãs e ovos. Total a pagar 12,80 euros."),
+        ]
+        for (script, text) in receipts {
+            #expect(!ImageExtractor.isSparse(text: text, confidence: 0.9, config: config),
+                    "a receipt in \(script) that OCR read whole is not sent to the vision model")
+        }
+        #expect(ImageExtractor.isSparse(text: "CONTINENTE", confidence: 0.9, config: config), "a logo alone is sparse")
+        #expect(ImageExtractor.isSparse(text: "東京電力", confidence: 0.9, config: config), "and so is a name alone, in any script")
+        // Ten runs between spaces, enough characters, and six words: rules and stars are no words.
+        let banner = "*** TOTAL A PAGAR *** 1.234,80 EUR " + String(repeating: "-", count: 40) + " OBRIGADO " + String(repeating: "=", count: 30)
+        #expect(banner.split(separator: " ").count >= config.sparseWords && banner.count { !$0.isWhitespace } >= config.sparseChars,
+                "counted at its spaces, the banner would not be sparse")
+        #expect(ImageExtractor.isSparse(text: banner, confidence: 0.9, config: config),
+                "a picture whose words are few, however many symbols stand between them, is described by the vision model")
+    }
+
+    @Test("A vision model's deadline of no time at all is refused by name, as it would wait for ever", arguments: [0.0, -1.0])
+    func vlmTimeoutRefused(seconds: Double) throws {
+        var config = try TestConfig.pipeline()
+        config.extraction.image.vlmTimeout = seconds
+        #expect(config.problems == ["extraction.image.vlmTimeout must be more than 0"], "\(seconds) s: \(config.problems)")
     }
 
     @Test("Organisation verification ignores case and diacritics")

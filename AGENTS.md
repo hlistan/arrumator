@@ -156,7 +156,13 @@ These are rules you can check, not aspirations. Each row says how it is checked;
    put into Incoming is untrusted input too. It is parsed within budgets checked on the sizes and counts it declares
    before anything is decoded, with overflow-checked arithmetic, in passes linear in its size, and each limit has a
    hostile-input test bounded by `.timeLimit` (`ZipDirectory`, `SpreadsheetML`, `HTMLText`). A library that cannot be
-   held to those bounds does not parse it.
+   held to those bounds does not parse it. What extraction produces is the same on every Mac and in every
+   script: a day is reckoned in an explicit Gregorian calendar and the time zone the runtime gives (calendar gate), a
+   number by its value in any script, words as `NLTokenizer` tells them apart; every limit that leaves content out
+   says what it left out, and text already read, such as a PDF's text layer, is dropped only for a reading that
+   replaces it. Reading knowledge moved from code into configuration keeps its meaning: the old code's outputs over
+   generated variants (every separator, none included, values starting with digits and with letters) are frozen as a
+   fixture, and every difference is listed (`StableKeysTests`).
 6. **Logic stays below the UI.** Views and CLI commands call Runtime and Core, and they only present and parse. Views
    learn of a change only from Core, through History (`AppDatabase.activity()`) or a stream of live state (the queues'
    `statusUpdates()`, `OllamaLifecycle.states()`, `SettingsStore.changes()`): a state the user watches is recorded in

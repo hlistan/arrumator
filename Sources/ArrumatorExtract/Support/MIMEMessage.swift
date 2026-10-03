@@ -32,9 +32,14 @@ struct MIMEPart {
         HeaderDecoding.parameters(header("Content-Type") ?? "").parameters
     }
 
+    /// A part sent as an attachment: so disposed, or with a name and no disposition. One disposed inline is shown in the
+    /// body, whatever its name (RFC 2183 §2.1), and is still listed among the attachments when it is not the body.
     var isAttachment: Bool {
-        let disposition = HeaderDecoding.parameters(header("Content-Disposition") ?? "").value.lowercased()
-        return disposition == "attachment" || filename != nil
+        switch HeaderDecoding.parameters(header("Content-Disposition") ?? "").value.lowercased() {
+        case "attachment": true
+        case "inline": false
+        default: filename != nil
+        }
     }
 
     /// Attachment filename from `Content-Disposition` or the `name` parameter of `Content-Type`.
@@ -71,9 +76,18 @@ struct MIMEPart {
         return (text, truncated)
     }
 
-    /// All leaf parts, depth first.
+    /// All leaf parts, depth first. A message within the message (`message/rfc822`, one forwarded as an attachment) is
+    /// one leaf: its body is not the message's, nor are its attachments (`attachedMessage`).
     var leaves: [MIMEPart] {
         children.isEmpty ? [self] : children.flatMap(\.leaves)
+    }
+
+    /// Whether this part is a message of its own, attached to the one it is part of.
+    var isMessage: Bool { mediaType == "message/rfc822" }
+
+    /// The message this part holds, read from at most `cap` of its bytes, when it is one (`isMessage`).
+    func attachedMessage(cap: Int, maxDepth: Int) -> MIMEPart? {
+        isMessage ? Self.parse(decodedBody(cap: cap).bytes, maxDepth: maxDepth) : nil
     }
 
     // MARK: Parsing
@@ -86,8 +100,6 @@ struct MIMEPart {
         guard depth < maxDepth else { return part }
         if part.mediaType.hasPrefix("multipart/"), let boundary = part.contentTypeParameters["boundary"], !boundary.isEmpty {
             part.children = splitMultipart(body, boundary: boundary).map { parse($0, depth: depth + 1, maxDepth: maxDepth) }
-        } else if part.mediaType == "message/rfc822" {
-            part.children = [parse(body, depth: depth + 1, maxDepth: maxDepth)]
         }
         return part
     }
