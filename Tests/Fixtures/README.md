@@ -148,8 +148,10 @@ document again in its place.
   EML has the expected MIME structure.
 - The encrypted PDF is locked, an empty password fails, and the recorded password opens it. PDFKit cannot read
   the truncated PDF. The duplicate is byte-identical to its original.
-- The corpus is rendered again into a temporary directory. Every file, `expected.json` included, must be
-  byte-identical, except `negative/93-encrypted.pdf`: PDF encryption salts every run.
+- The corpus is rendered again into a temporary directory. `expected.json` must be byte-identical, and so must
+  every file, except `negative/93-encrypted.pdf`: PDF encryption salts every run. On a macOS build other than the
+  one that rendered the corpus, as on a CI runner, the files are compared between two fresh renders instead, and
+  the log says so.
 
 ## How the files are made
 
@@ -168,9 +170,11 @@ Core Image runs on the CPU renderer. All randomness comes from SplitMix64 stream
 the file name, so adding a fixture does not change the others. Every tunable value (DPI, rotation range, noise,
 blur, JPEG/HEIC quality, spacing) lives in `RenderSettings.standard`.
 
-Byte-for-byte identity is guaranteed on the same macOS build. PDFs record the Quartz producer string, which
-contains the OS version, and system image codecs can change between releases. After a macOS update, render the
-corpus again and commit it if `--verify` reports differences.
+Byte-for-byte identity with the committed corpus holds only on the macOS build that rendered it. PDFs record the
+Quartz producer string, which contains the OS version, and system image codecs can change between releases.
+`--verify` reads that string from the committed corpus: on another build it checks that two fresh renders are
+identical instead. To have it compare against the committed files again after a macOS update, render the corpus
+again and commit it.
 
 ## Fake-data policy
 

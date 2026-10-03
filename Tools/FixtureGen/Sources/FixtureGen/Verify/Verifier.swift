@@ -274,26 +274,43 @@ struct Verifier {
 
     // MARK: Determinism
 
+    /// Renders the corpus again and compares it byte for byte. Quartz writes the macOS build into every PDF, and image
+    /// codecs change between releases, so a fresh render matches the committed corpus only on the build that rendered
+    /// it: on another build, as a CI runner, the corpus is rendered twice and the two renders are compared, so the check
+    /// still fails when the generator is not reproducible, and the log says which was done.
     private func verifyDeterminism(_ manifest: Manifest) throws -> Outcome {
         var outcome = Outcome(subject: "determinism (seed \(manifest.seed))")
         let scratch = FileManager.default.temporaryDirectory.appending(path: "fixturegen-verify-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: scratch) }
-        _ = try Generator(settings: settings, seed: manifest.seed).generate(into: scratch)
+        let fresh = scratch.appending(path: "fresh")
+        _ = try Generator(settings: settings, seed: manifest.seed).generate(into: fresh)
         let committedManifest = try Data(contentsOf: root.appending(path: Manifest.fileName))
-        if committedManifest != (try Data(contentsOf: scratch.appending(path: Manifest.fileName))) {
+        if committedManifest != (try Data(contentsOf: fresh.appending(path: Manifest.fileName))) {
             outcome.failures.append("\(Manifest.fileName) differs from a fresh render")
+        }
+        let fixtures = Catalog.fixtures(seed: manifest.seed)
+        let sample = fixtures.first { $0.isByteDeterministic && $0.record.file.hasSuffix(".pdf") }?.record.file
+        let renderedBy = sample.flatMap { Self.producer(of: root.appending(path: $0)) }
+        let rendersAs = sample.flatMap { Self.producer(of: fresh.appending(path: $0)) }
+        let reference: URL
+        if let renderedBy, renderedBy == rendersAs {
+            reference = root
+        } else {
+            reference = scratch.appending(path: "again")
+            _ = try Generator(settings: settings, seed: manifest.seed).generate(into: reference)
+            outcome.notes.append("the corpus was rendered by \(renderedBy ?? "an unknown producer") and this Mac renders "
+                + "as \(rendersAs ?? "an unknown producer"), so two fresh renders were compared instead")
         }
         var identical = 0
         var skipped: [String] = []
-        for fixture in Catalog.fixtures(seed: manifest.seed) {
+        for fixture in fixtures {
             let file = fixture.record.file
             guard fixture.isByteDeterministic else {
                 skipped.append((file as NSString).lastPathComponent)
                 continue
             }
-            let committed = try? Data(contentsOf: root.appending(path: file))
-            let fresh = try Data(contentsOf: scratch.appending(path: file))
-            if committed == fresh {
+            let expected = try? Data(contentsOf: reference.appending(path: file))
+            if expected == (try Data(contentsOf: fresh.appending(path: file))) {
                 identical += 1
             } else {
                 outcome.failures.append("\(file) differs")
@@ -304,5 +321,13 @@ struct Verifier {
             outcome.notes.append("skipped (random encryption salt): \(skipped.joined(separator: ", "))")
         }
         return outcome
+    }
+
+    /// The producer a PDF records, as Quartz writes it: "macOS Version 26.6.2 (Build 25G83) Quartz PDFContext".
+    private static func producer(of url: URL) -> String? {
+        guard let document = CGPDFDocument(url as CFURL), let info = document.info else { return nil }
+        var value: CGPDFStringRef?
+        guard CGPDFDictionaryGetString(info, "Producer", &value), let value else { return nil }
+        return CGPDFStringCopyTextString(value) as String?
     }
 }
