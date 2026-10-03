@@ -125,9 +125,10 @@ public actor IngestCoordinator {
         }
     }
 
-    /// Processes due jobs until none are left (CLI and tests).
+    /// Processes due jobs until none are left, or the task that drains them is cancelled, as Ctrl-C cancels a command
+    /// (CLI and tests). The job in hand when it is carries on at the next start.
     public func drain() async {
-        while let job = await nextDue() {
+        while !Task.isCancelled, let job = await nextDue() {
             await process(job)
         }
         await refreshQueueCount()

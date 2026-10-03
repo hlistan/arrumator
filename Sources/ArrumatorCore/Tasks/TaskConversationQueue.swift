@@ -194,10 +194,10 @@ public actor TaskConversationQueue {
         await publish()
     }
 
-    /// Answers every question that is due until none is left (the command line and tests), or until one cannot be taken
-    /// from the queue, which is logged.
+    /// Answers every question that is due until none is left (the command line and tests), until one cannot be taken
+    /// from the queue, which is logged, or until the task that drains it is cancelled, as Ctrl-C cancels a command.
     public func drain() async {
-        while let turn = await nextDue(), await run(turn) {}
+        while !Task.isCancelled, let turn = await nextDue(), await run(turn) {}
     }
 
     /// Stops answering `turn` if it is being answered: what came of the answer is kept, saying it was stopped. Whether

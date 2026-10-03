@@ -28,9 +28,55 @@ struct Ingest: AsyncParsableCommand {
         // a package of too many items, is refused with why before anything is read.
         let urls = try files.map { try runtime.services.arrival(URL(fileURLWithPath: $0.expandingTilde), settings: settings) }
         _ = await runtime.lifecycle.ensureRunning()
-        var jobs: [Int64] = []
+        let failed = dryRun ? try await preview(urls, runtime: runtime, settings: settings) : try await ingest(urls, runtime: runtime)
+        // Each file that failed was named on standard error; what the others came to is shown all the same.
+        for (url, reason) in failed { FileHandle.standardError.write(Data("\(url.path): \(reason)\n".utf8)) }
+        if !failed.isEmpty { throw ExitCode.failure }
+    }
+
+    /// Files each file, and shows the documents they became, in one list; the files that failed, each with why.
+    private func ingest(_ urls: [URL], runtime: ArrumatorRuntime) async throws -> [(URL, String)] {
+        var jobs: [(URL, Int64)] = []
+        var failed: [(URL, String)] = []
         for url in urls {
-            if dryRun {
+            if let job = await runtime.coordinator.enqueue(url, tags: tag) {
+                jobs.append((url, job))
+            } else {
+                failed.append((url, "not queued: it is held or undone in the archive, or the queue could not be written (see the log)"))
+            }
+        }
+        await runtime.coordinator.drain()
+        try Task.checkCancellation()
+        // The documents these files became, whatever else the archive holds; for an exact copy of a document in the
+        // archive, that document, read again in its place.
+        var docs: [DocumentRecord] = []
+        for (url, id) in jobs {
+            let job = try await runtime.services.jobs.job(id: id)
+            if let doc = job?.docId ?? job?.payload.copyOf, let document = try await runtime.services.documents.document(id: doc) {
+                docs.append(document)
+                if job?.state == .failed { failed.append((url, job?.lastError ?? "it could not be filed")) }
+            } else {
+                failed.append((url, job?.lastError ?? "it became no document"))
+            }
+        }
+        options.emit(docs) {
+            docs.map { document in
+                "\(document.status.rawValue.padding(toLength: 11, withPad: " ", startingAt: 0)) \(document.path)"
+                    + (document.labels(.tag).isEmpty ? "" : "\n            tags: " + document.labels(.tag).joined(separator: " · "))
+            }.joined(separator: "\n")
+        }
+        return failed
+    }
+
+    /// Reads and labels each file without moving it or recording anything, and shows what came of them in one list; the
+    /// files that could not be read, each with why.
+    private func preview(_ urls: [URL], runtime: ArrumatorRuntime, settings: AppSettings) async throws -> [(URL, String)] {
+        var runs: [DryRun] = []
+        var texts: [String] = []
+        var failed: [(URL, String)] = []
+        for url in urls {
+            try Task.checkCancellation()
+            do {
                 let sink = MemoryTraceSink()
                 let trace = TraceContext(traceID: 0, sink: sink)
                 let tags = runtime.services.tags(for: url, given: tag, settings: settings)
@@ -39,35 +85,21 @@ struct Ingest: AsyncParsableCommand {
                                                                            trace: trace)
                 let reading = try await runtime.services.read(content, tags: tags.map(\.label), settings: settings, trace: trace)
                 let steps = await sink.steps
-                options.emit(DryRun(content: content, analysis: reading.outcome.analysis, labels: reading.outcome.labels, tags: tags,
-                                    changes: reading.changes, steps: steps)) {
-                    describe(reading, tags: tags, content: content, steps: steps)
-                }
-            } else if let job = await runtime.coordinator.enqueue(url, tags: tag) {
-                jobs.append(job)
+                runs.append(DryRun(file: url.path, content: content, analysis: reading.outcome.analysis, labels: reading.outcome.labels,
+                                   tags: tags, changes: reading.changes, steps: steps))
+                texts.append(describe(reading, tags: tags, content: content, steps: steps))
+            } catch {
+                if error is CancellationError || Task.isCancelled { throw error }
+                failed.append((url, error.localizedDescription))
             }
         }
-        if !dryRun {
-            await runtime.coordinator.drain()
-            // The documents these files became, whatever else the archive holds; for an exact copy of a document in the
-            // archive, that document, read again in its place.
-            var docs: [DocumentRecord] = []
-            for id in jobs {
-                let job = try await runtime.services.jobs.job(id: id)
-                if let doc = job?.docId ?? job?.payload.copyOf, let document = try await runtime.services.documents.document(id: doc) {
-                    docs.append(document)
-                }
-            }
-            options.emit(docs) {
-                docs.map { document in
-                    "\(document.status.rawValue.padding(toLength: 11, withPad: " ", startingAt: 0)) \(document.path)"
-                        + (document.labels(.tag).isEmpty ? "" : "\n            tags: " + document.labels(.tag).joined(separator: " · "))
-                }.joined(separator: "\n")
-            }
-        }
+        options.emit(runs) { texts.joined(separator: "\n") }
+        return failed
     }
 
     struct DryRun: Encodable {
+        /// The file read, as given.
+        var file: String
         var content: ExtractedContent
         var analysis: DocumentAnalysis
         /// The model's labels, tidied, and the tags after them; nil when the model gave no valid answer.

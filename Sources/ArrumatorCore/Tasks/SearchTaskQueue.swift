@@ -164,10 +164,10 @@ public actor SearchTaskQueue {
         await publish()
     }
 
-    /// Runs every task that is due until none is left (the command line and tests), or until one cannot be taken from
-    /// the queue, which is logged.
+    /// Runs every task that is due until none is left (the command line and tests), until one cannot be taken from the
+    /// queue, which is logged, or until the task that drains it is cancelled, as Ctrl-C cancels a command.
     public func drain() async {
-        while let task = await nextDue(), await run(task) {}
+        while !Task.isCancelled, let task = await nextDue(), await run(task) {}
     }
 
     // MARK: Loop

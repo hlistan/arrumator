@@ -79,6 +79,7 @@ final class AppModel {
         do {
             let environment = RuntimeEnvironment.current
             let runtime = try await ArrumatorRuntime.bootstrap(appVersion: Self.version, environment: environment, echoLogsToStderr: false,
+                                                               resolver: SystemHostResolver(),
                                                                trash: environment.trash(orElse: SystemTrash()))
             self.runtime = runtime
             settings = await runtime.settings.current

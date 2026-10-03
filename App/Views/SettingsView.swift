@@ -152,6 +152,10 @@ struct ModelSettingsView: View {
                 if let serverError { Text(serverError).font(.caption).foregroundStyle(Palette.attention) }
                 Text(serverFromEnvironment ? Wording.serverFromEnvironment(RuntimeEnvironment.ollamaURLVariable) : Wording.ollamaServerNote)
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                // What the user is told of the server in use: plain HTTP across the network, a name trusted as local.
+                ForEach(model.runtime.map { OllamaEndpoint.cautions(for: $0.ollama.baseURL) } ?? [], id: \.self) { caution in
+                    Text(caution.summary).font(.caption).foregroundStyle(Palette.attention).fixedSize(horizontal: false, vertical: true)
+                }
                 Picker(Wording.management, selection: setting(model, loaded, \.ollamaManagement)) {
                     Text(Wording.launchOllamaApp).tag(OllamaManagement.launchApp)
                     Text(Wording.spawnServe).tag(OllamaManagement.spawnServe)

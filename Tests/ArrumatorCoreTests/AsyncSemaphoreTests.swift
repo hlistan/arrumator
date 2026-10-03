@@ -100,6 +100,7 @@ import Testing
 /// A server that takes every request for an answer and gives none until the request is cancelled, as a model that
 /// thinks for minutes.
 actor HeldOllama: OllamaAPI {
+    nonisolated var baseURL: URL { MockOllama.server }
     func version() async throws -> String { "held" }
     func tags() async throws -> [OllamaModelInfo] { [] }
     func show(model: String) async throws -> OllamaShowResponse { MockOllama.shown(capabilities: ["completion"], thinking: nil) }

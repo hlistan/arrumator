@@ -28,6 +28,11 @@
 	<string>26.0</string>
 	<key>LSUIElement</key>
 	<true/>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 	<key>NSDesktopFolderUsageDescription</key>
 	<string>Arrumator files documents from your Incoming folder into your archive.</string>
 	<key>NSDocumentsFolderUsageDescription</key>

@@ -62,13 +62,20 @@ public final class ArrumatorRuntime: Sendable {
     public let archiveWatcher: ArchiveWatcher
     public let stats: StatsService
     public let doctor: Doctor
+    /// What a `.local` name of the Ollama server stands for is looked up with (`useOllama(at:)`, the doctor).
+    let resolver: any HostResolving
     let tasks = BackgroundTasks()
+    /// Why each step of applying the settings last failed, as recorded in History, so a step that keeps failing the
+    /// same way is recorded once (`apply(_:)`).
+    private let applyFailures = Mutex<[ApplyStep: String]>([:])
 
     /// - Parameter trash: where an exact copy of a document in the archive goes once its original is read again in its
     ///   place: the Mac's Trash for the app and the command line, a folder of its own for a run that must leave nothing
     ///   behind, as `eval`.
+    /// - Parameter resolver: what a `.local` name of the Ollama server is looked up with: `SystemHostResolver` for the app
+    ///   and the command line, a stub for a test, which may look nothing up on the network.
     public static func bootstrap(appVersion: String, environment: RuntimeEnvironment, echoLogsToStderr: Bool,
-                                 trash: any Trashing) async throws -> ArrumatorRuntime {
+                                 resolver: any HostResolving, trash: any Trashing) async throws -> ArrumatorRuntime {
         let time = SystemTime()
         let paths = AppPaths.resolve(environment)
         try paths.ensureDirectories()
@@ -86,7 +93,8 @@ public final class ArrumatorRuntime: Sendable {
         let address = try configuredOllama(environment: environment, settings: current, paths: paths)
         let ollama = try OllamaConnection(config: config.ollama, url: address, time: time)
         return try ArrumatorRuntime(appVersion: appVersion, environment: environment, logLevelOverride: logLevelOverride,
-                                    time: time, paths: paths, config: config, settings: settings, archive: archive, ollama: ollama, trash: trash)
+                                    time: time, paths: paths, config: config, settings: settings, current: current, archive: archive,
+                                    ollama: ollama, trash: trash, resolver: resolver)
     }
 
     /// The Ollama server to talk to: the one the environment names in place of the saved setting, else the setting. One
@@ -99,10 +107,12 @@ public final class ArrumatorRuntime: Sendable {
     }
 
     /// Points the app at the Ollama server at `address` — this Mac or a machine on the local network — from now on,
-    /// and remembers it, recorded in History once. An address elsewhere is refused and nothing changes. Whether the
+    /// and remembers it, recorded in History once. An address elsewhere is refused and nothing changes: a `.local` name
+    /// too, when it stands for an address beyond the local network now (`OllamaEndpoint.resolved(_:by:within:)`). Whether the
     /// server answers is the caller's to check (`lifecycle.ensureRunning()`).
     public func useOllama(at address: String) async throws {
         let url = try OllamaEndpoint.validated(address)
+        _ = try await OllamaEndpoint.resolved(url, by: resolver, within: config.ollama.timeouts.resolve)
         try ollama.connect(to: url)
         let updated = try await settingsActions.change(summary: "Ollama at \(url.absoluteString)") { $0.ollamaURL = url.absoluteString }
         await lifecycle.configure(management: Self.management(for: updated, at: url), binaryOverride: updated.ollamaBinaryPath,
@@ -148,8 +158,8 @@ public final class ArrumatorRuntime: Sendable {
         guard !isInsideIncoming(target.path) else { throw ArchiveSwitchError.insideIncoming(archive: target.path, incoming: incoming.path) }
 
         let next = try ArrumatorRuntime(appVersion: appVersion, environment: environment, logLevelOverride: logLevelOverride,
-                                        time: time, paths: paths, config: config, settings: settings, archive: target,
-                                        ollama: ollama, trash: services.trash)
+                                        time: time, paths: paths, config: config, settings: settings, current: await settings.current,
+                                        archive: target, ollama: ollama, trash: services.trash, resolver: resolver)
         if !next.records.archiveIsThere {
             // A folder the user switches to that is not there is made, for a new archive: never in place of an archive
             // its index has held, which is away and is not switched to.
@@ -232,9 +242,11 @@ public final class ArrumatorRuntime: Sendable {
         await prepareSearch(await settings.current, loadingVectors: false)
     }
 
+    /// - Parameter current: the settings in force, which the Ollama server is started by (`ollamaManagement`) from the
+    ///   first, for every command as for the app.
     private init(appVersion: String, environment: RuntimeEnvironment, logLevelOverride: LogLevel?, time: any TimeSource,
-                 paths: AppPaths, config: PipelineConfig, settings: SettingsStore, archive: URL, ollama: OllamaConnection,
-                 trash: any Trashing) throws {
+                 paths: AppPaths, config: PipelineConfig, settings: SettingsStore, current: AppSettings, archive: URL,
+                 ollama: OllamaConnection, trash: any Trashing, resolver: any HostResolving) throws {
         self.appVersion = appVersion
         self.environment = environment
         self.logLevelOverride = logLevelOverride
@@ -254,8 +266,8 @@ public final class ArrumatorRuntime: Sendable {
         self.ollama = ollama
         gate = InferenceGate(api: ollama, retryDelays: config.ollama.retryDelays, time: time)
         models = ModelManager(api: ollama, config: config.ollama)
-        lifecycle = OllamaLifecycle(api: ollama, config: config.ollama, management: .external, binaryOverride: nil,
-                                    address: ollama.baseURL, time: time)
+        lifecycle = OllamaLifecycle(api: ollama, config: config.ollama, management: Self.management(for: current, at: ollama.baseURL),
+                                    binaryOverride: current.ollamaBinaryPath, address: ollama.baseURL, time: time)
         prompts = PromptBuilder(library: try PromptLibrary.bundled(), config: config.analysis, labels: config.labels,
                                 naming: config.naming)
         analyzer = DocumentAnalyzer(gate: gate, models: models, prompts: prompts)
@@ -288,7 +300,8 @@ public final class ArrumatorRuntime: Sendable {
         archiveWatcher = ArchiveWatcher(config: config.watcher, records: config.records, skip: skip, registry: registry,
                                         database: database)
         stats = StatsService(database: database, config: config.stats, time: time)
-        doctor = Doctor(database: database, archive: archive, paths: paths, appVersion: appVersion, time: time)
+        self.resolver = resolver
+        doctor = Doctor(database: database, archive: archive, paths: paths, appVersion: appVersion, time: time, resolver: resolver)
     }
 
     /// Records an event of the app's own in History. Nothing waits on these, so one that cannot be recorded is logged
@@ -517,24 +530,6 @@ public final class ArrumatorRuntime: Sendable {
         return stopped
     }
 
-    /// Applies (changed) settings: Ollama management, watched folders, embedding model for search. The archive watched is
-    /// the runtime's own, whatever the settings name; its folder is never made here, as one that is not there is away.
-    public func apply(_ current: AppSettings) async {
-        await lifecycle.configure(management: Self.management(for: current, at: ollama.baseURL), binaryOverride: current.ollamaBinaryPath,
-                                  address: ollama.baseURL)
-        Log.shared.setMinLevel(logLevelOverride ?? current.logLevel)
-        do {
-            await prepareSearch(current, loadingVectors: true)
-            try await incomingWatcher.start(root: current.incomingURL, excluding: [archive])
-            try await archiveWatcher.start(root: archive, excluding: [current.incomingURL])
-        } catch {
-            // Stopped while it applied them: what was not applied is applied at the next start.
-            guard !Task.isCancelled else { return }
-            Log.error(.app, "Could not apply settings", ["error": error.localizedDescription])
-        }
-        await coordinator.wake()
-    }
-
     private func maintain() async {
         let current = await settings.current
         Log.shared.prune(config.logging, now: time.now())
@@ -582,6 +577,51 @@ extension ArrumatorRuntime {
 }
 
 extension ArrumatorRuntime {
+    /// A watcher started in applying the settings, each whether the other could be.
+    enum ApplyStep: String, CaseIterable {
+        case incoming, archive
+
+        /// What does not work while the step fails, as History says it.
+        func failure(_ reason: String, current: AppSettings, archive: URL) -> String {
+            switch self {
+            case .incoming: "Incoming at \(current.incomingURL.path) is not watched: \(reason)"
+            case .archive: "The archive at \(archive.path) is not watched: \(reason)"
+            }
+        }
+    }
+
+    /// Applies (changed) settings: Ollama management, watched folders, embedding model for search. The archive watched is
+    /// the runtime's own, whatever the settings name; its folder is never made here, as one that is not there is away.
+    /// Each step is applied on its own, so one that fails, as an Incoming folder that cannot be made, keeps none of the
+    /// others from working; a watcher that cannot start is recorded in History, once until it fails otherwise or starts.
+    /// Search that cannot be readied goes on by words (`prepareSearch`).
+    public func apply(_ current: AppSettings) async {
+        await lifecycle.configure(management: Self.management(for: current, at: ollama.baseURL), binaryOverride: current.ollamaBinaryPath,
+                                  address: ollama.baseURL)
+        Log.shared.setMinLevel(logLevelOverride ?? current.logLevel)
+        await prepareSearch(current, loadingVectors: true)
+        for step in ApplyStep.allCases {
+            do {
+                switch step {
+                case .incoming: try await incomingWatcher.start(root: current.incomingURL, excluding: [archive])
+                case .archive: try await archiveWatcher.start(root: archive, excluding: [current.incomingURL])
+                }
+                applyFailures.withLock { $0[step] = nil }
+            } catch {
+                // Stopped while it applied them: what was not applied is applied at the next start.
+                guard !Task.isCancelled else { return }
+                let summary = step.failure(error.localizedDescription, current: current, archive: archive)
+                Log.error(.app, "Could not apply a setting", ["step": step.rawValue, "error": error.localizedDescription])
+                let isNew = applyFailures.withLock { failures in
+                    defer { failures[step] = summary }
+                    return failures[step] != summary
+                }
+                if isNew { await audit(.error, actor: .system, summary: summary, payload: nil) }
+            }
+        }
+        await coordinator.wake()
+    }
+
     /// Sets the query embedder of the profile in use and, when `loadingVectors`, loads its vectors now, as the app does
     /// before it files anything; otherwise a search loads them when it needs them (`SearchService.loadVectors`). What
     /// fails is logged, and search goes on by words; what a stop cuts short is done at the next start, or when needed.

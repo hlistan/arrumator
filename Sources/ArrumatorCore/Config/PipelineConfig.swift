@@ -71,6 +71,9 @@ public struct OllamaConfig: Sendable, Codable, Hashable {
         public var chat: Double
         public var embed: Double
         public var pull: Double
+        /// Seconds a `.local` name of the server may take to be looked up (`OllamaEndpoint.resolved`), after which it is
+        /// taken as not resolving; more than 0, as a lookup with no limit could hold what waits on it for ever.
+        public var resolve: Double
     }
     public var appBundleIdentifier: String
     public var appBinarySubpath: String

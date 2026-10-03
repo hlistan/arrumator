@@ -7,6 +7,10 @@ public enum OllamaError: Error, LocalizedError, Equatable {
     /// give another, as nothing can start without one.
     case unusableAddress(OllamaEndpoint.Source, reason: String)
     case nonLocalHost(String)
+    /// The `.local` name `host` also stands for addresses beyond the local network (`beyond`), which a request to the name
+    /// may go to, as one of a machine with a global IPv6 address does: the server is given by its address on the local
+    /// network instead, as `instead` writes it when one was found.
+    case nameReachesBeyond(host: String, beyond: [String], instead: String?)
     case unreachable(String)
     case http(status: Int, body: String)
     /// Ollama answered `endpoint` by sending the request elsewhere, which the app never follows: it talks to the one
@@ -39,6 +43,9 @@ public enum OllamaError: Error, LocalizedError, Equatable {
             "The Ollama address \(RuntimeEnvironment.ollamaURLVariable) gives cannot be used. \(reason). Unset the variable, or set it "
                 + "to an address on this Mac or the local network, such as \(OllamaEndpoint.example)"
         case let .nonLocalHost(h): "Refusing to contact non-local host \(h): recognition must stay on this Mac"
+        case let .nameReachesBeyond(host, beyond, instead):
+            "\(host) also stands for \(beyond.joined(separator: ", ")), beyond the local network, where a request to the name may go: "
+                + "give the server by its address on the local network instead" + (instead.map { ", \($0)" } ?? ", its IPv4 address")
         case let .unreachable(m): "Ollama is not reachable: \(m)"
         case let .http(status, body): "Ollama HTTP \(status): \(body.prefix(300))"
         case let .redirected(endpoint, location):
@@ -465,6 +472,9 @@ public struct OllamaPullProgress: Sendable, Codable, Hashable {
 
 /// Abstraction over the Ollama HTTP API so the pipeline can be tested with a mock.
 public protocol OllamaAPI: Sendable {
+    /// The server this asks now: what is learnt of a model, such as what it can do, is learnt of it there
+    /// (`ModelManager.capabilities(of:)`).
+    var baseURL: URL { get }
     func version() async throws -> String
     func tags() async throws -> [OllamaModelInfo]
     func show(model: String) async throws -> OllamaShowResponse

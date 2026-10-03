@@ -1,4 +1,4 @@
-import ArrumatorCore
+@testable import ArrumatorCore
 import ArrumatorRuntime
 import ArrumatorTesting
 import Foundation
@@ -25,6 +25,28 @@ import Testing
         let events = try await runtime.services.history.events(limit: 20, kinds: [.settingsChanged])
         #expect(events.map(\.summary).sorted() == ["Incoming again", "Incoming elsewhere", "Ollama at http://localhost:9"],
                 "each change is in History once, in its own words, and the running app records none of its own: \(events.map(\.summary))")
+        await runtime.stop()
+    }
+
+    @Test func aSettingThatCannotBeAppliedKeepsNoOtherFromWorkingAndIsRecordedOnce() async throws {
+        let home = try await RuntimeHome.make()
+        defer { home.cleanup() }
+        try await home.withoutOllama()
+        // Incoming is a file, so it can be neither made nor watched.
+        let incoming = home.folder("Incoming")
+        try Data("not a folder".utf8).write(to: incoming)
+        let runtime = try await home.open()
+        await runtime.start()
+        #expect(await Patience.until { (try? await runtime.database.meta(ArchiveWatcher.deviceKey)) != nil },
+                "the archive is watched all the same, as each setting is applied on its own")
+        try await runtime.settingsActions.change(TestSettingChange.make)
+        let watched = home.folder("Watched")
+        try await runtime.settingsActions.change(summary: "Incoming watched") { $0.incomingPath = watched.path }
+        // The app follows changes in the order they were made, so once it watches this folder it has applied them all.
+        #expect(await Patience.until { FileManager.default.fileExists(atPath: watched.path) }, "and Incoming is, once it can be")
+        let failures = try await runtime.services.history.events(limit: 20, kinds: [.error])
+        #expect(failures.count == 1 && failures.first?.summary.contains(incoming.path) == true,
+                "that Incoming was not watched is in History, once, though the settings were applied again meanwhile: \(failures.map(\.summary))")
         await runtime.stop()
     }
 }

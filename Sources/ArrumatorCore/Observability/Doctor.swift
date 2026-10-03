@@ -28,13 +28,17 @@ public struct Doctor: Sendable {
     public let paths: AppPaths
     public let appVersion: String
     public let time: any TimeSource
+    /// What a `.local` name of the server stands for is looked up with.
+    public let resolver: any HostResolving
 
-    public init(database: AppDatabase, archive: URL, paths: AppPaths, appVersion: String, time: any TimeSource) {
+    public init(database: AppDatabase, archive: URL, paths: AppPaths, appVersion: String, time: any TimeSource,
+                resolver: any HostResolving) {
         self.database = database
         self.archive = archive
         self.paths = paths
         self.appVersion = appVersion
         self.time = time
+        self.resolver = resolver
     }
 
     /// - Parameters:
@@ -65,6 +69,7 @@ public struct Doctor: Sendable {
         if unreadableRecords.isEmpty { add("Record files", true, "none found that cannot be read") }
         for file in unreadableRecords { add("Record file", false, "\(file.path): \(file.reason)") }
         let local = OllamaEndpoint.isThisMac(ollamaURL)
+        await checkAddress(ollamaURL, within: config.ollama.timeouts.resolve, add)
         if local {
             let install = await lifecycle.discover()
             add("Ollama installed", install.binaryURL != nil || install.appURL != nil,
@@ -77,7 +82,12 @@ public struct Doctor: Sendable {
         if state.isReady {
             do {
                 let profile = try settings.modelProfile()
-                modelStatus = (try? await models.status(for: profile)) ?? []
+                do {
+                    modelStatus = try await models.status(for: profile)
+                } catch {
+                    // Which models the server has is not known, so none of them is known to be there.
+                    add("Models", false, "Ollama did not list its models: \(error.localizedDescription)")
+                }
                 for m in modelStatus {
                     let detail = m.remoteHost.map { "\(m.name) runs at \($0), beyond this Mac and the local network, and is never read with" }
                         ?? (m.installed ? m.name : "\(m.name) is not installed")
@@ -104,6 +114,28 @@ public struct Doctor: Sendable {
             Log.log(c.status == .error ? .error : .warning, .app, "A doctor check did not pass", ["check": c.name, "detail": c.detail])
         }
         return report
+    }
+}
+
+extension Doctor {
+    /// How the server at `url` is reached: a warning for each caution (`OllamaEndpoint.Caution`), and, for a `.local`
+    /// name, what it stands for now: an error when that is beyond the local network, which no request is then sent to,
+    /// and a warning when it does not resolve, as it is then trusted by its name alone.
+    func checkAddress(_ url: URL, within seconds: Double, _ add: (String, Bool, String, Bool) -> Void) async {
+        for caution in OllamaEndpoint.cautions(for: url) {
+            switch caution {
+            case .unencrypted: add("Ollama connection", false, caution.summary, true)
+            case let .byName(host):
+                do {
+                    let addresses = try await OllamaEndpoint.resolved(url, by: resolver, within: seconds) ?? []
+                    add("Ollama address", !addresses.isEmpty,
+                        addresses.isEmpty ? "\(host) does not resolve now; \(caution.summary)"
+                            : "\(host) is \(addresses.joined(separator: ", ")), on the local network", true)
+                } catch {
+                    add("Ollama address", false, error.localizedDescription, false)
+                }
+            }
+        }
     }
 }
 

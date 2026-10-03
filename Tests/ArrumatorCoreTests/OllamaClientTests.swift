@@ -205,7 +205,7 @@ import Testing
         server.reply(to: "/api/version", with: .json(#"{"version":"0.18.2"}"#))
         server.reply(to: "/api/chat", with: .json(Self.line("ok", done: true)))
         // Every sleep on this clock ends at once: a deadline armed for any of these would expire before the answer came.
-        let unbounded = try client(server, time: TestTime(.advances)) { $0.timeouts = .init(meta: 0, version: 0, chat: 0, embed: 0, pull: 0) }
+        let unbounded = try client(server, time: TestTime(.advances)) { $0.timeouts = .init(meta: 0, version: 0, chat: 0, embed: 0, pull: 0, resolve: 1) }
         let version = try await unbounded.version()
         let answer = try await unbounded.chat(Self.chatRequest)
         #expect(version == "0.18.2" && answer.done == true, "no deadline cuts a request that has none")

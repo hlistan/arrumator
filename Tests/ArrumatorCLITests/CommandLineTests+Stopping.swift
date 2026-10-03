@@ -1,0 +1,213 @@
+@testable import ArrumatorCore
+import ArrumatorTesting
+import Foundation
+import Testing
+
+/// How a command ends: what it started stops with it, Ctrl-C included, and its exit code says whether every file it was
+/// given came to something.
+extension CommandLineTests {
+    /// Starts the command and leaves it running, as a person at a terminal runs `run`, what it prints and says on
+    /// standard error written into `standardOutput` and `standardError` in its home.
+    func launch(_ home: Home, _ arguments: [String], environment: [String: String] = [:]) throws -> Process {
+        let command = Bundle(for: Marker.self).bundleURL.deletingLastPathComponent().appendingPathComponent("arrumatorcli")
+        let process = Process()
+        process.executableURL = command
+        process.arguments = arguments
+        process.environment = ["ARRUMATOR_HOME": home.support.path, "ARRUMATOR_TRASH": home.root.appendingPathComponent("Trash").path,
+                               "HOME": FileManager.default.homeDirectoryForCurrentUser.path].merging(environment) { _, given in given }
+        let printed = home.root.appendingPathComponent(Self.standardOutput)
+        FileManager.default.createFile(atPath: printed.path, contents: nil)
+        process.standardOutput = try FileHandle(forWritingTo: printed)
+        let errors = home.root.appendingPathComponent(Self.standardError)
+        FileManager.default.createFile(atPath: errors.path, contents: nil)
+        process.standardError = try FileHandle(forWritingTo: errors)
+        try process.run()
+        return process
+    }
+
+    /// Settings under which the command starts Ollama itself, as `ollamaManagement` spawnServe does: a stand-in, never
+    /// the user's, that does not answer, and is given up on at once.
+    func spawningStandIn(_ home: Home) throws -> StandInServer {
+        let server = try StandInServer(in: home.root)
+        let settings: [String: String] = ["incomingPath": home.root.appendingPathComponent("Incoming").path, "archivePath": home.archive.path,
+                                          "ollamaURL": Home.nowhere, "ollamaManagement": OllamaManagement.spawnServe.rawValue,
+                                          "ollamaBinaryPath": server.executable.path]
+        try JSONEncoder().encode(settings).write(to: home.support.appendingPathComponent("settings.json"))
+        let pipeline: [String: [String: Double]] = ["ollama": ["startTimeout": Self.quickStart]]
+        try JSONEncoder().encode(pipeline).write(to: home.support.appendingPathComponent("pipeline.json"))
+        return server
+    }
+
+    /// A corpus of one fixture, and the `eval` of it, with an Ollama that is the stand-in, never the user's, given up on
+    /// after `startTimeout` seconds.
+    func evaluating(_ home: Home, startTimeout: Double) throws -> (server: StandInServer, arguments: [String], environment: [String: String]) {
+        let run = home.root.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: run, withIntermediateDirectories: true)
+        let server = try StandInServer(in: run)
+        let corpus = run.appendingPathComponent("Corpus", isDirectory: true)
+        try FileManager.default.createDirectory(at: corpus, withIntermediateDirectories: true)
+        try Data("A note".utf8).write(to: corpus.appendingPathComponent("note.txt"))
+        try Data(#"{"fixtures": [{"file": "note.txt", "lang": "en", "expected": {"status": "filed", "title_contains": []}}]}"#.utf8)
+            .write(to: corpus.appendingPathComponent("expected.json"))
+        // The Ollama app is looked for by an identifier no app has, and `ollama serve` only where the stand-in is.
+        let pipeline = run.appendingPathComponent("pipeline.json")
+        try JSONSerialization.data(withJSONObject: ["ollama": ["binarySearchPaths": [server.executable.path], "startTimeout": startTimeout,
+                                                               "appBundleIdentifier": Self.noSuchApp]])
+            .write(to: pipeline)
+        return (server, ["eval", corpus.path], ["ARRUMATOR_OLLAMA_URL": Home.nowhere, "ARRUMATOR_PIPELINE_CONFIG": pipeline.path])
+    }
+
+    /// A bundle identifier no app has.
+    static let noSuchApp = "dev.arrumator.tests.no-such-app"
+    /// Seconds a start may take that no test waits out.
+    static let longStart = 600.0
+    /// What `eval` prints before the folder it runs in.
+    static let evaluatingIn = " pass(es) in "
+
+    /// The throw-away home `eval` said it runs in, once it has said so.
+    func evalHome(_ home: Home) -> URL? {
+        let printed = (try? String(contentsOf: home.root.appendingPathComponent(Self.standardOutput), encoding: .utf8)) ?? ""
+        guard let line = printed.split(separator: "\n").first(where: { $0.contains(Self.evaluatingIn) }),
+              let range = line.range(of: Self.evaluatingIn) else { return nil }
+        return URL(fileURLWithPath: String(line[range.upperBound...]), isDirectory: true)
+    }
+
+    @Test func evalRemovesItsThrowAwayHomeHoweverItEnds() async throws {
+        let home = try Home.make()
+        defer { home.cleanup() }
+        let failing = try evaluating(home, startTimeout: Self.quickStart)
+        defer { for pid in failing.server.started { kill(pid, SIGKILL) } }
+        let failed = try launch(home, failing.arguments, environment: failing.environment)
+        try #require(await Patience.until { !failed.isRunning }, "eval ends, as Ollama never answers")
+        let said = (try? String(contentsOf: home.root.appendingPathComponent(Self.standardError), encoding: .utf8)) ?? ""
+        #expect(failed.terminationStatus != 0, "and fails, as Ollama never answered: \(said)")
+        let first = try #require(evalHome(home), "eval says where it runs")
+        #expect(!FileManager.default.fileExists(atPath: first.path), "its throw-away home is removed when it fails: \(first.path)")
+
+        let waiting = try evaluating(home, startTimeout: Self.longStart)
+        defer { for pid in waiting.server.started { kill(pid, SIGKILL) } }
+        let interrupted = try launch(home, waiting.arguments, environment: waiting.environment)
+        defer { if interrupted.isRunning { interrupted.terminate() } }
+        try #require(await Patience.until { !waiting.server.started.isEmpty }, "eval starts Ollama and waits for it")
+        let second = try #require(evalHome(home), "eval says where it runs")
+        #expect(FileManager.default.fileExists(atPath: second.path), "in a throw-away home of its own")
+        kill(interrupted.processIdentifier, SIGINT)
+        try #require(await Patience.until { !interrupted.isRunning }, "Ctrl-C ends it")
+        #expect(interrupted.terminationReason == .exit && interrupted.terminationStatus == 128 + SIGINT, "having stopped")
+        #expect(!FileManager.default.fileExists(atPath: second.path), "its throw-away home is removed when it is interrupted too")
+        #expect(waiting.server.started.allSatisfy { !StandInServer.runs($0) }, "and the server it started is stopped")
+    }
+
+    /// Where a launched command's standard output goes, in its home.
+    static let standardOutput = "stdout.txt"
+
+    /// Where a launched command's standard error goes, in its home.
+    static let standardError = "stderr.txt"
+
+    /// Seconds a command waits for the stand-in to answer, which it never does.
+    static let quickStart = 0.2
+
+    /// What the home's log files hold.
+    func logged(_ home: Home) throws -> String {
+        let logs = home.support.appendingPathComponent("Logs", isDirectory: true)
+        return try FileManager.default.contentsOfDirectory(at: logs, includingPropertiesForKeys: nil)
+            .map { try String(contentsOf: $0, encoding: .utf8) }.joined()
+    }
+
+    @Test func ctrlCStopsRunAsTheAppStopsAndEndsTheOllamaServerItStarted() async throws {
+        let home = try Home.make()
+        defer { home.cleanup() }
+        let server = try spawningStandIn(home)
+        defer { for pid in server.started { kill(pid, SIGKILL) } }
+        let running = try launch(home, ["run"])
+        defer { if running.isRunning { running.terminate() } }
+        try #require(await Patience.until { !server.started.isEmpty }, "run starts its work, Ollama among it, as the settings say")
+        kill(running.processIdentifier, SIGINT)
+        try #require(await Patience.until { !running.isRunning }, "Ctrl-C ends it")
+        let said = (try? String(contentsOf: home.root.appendingPathComponent(Self.standardError), encoding: .utf8)) ?? ""
+        #expect(running.terminationReason == .exit && running.terminationStatus == 128 + SIGINT,
+                "having stopped, it exits as a shell reports an interrupt: \(running.terminationReason.rawValue) \(running.terminationStatus) \(said)")
+        #expect(server.started.allSatisfy { !StandInServer.runs($0) }, "the Ollama server it started does not outlive it")
+        #expect(try logged(home).contains("Arrumator stopped"), "its work was stopped as the app stops its own, not cut off")
+    }
+
+    @Test func aSecondSignalEndsTheCommandAtOnceAndTheOllamaServerItStartedWithIt() async throws {
+        let home = try Home.make()
+        defer { home.cleanup() }
+        let server = try spawningStandIn(home)
+        defer { for pid in server.started { kill(pid, SIGKILL) } }
+        let running = try launch(home, ["run"])
+        defer { if running.isRunning { running.terminate() } }
+        try #require(await Patience.until { !server.started.isEmpty }, "run starts Ollama, as the settings say")
+        // Two signals at once: the second comes while the first one's stop has hardly begun.
+        kill(running.processIdentifier, SIGINT)
+        kill(running.processIdentifier, SIGTERM)
+        try #require(await Patience.until { !running.isRunning }, "the command ends")
+        #expect(running.terminationReason == .exit && [128 + SIGINT, 128 + SIGTERM].contains(running.terminationStatus),
+                "with the status of a signal: \(running.terminationStatus)")
+        #expect(await Patience.until { server.started.allSatisfy { !StandInServer.runs($0) } },
+                "and the server it spawned, in a process group of its own that no signal to the command reaches, ends with it")
+    }
+
+    @Test func aCommandStartsOllamaAsTheSettingsSayAndStopsItWhenItEnds() throws {
+        let home = try Home.make()
+        defer { home.cleanup() }
+        let server = try spawningStandIn(home)
+        defer { for pid in server.started { kill(pid, SIGKILL) } }
+        let file = home.root.appendingPathComponent("note.txt")
+        try Data("A note".utf8).write(to: file)
+        let ingested = try run(home, ["ingest", "--json", file.path])
+        #expect(ingested.status == 0, "the file waits for Ollama, which is no failure: \(ingested.stderr)")
+        #expect(server.started.count == 1, "the command starts Ollama as the settings say, not only the app: \(server.started)")
+        #expect(server.started.allSatisfy { !StandInServer.runs($0) }, "and stops it when it ends")
+    }
+
+    @Test func ingestShowsOneListAndExitsWithFailureWhenAFileCameToNothing() throws {
+        let home = try Home.make()
+        defer { home.cleanup() }
+        let missing = ["gone.pdf", "lost.pdf"].map { home.root.appendingPathComponent($0).path }
+        let previewed = try run(home, ["ingest", "--dry-run", "--json"] + missing)
+        let previews = try JSONSerialization.jsonObject(with: previewed.stdout) as? [Any]
+        #expect(previews?.isEmpty == true, "one JSON list for every file given, whatever came of each: \(previewed.text)")
+        #expect(previewed.status == 1 && missing.allSatisfy(previewed.stderr.contains),
+                "the exit code says files could not be read, and standard error says which: \(previewed.stderr)")
+        let ingested = try run(home, ["ingest", "--json", missing[0]])
+        #expect(try JSON.decoder.decode([DocumentRecord].self, from: ingested.stdout).isEmpty, "no document came of it: \(ingested.text)")
+        #expect(ingested.status == 1 && ingested.stderr.contains(missing[0]),
+                "which the exit code says, and standard error, naming the file: \(ingested.stderr)")
+    }
+
+    @Test func aDryRunOfSeveralFilesPrintsOneListNamingEachAndIngestShowsWhatCameOfTheRest() async throws {
+        let ollama = try LoopbackOllama()
+        defer { ollama.stop() }
+        try #require(await Patience.until { ollama.address != nil }, "the stand-in Ollama listens on the loopback address")
+        let home = try Home.make(ollamaURL: try #require(ollama.address))
+        defer { home.cleanup() }
+        let notes = ["one.txt", "two.txt"].map { home.root.appendingPathComponent($0) }
+        for (index, note) in notes.enumerated() { try Data("Note number \(index + 1)".utf8).write(to: note) }
+        let previewed = try run(home, ["ingest", "--dry-run", "--json"] + notes.map(\.path))
+        let previews = try JSONSerialization.jsonObject(with: previewed.stdout) as? [[String: Any]]
+        #expect(previews?.compactMap { ($0["file"] as? String).map { URL(fileURLWithPath: $0).lastPathComponent } } == notes.map(\.lastPathComponent),
+                "two files read are one JSON list, an object for each, naming it: \(previewed.text) \(previewed.stderr)")
+        #expect(previewed.status == 0, "and nothing failed: \(previewed.stderr)")
+
+        let gone = home.root.appendingPathComponent("gone.txt").path
+        let ingested = try run(home, ["ingest", "--json", notes[0].path, gone])
+        let documents = try JSON.decoder.decode([DocumentRecord].self, from: ingested.stdout)
+        #expect(documents.map(\.originalFilename) == [notes[0].lastPathComponent],
+                "the file taken in is shown, as it waits for Ollama, in the one list: \(ingested.text)")
+        #expect(ingested.status == 1 && ingested.stderr.contains(gone) && !ingested.stderr.contains(notes[0].path),
+                "and the one that came to nothing makes the exit code a failure, naming it alone: \(ingested.stderr)")
+    }
+
+    @Test func evalRefusesFewerThanOnePass() throws {
+        let home = try Home.make()
+        defer { home.cleanup() }
+        let result = try run(home, ["eval", home.root.path, "--passes", "0"])
+        #expect(result.status == Self.usageError && result.stderr.contains("--passes"),
+                "no pass over the corpus is refused as a usage error, before anything runs: \(result.status) \(result.stderr)")
+    }
+
+    /// The exit code ArgumentParser gives a command line it refuses (`EX_USAGE`).
+    static let usageError: Int32 = 64
+}

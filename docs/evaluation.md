@@ -29,7 +29,8 @@ model in place of the profile's reading model:
 Type, sender, date, title and language are scored only for documents the corpus expects to be filed. The median
 time per document is reported too. A second pass files the same documents again with different bytes, which shows
 how consistently they are read. `--min-accuracy <x>` fails the run when the first pass reads fewer than that share of
-type, sender, date and title right.
+type, sender, date and title right. Every score is computed by `Evaluation` in Core from what the run recorded, and
+`EvaluationTests` checks each on recorded outcomes, without a model.
 
 The 21 documents of the international set (`intl/`) record the labels they should get besides their type, sender and
 date. The others record only sender, type, date, title words and language, and their other labels are measured by

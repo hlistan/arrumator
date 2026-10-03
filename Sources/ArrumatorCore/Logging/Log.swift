@@ -33,13 +33,14 @@ public struct LogEntry: Sendable, Codable, Identifiable, Hashable {
 }
 
 /// Structured logging: os_log + daily-rotated JSONL files + in-memory ring buffer for the Logs tab.
+///
+/// Two locks, taken in one order, the file's and then the lines': a line is numbered and written to its file in turn, so
+/// the file holds lines in the order of their numbers, while the lines in memory, which the Logs tab reads, are never
+/// held behind the disk.
 public final class Log: Sendable {
     public static let shared = Log()
 
     private struct State {
-        var directory: URL?
-        var handle: FileHandle?
-        var currentDay: String = ""
         var buffer: [LogEntry] = []
         var nextID: UInt64 = 1
         var minLevel: LogLevel = .info
@@ -48,7 +49,16 @@ public final class Log: Sendable {
         var bufferLimit = 1
     }
 
+    /// The day's file being written, and where.
+    private struct File {
+        var directory: URL?
+        var handle: FileHandle?
+        var current: URL?
+        var currentDay: String = ""
+    }
+
     private let state = Mutex(State())
+    private let file = Mutex(File())
     private static let subsystem = "dev.arrumator"
 
     private static let dayFormatter: DateFormatter = {
@@ -71,14 +81,14 @@ public final class Log: Sendable {
     /// Enables on-disk JSONL logging into `directory` (one file per day).
     public func configure(directory: URL, minLevel: LogLevel, config: LoggingConfig, echoToStderr: Bool) {
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        state.withLock {
-            $0.bufferLimit = config.bufferLimit
-            $0.directory = directory
-            $0.minLevel = minLevel
-            $0.echoToStderr = echoToStderr
-            try? $0.handle?.close()
-            $0.handle = nil
-            $0.currentDay = ""
+        file.withLock { f in
+            try? f.handle?.close()
+            f = File(directory: directory)
+            state.withLock {
+                $0.bufferLimit = config.bufferLimit
+                $0.minLevel = minLevel
+                $0.echoToStderr = echoToStderr
+            }
         }
     }
 
@@ -97,33 +107,45 @@ public final class Log: Sendable {
         case .info: logger.info("\(msg, privacy: .public)\(fieldText, privacy: .private)")
         case .debug, .trace: logger.debug("\(msg, privacy: .public)\(fieldText, privacy: .private)")
         }
-        let encoder = lineEncoder
-        state.withLock { s in
-            guard level <= s.minLevel else { return }
-            let entry = LogEntry(id: s.nextID, ts: Date(), level: level, cat: cat, msg: msg, fields: fields)
-            s.nextID += 1
-            s.buffer.append(entry)
-            if s.buffer.count > s.bufferLimit { s.buffer.removeFirst(s.buffer.count - s.bufferLimit) }
-            for c in s.subscribers.values { c.yield(entry) }
-            if s.echoToStderr {
+        file.withLock { f in
+            let numbered: (entry: LogEntry, echo: Bool)? = state.withLock { s in
+                guard level <= s.minLevel else { return nil }
+                let entry = LogEntry(id: s.nextID, ts: Date(), level: level, cat: cat, msg: msg, fields: fields)
+                s.nextID += 1
+                s.buffer.append(entry)
+                if s.buffer.count > s.bufferLimit { s.buffer.removeFirst(s.buffer.count - s.bufferLimit) }
+                for c in s.subscribers.values { c.yield(entry) }
+                return (entry, s.echoToStderr)
+            }
+            guard let (entry, echo) = numbered else { return }
+            if echo {
                 FileHandle.standardError.write(Data("[\(level.rawValue)] \(cat.rawValue): \(msg)\(fieldText)\n".utf8))
             }
-            guard let dir = s.directory else { return }
-            let day = Log.dayFormatter.string(from: entry.ts)
-            if day != s.currentDay || s.handle == nil {
-                try? s.handle?.close()
-                let url = dir.appendingPathComponent("arrumator-\(day).jsonl")
-                if !FileManager.default.fileExists(atPath: url.path) {
-                    FileManager.default.createFile(atPath: url.path, contents: nil)
-                }
-                s.handle = try? FileHandle(forWritingTo: url)
-                _ = try? s.handle?.seekToEnd()
-                s.currentDay = day
+            write(entry, to: &f)
+        }
+    }
+
+    /// The name of the file of `day`, as `dayFormatter` writes it.
+    static func fileName(day: String) -> String { "arrumator-\(day).jsonl" }
+
+    /// Adds `entry` to the file of its day in the logs folder, opened when the day begins or the file was set aside.
+    private func write(_ entry: LogEntry, to f: inout File) {
+        guard let dir = f.directory else { return }
+        let day = Log.dayFormatter.string(from: entry.ts)
+        if day != f.currentDay || f.handle == nil {
+            try? f.handle?.close()
+            let url = dir.appendingPathComponent(Self.fileName(day: day))
+            if !FileManager.default.fileExists(atPath: url.path) {
+                FileManager.default.createFile(atPath: url.path, contents: nil)
             }
-            if var data = try? encoder.encode(entry) {
-                data.append(0x0A)
-                try? s.handle?.write(contentsOf: data)
-            }
+            f.handle = try? FileHandle(forWritingTo: url)
+            _ = try? f.handle?.seekToEnd()
+            f.current = url
+            f.currentDay = day
+        }
+        if var data = try? lineEncoder.encode(entry) {
+            data.append(0x0A)
+            try? f.handle?.write(contentsOf: data)
         }
     }
 
@@ -142,24 +164,28 @@ public final class Log: Sendable {
         return stream
     }
 
-    public var logDirectory: URL? { state.withLock { $0.directory } }
-
-    /// Deletes JSONL files older than `days` before `now` or beyond `maxBytes` total (oldest first).
+    /// Deletes JSONL files older than `days` before `now` or beyond `maxBytes` total (oldest first), never the one being
+    /// written, nor the day's, which the app or a command may be writing: their lines would go on into a file no longer
+    /// there. Lines wait meanwhile, so none is written into a file as it goes.
     public func prune(_ config: LoggingConfig, now: Date) {
         let days = config.keepDays
         let maxBytes = config.maxBytes
-        guard let dir = logDirectory,
-              let files = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey])
-                .filter({ $0.pathExtension == "jsonl" }).sorted(by: { $0.lastPathComponent > $1.lastPathComponent })
-        else { return }
-        let cutoff = now.addingTimeInterval(-Double(days) * Units.secondsPerDay)
-        var total: Int64 = 0
-        for file in files {
-            let values = try? file.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
-            total += Int64(values?.fileSize ?? 0)
-            // A file whose date cannot be read is kept unless the size limit says otherwise.
-            if values?.contentModificationDate.map({ $0 < cutoff }) == true || total > maxBytes {
-                try? FileManager.default.removeItem(at: file)
+        let today = Self.fileName(day: Self.dayFormatter.string(from: now))
+        file.withLock { f in
+            guard let dir = f.directory,
+                  let files = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey])
+                    .filter({ $0.pathExtension == "jsonl" }).sorted(by: { $0.lastPathComponent > $1.lastPathComponent })
+            else { return }
+            let cutoff = now.addingTimeInterval(-Double(days) * Units.secondsPerDay)
+            var total: Int64 = 0
+            for file in files {
+                let values = try? file.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+                total += Int64(values?.fileSize ?? 0)
+                guard file.lastPathComponent != today, file.lastPathComponent != f.current?.lastPathComponent else { continue }
+                // A file whose date cannot be read is kept unless the size limit says otherwise.
+                if values?.contentModificationDate.map({ $0 < cutoff }) == true || total > maxBytes {
+                    try? FileManager.default.removeItem(at: file)
+                }
             }
         }
     }

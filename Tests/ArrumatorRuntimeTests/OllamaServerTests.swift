@@ -1,5 +1,6 @@
 import ArrumatorCore
 import ArrumatorRuntime
+import ArrumatorTesting
 import Foundation
 import Testing
 
@@ -31,7 +32,7 @@ import Testing
         var environment = home.environment
         environment.ollamaURL = "http://127.0.0.1:12345"
         let overridden = try await ArrumatorRuntime.bootstrap(appVersion: "test", environment: environment, echoLogsToStderr: false,
-                                                              trash: home.trash)
+                                                              resolver: StubResolver(), trash: home.trash)
         #expect(overridden.ollama.baseURL.absoluteString == "http://127.0.0.1:12345", "ARRUMATOR_OLLAMA_URL takes its place while set")
     }
 
@@ -53,9 +54,29 @@ import Testing
         environment.ollamaURL = "http://ollama.example.com:11434"
         let fromVariable = OllamaError.unusableAddress(.environment, reason: OllamaError.nonLocalHost("ollama.example.com").localizedDescription)
         await #expect(throws: fromVariable, "an address the variable gives is refused, naming the variable, whatever is saved") {
-            _ = try await ArrumatorRuntime.bootstrap(appVersion: "test", environment: environment, echoLogsToStderr: false, trash: home.trash)
+            _ = try await ArrumatorRuntime.bootstrap(appVersion: "test", environment: environment, echoLogsToStderr: false, resolver: StubResolver(), trash: home.trash)
         }
         #expect(fromVariable.localizedDescription.contains(RuntimeEnvironment.ollamaURLVariable), "\(fromVariable.localizedDescription)")
+    }
+
+    @Test func aLocalNameThatAlsoStandsForAnAddressBeyondIsRefusedAndNothingChanges() async throws {
+        let home = try await RuntimeHome.make()
+        defer { home.cleanup() }
+        let resolver = StubResolver(["ollama-box.local": ["192.168.1.20", "2a01:4f8:c0c:1234::1"]])
+        let runtime = try await ArrumatorRuntime.bootstrap(appVersion: "test", environment: home.environment, echoLogsToStderr: false,
+                                                           resolver: resolver, trash: home.trash)
+        try await runtime.openArchive()
+        let before = runtime.ollama.baseURL
+        await #expect(throws: OllamaError.nameReachesBeyond(host: "ollama-box.local", beyond: ["2a01:4f8:c0c:1234::1"],
+                                                             instead: "http://192.168.1.20:11434"),
+                      "the name is refused, saying the address to give instead") {
+            try await runtime.useOllama(at: "http://ollama-box.local:11434")
+        }
+        let saved = await runtime.settings.current.ollamaURL
+        let history = try await runtime.services.history.events(limit: 10, kinds: [.settingsChanged])
+        #expect(runtime.ollama.baseURL == before && saved == before.absoluteString && history.isEmpty,
+                "and nothing changes: the server in use, the setting and History")
+        await runtime.stop()
     }
 
     @Test func theAppStartsOllamaOnlyOnThisMac() throws {

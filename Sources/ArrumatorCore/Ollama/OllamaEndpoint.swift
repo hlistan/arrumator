@@ -87,6 +87,70 @@ public enum OllamaEndpoint {
         return false
     }
 
+    /// What the user is told of an address the app accepts: a warning, never a refusal (Settings › Models, `doctor`).
+    public enum Caution: Sendable, Hashable {
+        /// Plain HTTP to another machine: documents cross the local network unencrypted.
+        case unencrypted(host: String)
+        /// A `.local` name, taken for the local network by its name: what it stands for is looked up when the user
+        /// chooses it (`ArrumatorRuntime.useOllama(at:)`) and by the doctor, not before each request.
+        case byName(host: String)
+
+        public var summary: String {
+            switch self {
+            case let .unencrypted(host):
+                "Documents go to \(host) over plain HTTP, unencrypted: anyone who can watch the local network can read them. "
+                    + "Use https when the server offers it."
+            case let .byName(host):
+                "\(host) is taken for a machine on the local network by its name; what it stands for is checked when you "
+                    + "choose it and by arrumatorcli doctor, not before each request."
+            }
+        }
+    }
+
+    /// What the user is told of `url`, an address `validated` accepts.
+    public static func cautions(for url: URL) -> [Caution] {
+        guard let host = host(of: url), !isThisMac(url) else { return [] }
+        var cautions: [Caution] = []
+        if url.scheme?.lowercased() == plainScheme { cautions.append(.unencrypted(host: host)) }
+        if host.hasSuffix(localLinkSuffix) { cautions.append(.byName(host: host)) }
+        return cautions
+    }
+
+    /// The scheme that sends a request unencrypted.
+    static let plainScheme = "http"
+
+    /// What the `.local` name of `url` stands for now, by `resolver` within `seconds` (`ollama.timeouts.resolve`): its
+    /// addresses, each on this Mac or the local network, or none when it does not resolve in time, as when the machine is
+    /// away. Nil for an address that is no `.local` name, which `validated` has checked by itself.
+    ///
+    /// A request to the name goes to whichever of its addresses the system picks, an IPv6 one first when it has one
+    /// (Happy Eyeballs, RFC 8305), so a name that stands for any address beyond the local network is refused
+    /// (`OllamaError.nameReachesBeyond`), even beside local ones: a machine on a network with IPv6 often has a global
+    /// address too, which a request would reach through the router. The refusal says the address to give instead: its
+    /// IPv4 address on the local network, with the port and path of `url`, when it has one.
+    public static func resolved(_ url: URL, by resolver: any HostResolving, within seconds: Double) async throws -> [String]? {
+        guard let host = host(of: url), host.hasSuffix(localLinkSuffix) else { return nil }
+        let addresses = try await resolver.addresses(of: host, within: seconds)
+        // An IPv6 address on the local link names its zone, which says which interface, not where.
+        let bare = { (address: String) in String(address.prefix { $0 != zoneSeparator }) }
+        let beyond = addresses.filter { !isLocal(host: bare($0)) }
+        guard beyond.isEmpty else {
+            let local = addresses.first { IPv4.bytes($0).map(IPv4.isLocal) == true }
+            throw OllamaError.nameReachesBeyond(host: host, beyond: beyond, instead: local.flatMap { address(url, host: $0) })
+        }
+        return addresses
+    }
+
+    /// `url` with the IPv4 address `host` in place of its host, as an address to give.
+    static func address(_ url: URL, host: String) -> String? {
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
+        components.host = host
+        return components.url?.absoluteString
+    }
+
+    /// What separates an IPv6 address from its zone (RFC 6874).
+    static let zoneSeparator: Character = "%"
+
     /// Whether `host`, in the form `host(of:)` gives, is this Mac or the local network.
     static func isLocal(host: String) -> Bool {
         if host == localhostName || host.hasSuffix(localLinkSuffix) { return true }

@@ -24,15 +24,24 @@ public actor MockOllama: OllamaAPI {
     private let remoteHosts: [String: String]
     private var showFailures: [String: OllamaError] = [:]
     private var versionFailure: OllamaError?
+    private var listingFailure: OllamaError?
+    public nonisolated let baseURL: URL
+
+    /// Where a mock answers unless it is given another server: this Mac, as the app's own default is.
+    public static let server: URL = {
+        guard let url = URL(string: "http://127.0.0.1:11434") else { preconditionFailure("a constant address reads as one") }
+        return url
+    }()
 
     /// `capabilities` are what `show` reports for every model, as Ollama lists them ("completion", "vision", …),
     /// `modelCapabilities` what it reports for particular models instead, and `modelThinking` how a particular model
     /// says it can be told to think (`thinking` of `/api/show`); a model not in it says nothing of it, as on older servers.
     /// `remoteHosts` names the models the server runs elsewhere, with where, as Ollama lists and describes a model of its
-    /// cloud (`remote_host`).
+    /// cloud (`remote_host`). `server` is the address it stands in for.
     public init(installed: [String] = [], dimension: Int = 256, capabilities: [String] = ["completion"],
                 modelCapabilities: [String: [String]] = [:], modelThinking: [String: OllamaShowResponse.Thinking] = [:],
-                remoteHosts: [String: String] = [:], handler: @escaping ChatHandler) {
+                remoteHosts: [String: String] = [:], server: URL = MockOllama.server, handler: @escaping ChatHandler) {
+        baseURL = server
         self.installed = installed
         self.dimension = dimension
         defaultCapabilities = capabilities
@@ -64,8 +73,12 @@ public actor MockOllama: OllamaAPI {
         return "mock"
     }
 
+    /// Makes `tags` fail with `error` from now on, as a server that cannot list its models.
+    public func failListing(with error: OllamaError) { listingFailure = error }
+
     public func tags() async throws -> [OllamaModelInfo] {
-        installed.map { OllamaModelInfo(name: $0, model: $0, remoteModel: nil, remoteHost: remoteHosts[$0], size: 1, digest: nil, modifiedAt: nil,
+        if let listingFailure { throw listingFailure }
+        return installed.map { OllamaModelInfo(name: $0, model: $0, remoteModel: nil, remoteHost: remoteHosts[$0], size: 1, digest: nil, modifiedAt: nil,
                                         details: nil) }
     }
 

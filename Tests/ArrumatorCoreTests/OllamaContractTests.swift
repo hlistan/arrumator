@@ -185,6 +185,7 @@ import Testing
 
     /// A server that cannot be reached, whatever is asked of it.
     struct AwayServer: OllamaAPI {
+        var baseURL: URL { MockOllama.server }
         func version() async throws -> String { throw OllamaError.unreachable("Could not connect to the server.") }
         func tags() async throws -> [OllamaModelInfo] { throw OllamaError.unreachable("down") }
         func show(model: String) async throws -> OllamaShowResponse { throw OllamaError.unreachable("down") }

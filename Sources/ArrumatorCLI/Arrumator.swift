@@ -16,11 +16,14 @@ struct Arrumator: AsyncParsableCommand {
                       Review.self, Archive.self, Funnel.self, Stats.self, Rebuild.self, Logs.self,
                       Models.self, Profiles.self, Diagnostics.self, Eval.self, Settings.self])
 
-    /// Runs the command given, then writes the record files its changes marked, also when it failed part way: a command
-    /// ends with its process, and nothing else would write them until the app or another command did (docs/storage.md).
+    /// Runs the command given, then stops every runtime it opened, as the app stops its own before it quits, and writes
+    /// the record files its changes marked, also when it failed part way: a command ends with its process, and nothing
+    /// else would write them until the app or another command did (docs/storage.md). Ctrl-C, or SIGTERM, stops the
+    /// command the same way (`Interruption`), and it exits with 128 and the signal's number, as a shell reports one. The
+    /// throw-away folders it made, as `eval` makes its home, are removed last, whatever it came to.
     static func main() async {
         let opened = OpenedArchives()
-        do {
+        let command = Task {
             try await OpenedArchives.$current.withValue(opened) {
                 var command = try await asyncParseAsRoot()
                 if var asyncCommand = command as? any AsyncParsableCommand {
@@ -29,16 +32,84 @@ struct Arrumator: AsyncParsableCommand {
                     try command.run()
                 }
             }
-        } catch {
+        }
+        let interruption = Interruption(stopping: command, endingAtOnce: { opened.endSpawnedServers() })
+        let outcome = await command.result
+        await opened.stop()
+        let interrupted = interruption.end()
+        if case let .failure(error) = outcome {
             await opened.flushAfterFailure()
-            exit(withError: error)
+            opened.discard()
+            exit(withError: interrupted.map(Interruption.exitCode) ?? error)
         }
         do {
             try await opened.flush()
         } catch {
+            opened.discard()
             exit(withError: error)
         }
+        opened.discard()
+        if let interrupted { exit(withError: Interruption.exitCode(interrupted)) }
     }
+}
+
+/// Ctrl-C (SIGINT) and SIGTERM, while a command runs: the first cancels the command, whose work then stops as the app's
+/// does before it quits, the document in hand carrying on at the next start; a second, or two that arrive together,
+/// ends the process at once, and the Ollama server it spawned with it. Once the stop is done (`end()`), a signal ends
+/// the process at once, as by default, while it writes the record files and removes what it threw away.
+final class Interruption: Sendable {
+    /// The signals that stop a command.
+    static let signals = [SIGINT, SIGTERM]
+    /// What a shell adds to a signal's number for the status of a process it ended.
+    static let signalStatusBase: Int32 = 128
+
+    private let sources = Mutex<[any DispatchSourceSignal]>([])
+    private let received = Mutex<Int32?>(nil)
+
+    /// - Parameter endingAtOnce: what must end with the process when a signal ends it at once, called on the signal's
+    ///   queue just before it exits.
+    init(stopping command: Task<Void, any Error>, endingAtOnce: @escaping @Sendable () -> Void) {
+        let made = Self.signals.map { number in
+            // Caught by a handler that does nothing, so it reaches the source rather than ending the process. Not
+            // ignored: a process the command starts, such as `ollama serve`, would inherit that, and outlive a stop.
+            signal(number) { _ in }
+            let source = DispatchSource.makeSignalSource(signal: number, queue: .global())
+            // The source hears of a signal when it is sent, which may be before the process takes it: the handler stays
+            // as it is, as a signal taken after it went back to the default would end the process all the same.
+            source.setEventHandler { [weak self, unowned source] in
+                guard let self else { return }
+                // How many times the signal came since the handler last ran: two quick Ctrl-Cs may come as one event.
+                let times = source.data
+                let first = received.withLock { received in
+                    defer { received = received ?? number }
+                    return received == nil
+                }
+                guard first, times < 2 else {
+                    // The next one ends the process, should the stop not end.
+                    endingAtOnce()
+                    exit(Self.signalStatusBase + number)
+                }
+                FileHandle.standardError.write(Data("Stopping… (press Ctrl-C again to quit at once)\n".utf8))
+                command.cancel()
+            }
+            source.resume()
+            return source
+        }
+        sources.withLock { $0 = made }
+    }
+
+    /// Stops listening, and gives each signal its default again; the signal that cancelled the command, if one did.
+    func end() -> Int32? {
+        sources.withLock { all in
+            for source in all { source.cancel() }
+            all = []
+        }
+        for number in Self.signals { signal(number, SIG_DFL) }
+        return received.withLock { $0 }
+    }
+
+    /// The status a command a signal stopped exits with.
+    static func exitCode(_ signal: Int32) -> ExitCode { ExitCode(signalStatusBase + signal) }
 }
 
 /// The archives a command opened (`GlobalOptions.runtime`), whose record files `Arrumator.main` writes before the command
@@ -48,9 +119,38 @@ final class OpenedArchives: Sendable {
     @TaskLocal static var current: OpenedArchives?
 
     private let runtimes = Mutex<[ArrumatorRuntime]>([])
+    /// Folders the command made to throw away, such as `eval`'s home (`discardAfterwards(_:)`).
+    private let throwAway = Mutex<[URL]>([])
 
     func add(_ runtime: ArrumatorRuntime) {
         runtimes.withLock { $0.append(runtime) }
+    }
+
+    /// Removes `folder`, which the command made for itself alone, once it has ended, however it ends: after its
+    /// runtimes have stopped and written into it.
+    func discardAfterwards(_ folder: URL) {
+        throwAway.withLock { $0.append(folder) }
+    }
+
+    /// Removes the throw-away folders; one that cannot be removed is said on standard error, and left.
+    func discard() {
+        for folder in throwAway.withLock({ $0 }) where FileManager.default.fileExists(atPath: folder.path) {
+            do { try FileManager.default.removeItem(at: folder) } catch {
+                FileHandle.standardError.write(Data("Could not remove \(folder.path): \(error.localizedDescription)\n".utf8))
+            }
+        }
+    }
+
+    /// Stops every runtime the command opened (`ArrumatorRuntime.stop()`): what it started, Ollama among it, ends with
+    /// the command.
+    func stop() async {
+        for runtime in runtimes.withLock({ $0 }) { await runtime.stop() }
+    }
+
+    /// Ends at once every Ollama server the command's runtimes spawned, as a second Ctrl-C ends the command before its
+    /// stop could: from the signal's queue, without waiting for anything.
+    func endSpawnedServers() {
+        for runtime in runtimes.withLock({ $0 }) { runtime.lifecycle.endSpawnedServerNow() }
     }
 
     /// Writes every record file the command's changes marked; those of an archive whose folder is away wait in its index
@@ -108,7 +208,7 @@ struct GlobalOptions: ParsableArguments {
         var environment = RuntimeEnvironment.current
         if let ollamaURL { environment.ollamaURL = ollamaURL.absoluteString }
         let runtime = try await ArrumatorRuntime.bootstrap(appVersion: Arrumator.version, environment: environment,
-                                                           echoLogsToStderr: verbose, trash: environment.trash(orElse: SystemTrash()))
+                                                           echoLogsToStderr: verbose, resolver: SystemHostResolver(), trash: environment.trash(orElse: SystemTrash()))
         OpenedArchives.current?.add(runtime)
         return runtime
     }

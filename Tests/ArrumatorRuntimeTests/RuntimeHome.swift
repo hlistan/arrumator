@@ -1,5 +1,6 @@
 import ArrumatorCore
 import ArrumatorRuntime
+import ArrumatorTesting
 import Foundation
 
 /// A subscriber to whether a runtime's work runs (`ArrumatorRuntime.workUpdates()`), as the app is one: everything it was
@@ -78,7 +79,7 @@ struct RuntimeHome {
     /// A runtime whose archive is not read yet, as the app has one before the user has set it up
     /// (`ArrumatorRuntime.openAndStart()`).
     func bootstrap() async throws -> ArrumatorRuntime {
-        try await ArrumatorRuntime.bootstrap(appVersion: "test", environment: environment, echoLogsToStderr: false, trash: trash)
+        try await ArrumatorRuntime.bootstrap(appVersion: "test", environment: environment, echoLogsToStderr: false, resolver: StubResolver(), trash: trash)
     }
 
     /// Sets `values` in the section `section` of the home's `pipeline.json`, over the bundled defaults, as a user may.
@@ -96,19 +97,8 @@ struct RuntimeHome {
 
     static let quickly = 0.1
 
-    /// A stand-in for `ollama serve`: a script that writes its process number into a file and then waits, as a server
-    /// does, until it is stopped. Where the script is, and where it writes its number.
-    func standInServer() throws -> (executable: URL, processNumber: URL) {
-        let executable = root.appendingPathComponent("serve")
-        let processNumber = root.appendingPathComponent("serve.pid")
-        try Data("#!/bin/sh\necho $$ > '\(processNumber.path)'\nexec /bin/sleep \(Self.standInLifetime)\n".utf8).write(to: executable)
-        try FileManager.default.setAttributes([.posixPermissions: Self.executablePermissions], ofItemAtPath: executable.path)
-        return (executable, processNumber)
-    }
-
-    /// How long the stand-in server lives if nothing stops it: far longer than any test waits for it.
-    static let standInLifetime = 300
-    static let executablePermissions = 0o755
+    /// A stand-in for `ollama serve` in the home.
+    func standInServer() throws -> StandInServer { try StandInServer(in: root) }
 
     /// Makes `folder` read-only, or writable again: nothing can be saved in it, but in the folders inside it, unless
     /// `withFoldersInIt`, as on a disk that can no longer be written to.

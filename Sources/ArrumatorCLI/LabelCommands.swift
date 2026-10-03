@@ -116,7 +116,7 @@ struct Labels: AsyncParsableCommand {
         @OptionGroup var options: GlobalOptions
         @Argument(help: "Labels, as kind=value, such as type=invoice sender=EDP; none lists every document and label.")
         var labels: [String] = []
-        @Option(help: "List only the labels written with this in them, as the sidebar's search does; the documents stay.")
+        @Option(help: "List only the labels written with this in them, as the sidebar's filter does; the documents stay.")
         var matching = ""
 
         struct Scope: Encodable {

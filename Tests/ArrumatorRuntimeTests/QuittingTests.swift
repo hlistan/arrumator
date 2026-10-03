@@ -150,10 +150,9 @@ import Testing
         await runtime.lifecycle.configure(management: .spawnServe, binaryOverride: server.executable.path, address: runtime.ollama.baseURL)
         let starting = Task { await runtime.lifecycle.ensureRunning() }
         defer { starting.cancel() }
-        let started = { (try? String(contentsOf: server.processNumber, encoding: .utf8)).flatMap { pid_t($0.trimmingCharacters(in: .newlines)) } }
-        try #require(await Patience.until { started() != nil }, "the app starts the server")
-        let process = try #require(started())
-        #expect(kill(process, 0) == 0, "which runs")
+        try #require(await Patience.until { !server.started.isEmpty }, "the app starts the server")
+        let process = try #require(server.started.first)
+        #expect(StandInServer.runs(process), "which runs")
 
         // Quit while the archive is read, held as macOS holds a folder behind its prompt for access: the stop cannot end.
         let (reading, read) = (Signal(), OneShot<Void>())

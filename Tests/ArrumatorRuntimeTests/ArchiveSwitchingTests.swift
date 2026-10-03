@@ -264,7 +264,7 @@ import Testing
         try await home.withoutOllama()
         var environment = home.environment
         environment.ollamaURL = Self.anotherServer
-        let first = try await ArrumatorRuntime.bootstrap(appVersion: "test", environment: environment, echoLogsToStderr: false, trash: home.trash)
+        let first = try await ArrumatorRuntime.bootstrap(appVersion: "test", environment: environment, echoLogsToStderr: false, resolver: StubResolver(), trash: home.trash)
         let second = try await first.switchArchive(to: home.folder("Second").path).runtime
         let saved = await second.settings.current.ollamaURL
         #expect(saved == RuntimeHome.nowhere, "the settings name another server")

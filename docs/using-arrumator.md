@@ -148,7 +148,15 @@ Settings › Models says where the models run and which models read your documen
 sections. **Ollama** is the server: its status, its address under **Server**, and, on this Mac, whether the app starts
 it (**Management**). The server must be this Mac, a private or link-local address, or a `.local` name, such as
 `http://192.168.1.20:11434`; anything else is refused (`arrumatorcli settings --ollama-url`), as is an address with a
-user name or password, a query or a fragment. An address saved by an earlier version that this one refuses stops the app
+user name or password, a query or a fragment. A `.local` name is looked up when you choose it, waiting at most
+`ollama.timeouts.resolve` seconds: one that stands for any address beyond the local network is refused, also beside
+local ones, as a machine on a network with IPv6 often has a global address too, which a request to the name may go to
+through the router; the refusal says the address to give instead, its IPv4 address on the local network. A name that
+does not resolve in time is taken as it is. It is trusted by its name from then on, as each request goes to the name,
+and `arrumatorcli doctor` looks it up again, failing when it stands for an address beyond and warning when it does not
+resolve. Settings says so below the address, and also warns when documents go to another machine over plain `http`,
+unencrypted on the local network; use `https` when the server offers it. Neither is refused. An address saved by an
+earlier version that this one refuses stops the app
 and every command, saying it is the `ollamaURL` in `settings.json`; `arrumatorcli settings --ollama-url <address>` gives
 another, and the app starts again. The app talks to that server alone: through no proxy, whatever the
 system's settings, and it follows no redirect the server answers with. Nor does it read with a model the server sends
@@ -239,7 +247,8 @@ No tunable lives in code. Defaults are bundled in `Sources/ArrumatorCore/Resourc
   when the app starts it, listens on the address the app talks to, with `ollama.serveEnvironment` besides; how long a
   model stays loaded after its last request, `ollama.keepAlive.chat` for the one that reads and describes images and
   `ollama.keepAlive.embed` for the one that finds by meaning; each of `ollama.timeouts` bounds how long a request may
-  wait for more of its answer and, but for a download, how long the whole of it may take, and 0 is no timeout; the
+  wait for more of its answer and, but for a download, how long the whole of it may take, and 0 is no timeout, but
+  `ollama.timeouts.resolve`, how long a `.local` name of the server may take to be looked up, more than 0; the
   most bytes one answer may hold, a reply or all the lines of an answer streamed, and one line of a download's
   progress, `ollama.maxResponseBytes`; how long what the server said of where a model runs is trusted,
   `ollama.modelLocationMaxAge`, 0 to ask before every request), `watcher` (when a file in Incoming has stopped changing,

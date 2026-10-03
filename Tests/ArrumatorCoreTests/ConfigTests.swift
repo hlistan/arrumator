@@ -445,9 +445,11 @@ extension ConfigTests {
         var config = try PipelineConfig.bundledDefaults()
         #expect(config.ollama.maxResponseBytes > 1 << 20, "the bundled limit holds the largest answer the app asks for, an embedding batch")
         config.ollama.timeouts.chat = -1
+        config.ollama.timeouts.resolve = 0
         config.ollama.maxResponseBytes = 0
         config.ollama.modelLocationMaxAge = -1
         #expect(config.problems.contains("ollama.timeouts.chat cannot be negative: 0 is no timeout")
+                    && config.problems.contains("ollama.timeouts.resolve must be more than 0")
                     && config.problems.contains("ollama.maxResponseBytes must be at least 1")
                     && config.problems.contains("ollama.modelLocationMaxAge cannot be negative: 0 asks before every request"),
                 "\(config.problems)")

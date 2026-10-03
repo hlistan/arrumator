@@ -61,7 +61,10 @@ public enum ModelManagerError: Error, LocalizedError {
 public actor ModelManager {
     private let api: any OllamaAPI
     private let config: OllamaConfig
-    private var capabilities: [String: OllamaShowResponse] = [:]
+    /// What each server said of each model it was asked about, by server and model: a model of one name on another
+    /// server, as after the user points the app elsewhere (`ArrumatorRuntime.useOllama(at:)`), may be another model, or
+    /// the same at another version.
+    private var capabilities: [URL: [String: OllamaShowResponse]] = [:]
 
     public init(api: any OllamaAPI, config: OllamaConfig) {
         self.api = api
@@ -95,10 +98,12 @@ public actor ModelManager {
         return models
     }
 
+    /// What the server in use says `model` can do, asked once of each server and kept.
     public func capabilities(of model: String) async throws -> OllamaShowResponse {
-        if let cached = capabilities[model] { return cached }
+        let server = api.baseURL
+        if let cached = capabilities[server]?[model] { return cached }
         let info = try await api.show(model: model)
-        capabilities[model] = info
+        capabilities[server, default: [:]][model] = info
         return info
     }
 
@@ -111,7 +116,7 @@ public actor ModelManager {
             throw ModelManagerError.insufficientDisk(neededGB: config.requiredFreeDiskGBAfterPull, freeGB: freeGB)
         }
         Log.info(.ollama, "Pulling model (user request)", ["model": model])
-        capabilities[model] = nil
+        capabilities[api.baseURL]?[model] = nil
         return api.pull(model: model)
     }
 }
@@ -199,6 +204,7 @@ public struct GatedOllama: OllamaAPI {
 
     public init(gate: InferenceGate) { self.gate = gate }
 
+    public var baseURL: URL { gate.client.baseURL }
     public func version() async throws -> String { try await gate.client.version() }
     public func tags() async throws -> [OllamaModelInfo] { try await gate.client.tags() }
     public func show(model: String) async throws -> OllamaShowResponse { try await gate.client.show(model: model) }

@@ -41,6 +41,13 @@ targets:
         NSRemovableVolumesUsageDescription: Arrumator can keep your archive or Incoming folder on an external drive.
         NSNetworkVolumesUsageDescription: Arrumator can keep your archive or Incoming folder on a network volume.
         NSLocalNetworkUsageDescription: Arrumator sends documents to your Ollama server on the local network to read and file them, and nowhere else.
+        # Plain HTTP to the user's Ollama on the local network by an IP address, which App Transport Security no longer
+        # allows by default since macOS 14; unqualified and .local names it allows (https://developer.apple.com/
+        # documentation/bundleresources/information-property-list/nsapptransportsecurity/nsallowslocalnetworking), and
+        # 127.0.0.1 and localhost were seen to load without the key. Where requests may go is NetworkGuardProtocol's to
+        # decide, never this key's.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
         ITSAppUsesNonExemptEncryption: false
     settings:
       base:

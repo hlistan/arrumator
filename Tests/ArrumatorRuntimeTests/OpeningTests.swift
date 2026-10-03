@@ -14,7 +14,7 @@ import Testing
         // The archive's list of documents, broken by hand, read by a new index.
         let listing = try home.writeList(TestRecordFiles.brokenList, in: home.folder("First"))
 
-        let refused = try await ArrumatorRuntime.bootstrap(appVersion: "test", environment: home.environment, echoLogsToStderr: false, trash: home.trash)
+        let refused = try await ArrumatorRuntime.bootstrap(appVersion: "test", environment: home.environment, echoLogsToStderr: false, resolver: StubResolver(), trash: home.trash)
         await #expect(throws: RecordsError.self, "the index cannot be rebuilt without the list") { try await refused.openArchive() }
         #expect(await refused.start() == false, "and the app, which starts it all the same, starts nothing on it")
         #expect(try await refused.services.history.events(limit: 10).isEmpty, "not even to record that it started")
@@ -56,7 +56,7 @@ import Testing
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }
         try await home.withoutOllama()
-        let runtime = try await ArrumatorRuntime.bootstrap(appVersion: "test", environment: home.environment, echoLogsToStderr: false, trash: home.trash)
+        let runtime = try await ArrumatorRuntime.bootstrap(appVersion: "test", environment: home.environment, echoLogsToStderr: false, resolver: StubResolver(), trash: home.trash)
         try await runtime.openArchive()
         func started() async throws -> Int { try await runtime.services.history.events(limit: 10, kinds: [.appStarted]).count }
         // As before onboarding is done: the archive is open, and the app has started nothing on it.

@@ -191,11 +191,11 @@ table in [AGENTS.md §5](../AGENTS.md#5-boundaries).
 | `Ingest/` | The pipeline's state machine, filing, and what the user does with a document or a label. | `IngestCoordinator`, `PipelineServices`, `DocumentFiler`, `ReviewActions`, `LabelActions`, `ArchiveReconciler` |
 | `FileOps/` | Names, moves, identity on disk (a package is one document), the Trash. | `FilenameBuilder`, `Placer`, `FileOperations`, `HashService`, `Packages`, `Xattr`, `SystemTrash`, `FolderTrash` |
 | `Watching/` | FSEvents on Incoming and on the archive. | `IncomingWatcher`, `ArchiveWatcher`, `SelfChangeRegistry`, `FSEventStream`, `SkipRules` |
-| `Ollama/` | The only network client, its guard, the server's lifecycle, one model call at a time. | `OllamaClient`, `OllamaConnection`, `OllamaEndpoint`, `NetworkGuardProtocol`, `OllamaLifecycle`, `ModelManager`, `InferenceGate` |
+| `Ollama/` | The only network client, its guard, the server's lifecycle, one model call at a time. | `OllamaClient`, `OllamaConnection`, `OllamaEndpoint`, `SystemHostResolver`, `NetworkGuardProtocol`, `OllamaLifecycle`, `ModelManager`, `InferenceGate` |
 | `Tasks/` | Search tasks and conversations: two queues, their actions, what an answer is shown, exports. | `SearchTaskQueue`, `SearchTaskActions`, `TaskConversationQueue`, `TaskConversationActions`, `TaskContextBuilder`, `SearchTaskExporter` |
 | `Search/` | Full-text search fused with search by meaning. | `SearchService`, `VectorIndex`, `SearchPlanMatcher` |
 | `Vocabulary/` | Keeping labels one vocabulary. | `LabelConsolidator`, `LabelSimilarity` |
-| `Observability/` | What the pipeline did, in numbers; the doctor; the diagnostics export. | `StatsService`, `ProcessingFunnel`, `Doctor`, `DiagnosticsExporter` |
+| `Observability/` | What the pipeline did, in numbers; how an eval run read its corpus; the doctor; the diagnostics export. | `StatsService`, `ProcessingFunnel`, `Evaluation`, `Doctor`, `DiagnosticsExporter` |
 | `Domain/`, `System/`, `Logging/` | Deadlines, retries, the worker's doorbell, identifiers and the words that label them; power state; structured logs. | `Deadline`, `Retry`, `Doorbell`, `AsyncSemaphore`, `PowerState`, `Log` |
 
 ### The other modules

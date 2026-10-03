@@ -66,4 +66,66 @@ import Testing
         }
         #expect(config.urlCache == nil, "and nothing is cached")
     }
+
+    @Test func aLocalNameIsTrustedOnlyWhileItStandsForAddressesOnTheLocalNetwork() async throws {
+        let url = try OllamaEndpoint.validated("http://ollama-box.local:11434")
+        #expect(try await OllamaEndpoint.resolved(url, by: StubResolver(["ollama-box.local": ["192.168.1.20", "fe80::1%en0"]]), within: Self.lookup)
+                    == ["192.168.1.20", "fe80::1%en0"], "a name on the local link, by any of its addresses there, zone and all")
+        await #expect(throws: OllamaError.nameReachesBeyond(host: "ollama-box.local", beyond: ["203.0.113.7"], instead: "http://192.168.1.20:11434"),
+                      "one that stands for an address beyond, as a machine there may answer to any name, is refused") {
+            try await OllamaEndpoint.resolved(url, by: StubResolver(["ollama-box.local": ["192.168.1.20", "203.0.113.7"]]), within: Self.lookup)
+        }
+        #expect(try await OllamaEndpoint.resolved(url, by: StubResolver(), within: Self.lookup) == [],
+                "one that does not resolve now stands for nothing yet")
+        #expect(try await OllamaEndpoint.resolved(try OllamaEndpoint.validated("http://192.168.1.20:11434"), by: StubResolver(), within: Self.lookup)
+                    == nil, "an address is checked by itself, with nothing to look up")
+    }
+
+    /// Seconds a test's lookups may take, which a stub answers at once.
+    static let lookup = 1.0
+
+    /// What mDNS answers for a machine on a home network with IPv6: link-local, private IPv4 and a global IPv6 address.
+    static let dualStack = ["ollama-box.local": ["fe80::1c2b:3a4d:5e6f:7081%en0", "192.168.1.20", "2a01:4f8:c0c:1234::1"]]
+
+    @Test func aLocalNameOnADualStackNetworkIsRefusedSayingWhichAddressToGive() async throws {
+        let url = try OllamaEndpoint.validated("http://ollama-box.local:11434/ollama")
+        let refusal = OllamaError.nameReachesBeyond(host: "ollama-box.local", beyond: ["2a01:4f8:c0c:1234::1"],
+                                                    instead: "http://192.168.1.20:11434/ollama")
+        await #expect(throws: refusal, "a request to the name may go to its global IPv6 address, through the router: never let it") {
+            try await OllamaEndpoint.resolved(url, by: StubResolver(Self.dualStack), within: Self.lookup)
+        }
+        #expect(refusal.localizedDescription.contains("http://192.168.1.20:11434/ollama"),
+                "the refusal says the address to give instead, its IPv4 address on the local network: \(refusal.localizedDescription)")
+    }
+
+    @Test(.timeLimit(.minutes(1))) func theSystemsLookupEndsWithinItsTimeAndWhenItIsCancelled() async throws {
+        // A lookup that holds its thread until the test lets it go, as mDNS for a machine that is away may: nothing is
+        // looked up on the network.
+        let release = DispatchSemaphore(value: 0)
+        defer { release.signal(); release.signal() }
+        let held = SystemHostResolver { _ in
+            release.wait()
+            return ["192.168.1.20"]
+        }
+        #expect(try await held.addresses(of: Self.name, within: Self.short).isEmpty,
+                "a lookup out of time is a name that does not resolve, whatever the lookup finds after")
+        let waiting = Task { try await held.addresses(of: Self.name, within: Self.long) }
+        waiting.cancel()
+        await #expect(throws: CancellationError.self, "and one is given up as soon as what waits on it is cancelled") { try await waiting.value }
+    }
+
+    static let name = "ollama-box.local"
+    /// Seconds of a lookup's time that run out at once, and that never run out in a test.
+    static let short = 0.01
+    static let long = 3600.0
+
+    @Test func plainHTTPToAnotherMachineAndATrustedNameAreSaid() throws {
+        #expect(OllamaEndpoint.cautions(for: try OllamaEndpoint.validated("http://ollama-box.local:11434"))
+                    == [.unencrypted(host: "ollama-box.local"), .byName(host: "ollama-box.local")],
+                "documents to another machine over plain HTTP cross the network unencrypted, to a machine trusted by its name")
+        #expect(OllamaEndpoint.cautions(for: try OllamaEndpoint.validated("https://192.168.1.20:11434")).isEmpty,
+                "over https to an address, there is nothing to say")
+        #expect(OllamaEndpoint.cautions(for: try OllamaEndpoint.validated("http://127.0.0.1:11434")).isEmpty,
+                "nor to this Mac, as nothing leaves it")
+    }
 }

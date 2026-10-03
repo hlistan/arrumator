@@ -1,6 +1,7 @@
 import ArrumatorCore
 import ArrumatorTesting
 import Foundation
+import Synchronization
 import Testing
 
 /// Model profiles are the user's to add, change, set back and remove (docs/using-arrumator.md): a new one is a copy of
@@ -305,5 +306,41 @@ import Testing
                 "one that thinks lists how it is told to: its levels; one that cannot lists none")
         #expect(installed.map(\.capabilities) == [["completion"], ["completion", "vision", OllamaShowResponse.thinkingCapability], ["embedding"]],
                 "and what Ollama says each can do is kept as it says it")
+    }
+
+    /// The servers the user points the app at, one after the other, as `OllamaConnection` forwards to one at a time.
+    final class Servers: OllamaAPI {
+        private let all: [MockOllama]
+        private let current = Mutex(0)
+
+        init(_ all: [MockOllama]) { self.all = all }
+
+        func use(_ index: Int) { current.withLock { $0 = index } }
+        private var server: MockOllama { all[current.withLock { $0 }] }
+
+        var baseURL: URL { server.baseURL }
+        func version() async throws -> String { try await server.version() }
+        func tags() async throws -> [OllamaModelInfo] { try await server.tags() }
+        func show(model: String) async throws -> OllamaShowResponse { try await server.show(model: model) }
+        func chat(_ request: OllamaChatRequest, partial: (@Sendable (OllamaChatResponse) async -> Void)?) async throws -> OllamaChatResponse {
+            try await server.chat(request, partial: partial)
+        }
+        func embed(_ request: OllamaEmbedRequest) async throws -> OllamaEmbedResponse { try await server.embed(request) }
+        func pull(model: String) -> AsyncThrowingStream<OllamaPullProgress, any Error> { server.pull(model: model) }
+    }
+
+    @Test func whatAModelCanDoIsAskedAgainOfAnotherServer() async throws {
+        let env = try await TestEnvironment.make()
+        defer { env.cleanup() }
+        let other = try #require(URL(string: "http://192.168.1.20:11434"))
+        let servers = Servers([MockOllama(installed: [Self.reader], modelCapabilities: [Self.reader: ["completion"]]) { _ in "" },
+                               MockOllama(installed: [Self.reader], modelCapabilities: [Self.reader: ["completion", "vision"]],
+                                          server: other) { _ in "" }])
+        let models = ModelManager(api: servers, config: env.config.ollama)
+        #expect(try await models.capabilities(of: Self.reader).capabilities == ["completion"], "this Mac's model reads")
+        servers.use(1)
+        #expect(try await models.capabilities(of: Self.reader).capabilities == ["completion", "vision"],
+                "the model of that name on the server the user points the app at next is asked of there, not taken for this Mac's")
+        #expect(try await models.installed().map(\.roles) == [[.chat, .vision]], "and is offered for what it can do there")
     }
 }

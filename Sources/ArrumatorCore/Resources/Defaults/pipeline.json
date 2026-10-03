@@ -16,7 +16,8 @@
       "version": 1.5,
       "chat": 180,
       "embed": 60,
-      "pull": 0
+      "pull": 0,
+      "resolve": 3
     },
     "retryDelays": [
       2,
