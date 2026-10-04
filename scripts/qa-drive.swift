@@ -2,8 +2,9 @@
 // reads its windows' elements, presses, clicks, types, scrolls and screenshots its windows and no other: a click, a
 // hover or a scroll is refused unless one of the process's windows is the frontmost one at that point, as the pointer's
 // events reach whatever window is there. It never reads the system's Apple menu, which lists the user's own recent
-// files, nor an open file panel, which lists the user's folders, and takes no screenshot while one is open. Built and
-// run by scripts/qa-drive.sh; the terminal running it needs Accessibility in System Settings.
+// files, nor an open file panel, which lists the user's folders, but to find and press its Cancel, and takes no
+// screenshot while one is open. Built and run by scripts/qa-drive.sh; the terminal running it needs Accessibility in
+// System Settings.
 import AppKit
 import ApplicationServices
 import Foundation
@@ -24,6 +25,7 @@ let usage = """
       scroll <pid> <text> <steps>            scroll over the match, negative steps down
       resize <pid> <width> <height>          resize the first window
       shot <pid> <file> [window title]       screenshot of the window (the first, or the one titled so)
+      cancelpanel <pid>                      press an open file panel's Cancel, reading nothing else of it
     """
 
 func fail(_ message: String, code: Int32 = 1) -> Never {
@@ -84,8 +86,14 @@ func describe(_ e: AXUIElement) -> String {
     if let h = str(e, kAXHelpAttribute) { parts.append("help=“\(h.prefix(80))”") }
     if let i = str(e, kAXIdentifierAttribute) { parts.append("id=\(i)") }
     if attr(e, kAXEnabledAttribute) as? Bool == false { parts.append("DISABLED") }
-    if let f = frame(e) { parts.append("@\(Int(f.minX)),\(Int(f.minY)) \(Int(f.width))x\(Int(f.height))") }
+    if let f = frame(e) { parts.append("@\(whole(f.minX)),\(whole(f.minY)) \(whole(f.width))x\(whole(f.height))") }
     return parts.joined(separator: " ")
+}
+
+/// A coordinate as a whole number. An element of a long list scrolled out of view can report a size that is not finite
+/// or too large for an `Int`, which `Int(_:)` traps on, ending the walk with nothing of a piped tree printed.
+func whole(_ value: CGFloat) -> String {
+    value.isFinite && abs(value) < CGFloat(Int32.max) ? String(Int(value)) : "?"
 }
 
 func windows() -> [AXUIElement] { (attr(app, kAXWindowsAttribute) as? [CFTypeRef] ?? []).compactMap(element) }
@@ -149,10 +157,13 @@ func activate() {
     usleep(250_000)
 }
 
-/// The process whose window is frontmost on screen at `p`, which the pointer's events there reach.
+/// The process whose window is frontmost on screen at `p`, which the pointer's events there reach. The pointer is drawn
+/// in a window of its own, at the cursor's level, which events pass through: left where the last click was, it would
+/// otherwise refuse a second click at the same place.
 func owner(at p: CGPoint) -> pid_t? {
     let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
-    for window in list {
+    let cursorLevel = Int(CGWindowLevelForKey(.cursorWindow))
+    for window in list where window[kCGWindowLayer as String] as? Int != cursorLevel {
         guard (window[kCGWindowAlpha as String] as? Double ?? 0) > 0,
               let bounds = window[kCGWindowBounds as String] as? NSDictionary,
               let rect = CGRect(dictionaryRepresentation: bounds), rect.contains(p) else { continue }
@@ -164,7 +175,7 @@ func owner(at p: CGPoint) -> pid_t? {
 /// Refuses a pointer event at `p` that would reach another process's window, or none.
 func ensureOwnWindow(at p: CGPoint) {
     guard owner(at: p) == pid else {
-        fail("refused: \(Int(p.x)),\(Int(p.y)) is not on a window of \(pid), so nothing was sent there")
+        fail("refused: \(whole(p.x)),\(whole(p.y)) is not on a window of \(pid), so nothing was sent there")
     }
 }
 
@@ -303,6 +314,23 @@ case "resize":
     var size = CGSize(width: Double(rest[0]) ?? 800, height: Double(rest[1]) ?? 600)
     if let value = AXValueCreate(.cgSize, &size) { AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, value) }
     print("resized " + describe(window))
+case "cancelpanel":
+    // A file panel runs in a service of its own, which keys posted to the process never reach, so Escape cannot close
+    // it. Its Cancel button is found by its role and title alone, and nothing else of the panel is printed or kept:
+    // its other elements list the user's folders and files.
+    let panels = windows().filter(isFilePanel) + windows().flatMap { children($0).filter(isFilePanel) }
+    guard let panel = panels.first else { fail("no file panel is open") }
+    let cancelTitles = ["Cancel", Bundle(for: NSApplication.self).localizedString(forKey: "Cancel", value: "Cancel", table: "Common")]
+    var cancel: AXUIElement?
+    walk(panel, depth: 0, max: 40) { e, _ in
+        if cancel == nil, str(e, kAXRoleAttribute) == "AXButton", let title = str(e, kAXTitleAttribute), cancelTitles.contains(title) {
+            cancel = e
+        }
+    }
+    guard let cancel, AXUIElementPerformAction(cancel, kAXPressAction as CFString) == .success else {
+        fail("the file panel has no Cancel the accessibility API can press")
+    }
+    print("cancelled the file panel")
 case "shot":
     // A file panel lists the user's own folders and files, and a screenshot would keep them.
     guard !filePanelOpen() else { fail("refused: a file panel is open; close it before taking a screenshot") }

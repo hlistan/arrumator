@@ -53,7 +53,13 @@ retrieval-augmented generation are: each claim of an answer must be supported by
 each document it cites must support what it says (citation faithfulness), and it must answer what was asked
 (completeness) ([Evidently: RAG evaluation](https://www.evidentlyai.com/llm-guide/rag-evaluation); Gao et al., ALCE,
 in [sources](../organizing-principles-sources.md#sources-for-conversations)). The synthetic corpus's `expected.json`
-says what each fixture's labels are; `arrumatorcli eval` measures that at scale, so a run samples it by hand.
+says what each fixture's labels are; `arrumatorcli eval` measures that at scale, so a run samples it by hand. Neither
+says what shape the labels of the other kinds take, so a run also reads the whole vocabulary, `arrumatorcli labels list
+--kind <kind>` for every kind, against the form [how it works](../how-it-works.md#labels) gives each: a value that
+copies the prompt's wording as a template ("an account and its number: …"), holds two labels in one (`;`), puts a
+description before a number where none belongs, or holds what is no label of its kind (a birth date as an object, a
+percentage as an amount, a tax number as a party) is a finding however few fixtures show it, as every reading adds to
+the vocabulary that the sidebar, Look Alike, search and the next prompt read.
 
 ## Severity
 
@@ -76,7 +82,10 @@ ratings are a starting point; the person fixing a finding may rate it again.
 AGENTS.md §4.3 holds for every step: the run never touches the real archive, Incoming, `~/Library/Application
 Support/Arrumator` or a running Arrumator of the user's.
 
-1. Build the branch under test: `scripts/verify.sh --app`, which leaves `Arrumator.app` in `build/DerivedData`.
+1. Build the branch under test: `scripts/verify.sh --app`, which builds the release as a release is built and leaves
+   `Arrumator.app` in `build/DerivedData/Build/Products/Release`, and the command built with it in
+   `build/Release/stage/arrumatorcli-<version>/arrumatorcli`. Use that command for the run: `.build/debug/arrumatorcli`
+   is relinked only when `swift build` finds a change, so it can be older than the app.
 2. Make a scratch home with scratch folders, and settings naming them, before anything runs:
 
    ```sh
@@ -93,24 +102,40 @@ Support/Arrumator` or a running Arrumator of the user's.
 
    ```sh
    ARRUMATOR_HOME="$RUN/home" ARRUMATOR_TRASH="$RUN/Trash" ARRUMATOR_OLLAMA_URL=http://<server>:11434 \
-     build/DerivedData/Build/Products/Debug/Arrumator.app/Contents/MacOS/Arrumator > "$RUN/app.log" 2>&1 &
+     build/DerivedData/Build/Products/Release/Arrumator.app/Contents/MacOS/Arrumator > "$RUN/app.log" 2>&1 &
    echo $! > "$RUN/pid"
    ```
+
+   On a Mac in dark appearance, see the light one by quitting it and launching it again with
+   `-NSRequiresAquaSystemAppearance YES` after its path, which keeps that copy light. Never change the Mac's appearance
+   for a run: it is the user's setting and changes every app they have open. A Mac in light appearance has no such
+   switch for dark, so the report says that appearance was not seen.
 
 5. Drive it with `scripts/qa-drive.sh`, which goes through the macOS accessibility API to that process alone: it reads
    the window's elements (`tree`, `find`), presses buttons and menu items (`press`), clicks and double-clicks rows
    (`click`, `dclick`), types into fields (`set`, `type`), sends keys (`key return`, `key escape`, `key f cmd`), scrolls
-   (`scroll`) and screenshots its window and no other (`shot`). The terminal it runs in needs Accessibility in System
-   Settings › Privacy & Security. It never reads the system's Apple menu, which lists the user's own recent files.
+   (`scroll`), screenshots its window and no other (`shot`) and cancels a file panel (`cancelpanel`). The terminal it
+   runs in needs Accessibility in System Settings › Privacy & Security. It never reads the system's Apple menu, which
+   lists the user's own recent files.
    Its pointer events reach whatever window is under the pointer, so it refuses a click, hover or scroll at a point
    where one of the process's windows is not the frontmost, and it refuses `shot` while a file panel is open. The
    screen must be unlocked: while it is locked, the accessibility API gives every window, any app's, as the application
    itself, `windows` lists none and `shot` makes no image, so wait for the user rather than read anything into it.
-   A file panel (Choose…, Export) opens on the user's own folders: never read its elements, which list the user's files,
-   and never press Open or Save until the panel's folder is the scratch one. Point it there with Go to Folder
-   (`key g cmd,shift`, then type the path), read only that the panel now shows the scratch folder's name, and check
-   afterwards where the file went (the card, `arrumatorcli tasks show`). When the panel cannot be pointed there,
-   cancel it and do the same through `arrumatorcli`.
+   A file panel (Choose…, Export, Switch Archive…) opens on the user's own folders, and the driver can neither read it,
+   as its elements list the user's files, nor type into it: the panel runs in a service of its own, which keys posted
+   to the app's process never reach, so Go to Folder and Escape do nothing there and Return would choose whatever the
+   panel shows. Never confirm a panel blind: close it with `cancelpanel`, which presses its Cancel and reads nothing
+   else of it, then do the same through `arrumatorcli` (`tasks export`, `archive switch`, `settings --incoming`), and
+   check what the app shows of it afterwards (the card, a restart for an archive).
+
+   How the driver meets the app: `press` performs an element's own action, so it moves nothing on a text that has none,
+   such as a sidebar list's name; `click` it instead, and read afterwards that the page changed. An element below the
+   window's edge, such as a card's field on a long page, is refused as not on its window: `scroll` over something near it
+   first. The window's close button is a button without a name (subrole `AXCloseButton`): `clickat` its centre from the
+   `tree`. The Dock cannot be driven; the app's menus can, by an item's identifier, such as `press <pid> showMain
+   AXMenuItem` for Window › Arrumator (⌘0) and `showOnboarding` for Window › Setup…. A command that prints nothing, or
+   less than the page holds, has failed: check its exit status (`tree` piped into `grep` hides it) before reading
+   anything into the page.
 
    The app moves an exact copy of a document, and a file it has no more use for, to the Trash: `ARRUMATOR_TRASH` makes
    that a scratch folder, so set it for the app and for every command of the run, and check afterwards that what went
@@ -119,7 +144,9 @@ Support/Arrumator` or a running Arrumator of the user's.
    scans, photos, mail and Office files, and the negative cases (encrypted, blank, damaged, an exact copy, a
    spreadsheet). Put a part of it in a folder of its own inside Incoming to see folder tags. Never use real documents.
 7. Use `arrumatorcli` in the same scratch home (`ARRUMATOR_HOME`, `ARRUMATOR_TRASH`, `ARRUMATOR_OLLAMA_URL`) to check
-   what the app shows against what Core says, and the record files and `app.log` to check what it wrote.
+   what the app shows against what Core says, and the record files and `app.log` to check what it wrote. Pipe its
+   `--json` straight into what decodes it (`… --json | python3 -m json.tool`): zsh's `echo "$out"` turns the `\n` in its
+   strings into line breaks, which reads as JSON the command never wrote.
 
 At the end, quit the app the way a user does, then check the scratch archive's files once more. Stop nothing else.
 
@@ -131,24 +158,29 @@ why.
 
 | # | Charter: explore… | Use cases | Edge cases and risks |
 |---|---|---|---|
-| C1 | First run and onboarding, step by step, forward and back | Welcome, folders, background and notifications, Ollama and its server, profile and models, Ready | Ollama unreachable or slow, a server off the local network refused, models missing and their Download, the menu bar full, keyboard only (Return, Escape, Tab), closing the window part way |
-| C2 | Filing documents through Incoming and the queue | Drop files and folders, watch In Progress and Queued, a document filed and named | Every format of the corpus, non-Latin names, a folder in Incoming as a tag, nested folders, an exact copy, encrypted, blank, damaged and unsupported files, a large batch, pausing and resuming, quitting part way and starting again |
-| C3 | Processed and a document's card | Open a card, rename, add and remove labels, read again, undo filing, open the file and show it in Finder | Empty and very long names, names with `/` or `:`, a label of every kind, removing every label, undo twice, a file moved, copied, or removed and put back in Finder meanwhile, a folder renamed in the archive, a package put into it |
+| C1 | First run and onboarding, step by step, forward and back | Welcome, folders, background and notifications, Ollama and its server, profile and models, Ready | Ollama unreachable or slow, a server off the local network refused, models missing and their Download, the menu bar full, keyboard only (Return, Escape, Tab), closing the window part way and opening the main window from the Window menu (⌘0) before setup is done: what it says and whether a file dropped then is taken |
+| C2 | Filing documents through Incoming and the queue | Drop files and folders, watch In Progress and Queued, a document filed and named | Every format of the corpus, non-Latin names, a folder in Incoming as a tag, nested folders, an exact copy, encrypted, blank, damaged and unsupported files, a large batch, pausing and resuming, quitting part way and starting again, and the queue's order after the restart |
+| C3 | Processed and a document's card | Open a card, rename, add and remove labels, read again, undo filing, open the file and show it in Finder | Empty and very long names, names with `/` or `:`, a label of every kind, removing every label, undo twice, a file moved, copied, or removed and put back in Finder meanwhile, a folder renamed in the archive, a package put into it, every action of the card pressed twice (what the card and History say the second time) |
 | C4 | Needs You | Confirm, read again, leave for later, undo | Each reason a document waits, a document read again that still fails, counts on the sidebar |
 | C5 | The sidebar's labels | Choose labels to narrow down, Clear, Filter Labels, group by kind, Show More | Labels in many scripts, filters that match nothing, accents and punctuation, choosing every label, a narrowed page with no documents |
 | C6 | The Labels page | Merge, keep apart, remove everywhere, forget a rule, suggestions of alike labels | Merging a label into itself, into one of another kind, a tag, undoing a rule, what a later reading does |
-| C7 | Search tasks | Ask in several languages, watch the queue, open the card, rename, rewrite, Find Again, effort and profile, arrangement, add documents through the sidebar, take out, export to a folder and as ZIP, remove | A request that finds nothing, an empty or very long request, a profile removed meanwhile, an export into the archive or Incoming refused, exporting twice, a task read while another is |
-| C8 | Talking with a task's documents | Ask, watch the answer being written, sources, find more and add, Copy, Ask Again, Stop, Clear | Translation, an e-mail draft, a question about nothing in the set, a question in another language, a set changed between questions, a very long answer cut off, Ollama away, an empty set, a task still being read, the groundedness of every answer |
+| C7 | Search tasks | Ask in several languages, watch the queue, open the card, rename, rewrite, Find Again, effort and profile, arrangement, add documents through the sidebar, take out, export to a folder and as ZIP, remove | A request that finds nothing, and whether the archive holds what it asked for (`labels browse`); a request that says how to arrange ("by sender"), whose plan must not limit by it; an empty or very long request, a profile removed meanwhile, a profile whose model is not installed, an export into the archive or Incoming refused, exporting twice, a task read while another is |
+| C8 | Talking with a task's documents | Ask, watch the answer being written, sources, find more and add, Copy, Ask Again, Stop, Clear | Translation, an e-mail draft, a question about nothing in the set, a question in another language, a set changed between questions, a very long answer cut off, Ollama away, an empty set, a task still being read, the groundedness of every answer, and its completeness: a question about "these" documents counts every one of the set |
 | C9 | Settings and model profiles | General, Models, profiles: choose, add, rename, change models, reset, remove; Advanced: rebuild the index, diagnostics | A profile in use or named by a task removed, a blank name, a name taken, a model not installed, a server address that is not local |
 | C10 | History, Statistics and traces | Read every event, open the document or task it is about, the funnel, a trace of a document and of a task | Events of every kind, long summaries, a trace of a failed reading |
 | C11 | The app around its window | Menu bar, Dock, windows, notifications, quitting while working | The menu bar full, reopening a closed window, two windows, quitting during a reading and during an answer |
-| C12 | Resilience | Ollama going away and back, a record file edited by hand, switching archives, a restart | Stopping in the middle of every queue, a broken record file, an archive moved, the clock |
+| C12 | Resilience | Ollama going away and back, a record file edited by hand, switching archives, a restart | Stopping in the middle of every queue, a record file broken by hand while documents are filed (the window, History, `doctor`, and what it holds once mended), an archive moved, the clock, a slow server (a probe that times out while it reads) |
 | C13 | The app against `arrumatorcli` | Each action of C2–C9 done in one and read in the other | The `--json` of every command decoded, a change made by the CLI while the app runs |
-| C14 | Accessibility and keyboard | Every page by keyboard and through the accessibility tree | Controls without labels, images without descriptions, colour as the only sign, focus lost after an action, both appearances, the smallest window |
+| C14 | Accessibility and keyboard | Every page by keyboard and through the accessibility tree | Controls without labels, images without descriptions, colour as the only sign, focus lost after an action, both appearances (Environment, step 4), the smallest window, a help that repeats itself |
 
 ## A session
 
 1. Start a session sheet in the run's report: the charter, the start time, and the build, macOS, server and profile.
+   The first session re-checks what the last report says was fixed, likely fixed or not re-checked, as a finding
+   "likely fixed" because it could not be reproduced on demand can be back in the next run's `app.log`. Plan the rest by
+   the model's pace: a large batch takes about half a minute a document with a 14B model on a server on the network, so
+   while it files, explore what does not need a still archive (cards, labels, profiles, tasks, conversations, the CLI),
+   and leave what does (switching archives, a rebuild, Statistics' counts) until Incoming is empty.
 2. Do what a user would, one action at a time. After each, look: screenshot the window (`qa-drive.sh shot`), read what
    it says (`tree`), and check what changed underneath (`arrumatorcli`, the archive, History, `app.log`).
 3. Write down each finding as it is found, never from memory afterwards, with its evidence.
@@ -169,6 +201,9 @@ A run writes `docs/qa/reports/<date>/report.md`, with its screenshots beside it 
   - where the fix likely lies (module, file), when it is known.
 - **Session sheets**, one per session.
 - **What works**: what was checked and held, so the next run knows what was covered.
+- **The last run's findings**: each one it fixed, re-checked, and whether it held.
+- **The protocol**: what the run found the protocol, or its driver, got wrong or left out, and what was changed in it,
+  so the next run starts from what this one learned.
 
 Never put a real document, a personal name or anything of the user's own into a report, nor anything read from outside
 the app under test.
