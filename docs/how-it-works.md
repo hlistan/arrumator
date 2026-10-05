@@ -22,9 +22,10 @@ so a file stopped part way, because you quit Arrumator, the Mac shut down or the
 finished stage at the next start, before any file that arrived after it. Quitting first stops the stage in hand, waiting
 for it at most `ingest.quitTimeout` seconds; a file being moved into the archive is always moved and recorded together.
 A file whose stage failed is tried again after `ingest.retryDelays`, holding up none of the files behind it meanwhile,
-and then takes its place by when it arrived. Documents read again after a rebuild of the index wait until no new file
-does; one you have the model read meanwhile, with **Read Again** or a copy of it in Incoming, is read by the model in
-its turn instead, which reads its text too.
+and then takes its place by when it arrived. Documents read again after a rebuild of the index, and those read again
+all at once ([reading documents again](#reading-documents-again)), wait until no new file does; one you have the model
+read meanwhile, with **Read Again** or a copy of it in Incoming, is read by the model in its turn instead, which reads
+its text too.
 
 A document is described by its labels and nothing else: who sent it, what type it is, its date, whom and what it
 concerns, and the rest are all labels of one kind or another. The archive has no folders of the app's making. Every
@@ -346,7 +347,8 @@ change.
   labels it, keeping the tag. `arrumatorcli ingest <file> --tag <tag>` gives a file a tag of your choosing too, besides
   its folder's.
 - **Reading a document again keeps its tags**, the folder's and those you gave it, while what the model gives replaces
-  what it gave before (and the labels of other kinds you gave it by hand with them).
+  what it gave before (and the labels of other kinds you gave it by hand with them) once it is read ([reading documents
+  again](#reading-documents-again)).
 - **An exact copy** of a document in the archive, put into the folder, gives that document the folder's tag and has it
   read again ([exact copies](#exact-copies)), so the document itself is found under the tag, by the sidebar, a search
   task and its exports alike. The copy goes to the Trash.
@@ -393,14 +395,14 @@ not one or an image the server refuses, is noted with the document, which is rea
 
 A file in Incoming with the same bytes as a document in the archive (filed, waiting for you, parked after failing or
 left for later), by its SHA-256 and by that document's file as it is on disk now, is no second document: it asks for
-that document to be read again. This is how you have documents read with another profile
-([profile and effort](#profile-and-effort)): choose it, and put the documents into Incoming again, as they are.
+that document to be read again. This is how you have some documents read with another profile
+([profile and effort](#profile-and-effort)): choose it, and put them into Incoming again, as they are.
 
-- **The document is read again from the start**, with the profile in use: its text is read from its file again, images
-  described by the profile's vision model, then the model reads it, it is renamed where it is under the name it gives,
-  and the search index takes what it reads now, its words, labels and meaning. It is queued behind the files already
-  waiting, and shows in Incoming while it waits. Reading with the model takes the place of having only its text read
-  again after a rebuild of the index.
+- **The document is read again from the start**, with the profile in use, as [reading documents
+  again](#reading-documents-again) says: from its file, found as it was until it is read, and then renamed where it is
+  under the name the model gives, everything the earlier reading gave it, its labels, text and meaning, replaced at
+  once. It is queued behind the files already waiting, and shows in Incoming while it waits. Reading with the model takes
+  the place of having only its text read again after a rebuild of the index.
 - **It keeps its tags**, the folders' and those you gave it, and a copy put into a folder in Incoming, or given `--tag`,
   gives it those tags at once, before it is read; what the model gives replaces what it gave before.
 - **The copy goes to the Trash**, never deleted, as the archive holds the same bytes; take it back from there. A copy
@@ -417,6 +419,44 @@ A file whose bytes the archive no longer holds, because the document's file was 
 is a new document, and so is a file you put into the archive yourself, even a copy: it is yours, read where it is.
 A copy that earlier versions filed beside its original, marked as a copy, stays as it is; a new copy reads the
 original again, not it.
+
+## Reading documents again
+
+A document of the archive is read again from the start, as a file that arrives is: for an exact copy of it put into
+Incoming ([exact copies](#exact-copies)), for **Read Again** on its card (`arrumatorcli review retry <document>`), for
+one the model has not labelled yet (`arrumatorcli labels unlabelled`), and for every document at once, with **Read All
+Documents Again** (`arrumatorcli review retry --all`). Choose another profile, or install a better Arrumator, and this is
+how the archive is read with it. A document with no file to read where the archive records it, as one missing, or a copy
+an earlier version filed, cannot be read again, which is said at once.
+
+- **From its file**, where it is when its turn comes, also when you moved or renamed it in Finder while it waited. Its
+  file is hashed and its text read from it again, images described by the profile's vision model; then the model reads
+  it and names it, as it would a file that arrives.
+- **Found as it was until it is read.** Nothing of the document changes while it waits or is read but the tags it is
+  given, and what is recorded of its file, should the file have changed: its labels, its name, its text and its meaning
+  stay as they were, and search, the sidebar and search tasks find it by them.
+- **Then replaced at once.** Once it is read, its file is renamed where it is, under the name the model gives, and with
+  the record of that, in one step, what it reads takes the place of everything it had: its labels, those the model
+  gave and those you corrected alike, but its tags; its text in the index; its meaning, every embedding it had, of
+  whatever model, replaced by the profile's, or, when the reading makes none, as when the embedding model fails, those
+  it had kept. Nothing of the earlier reading is left beside the new one, and a stop or a failure before that step
+  leaves the document as it was, to be recorded whole at the next attempt. Its trace's `index` step says so, naming the
+  embedding model, or that the earlier embeddings were kept.
+- **What you do after asking wins.** A label you change once it is asked for, while it waits or is read, stays as you
+  left it, and so does a name you give it ([your own changes](#your-own-changes)); leave it for later or undo it
+  meanwhile, and the reading is dropped, changing nothing of it.
+- **A reading that gives no labels**, as when the model gives no valid answer, made none to put in their place: the
+  document keeps the labels it had and its name, and waits for you in Needs You, saying why. One that keeps failing
+  (`ingest.maxAttempts`) leaves its labels, text and meaning as they were, and it waits for you in Needs You as failed,
+  saying why.
+- **Read All Documents Again**, under Settings › Filing, asks first, naming the profile, then queues every document in
+  the archive that is filed, waiting for you or set aside after failing; those you left for later stay as they are.
+  They give way to every file that arrives, so new files are filed first, and Incoming counts them in a line of their
+  own rather than listing each; the app, or `arrumatorcli run`, reads them, and no other command does. One already
+  waiting to be read is read once, and asked for again, as with **Read Again** on its card or a copy of it in Incoming,
+  it is read in its turn. History records the request once, naming the profile
+  and the documents, and asked again while every one of them waits, nothing; each reading is recorded under its
+  document, before its filing.
 
 ## Your own changes
 
@@ -449,11 +489,12 @@ a document whose file is not in it is missing, and one recorded where another do
 folder back is said to be back. Either way, what its record files hold is merged with what was kept meanwhile, never
 taken over it.
 
-Reading a document again (`review retry`, **Read Again**) labels and names it again where it is, from the text read of
-it before (from its file, when the file changed since it was read), keeping its tags; putting an exact copy of it into
-Incoming does the same, reading its text from its file again too ([exact copies](#exact-copies)). You win over a reading
-under way: a label you change while the model reads, of any kind, as a sender corrected or a tag given or taken away,
-stays as you left it, and the reading fills in only the kinds you did not touch. A reading that gives no name leaves it
+Reading a document again (`review retry`, **Read Again**, **Read All Documents Again**, an exact copy of it put into
+Incoming) labels and names it again where it is, from its file, keeping its tags ([reading documents
+again](#reading-documents-again)). You win over a reading under way: a label you change until it is filed, from when
+the model begins to read a file, or from when you asked for a document to be read again, of any kind, as a sender
+corrected or a tag given or taken away, stays as you left it, and the reading fills in only the kinds you did not
+touch. A reading that gives no name leaves it
 the name it has, and one that names it as it is named, but for case or the collision suffix (`naming.collisionFormat`) a
 taken name gave it, moves nothing. Only a document in the archive can be undone: one already undone, or left in
 Incoming, is refused, and its file keeps its name. A document you undid is back in Incoming, held, and a rescan leaves
@@ -675,8 +716,9 @@ A **model profile** is a name and three models: one that reads documents and sea
 Arrumator comes with Fast, Standard and Smart ([requirements](../README.md#requirements)); Settings › Models chooses the
 one documents are read with, gives any profile other models and adds your own ([using
 Arrumator](using-arrumator.md#models-and-profiles)). Documents already read keep their labels when the reading model
-changes, and those embedded by another model are found by meaning again only once they are read again: put them into
-Incoming again, as they are, to have them read with the profile now in use ([exact copies](#exact-copies)). A task is
+changes, and those embedded by another model are found by meaning again only once they are read again: **Read All
+Documents Again**, under Settings › Filing, reads them with the profile now in use, as putting one into Incoming again,
+as it is, does ([reading documents again](#reading-documents-again)). A task is
 read by the reading model of the profile you gave it, or else of the one Settings uses when the request is read, so a
 task without a profile of its own follows a change of profile. A profile search tasks of the archive that is open read
 with is not removed until they are given another. Profiles are yours and tasks each archive's, so a task of another

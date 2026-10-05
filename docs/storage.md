@@ -88,7 +88,9 @@ first, so the database file alone holds everything when it is moved.
   it reads the entries.
 - **Embeddings** of documents are computed again with the embedding model.
 - **The job queue** is rebuilt by looking at the Incoming folder, so each file waiting there is given the tag of the
-  folder it is in again. A tag a document already has is in its entry.
+  folder it is in again. A tag a document already has is in its entry. Documents of the archive waiting to be read
+  again are not: each keeps what it had, its text read again for search, and **Read All Documents Again** asked for
+  once more queues them.
 - **Positions in the file-system event stream**, each saved once what the events before it reported is applied, and
   none past a change that could not be applied, so a change the app quit or crashed before applying, or could not
   apply, is reported again at the next start, up to `ingest.maxAttempts` times, which the index counts; and similar

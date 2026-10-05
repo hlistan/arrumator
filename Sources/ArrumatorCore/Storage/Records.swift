@@ -224,6 +224,10 @@ public struct JobRecord: ArrumatorRecord, Identifiable, Hashable {
     /// for a job no worker has.
     public var claim: String?
     public var claimedBy: String?
+    /// Whether the job waits until no other is due (`JobStore.nextDue`): reading documents again after a rebuild
+    /// (`reindex`), and every document of the archive read again at once (`PipelineServices.queueReadingAllAgain`), so
+    /// that neither holds up a file that arrives meanwhile.
+    public var givesWay: Bool
     public mutating func didInsert(_ inserted: InsertionSuccess) { id = inserted.rowID }
 }
 

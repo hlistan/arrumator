@@ -87,7 +87,7 @@ public actor IngestCoordinator {
     }
 
     /// Throws what the archive's folder missing throws, so the job waits for it, when the archive is away (`archive(isAway:)`).
-    private func checkArchiveThere() throws {
+    func checkArchiveThere() throws {
         if archiveAway { throw FileOperationError.folderMissing(services.archive.path) }
     }
 
@@ -162,10 +162,12 @@ public actor IngestCoordinator {
 
     /// Processes due jobs until none are left that this worker may take, or the task that drains them is cancelled, as
     /// Ctrl-C cancels a command (CLI and tests): a job another process has in hand, as the app beside `arrumatorcli`,
-    /// is left to it, and the job in hand when the task is cancelled carries on at the next start.
-    public func drain() async {
-        while !Task.isCancelled, case let .taken(job) = await nextDue() {
+    /// is left to it, and the job in hand when the task is cancelled carries on at the next start. Which jobs it takes,
+    /// `draining` says: by default only those that come in their turn.
+    public func drain(_ draining: Draining = .inTurn) async {
+        while !Task.isCancelled, case let .taken(job) = await nextDue(givingWay: draining == .everything) {
             await process(job)
+            if draining == .everything, status.waitingForOllama { break }
         }
         await refreshQueueCount()
     }
@@ -194,9 +196,12 @@ public actor IngestCoordinator {
         case unreadable
     }
 
-    /// The next job due now, taken for this worker (`JobStore.nextDue`).
-    private func nextDue() async -> Look {
-        do { return try await services.jobs.nextDue(claiming: services.claims, excluding: stillRunning()).map(Look.taken) ?? .none } catch {
+    /// The next job due now, taken for this worker (`JobStore.nextDue`), one that gives way only with `givingWay`.
+    private func nextDue(givingWay: Bool = true) async -> Look {
+        do {
+            return try await services.jobs.nextDue(claiming: services.claims, excluding: stillRunning(), givingWay: givingWay)
+                .map(Look.taken) ?? .none
+        } catch {
             Log.error(.ingest, "Could not read the job queue", ["error": error.localizedDescription])
             return .unreadable
         }
@@ -234,7 +239,10 @@ public actor IngestCoordinator {
     }
 
     private func refreshQueueCount() async {
-        do { (status.queued, status.reindexing) = try await services.jobs.counts() } catch {
+        do {
+            let counts = try await services.jobs.counts()
+            (status.queued, status.reindexing, status.readingAgain) = (counts.queued, counts.reindexing, counts.readingAgain)
+        } catch {
             Log.error(.ingest, "Could not count the job queue", ["error": error.localizedDescription])
         }
     }
@@ -333,7 +341,7 @@ public actor IngestCoordinator {
 
     /// Saves the job at `state` with `payload`. Tags a request gave it meanwhile (`JobStore.enqueue`) come back with the
     /// save, and are given to its document, or to the original of a copy, once it has one.
-    private func save(_ job: inout JobRecord, _ payload: inout JobPayload, state: JobState, trace: TraceContext) async throws {
+    func save(_ job: inout JobRecord, _ payload: inout JobPayload, state: JobState, trace: TraceContext) async throws {
         job.state = state
         try job.setPayload(payload)
         let saved = try await services.jobs.update(job)
@@ -358,13 +366,7 @@ public actor IngestCoordinator {
             try await reindex(&job, payload: &payload, settings: settings, trace: trace)
             return
         }
-        let source = URL(fileURLWithPath: job.sourcePath)
-        // A document read again comes with what earlier stages found of it, and starts at the first stage it lacks: its
-        // text is extracted again only when none was kept.
-        if job.state == .pending, let docID = job.docId, payload.sha256 != nil {
-            if let given = payload.tags { payload.tags = try await services.giveTags(given, docID: docID, trace: trace) }
-            try await save(&job, &payload, state: payload.content == nil ? .extracting : .analysing, trace: trace)
-        }
+        guard let source = try await source(&job, payload: &payload, trace: trace) else { return }
         // A job that carries on from a later stage may have been given tags while it waited (`JobStore.enqueue`).
         if [.extracting, .analysing, .filing].contains(job.state), let docID = job.docId, let given = payload.tags,
            given.contains(where: \.isNew) {
@@ -412,7 +414,8 @@ public actor IngestCoordinator {
             let context = try services.config.extractionContext(settings: settings, whenOllamaIsAway: .wait)
             let content = try await services.extractor.extract(source, sha256: sha, context: context, trace: trace)
             payload.content = content
-            try await storeExtraction(docID: docID, content: content)
+            // A document read again keeps what it had until it is filed (`fileDocument`).
+            if job.kind != .reanalyse { try await storeExtraction(docID: docID, content: content) }
             try await services.history.record(.extracted, doc: docID, job: job.id, trace: trace.traceID,
                                               summary: Self.extractedSummary(content),
                                               payload: ["warnings": content.warnings.map(\.code.rawValue).joined(separator: ",")])
@@ -422,11 +425,10 @@ public actor IngestCoordinator {
 
         if job.state == .analysing {
             try checkArchiveThere()
-            payload.outcome = try await services.analyse(docID: docID, jobID: job.id, content: content, given: payload.tags ?? [],
-                                                         settings: settings, trace: trace)
+            try await read(job, payload: &payload, docID: docID, content: content, settings: settings, trace: trace)
             try await save(&job, &payload, state: .filing, trace: trace)
         }
-        guard let outcome = payload.outcome else { throw IngestError.analysisMissing(docID) }
+        guard let outcome = payload.outcome, job.kind != .reanalyse || payload.rereading != nil else { throw IngestError.analysisMissing(docID) }
 
         if job.state == .filing {
             try checkArchiveThere()
@@ -435,52 +437,10 @@ public actor IngestCoordinator {
         }
     }
 
-    /// Reads a filed document's text and computes its embedding again, asking the model nothing and moving nothing:
-    /// what a document needs for search after the index was rebuilt from the archive. Its labels come from its record.
-    private func reindex(_ job: inout JobRecord, payload: inout JobPayload, settings: AppSettings, trace: TraceContext) async throws {
-        guard let docID = job.docId, let document = try await services.documents.document(id: docID),
-              FileManager.default.fileExists(atPath: document.path) else {
-            try await save(&job, &payload, state: .cancelled, trace: trace)
-            return
-        }
-        try await save(&job, &payload, state: .extracting, trace: trace)
-        let context = try services.config.extractionContext(settings: settings, whenOllamaIsAway: .wait)
-        let content = try await services.extractor.extract(document.url, sha256: document.sha256, context: context, trace: trace)
-        try await storeExtraction(docID: docID, content: content)
-        let senders = document.labels(.sender)
-        if let (vector, model) = try await services.analyzer.embedding(for: content, senders: senders, settings: settings,
-                                                                        config: services.config, trace: trace) {
-            try await index(docID: docID, content: content, senders: senders, vector: vector, model: model, trace: trace)
-        }
-        try await save(&job, &payload, state: .done, trace: trace)
-    }
-
-    private func index(docID: Int64, content: ExtractedContent, senders: [String], vector: [Float], model: String,
-                       trace: TraceContext) async throws {
-        let text = content.embeddingSummary(senders: senders, maxChars: services.config.analysis.embeddingSummaryChars,
-                                            identifiersLimit: services.config.analysis.embeddingIdentifiersLimit)
-        try await trace.measure(.index, input: ["model": model]) {
-            try await services.index.upsertEmbedding(docID: docID, model: model, vector: vector, sourceText: text)
-            await services.vectors.upsert(docID: docID, vector: vector, model: model)
-        }
-    }
-
-    private func storeExtraction(docID: Int64, content: ExtractedContent) async throws {
-        let now = services.time.now()
-        let doc = try await services.documents.update(docID) { doc in
-            doc.pageCount = content.pageCount
-            doc.extractedAt = now
-            doc.contentJson = try DocumentStore.storedContentJSON(content)
-        }
-        try await services.index.upsertText(docID: docID, filename: doc.filename, body: content.text, summary: content.visual?.description,
-                                            metadata: content.metadata,
-                                            extractorVersion: "\(content.extractorName)/\(content.extractorVersion)",
-                                            labels: doc.labels ?? [])
-    }
-
     /// Files the document under the name the model gave it: a new arrival at the top of the archive, a document read
     /// again where it is, one the user put in the archive left as it is. A document the model could not read waits
-    /// for the user there.
+    /// for the user there. What a document read again was read as takes the place of everything it had in the
+    /// transaction that records its filing (`PipelineServices.replaceReading`), so it is found as it was until then.
     ///
     /// The job's destination is recorded in the transaction that records the filing, so a job that stopped after it,
     /// on an error or a crash, finds it filed and finishes what is left instead of filing it again. Where the file is
@@ -489,13 +449,22 @@ public actor IngestCoordinator {
     private func fileDocument(_ job: inout JobRecord, payload: inout JobPayload, docID: Int64, content: ExtractedContent,
                               outcome: AnalysisOutcome, settings: AppSettings, trace: TraceContext) async throws {
         guard let document = try await services.documents.document(id: docID) else { throw IngestError.documentNotFound(docID) }
-        let analysis = outcome.analysis
+        var analysis = outcome.analysis
         let status: DocumentStatus = analysis.problems.isEmpty ? .filed : .needsReview
         let filedRecord: DocumentRecord
         if let target = payload.targetPath, document.path == target, FileManager.default.fileExists(atPath: target) {
             Log.info(.ingest, "Filing already completed before the job stopped", ["doc": String(docID)])
             filedRecord = document
         } else {
+            var keepsItsName = false
+            if let rereading = payload.rereading {
+                guard let filing = filing(document, rereading: rereading, analysis: analysis) else {
+                    Log.info(.ingest, "No longer to be read again; left as it is", ["job": String(job.id ?? 0)])
+                    try await save(&job, &payload, state: .cancelled, trace: trace)
+                    return
+                }
+                (analysis, keepsItsName) = filing
+            }
             let movedTo = try await movedBefore(document, planned: payload.plannedPath)
             guard movedTo != nil || FileManager.default.fileExists(atPath: document.path) else { throw IngestError.sourceMissing(document.path) }
             if movedTo != nil { Log.info(.ingest, "Recording a move made before the job stopped", ["doc": String(docID)]) }
@@ -505,7 +474,8 @@ public actor IngestCoordinator {
             // A failure after the plan was kept keeps it with the job's payload too, which the failure saves.
             defer { if let planned = plannedPath.withLock({ $0 }) { payload.plannedPath = planned } }
             filedRecord = try await services.filer.file(
-                document, archive: services.archive, analysis: analysis, status: status, directory: directory, inPlace: job.kind == .adopt,
+                document, archive: services.archive, analysis: analysis, status: status, directory: directory,
+                inPlace: job.kind == .adopt || keepsItsName,
                 fingerprint: payload.fingerprint, actor: .system, settings: settings, trace: trace, event: nil,
                 keeping: FilingKeeper(planning: { path in
                     var planned = unfiledPayload
@@ -515,20 +485,29 @@ public actor IngestCoordinator {
                     try await jobs.update(plannedJob)
                     plannedPath.withLock { $0 = path }
                 },
-                recording: { db, filed in
+                recording: { [services] db, filed in
+                    if let rereading = unfiledPayload.rereading {
+                        try services.replaceReading(db, docID: docID, filename: filed.filename, content: content, outcome: outcome,
+                                                    rereading: rereading, jobID: unfiledJob.id, traceID: unfiledPayload.traceID, at: now)
+                    }
                     var filedPayload = unfiledPayload
                     filedPayload.targetPath = filed.path
                     var filedJob = unfiledJob
                     try filedJob.setPayload(filedPayload)
                     // The file has moved: its record commits even when the job is no longer this worker's, which then
-                    // saves nothing more of the job (`IngestError.claimLost` at its next save).
-                    do { try JobStore.save(filedJob, at: now, in: db) } catch IngestError.claimLost {}
+                    // saves nothing more of the job (`IngestError.claimLost` at its next save). A document read again
+                    // that has not moved is left as it was: what the user did meanwhile, as leaving it for later, stands.
+                    do { try JobStore.save(filedJob, at: now, in: db) } catch let IngestError.claimLost(id) {
+                        if unfiledPayload.rereading != nil, filed.path == document.path { throw IngestError.claimLost(id) }
+                    }
                 }), movedTo: movedTo)
         }
         payload.targetPath = filedRecord.path
         let traceID = trace.traceID
         try await services.documents.update(docID) { $0.lastTraceId = traceID }
-        if let embedding = outcome.embedding, let model = outcome.embeddingModel {
+        if payload.rereading != nil {
+            await replaced(docID: docID, outcome: outcome, trace: trace)
+        } else if let embedding = outcome.embedding, let model = outcome.embeddingModel {
             try await index(docID: docID, content: content, senders: outcome.labels?.values(.sender) ?? [], vector: embedding,
                             model: model, trace: trace)
         }
@@ -580,7 +559,7 @@ extension IngestCoordinator {
             }
         }
         let current = try await services.documents.document(id: originalID) ?? original
-        try await services.queueReadingAgain(current, content: nil, settings: settings)
+        try await services.queueReadingAgain(current, settings: settings)
         // A file that was a document of its own, as one left in Incoming or one that changed into this copy, ends as one.
         try await end(job.docId, as: .duplicate, of: originalID)
         let tags = payload.tags ?? []

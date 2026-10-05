@@ -77,7 +77,8 @@ import Testing
         services.filer = DocumentFiler(database: database, placer: services.filer.placer, index: IndexStore(database: database, time: w.h.env.time),
                                        registry: services.filer.registry, time: w.h.env.time)
         services.traces = TraceRecorder(database: database, appVersion: "test", time: w.h.env.time)
-        await IngestCoordinator(services: services).drain()
+        // As the app's worker does, which takes reading again for search too.
+        await IngestCoordinator(services: services).drain(.everything)
 
         let index = IndexStore(database: database, time: TestTime(.advances))
         var bodies: [String?] = []

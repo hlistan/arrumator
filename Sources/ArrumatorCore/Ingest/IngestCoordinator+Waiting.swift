@@ -1,5 +1,17 @@
 import Foundation
 
+/// Which jobs a command works through (`IngestCoordinator.drain`); the app and `arrumatorcli run` work through all of them.
+public enum Draining: Sendable, Equatable {
+    /// Those that come in their turn, as the files a command files or reads again, and never one that gives way
+    /// (`JobRecord.givesWay`: reading documents again for search after a rebuild, or the whole archive at once), which
+    /// may take hours, and which the app or `run` works through.
+    case inTurn
+    /// Those that give way too, as reading the whole archive again from a command asks (`review retry --all`), until the
+    /// first that waits for Ollama, rather than take every job in turn while it is away, each waiting its
+    /// `ollama.retryDelays`.
+    case everything
+}
+
 /// How the worker waits when it has taken no job.
 extension IngestCoordinator {
     /// How long the worker waits when it has taken no job: while paused, until the doorbell rings, as resuming, and every

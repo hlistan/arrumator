@@ -5,7 +5,8 @@ import SwiftUI
 /// flow on one page. In Progress is the file the worker has in hand now, as its status says
 /// (`IngestStatus.progress(of:)`), with what is being done to it, by which model, and for how long; every other file
 /// waits under Queued, in the order the queue takes them, a file stopped part way, as when the app quit, saying that it
-/// carries on where it stopped. Beneath its name, a file shows the tags it
+/// carries on where it stopped. Documents read again with the rest of the archive, which give way to those, are counted
+/// in a notice above them, not listed (`JobStore.listed(inHand:)`). Beneath its name, a file shows the tags it
 /// will be given, such as the name of the folder in Incoming it was put in (`JobRecord.tags`), as a document shows its
 /// labels.
 struct IncomingPage: View {
@@ -22,6 +23,9 @@ struct IncomingPage: View {
         Page(.incoming) {
             if let attention = model.attention {
                 Notice(text: attention, action: holdupAction)
+            }
+            if model.session.ingest.readingAgain > 0 {
+                Notice(text: Wording.readingAllAgain(model.session.ingest.readingAgain))
             }
             if model.session.ingest.reindexing > 0 {
                 Notice(text: Wording.reindexing(model.session.ingest.reindexing))
@@ -69,7 +73,8 @@ struct IncomingPage: View {
     /// Reads the queue and what was just processed. A read cut short by a newer one keeps what is shown until the newer
     /// one has read it.
     private func load() async {
-        if let active = await model.load(Wording.loadQueueAction, { try await $0.services.jobs.active(kinds: [.ingest, .adopt, .reanalyse]) }) {
+        let inHand = model.session.ingest.current?.job
+        if let active = await model.load(Wording.loadQueueAction, { try await $0.services.jobs.listed(inHand: inHand) }) {
             jobs = active
         }
         if let processed = await model.load(Wording.loadProcessedAction, {

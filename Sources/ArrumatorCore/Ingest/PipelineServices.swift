@@ -1,4 +1,5 @@
 import Foundation
+import GRDB
 
 /// Everything the pipeline needs, assembled by the composition root (app or CLI).
 public struct PipelineServices: Sendable {
@@ -150,32 +151,76 @@ public struct PipelineServices: Sendable {
         return Reading(outcome: outcome, tags: kept, changes: consolidation.changes)
     }
 
-    /// Queues `document` to be read again with the model and filed under the name it gives: where it is in the archive,
-    /// or, for one outside it (back in Incoming), at the top of the archive. It keeps its tags, which its row in the
-    /// queue shows, and one in a folder in Incoming is given that folder's too. With `content`, its text as read
-    /// before, reading starts with the model; without it, its text is read from its file again too, as a file that
-    /// arrives is read. One outside the archive, as one left in Incoming, or whose file is no longer as it was recorded
-    /// (`FileFingerprint.matches`) is read as an arrival: hashed again, so an exact copy is handed over to its original
-    /// (`IngestCoordinator`), and its text read from its file. The job, or the one already queued for its file, which
-    /// reads it as well.
+    /// Queues `document` to be read again from the start, as a file that arrives is read: its file hashed and its text
+    /// read again, then the model reads it, and it is filed under the name it gives: where it is in the archive, or, for
+    /// one outside it (back in Incoming), at the top of the archive. One in the archive (`reanalyse`) is found as it was
+    /// until it is filed, when what it reads takes the place of everything it had at once (`IndexStore.replaceReading`).
+    /// It keeps its tags, which its row in the queue shows, and one in a folder in Incoming is given that folder's too.
+    /// One outside the archive, as one left in Incoming, is read as an arrival, so an exact copy is handed over to its
+    /// original (`IngestCoordinator`). One with no file to read where it is recorded, as one missing, or a copy an earlier
+    /// version filed, is refused before anything changes (`IngestError.cannotReadAgain`). The job, or the one already
+    /// queued for its file, which reads it as well.
     @discardableResult
-    public func queueReadingAgain(_ document: DocumentRecord, content: ExtractedContent?, settings: AppSettings) async throws -> Int64? {
+    public func queueReadingAgain(_ document: DocumentRecord, settings: AppSettings) async throws -> Int64? {
         guard let docID = document.id else { throw IngestError.documentNotPersisted }
         var doc = document
         let inArchive = isInArchive(doc)
+        let readable: Set<DocumentStatus> = inArchive ? [.filed, .needsReview, .failed, .held, .processing]
+            : [.undone, .held, .failed, .arrived, .processing]
+        guard readable.contains(doc.status), FileManager.default.fileExists(atPath: doc.path) else {
+            throw IngestError.cannotReadAgain(docID)
+        }
         if !inArchive || [.undone, .held].contains(doc.status) {
             doc = try await documents.update(docID) { $0.status = .processing }
         }
-        // What earlier stages found of it goes with the job, so it starts at the first stage it lacks (`IngestCoordinator`).
-        var payload = JobPayload()
-        if inArchive, doc.isAsRecorded {
-            payload.sha256 = doc.sha256
-            payload.content = content
+        let tags = Self.keptTags(doc.labels) + (inArchive ? [] : self.tags(for: doc.url, given: [], settings: settings))
+        return try await jobs.enqueue(path: doc.path, kind: inArchive ? .reanalyse : .ingest, docID: docID,
+                                      payload: Self.readingAgain(tags: tags, asked: inArchive ? doc : nil)).id
+    }
+
+    /// Queues every document of the archive that waits for nothing the user decided to be read again from the start, as
+    /// `queueReadingAgain` reads one in the archive: filed, waiting for the user or set aside after failing, but not
+    /// one left for later, nor one undone, missing or a copy. Each gives way to every file that arrives
+    /// (`JobRecord.givesWay`), and to the user's own request to read one again. One already queued to be read is read
+    /// once (`JobStore.enqueue`). Decided, queued and recorded once in History, under no document, in one transaction.
+    /// The documents queued now, in the order they were added; none, and nothing recorded, when every document is
+    /// queued already, or the archive has none.
+    public func queueReadingAllAgain(settings: AppSettings) async throws -> [Int64] {
+        let profile = try settings.modelProfile()
+        let (archive, now) = (archive, time.now())
+        return try await database.writer.write { db in
+            let statuses = [DocumentStatus.filed, .needsReview, .failed].map(\.rawValue)
+            // What queueing needs of each, not its stored text and what it was read from.
+            let documents = try Row.fetchAll(db, DocumentRecord.filter(statuses.contains(Column("status")))
+                .select(Column("id"), Column("path"), Column("labels_json")).order(Column("id")))
+                .filter { archive.holds($0["path"]) }
+            let ids = try documents.compactMap { row -> Int64? in
+                let (id, path): (Int64, String) = (row["id"], row["path"])
+                let labels = JSON.decode([DocumentLabel].self, from: row["labels_json"] as String?)
+                var payload = Self.readingAgain(tags: Self.keptTags(labels), asked: nil)
+                payload.rereading = Rereading(before: labels ?? [], path: path, changes: [], tags: nil)
+                return try JobStore.enqueue(db, path: path, kind: .reanalyse, docID: id, payload: payload, givesWay: true, at: now).isNew ? id : nil
+            }
+            guard !ids.isEmpty else { return [] }
+            try HistoryStore.insert(db, .retry, at: now, actor: .user,
+                                    summary: "Read every document again with the profile “\(profile.name)”: " + Format.count(ids.count, "document"),
+                                    payload: ReadingAllAgainPayload(profile: settings.profile, documents: ids))
+            return ids
         }
-        let kept = (doc.labels ?? []).filter(\.kind.isUsersOwn).map { GivenTag(label: $0, source: .document) }
-        let tags = kept + (inArchive ? [] : self.tags(for: doc.url, given: [], settings: settings))
+    }
+
+    /// The tags a document with `labels` keeps when it is read again, as its row in the queue shows them.
+    private static func keptTags(_ labels: [DocumentLabel]?) -> [GivenTag] {
+        (labels ?? []).filter(\.kind.isUsersOwn).map { GivenTag(label: $0, source: .document) }
+    }
+
+    /// What a job reading a document again is queued with, as it starts at hashing: the tags it keeps or is given, and,
+    /// for one of the archive, `asked`, its labels and place as they are when it is asked for (`Rereading`).
+    private static func readingAgain(tags: [GivenTag], asked: DocumentRecord?) -> JobPayload {
+        var payload = JobPayload()
         payload.tags = tags.isEmpty ? nil : tags
-        return try await jobs.enqueue(path: doc.path, kind: inArchive ? .reanalyse : .ingest, docID: docID, payload: payload).id
+        payload.rereading = asked.map { Rereading(before: $0.labels ?? [], path: $0.path, changes: [], tags: nil) }
+        return payload
     }
 
     /// Asks the model about a document and keeps what it says: the labels on the document and in the search index
@@ -184,36 +229,89 @@ public struct PipelineServices: Sendable {
     /// the labels it had: its tags, or what an earlier reading gave it.
     public func analyse(docID: Int64, jobID: Int64?, content: ExtractedContent, given: [GivenTag], settings: AppSettings,
                         trace: TraceContext) async throws -> AnalysisOutcome {
-        // The labels as the reading begins: a kind the user changes while the model reads stays as the user left it.
-        let before = try await documents.document(id: docID)?.labels ?? []
-        let tags = before.filter(\.kind.isUsersOwn)
-        let reading = try await read(content, tags: tags, settings: settings, trace: trace)
-        var outcome = reading.outcome
-        let sources = GivenTag.sources(of: reading.tags, given: given)
-        let note = GivenTag.note(sources).map { "; " + $0 } ?? ""
-        let problems = outcome.analysis.problems
+        let (read, rereading) = try await reading(docID: docID, content: content, given: given, settings: settings, trace: trace)
+        var outcome = read
+        if let labels = outcome.labels {
+            // Where the user changed nothing since the reading began: what the user did meanwhile is kept.
+            outcome.labels = try await index.saveReading(labels, before: rereading.before, docID: docID)
+        }
+        let event = Self.readingEvent(read, rereading: rereading)
+        try await history.record(event.kind, doc: docID, job: jobID, trace: trace.traceID, summary: event.summary, payload: event.payload)
+        return outcome
+    }
+
+    /// Reads a document already read once again with the model, as `analyse` does, and saves nothing: what it reads takes
+    /// the place of everything the document has once it is filed (`replaceReading`), but what the user changed since it
+    /// was asked for, as `asked` says it was then; the job keeps what that needs until then (`Rereading`).
+    public func reread(docID: Int64, content: ExtractedContent, given: [GivenTag], asked: Rereading, settings: AppSettings,
+                       trace: TraceContext) async throws -> (outcome: AnalysisOutcome, rereading: Rereading) {
+        let read = try await reading(docID: docID, content: content, given: given, settings: settings, trace: trace)
+        return (read.outcome, Rereading(before: asked.before, path: asked.path, changes: read.rereading.changes, tags: read.rereading.tags))
+    }
+
+    /// Reads a document with the model (`read`), with the tags it has as the reading begins, and says in its trace why it
+    /// waits for the user, when it does; with the labels it had then and where it was, a kind or a name the user changes
+    /// meanwhile staying as the user left it, and what gave each of its tags (`given`, the tags its job was queued with).
+    private func reading(docID: Int64, content: ExtractedContent, given: [GivenTag], settings: AppSettings,
+                         trace: TraceContext) async throws -> (outcome: AnalysisOutcome, rereading: Rereading) {
+        guard let document = try await documents.document(id: docID) else { throw IngestError.documentNotFound(docID) }
+        let before = document.labels ?? []
+        let reading = try await read(content, tags: before.filter(\.kind.isUsersOwn), settings: settings, trace: trace)
+        let problems = reading.outcome.analysis.problems
         if !problems.isEmpty {
             // Why it waits for the user, which the steps before it, each done as it should be, do not say.
             await trace.record(.review, status: .warn, startedAt: Date(), durationMs: 0, output: ["problems": problems],
                                error: "Waits for you: " + DocumentAnalysis.said(problems))
         }
-        if let labels = outcome.labels {
-            // Where the user changed nothing since the reading began: what the user did meanwhile is kept.
-            outcome.labels = try await index.saveReading(labels, before: before, docID: docID)
-            let read = labels.filter { !$0.kind.isUsersOwn }
-            try await history.record(.analysed, doc: docID, job: jobID, trace: trace.traceID,
-                                     summary: Self.readingSummary(read, problems: problems) + note,
-                                     payload: AnalysedPayload(analysis: outcome.analysis, changes: reading.changes,
-                                                              tags: sources.isEmpty ? nil : sources))
-        } else {
-            try await history.record(.error, doc: docID, job: jobID, trace: trace.traceID,
-                                     summary: "Not read: " + DocumentAnalysis.said(outcome.analysis.problems) + note, payload: outcome.analysis)
+        let sources = GivenTag.sources(of: reading.tags, given: given)
+        return (reading.outcome, Rereading(before: before, path: document.path, changes: reading.changes, tags: sources.isEmpty ? nil : sources))
+    }
+
+    /// Puts what reading document `docID` again gave it, `outcome`, in the place of everything it had, in the transaction
+    /// of `db` that records its filing under `filename` (`IndexStore.replaceReading`), with its text, `content`, and its
+    /// meaning, and records the reading in History there too, before the filing. The labels saved.
+    @discardableResult
+    func replaceReading(_ db: Database, docID: Int64, filename: String, content: ExtractedContent, outcome: AnalysisOutcome,
+                        rereading: Rereading, jobID: Int64?, traceID: Int64?, at now: Date) throws -> [DocumentLabel] {
+        let embedding = outcome.embedding.flatMap { vector in
+            outcome.embeddingModel.map {
+                TextEmbedding(model: $0, vector: vector, sourceText: embeddingText(content, senders: outcome.labels?.values(.sender) ?? []))
+            }
         }
-        return outcome
+        let labels = try IndexStore.replaceReading(db, docID: docID, filename: filename, content: content, read: outcome.labels,
+                                                   before: rereading.before, embedding: embedding, at: now)
+        let event = Self.readingEvent(outcome, rereading: rereading)
+        try HistoryStore.insert(db, event.kind, at: now, doc: docID, job: jobID, trace: traceID, summary: event.summary, payload: event.payload)
+        return labels
+    }
+
+    /// The text a document's embedding is made of, as its job keeps it with the embedding (`IndexStore.upsertEmbedding`).
+    func embeddingText(_ content: ExtractedContent, senders: [String]) -> String {
+        content.embeddingSummary(senders: senders, maxChars: config.analysis.embeddingSummaryChars,
+                                 identifiersLimit: config.analysis.embeddingIdentifiersLimit)
     }
 }
 
 extension PipelineServices {
+    /// What History records of a reading, `outcome`: what it was labelled with, or why it was not, and what gave its tags.
+    struct ReadingEvent {
+        var kind: EventKind
+        var summary: String
+        var payload: any Encodable & Sendable
+    }
+
+    /// What History records of a reading, `outcome`, its labels as the model gave them: the model's labels, or, without
+    /// them, why it was not read; and what gave each of its tags (`Rereading.tags`).
+    static func readingEvent(_ outcome: AnalysisOutcome, rereading: Rereading) -> ReadingEvent {
+        let note = GivenTag.note(rereading.tags ?? []).map { "; " + $0 } ?? ""
+        let problems = outcome.analysis.problems
+        guard let labels = outcome.labels else {
+            return ReadingEvent(kind: .error, summary: "Not read: " + DocumentAnalysis.said(problems) + note, payload: outcome.analysis)
+        }
+        return ReadingEvent(kind: .analysed, summary: readingSummary(labels.filter { !$0.kind.isUsersOwn }, problems: problems) + note,
+                            payload: AnalysedPayload(analysis: outcome.analysis, changes: rereading.changes, tags: rereading.tags))
+    }
+
     /// What History says of a reading that gave the model's labels `read`: their values, or that it found nothing worth a
     /// label; and, when the document waits for the user, why. One that waits with nothing read, as a damaged file, a blank
     /// scan or a kind of file no extractor reads, is never said to have had nothing worth a label: nothing of it could be
@@ -234,6 +332,18 @@ public struct Reading: Sendable, Codable {
     /// The document's tags, as the user's rules write them.
     public var tags: [DocumentLabel]
     public var changes: [LabelChange]
+}
+
+/// What History keeps of the user's reading every document of the archive again (`PipelineServices.queueReadingAllAgain`):
+/// the profile they are read with, by its id, and the documents queued.
+public struct ReadingAllAgainPayload: Sendable, Codable, Hashable {
+    public var profile: String
+    public var documents: [Int64]
+
+    public init(profile: String, documents: [Int64]) {
+        self.profile = profile
+        self.documents = documents
+    }
 }
 
 /// What the history keeps of a reading: how the document was read, which of the model's labels became others, and what

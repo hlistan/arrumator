@@ -46,6 +46,8 @@ extension IngestCoordinator {
         // Ollama away costs no attempt, however long it is away; a server that answers, but with a failure or not in time,
         // as it may for one image or one document alone, does, so the job ends rather than coming back for ever.
         let ollamaDown = await services.ollamaIsAway(error)
+        // A failure of anything else says Ollama answered.
+        status.waitingForOllama = ollamaDown
         let lastError = job.lastError
         job.lastError = message
         if case IngestError.unreadablePayload = error {
@@ -69,9 +71,8 @@ extension IngestCoordinator {
             return
         }
         if ollamaDown {
-            status.waitingForOllama = true
             job.nextRunAt = services.time.now().addingTimeInterval(config.retryDelays.last)
-            await keep(job, event: .retry, summary: "Waiting for Ollama: \(message)", trace: trace)
+            await keep(job, event: lastError == message ? nil : .retry, summary: "Waiting for Ollama: \(message)", trace: trace)
             await finish(trace, .waiting, docID: job.docId)
             Log.warning(.ingest, "Ollama unavailable; will retry", ["job": String(job.id ?? 0), "error": message])
             return
@@ -195,12 +196,15 @@ extension IngestCoordinator {
 
     /// Sends a job whose file changed after it was hashed back to the start, as a new arrival: it is hashed, read and
     /// named again, so nothing read of what it was is filed as what it is (`FileOperationError.sourceChanged`). Its tags
-    /// go with it; what was read of it does not, neither with the job nor with its document (`IndexStore.forgetReading`).
-    /// Recorded once, and due at once, as nothing failed; it costs an attempt, so a file that changes at every reading
-    /// ends as any job that keeps failing does.
+    /// go with it; what was read of it does not, neither with the job nor with its document (`IndexStore.forgetReading`),
+    /// but for a document in the archive read again, which keeps what it had until it is filed. Recorded once, and due at
+    /// once, as nothing failed; it costs an attempt, so a file that changes at every reading ends as any job that keeps
+    /// failing does.
     private func readFromTheStart(_ job: inout JobRecord, payload: JobPayload, trace: TraceContext) async {
         var fresh = JobPayload()
         fresh.tags = payload.tags
+        // What a document read again had when it was asked for stays what the user's changes are told by.
+        fresh.rereading = payload.rereading
         do { try job.setPayload(fresh) } catch {
             Log.error(.ingest, "Could not keep what a failed job had done", ["job": String(job.id ?? 0), "error": error.localizedDescription])
         }
@@ -212,7 +216,7 @@ extension IngestCoordinator {
             return
         }
         // The document is an arrival again: nothing read of what the file was stays with it, its tags aside.
-        if let docID = job.docId {
+        if let docID = job.docId, job.kind != .reanalyse {
             do { try await services.index.forgetReading(docID: docID) } catch {
                 Log.error(.ingest, "Could not take back a reading", ["doc": String(docID), "error": error.localizedDescription])
             }

@@ -133,6 +133,9 @@ struct GeneralSettings: View {
 struct FilingSettings: View {
     @Environment(AppModel.self) private var model
     let loaded: AppSettings
+    @State private var confirmingReadAll = false
+    /// What reading every document again queued, once asked.
+    @State private var readAllMessage: String?
 
     var body: some View {
         Form {
@@ -148,9 +151,28 @@ struct FilingSettings: View {
             Section(Wording.readingAgain) {
                 Text(Wording.copiesFooter)
                     .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Button(Wording.readAllAgain) { confirmingReadAll = true }
+                    .confirmationDialog(Wording.readAllAgainQuestion, isPresented: $confirmingReadAll) {
+                        // It replaces the labels the user corrected too.
+                        Button(Wording.readAgain, role: .destructive) { Task { await readAll() } }
+                    } message: {
+                        Text(Wording.readAllAgainNote(profile: profileName))
+                    }
+                if let readAllMessage { Text(readAllMessage).font(.caption) }
             }
         }
         .formStyle(.grouped)
+    }
+
+    /// The name of the profile documents are read with, which reading them all again reads them with.
+    private var profileName: String? {
+        let settings = model.settings ?? loaded
+        return settings.modelProfiles[settings.profile]?.name
+    }
+
+    private func readAll() async {
+        let queued = await model.perform(Wording.readAllAgainAction) { try await $0.review.retryAll() }
+        readAllMessage = queued.map { Wording.readAllAgainQueued($0.count) }
     }
 }
 

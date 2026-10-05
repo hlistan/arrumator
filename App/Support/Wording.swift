@@ -198,6 +198,7 @@ enum Wording {
     static let confirmAction = "Confirm"
     static let holdAction = "Hold"
     static let readAgainAction = "Read again"
+    static let readAllAgainAction = "Read every document again"
     static let changeLabelsAction = "Change labels"
     static let renameAction = "Rename"
     static let removeLabelAction = "Remove label"

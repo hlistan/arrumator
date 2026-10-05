@@ -52,16 +52,45 @@ struct Review: AsyncParsableCommand {
 
     struct Retry: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
-            abstract: "Read a document again with the model (after changing models, say): its labels and name.")
+            abstract: "Read a document again from its file with the profile in use (after changing models, say): its labels, "
+                + "name, text and meaning take the place of those it had once it is read. --all reads every document of the "
+                + "archive again, after the files that arrive meanwhile.")
         @OptionGroup var options: GlobalOptions
-        @Argument var document: String
+        @Argument(help: "The document to read again; none with --all.") var document: String?
+        @Flag(help: "Read every document of the archive again: filed, waiting for you or failed, but not one left for later.")
+        var all = false
+        @Flag(help: "Only put it in the queue; the app or `run` reads it.") var queueOnly = false
+
+        func validate() throws {
+            if all == (document != nil) { throw ValidationError("Name one document to read again, or give --all for every one.") }
+        }
+
         func run() async throws {
             let runtime = try await options.runtime()
-            _ = await runtime.lifecycle.ensureRunning()
+            if !queueOnly { _ = await runtime.lifecycle.ensureRunning() }
+            guard let document else {
+                let ids = try await runtime.review.retryAll()
+                if !queueOnly { await runtime.coordinator.drain(.everything) }
+                let documents = try await runtime.services.documents.documents(ids: ids)
+                let left = try await runtime.services.jobs.counts().readingAgain
+                try options.emit(documents) { Self.said(documents, left: left) }
+                return
+            }
             let id = try await resolveDocument(document, runtime: runtime)
             try await runtime.review.retry(id)
-            await runtime.coordinator.drain()
+            if !queueOnly { await runtime.coordinator.drain() }
             try await report(id, runtime: runtime, options: options)
+        }
+
+        /// What `--all` prints: each document queued now, as it is now, then how many were, and how many documents, `left`,
+        /// are still to be read, by the app or `run`, as with `--queue-only` or while Ollama is away.
+        static func said(_ documents: [DocumentRecord], left: Int) -> String {
+            guard !documents.isEmpty else { return "No document to queue: every document of the archive waits to be read already, or it has none." }
+            let rows = documents.map { "#\($0.id ?? 0) \($0.status.rawValue): \($0.path)" }
+            let total = Format.count(documents.count, "document")
+            let said = left == 0 ? "Read \(total) again." : "\(total) queued to be read again, after the files that arrive meanwhile; "
+                + "\(left) still to be read by the app or `arrumatorcli run`."
+            return (rows + [said]).joined(separator: "\n")
         }
     }
 

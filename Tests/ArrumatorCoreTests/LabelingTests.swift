@@ -58,8 +58,8 @@ import Testing
         let coordinator = IngestCoordinator(services: services)
         try await ReviewActions(services: services, coordinator: coordinator).retry(id)
         let queued = try await services.jobs.active()
-        #expect(try queued.map(\.state) == [.pending] && queued.first?.payload.content != nil,
-                "it waits its turn with the text it arrived with, to be read again from it")
+        #expect(try queued.map(\.state) == [.pending] && queued.first?.payload.content == nil,
+                "it waits its turn not begun, to be read again from its file, as a file that arrives is")
         await coordinator.drain()
         let read = try #require(try await services.documents.document(id: id))
         #expect(read.labels == StubAnalyzer.edpBill && read.status == .filed && read.analysis?.problems == [],
