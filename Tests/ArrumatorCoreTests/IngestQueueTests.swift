@@ -264,7 +264,7 @@ import Testing
                 "only the file in hand is said to be worked on")
     }
 
-    @Test func aDocumentAskedToBeReadAgainWaitsItsTurnNotBegunAndStartsFromTheTextItArrivedWith() async throws {
+    @Test func aDocumentAskedToBeReadAgainWaitsItsTurnNotBegunAndIsReadFromItsFile() async throws {
         let h = try await Harness.make()
         defer { h.env.cleanup() }
         let id = try #require(try await h.ingest("bill.txt", text: "EDP electricity July").id)
@@ -274,8 +274,8 @@ import Testing
                 "a document asked to be read again waits its turn as not begun: it did not stop anywhere to carry on from")
         await h.coordinator.drain()
         let events = try await h.services.history.events(limit: 20, kinds: [.extracted, .analysed], docID: id).map(\.kind)
-        #expect(events.filter { $0 == .analysed }.count == 2 && events.filter { $0 == .extracted }.count == 1,
-                "taken, it is read again from the text it arrived with, which is not extracted again")
+        #expect(events.filter { $0 == .analysed }.count == 2 && events.filter { $0 == .extracted }.count == 2,
+                "taken, it is read again from the start, its text read from its file again, as a file that arrives is")
         #expect(try await h.jobs().map(\.state) == [.done, .done], "and filed")
     }
 

@@ -92,11 +92,11 @@ public struct DocumentFiler: Sendable {
             d.filedAt = now
             d.updatedAt = now
             try d.update(db)
+            try keeping?.recording(db, d)
             let kind = event ?? (status == .needsReview ? .needsReview : .filed)
             try HistoryStore.insert(db, kind, at: now, actor: actor, doc: docID, trace: trace.traceID,
                                     summary: Self.summary(named: document.filename, filedAs: filedName, problems: analysis.problems),
                                     payload: FiledPayload(from: document.path, to: finalPath, problems: analysis.problems))
-            try keeping?.recording(db, d)
             return d
         }
         try await index.updateFilename(docID: docID, filename: filedName)
@@ -121,8 +121,8 @@ public struct FilingKeeper: Sendable {
     /// Runs with the path the document is moved to, before it is moved, so what the caller keeps of it (a job's planned
     /// destination) is there to find it by should the move not be recorded, as after a crash.
     public var planning: @Sendable (String) async throws -> Void
-    /// Runs in the transaction that records the filing, with the document as filed, so what the caller keeps of it (a
-    /// job's destination) commits with it or not at all.
+    /// Runs in the transaction that records the filing, with the document as filed, before the filing's event, so what
+    /// the caller keeps of it (a job's destination, what a document read again was read as) commits with it or not at all.
     public var recording: @Sendable (Database, DocumentRecord) throws -> Void
 
     public init(planning: @escaping @Sendable (String) async throws -> Void,

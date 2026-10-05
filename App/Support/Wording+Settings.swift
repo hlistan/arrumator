@@ -38,8 +38,24 @@ extension Wording {
     static let filesFooter = "Renamed, a document is named by the model from what it reads: its date, its sender and what it is. "
         + "Transliterated, a name in another script, such as Cyrillic, is written in Latin letters."
     static let readingAgain = "Reading Again"
-    static let copiesFooter = "Put a document into Incoming again, as it is, and the one in the archive is read again with the "
-        + "profile in use, keeping its tags and given that of the folder you put it in. The copy goes to the Trash."
+    static let copiesFooter = "Put a document into Incoming again, as it is, and the one in the archive is read again from "
+        + "its file with the profile in use. Once it is read, its name, labels, text and meaning take the place of those it had, "
+        + "keeping its tags and given that of the folder you put it in. The copy goes to the Trash."
+    static let readAllAgain = "Read All Documents Again…"
+    static let readAllAgainQuestion = "Read every document in the archive again?"
+
+    /// What reading every document again does, under the question that asks for it.
+    static func readAllAgainNote(profile: String?) -> String {
+        "Each document is read from its file with the profile " + (profile.map { "“\($0)”" } ?? "in use")
+            + ", renamed, and given only the labels this reading finds, also in place of those you corrected; its tags stay. "
+            + "Documents you left for later stay as they are. New files still come first."
+    }
+
+    /// What reading every document again queued.
+    static func readAllAgainQueued(_ count: Int) -> String {
+        count == 0 ? "No document to queue: every document of the archive waits to be read already, or it has none."
+            : "\(Format.count(count, "document")) queued to be read again. Incoming shows how many are left."
+    }
 
     static let ollama = "Ollama"
     static let status = "Status"

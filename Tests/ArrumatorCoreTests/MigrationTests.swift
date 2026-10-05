@@ -14,7 +14,8 @@ import ArrumatorTesting
                           "v12_labelRules", "v13_traceExchanges", "v14_searchTasks", "v15_taskEffort",
                           "v16_taskProfile", "v17_tags", "v18_taskConversations", "v19_unreadIndexRefusesRecords",
                           "v20_queueWorkers", "v21_jobClaims", "v22_jobsWaitForTheirModel", "v23_endedJobsKeepNoText",
-                          "v24_documentLabels", "v25_documentsInTwoPlaces", "v26_storedLabelsInTheirForm"]
+                          "v24_documentLabels", "v25_documentsInTwoPlaces", "v26_storedLabelsInTheirForm",
+                          "v27_readingAgain"]
 
     /// An index as a release before this one made it, migrated up to `identifier`: its first migration ran before that
     /// one marked a new index as still to be rebuilt from its archive, so it is not.
@@ -401,7 +402,7 @@ import ArrumatorTesting
                     "an old model exchange is kept out of diagnostics like a new one")
             #expect(try EventRecord.order(Column("id")).fetchAll(db).map(\.kind) == [.filed], "events of kinds that are gone are dropped")
             let job = try #require(try JobRecord.fetchOne(db))
-            #expect(job.state == .analysing && job.kind == .reanalyse, "a job half way through is read again")
+            #expect(job.state == .extracting && job.kind == .reanalyse, "a job half way through is read again, from its file")
             #expect(try String.fetchAll(db, sql: "SELECT key FROM record_dirty WHERE key LIKE 'documents:%'") == ["documents:/archive/Home/Utilities/"],
                     "every record file is written again in today's shape")
             let match = "SELECT rowid FROM document_fts WHERE document_fts MATCH ?"

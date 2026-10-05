@@ -22,6 +22,9 @@ public struct JobPayload: Sendable, Codable, Hashable {
     /// The model the job waits to be installed, which it looks for among the server's before it is taken up again
     /// (`IngestCoordinator`); nil for a job that waits for none, and in every job queued before jobs waited for one.
     public var waitingForModel: String?
+    /// What a reading of a document already read once keeps until it is filed, with `outcome`, when it takes the place of
+    /// everything the document had (`IndexStore.replaceReading`); nil until it is read, and for a file read the first time.
+    public var rereading: Rereading?
 
     public init() {}
 
@@ -29,6 +32,25 @@ public struct JobPayload: Sendable, Codable, Hashable {
     /// as a document read again is not.
     var fingerprint: FileFingerprint? {
         size.map { FileFingerprint(size: $0, modified: mtime, inode: inode) }
+    }
+}
+
+/// What a reading of a document already read once keeps, beside its outcome, until it is filed: the document's labels
+/// and where it was when the reading began, so a kind of label the user changes, or a name the user gives it, before it
+/// is filed stays as the user left it; what the user's rules changed of the model's labels; and what gave each of its
+/// tags, as History says them once it is filed.
+public struct Rereading: Sendable, Codable, Hashable {
+    public var before: [DocumentLabel]
+    public var path: String
+    public var changes: [LabelChange]
+    /// Absent for a document without tags.
+    public var tags: [GivenTag]?
+
+    public init(before: [DocumentLabel], path: String, changes: [LabelChange], tags: [GivenTag]?) {
+        self.before = before
+        self.path = path
+        self.changes = changes
+        self.tags = tags
     }
 }
 
@@ -47,6 +69,21 @@ extension AnalysisOutcome: Hashable {
         lhs.analysis == rhs.analysis && lhs.labels == rhs.labels && lhs.embeddingModel == rhs.embeddingModel
     }
     public func hash(into hasher: inout Hasher) { hasher.combine(analysis) }
+}
+
+/// How many jobs are active, by how they come: those that file and read files in their turn, the one in hand among them;
+/// and, giving way to those, documents read again for search after a rebuild (`reindex`), and documents read again with
+/// the rest of the archive (`PipelineServices.queueReadingAllAgain`).
+public struct JobCounts: Sendable, Hashable {
+    public var queued: Int
+    public var reindexing: Int
+    public var readingAgain: Int
+
+    public init(queued: Int, reindexing: Int, readingAgain: Int) {
+        self.queued = queued
+        self.reindexing = reindexing
+        self.readingAgain = readingAgain
+    }
 }
 
 public struct JobStore: Sendable {
@@ -70,33 +107,46 @@ public struct JobStore: Sendable {
     }
 
     /// Enqueues a job, not begun (`pending`), unless one is already active for the path that does all this one asks: a
-    /// queue drops no request. One that does as much but for the tags `payload` gives is given those it lacks, in the
+    /// queue drops no request. A job for a document in the archive is at the document's path, which follows it as it
+    /// moves (`jobs_follow_document`). One that does as much but for the tags `payload` gives is given those it lacks, in the
     /// write that finds it, which its worker, if one has it in hand, takes up at its next save (`update`). One that does
     /// less gives way, cancelled, its worker losing its claim (`IngestError.claimLost`): a `reindex` job, which only reads
-    /// the text and computes the embedding, to one that reads the file with the model too; and one whose payload cannot
-    /// be read, which could not be worked on. A job for a document read again carries in `payload` what earlier stages
-    /// found of it.
+    /// the text and computes the embedding, to one that reads the file with the model too; one that gives way to every
+    /// other (`givesWay`, as a `reindex` job always does), to one asked for in its turn, as a document read again with the rest of the archive to the
+    /// user's **Read Again** of it; and one whose payload cannot be read, which could not be worked on. A job for a
+    /// document read again carries in `payload` what earlier stages found of it.
     @discardableResult
-    public func enqueue(path: String, kind: JobKind, docID: Int64? = nil, payload: JobPayload = JobPayload()) async throws -> Queued {
+    public func enqueue(path: String, kind: JobKind, docID: Int64? = nil, payload: JobPayload = JobPayload(),
+                        givesWay: Bool = false) async throws -> Queued {
         let now = time.now()
         return try await database.writer.write { db in
-            if var active = try Self.active(db, path: path), let id = active.id {
-                let readable = Self.tags(ofPayload: active.payloadJson, in: db)
-                if let had = readable, active.kind != .reindex || kind == .reindex {
-                    let added = Self.lacking(payload.tags ?? [], in: had)
-                    if !added.isEmpty { try Self.setTags(had + added, job: id, in: db) }
-                    return Queued(id: id, isNew: false, tagsAdded: added)
-                }
-                active.state = .cancelled
-                (active.claim, active.claimedBy) = (nil, nil)
-                active.updatedAt = now
-                try active.update(db)
-            }
-            var job = JobRecord(id: nil, kind: kind, docId: docID, sourcePath: path, state: .pending, attempt: 0, nextRunAt: now,
-                                lastError: nil, payloadJson: try JSON.string(payload), createdAt: now, updatedAt: now)
-            try job.insert(db)
-            return Queued(id: job.id ?? db.lastInsertedRowID, isNew: true, tagsAdded: [])
+            try Self.enqueue(db, path: path, kind: kind, docID: docID, payload: payload, givesWay: givesWay, at: now)
         }
+    }
+
+    /// `enqueue`, in a transaction of the caller's, as the one that queues every document of the archive to be read again
+    /// with the event that records it (`PipelineServices.queueReadingAllAgain`).
+    @discardableResult
+    static func enqueue(_ db: Database, path: String, kind: JobKind, docID: Int64?, payload: JobPayload, givesWay: Bool,
+                        at now: Date) throws -> Queued {
+        // Reading a document again for search, after a rebuild, never holds up filing, whoever queues it.
+        let givesWay = givesWay || kind == .reindex
+        if var active = try Self.active(db, path: path), let id = active.id {
+            let readable = Self.tags(ofPayload: active.payloadJson, in: db)
+            if let had = readable, active.kind != .reindex || kind == .reindex, !active.givesWay || givesWay {
+                let added = Self.lacking(payload.tags ?? [], in: had)
+                if !added.isEmpty { try Self.setTags(had + added, job: id, in: db) }
+                return Queued(id: id, isNew: false, tagsAdded: added)
+            }
+            active.state = .cancelled
+            (active.claim, active.claimedBy) = (nil, nil)
+            active.updatedAt = now
+            try active.update(db)
+        }
+        var job = JobRecord(id: nil, kind: kind, docId: docID, sourcePath: path, state: .pending, attempt: 0, nextRunAt: now,
+                            lastError: nil, payloadJson: try JSON.string(payload), createdAt: now, updatedAt: now, givesWay: givesWay)
+        try job.insert(db)
+        return Queued(id: job.id ?? db.lastInsertedRowID, isNew: true, tagsAdded: [])
     }
 
     /// The tags a stored payload holds, read by the database, as the payload can hold a document's whole text; nil when
@@ -129,6 +179,16 @@ public struct JobStore: Sendable {
         try JobRecord.filter(Column("source_path") == path).filter(activeStates.contains(Column("state"))).fetchOne(db)
     }
 
+    /// Cancels the active job reading document `docID` again (`reanalyse`), in a transaction of the caller's that sets
+    /// the document aside, as leaving it for later or undoing it: its worker loses its claim, and its reading changes
+    /// nothing of the document (`IngestError.claimLost`).
+    static func cancelReadingAgain(_ db: Database, docID: Int64, at now: Date) throws {
+        try JobRecord.filter(Column("doc_id") == docID).filter(Column("kind") == JobKind.reanalyse.rawValue)
+            .filter(activeStates.contains(Column("state")))
+            .updateAll(db, Column("state").set(to: JobState.cancelled.rawValue), Column("updated_at").set(to: now.unixSeconds),
+                       Column("claim").set(to: nil), Column("claimed_by").set(to: nil))
+    }
+
     public func job(id: Int64) async throws -> JobRecord? {
         try await database.reader.read { db in try JobRecord.fetchOne(db, key: id) }
     }
@@ -137,12 +197,12 @@ public struct JobStore: Sendable {
     /// `next_run_at` only says when a job is due: one waiting to be tried again, after a failure or for Ollama, is not
     /// taken before its time and holds up none behind it, and once due it takes its place by when it was queued. A job
     /// stopped part way, as when the app quit or crashed, keeps its stage and its place, so it carries on first at the
-    /// next start, before anything queued after it. Reading documents again after a rebuild (`reindex`) always gives way
-    /// to the others, so a rebuild never holds up filing.
+    /// next start, before anything queued after it. A job that gives way (`JobRecord.givesWay`: reading documents again
+    /// after a rebuild, or the whole archive at once) waits until no other is due, so neither ever holds up filing.
     private static func due(at now: Date) -> QueryInterfaceRequest<JobRecord> {
         JobRecord.filter(activeStates.contains(Column("state")))
             .filter(Column("next_run_at") == nil || Column("next_run_at") <= now.unixSeconds)
-            .order(SQL("CASE kind WHEN \(JobKind.reindex.rawValue) THEN 1 ELSE 0 END"), Column("id"))
+            .order(Column("gives_way"), Column("id"))
     }
 
     /// Takes the job to work on next for a worker of `claims`' process: of the jobs due (`due`), the first that no
@@ -220,13 +280,25 @@ public struct JobStore: Sendable {
         }
     }
 
-    /// How many jobs are active: those that file and read files, and those that read filed documents again for search
-    /// (`reindex`). Counted by the database: a job's payload can hold a document's whole text.
-    public func counts() async throws -> (queued: Int, reindexing: Int) {
+    /// How many jobs are active (`JobCounts`). Counted by the database: a job's payload can hold a document's whole text.
+    public func counts() async throws -> JobCounts {
         try await database.reader.read { db in
             let active = JobRecord.filter(Self.activeStates.contains(Column("state")))
-            let reindexing = try active.filter(Column("kind") == JobKind.reindex.rawValue).fetchCount(db)
-            return (try active.fetchCount(db) - reindexing, reindexing)
+            let givingWay = active.filter(Column("gives_way") == true)
+            let reindexing = try givingWay.filter(Column("kind") == JobKind.reindex.rawValue).fetchCount(db)
+            return JobCounts(queued: try active.filter(Column("gives_way") == false).fetchCount(db), reindexing: reindexing,
+                             readingAgain: try givingWay.fetchCount(db) - reindexing)
+        }
+    }
+
+    /// The jobs the Incoming page lists, in the order they were queued: those that file and read files, and of those that
+    /// give way, which are counted instead (`counts`), only the one in hand, `inHand`, if any.
+    public func listed(inHand: Int64?) async throws -> [JobRecord] {
+        try await database.reader.read { db in
+            try JobRecord.filter(Self.activeStates.contains(Column("state")))
+                .filter([JobKind.ingest, .adopt, .reanalyse].map(\.rawValue).contains(Column("kind")))
+                .filter(Column("gives_way") == false || Column("id") == inHand)
+                .order(Column("id")).fetchAll(db)
         }
     }
 
@@ -279,8 +351,10 @@ public struct JobStore: Sendable {
             try saved.save(db)
             return Saved(job: saved, tagsAdded: [])
         }
-        let stored = try Row.fetchOne(db, sql: "SELECT claim, payload_json FROM jobs WHERE id = ?", arguments: [id])
+        let stored = try Row.fetchOne(db, sql: "SELECT claim, payload_json, source_path FROM jobs WHERE id = ?", arguments: [id])
         if let claim = job.claim, stored?["claim"] != claim { throw IngestError.claimLost(id) }
+        // Where its document is now, which may have moved since the worker took it (`jobs_follow_document`).
+        if let path: String = stored?["source_path"] { saved.sourcePath = path }
         let had = Self.tags(ofPayload: job.payloadJson, in: db) ?? []
         let added = Self.lacking(stored.flatMap { Self.tags(ofPayload: $0["payload_json"], in: db) } ?? [], in: had)
         try saved.update(db)

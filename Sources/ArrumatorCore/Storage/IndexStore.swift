@@ -15,17 +15,23 @@ public struct IndexStore: Sendable {
     /// Indexes a document's text with its labels, replacing what was indexed for it.
     public func upsertText(docID: Int64, filename: String, body: String, summary: String?, metadata: [String: String],
                            extractorVersion: String, labels: [DocumentLabel]) async throws {
+        try await database.writer.write { db in
+            try Self.writeText(db, docID: docID, filename: filename, body: body, summary: summary, metadata: metadata,
+                               extractorVersion: extractorVersion, labels: labels)
+        }
+    }
+
+    /// `upsertText`, in a transaction of the caller's.
+    static func writeText(_ db: Database, docID: Int64, filename: String, body: String, summary: String?, metadata: [String: String],
+                          extractorVersion: String, labels: [DocumentLabel]) throws {
         let kinds = LabelKind.allCases.map(\.rawValue)
         let columns = ["doc_id", "filename", "body", "summary", "metadata_json", "extractor_version"] + kinds
         let values: [(any DatabaseValueConvertible)?] = [docID, filename, body, summary, try JSON.string(metadata), extractorVersion]
             + LabelKind.allCases.map { DocumentLabel.searchText(labels, kind: $0) }
-        let arguments = StatementArguments(values)
-        try await database.writer.write { db in
-            try db.execute(sql: """
-                INSERT INTO document_text (\(columns.joined(separator: ", "))) VALUES (\(databaseQuestionMarks(count: columns.count)))
-                ON CONFLICT(doc_id) DO UPDATE SET \(columns.dropFirst().map { "\($0) = excluded.\($0)" }.joined(separator: ", "))
-                """, arguments: arguments)
-        }
+        try db.execute(sql: """
+            INSERT INTO document_text (\(columns.joined(separator: ", "))) VALUES (\(databaseQuestionMarks(count: columns.count)))
+            ON CONFLICT(doc_id) DO UPDATE SET \(columns.dropFirst().map { "\($0) = excluded.\($0)" }.joined(separator: ", "))
+            """, arguments: StatementArguments(values))
     }
 
     /// Saves what the model read of a document, `read`, where the user has not changed it since the reading began: the
@@ -38,13 +44,45 @@ public struct IndexStore: Sendable {
         let now = time.now()
         return try await database.writer.write { db in
             guard let document = try DocumentRecord.fetchOne(db, key: docID) else { throw IngestError.documentNotFound(docID) }
-            let current = document.labels ?? []
-            let ofKind = { (labels: [DocumentLabel], kind: LabelKind) in Set(labels.filter { $0.kind == kind }) }
-            let users = Set(LabelKind.allCases.filter { $0.isUsersOwn || ofKind(before, $0) != ofKind(current, $0) })
-            let labels = (read.filter { !users.contains($0.kind) } + current.filter { users.contains($0.kind) }).distinct()
+            let labels = Self.kept(read, before: before, current: document.labels ?? [])
             try Self.saveLabels(db, labels, docID: docID, labelled: true, at: now)
             return labels
         }
+    }
+
+    /// The labels a reading leaves a document: those it read, `read`, but of the kinds the user changed since it began,
+    /// the labels it had then, `before`, compared kind by kind with those it has now, `current`, and of the user's own
+    /// (tags), which stay as the document has them now.
+    static func kept(_ read: [DocumentLabel], before: [DocumentLabel], current: [DocumentLabel]) -> [DocumentLabel] {
+        let ofKind = { (labels: [DocumentLabel], kind: LabelKind) in Set(labels.filter { $0.kind == kind }) }
+        let users = Set(LabelKind.allCases.filter { $0.isUsersOwn || ofKind(before, $0) != ofKind(current, $0) })
+        return (read.filter { !users.contains($0.kind) } + current.filter { users.contains($0.kind) }).distinct()
+    }
+
+    /// Puts what reading a document again gave it in the place of everything an earlier reading had, in the transaction
+    /// of `db` that records its filing (`IngestCoordinator`), so the index holds one reading of it or the other, never
+    /// parts of both, and a document read again is found as it was until then. Its labels are those the reading gave,
+    /// `read`, but of the kinds the user changed since it began and of the user's own (`kept`); without them, as when the
+    /// model gave no valid answer, it keeps none of the model's, as a file read the first time would have none. Its text
+    /// and what it was read from are `content`; its row of the full-text index is deleted and written again, under
+    /// `filename`; and every embedding it had, of whatever model, is deleted, `embedding` taking their place. A reading
+    /// that made no embedding, as when the embedding model failed, leaves it those it had: search by meaning finds it as
+    /// before rather than not at all. The labels saved.
+    static func replaceReading(_ db: Database, docID: Int64, filename: String, content: ExtractedContent, read: [DocumentLabel]?,
+                               before: [DocumentLabel], embedding: TextEmbedding?, at now: Date) throws -> [DocumentLabel] {
+        guard let document = try DocumentRecord.fetchOne(db, key: docID) else { throw IngestError.documentNotFound(docID) }
+        let labels = kept(read ?? [], before: before, current: document.labels ?? [])
+        try db.execute(sql: "DELETE FROM document_text WHERE doc_id = ?", arguments: [docID])
+        try writeText(db, docID: docID, filename: filename, body: content.text, summary: content.visual?.description,
+                      metadata: content.metadata, extractorVersion: content.extractedBy, labels: labels)
+        try saveLabels(db, labels, docID: docID, labelled: read != nil, at: now)
+        try db.execute(sql: "UPDATE documents SET content_json = ?, page_count = ?, extracted_at = ? WHERE id = ?",
+                       arguments: [try DocumentStore.storedContentJSON(content), content.pageCount, now.unixSeconds, docID])
+        if let embedding {
+            try db.execute(sql: "DELETE FROM embeddings WHERE doc_id = ?", arguments: [docID])
+            try writeEmbedding(db, docID: docID, embedding, at: now)
+        }
+        return labels
     }
 
     /// Adds `added` to a document's labels, those it has not already, as they are when the transaction reads them, so
@@ -103,15 +141,21 @@ public struct IndexStore: Sendable {
     }
 
     public func upsertEmbedding(docID: Int64, model: String, vector: [Float], sourceText: String) async throws {
-        let hash = SHA256.hash(data: Data(sourceText.utf8)).map { String(format: "%02x", $0) }.joined()
         let now = time.now()
         try await database.writer.write { db in
-            try db.execute(sql: "DELETE FROM embeddings WHERE doc_id = ? AND model = ?", arguments: [docID, model])
-            var e = EmbeddingRecord(id: nil, docId: docID, chunkIndex: 0, model: model, dim: vector.count,
-                                    vector: VectorCodec.encode(vector), textHash: hash, createdAt: now)
-            try e.insert(db)
-            try db.execute(sql: "UPDATE documents SET embedded_at = ? WHERE id = ?", arguments: [now.unixSeconds, docID])
+            try Self.writeEmbedding(db, docID: docID, TextEmbedding(model: model, vector: vector, sourceText: sourceText), at: now)
         }
+    }
+
+    /// `upsertEmbedding`, in a transaction of the caller's: the document's embedding of `embedding.model` takes the place
+    /// of the one it had of that model.
+    static func writeEmbedding(_ db: Database, docID: Int64, _ embedding: TextEmbedding, at now: Date) throws {
+        let hash = SHA256.hash(data: Data(embedding.sourceText.utf8)).map { String(format: "%02x", $0) }.joined()
+        try db.execute(sql: "DELETE FROM embeddings WHERE doc_id = ? AND model = ?", arguments: [docID, embedding.model])
+        var e = EmbeddingRecord(id: nil, docId: docID, chunkIndex: 0, model: embedding.model, dim: embedding.vector.count,
+                                vector: VectorCodec.encode(embedding.vector), textHash: hash, createdAt: now)
+        try e.insert(db)
+        try db.execute(sql: "UPDATE documents SET embedded_at = ? WHERE id = ?", arguments: [now.unixSeconds, docID])
     }
 
     public func embedding(docID: Int64, model: String) async throws -> [Float]? {
@@ -127,4 +171,22 @@ public struct IndexStore: Sendable {
                 .map { ($0["doc_id"], VectorCodec.decode($0["vector"])) }
         }
     }
+}
+
+/// A document's meaning as an embedding model gives it: the model, its vector, and the text it was made of.
+public struct TextEmbedding: Sendable, Hashable {
+    public var model: String
+    public var vector: [Float]
+    public var sourceText: String
+
+    public init(model: String, vector: [Float], sourceText: String) {
+        self.model = model
+        self.vector = vector
+        self.sourceText = sourceText
+    }
+}
+
+extension ExtractedContent {
+    /// What read the text, as the full-text index keeps it: the extractor and its version.
+    var extractedBy: String { "\(extractorName)/\(extractorVersion)" }
 }

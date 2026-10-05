@@ -36,6 +36,11 @@ extension Wording {
     static let queuedHeading = "Queued"
     static let showMoreInProcessed = "Show More in Processed"
 
+    /// While documents of the archive are read again with the rest of it.
+    static func readingAllAgain(_ count: Int) -> String {
+        "Reading \(Format.count(count, "document")) of the archive again with the profile in use. New files still come first."
+    }
+
     /// While documents are read again after the index was rebuilt.
     static func reindexing(_ count: Int) -> String {
         "Reading \(Format.count(count, "document")) again for search, after the index was "

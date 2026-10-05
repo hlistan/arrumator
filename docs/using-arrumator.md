@@ -42,8 +42,10 @@ what would help.
   Incoming](how-it-works.md#folders-in-incoming-and-tags)), and for a document read again the tags it keeps; nothing for
   a file directly in Incoming. An exact copy of a document in the archive leaves for the Trash once it is checked, and
   that document joins the queue to be read again, under its own name ([exact copies](how-it-works.md#exact-copies)).
-  Then comes what was just processed, grouped by day as on Processed, each with its labels, its tags among them, with
-  **Show More in Processed** for the rest.
+  Documents read again all at once (**Read All Documents Again**) are not listed one by one: a line above says how many
+  are left, **Reading 120 documents of the archive again with the profile in use. New files still come first.**, and
+  the one being read shows under **In Progress**. Then comes what was just processed, grouped by day as on Processed,
+  each with its labels, its tags among them, with **Show More in Processed** for the rest.
 - **Needs You**: documents waiting for you, each with the reason: those the model could not read, or that are
   encrypted, damaged, blank or of a kind of file Arrumator cannot read, and those that could not be filed. The sidebar
   and the menu bar count them. Below them, under **Set Aside by You**, come the documents you left for later or undid
@@ -187,6 +189,19 @@ and macOS does not let Arrumator notify, because notifications are turned off fo
 Notifications, or because macOS would not let it ask, the switches say so, with **Open Notification Settings**, and
 the log says why, rather than nothing being shown without a word.
 
+## Filing and reading again
+
+Settings › Filing: **Rename files** has the model name each document from what it reads, its date, its sender and what
+it is, and **Transliterate names to Latin letters** writes a name in another script, such as Cyrillic, in Latin
+letters. Under **Reading Again**, **Read All Documents Again…** reads every document of the archive again from its
+file, with the profile in use, as you would after choosing another profile: filed documents, those waiting for you and
+those set aside after failing, but not those you left for later. It asks first, naming the profile, and says that each
+document is renamed and given only the labels this reading finds, also in place of those you corrected, keeping its
+tags; then it says how many it queued. Each document is found as it was until it is read, and then its name, labels,
+text and meaning are replaced at once ([reading documents again](how-it-works.md#reading-documents-again)). New files
+still come first. Asked again while they wait, it queues none of them twice. `arrumatorcli review retry --all` does the
+same.
+
 ## Models and profiles
 
 Settings › Models says where the models run and which models read your documents; onboarding shows its first two
@@ -228,8 +243,9 @@ or chosen from the installed models that can do the job, each marked installed o
 profile you changed has **Reset**, which gives it back the name and models Arrumator comes with. A profile of your own
 has **Remove Profile…**, dimmed, saying why under the pointer, while it cannot be removed: while it is the profile in
 use (choose another first) and while search tasks of the archive that is open read with it (give them another first);
-documents already read with it stay as they are. To read documents again with the profile in use, put them into
-Incoming again, as they are ([exact copies](how-it-works.md#exact-copies)). Profiles are yours, tasks each archive's: a
+documents already read with it stay as they are. To read documents again with the profile in use, use **Read All
+Documents Again** ([filing and reading again](#filing-and-reading-again)), or put some into Incoming again, as they are
+([exact copies](how-it-works.md#exact-copies)). Profiles are yours, tasks each archive's: a
 task of another archive whose profile you removed fails saying so until you give it another. **New Profile…** adds a
 profile under the name you give it, a copy of the one in use, and opens it to give it other models; a name another
 profile has, whatever its case, or one with no letter or digit, is said under the field as you write it, naming that
@@ -241,7 +257,9 @@ by meaning**, documents embedded by another model are found by meaning only once
 ## Audit, logs and tuning
 
 - **History**: every arrival (with the tag its folder in Incoming gives it), file in Incoming that cannot be opened,
-  exact copy (under the document it has read again, with where the copy went and the tags it gave), extraction, reading
+  exact copy (under the document it has read again, with where the copy went and the tags it gave), every document read
+  again at once (under none, with the profile and the documents, `Read every document again with the profile
+  “Standard”: 120 documents`), extraction, reading
   (with the labels it gave, which of the model's labels were tidied and why, and what gave its tags, or that nothing
   could be read of it and why it waits for you), filing (from the name it had to the one it was given, or that it kept
   its name or waits where it is), correction of a name or labels, decision about labels (a merge, a label removed

@@ -292,7 +292,7 @@ which is left out of the drawing because any stage can end that way.*
    ([exact copies](how-it-works.md#exact-copies)).
 3. **Extracted.** `ContentExtracting` turns the file into `ExtractedContent`; the text goes into the full-text index.
 4. **Analysed.** `DocumentAnalyzing` asks the model once; the answer is validated and its labels are made one
-   vocabulary with the archive's (`LabelConsolidator`).
+   vocabulary with the archive's (`LabelConsolidator`), and saved.
 5. **Filed.** `DocumentFiler` builds the name, moves the file, and records the document row, the History event and the
    job's destination in one transaction. The move and its record run in a task of their own, so a stop that arrives
    between them cannot separate them; where the file goes is kept with the job before it moves
@@ -307,6 +307,14 @@ which is left out of the drawing because any stage can end that way.*
    refuses is. A move makes the folders below the archive it needs, never the archive's own folder: one that is gone
    is `FileOperationError.folderMissing`, and the job waits for it, as for Ollama, spending no attempt.
 
+A document of the archive read again (`reanalyse`: an exact copy's original, **Read Again**, **Read All Documents
+Again**) goes through the same stages from the start, its file where the document is when its turn comes, but its job
+keeps what they find (`JobPayload.content`, `outcome`, `rereading`) and writes nothing of it to the document until it is
+filed: then, in the transaction that records the filing, before its event, `IndexStore.replaceReading` puts its labels
+(those the user changed since the reading began, and the tags, as they are then), its text, its row of the full-text
+index and its embeddings, every model's, in the place of the earlier reading's, and its reading is recorded in History
+([reading documents again](how-it-works.md#reading-documents-again)).
+
 After each stage the job row is saved with what the stage found (`JobPayload`), which is what lets a job resume. A job
 that has ended keeps neither its document's text nor its embedding, which the document's row and the index keep. A
 payload that cannot be read is never taken for an empty one: its job fails, saying why, and a rescan queues the file
@@ -319,8 +327,13 @@ afresh.
 | Ollama is away, timed out or answered with a server error. | The job waits the last of `ingest.retryDelays` and is tried again. No attempt is spent. |
 | Anything else failed. | One attempt is spent and the job waits its `ingest.retryDelays` step. After `ingest.maxAttempts` the file is parked in the archive as failed, where it waits for the user. |
 
-The queue has one order, the order jobs were queued in (`JobStore.nextDue`); when a job is due only gates it. Reading
-documents again after a rebuild always gives way to new arrivals. A worker takes a job in the write that claims it
+The queue has one order, the order jobs were queued in (`JobStore.nextDue`); when a job is due only gates it. A job
+that gives way (`JobRecord.givesWay`: reading documents again after a rebuild, and the whole archive read again at once)
+comes after every job that does not, and gives its place to a request that does not, as the user's **Read Again** of
+its document (`JobStore.enqueue`). A job reading a document of the archive again is at its document's path as the
+document moves (the trigger `jobs_follow_document`), reads it where it is when its turn comes and only while it is still
+to be read (`IngestCoordinator.stillToReadAgain`, and again before filing it), and is cancelled by the write that leaves
+the document for later or undoes it (`JobStore.cancelReadingAgain`). A worker takes a job in the write that claims it
 (`JobClaims`: a claim of its own and its `ProcessTag`, as the task queues keep theirs), and saves each stage only
 while the claim holds, so `arrumatorcli` beside the app never works on the job the app has in hand. A job is let go
 when its worker stops; one a process that has since ended held is taken again. A job whose stage a deadline gave up
@@ -488,7 +501,7 @@ change that replaces it; the earlier one stays in Git's history, as superseded c
 | 1 | One network client, behind a guard that admits one validated local host: each request carries the host its client was pointed at, the session uses no proxy and follows no redirect. | Privacy must not depend on every call site being careful, nor on the system's proxy settings or on what a server answers. | §4.1; `Ollama/NetworkGuard.swift` |
 | 2 | The archive is the record, SQLite is an index over it. | An index can be lost, damaged or outgrown; plain files next to the documents cannot be taken hostage by a schema. | [Storage](storage.md) |
 | 3 | A document is described by labels; the app makes no folders. | Folders force one place for a document that belongs to several. | [How it works](how-it-works.md#labels), [sources](organizing-principles-sources.md) |
-| 4 | Persistent queues with one order, the order of queueing; due time only gates. | A stopped item must resume first, and a retry must not overtake. | §3; `Storage/JobStore.swift` |
+| 4 | Persistent queues with one order, the order of queueing; due time only gates; work for the whole archive at once gives way to every other. | A stopped item must resume first, a retry must not overtake, and reading the archive again must not hold up a file that arrives. | §3; `Storage/JobStore.swift` |
 | 5 | The model reads a document once, into a fixed schema; an invalid answer goes back a bounded number of times; no other model is asked in its place. | An answer is untrusted input, and a silent fallback hides which model read what. | §4.5; [How it works](how-it-works.md#reading-a-document) |
 | 6 | Labels are kept one vocabulary by how they are written, never by what they mean. | Meaning is the model's judgment or the user's; writing can be compared and audited. | [How it works](how-it-works.md#keeping-labels-one-vocabulary) |
 | 7 | Ports in `Contracts/`, one composition root in Runtime. | Every collaborator can be replaced by a test double, and wiring is read in one place. | §3; `ArrumatorRuntime.swift` |
@@ -505,6 +518,7 @@ change that replaces it; the earlier one stays in Git's history, as superseded c
 | 18 | Excel workbooks are read with Foundation's `XMLParser`, as PowerPoint decks are, not with CoreXLSX: each part through the checked ZIP reader up to its cap, the main workbook read once with the sheets past the limit only counted, a sheet's rows collected as it is parsed and the parse stopped at the row limit. | CoreXLSX 0.14.2, unchanged since February 2023 and pinning XMLCoder 0.14, trapped on hostile workbooks in code the project cannot change (`Dictionary(uniqueKeysWithValues:)` on two sheets of one relationship, an overflow on a column of 14 letters, an `Array.insert` out of range on an empty relationship target), opened files with ZIPFoundation itself, and decoded whole parts into trees before any limit applied. SpreadsheetML needs only its relationships, workbook, shared strings and sheets read (ECMA-376 Part 1 §18), which a SAX parser does in a few hundred lines. | `ArrumatorExtract/Extractors/XLSXExtractor.swift`, `Support/SpreadsheetML.swift` |
 | 19 | A search task's ZIP export is written by ZIPFoundation, behind `FolderArchiving` in Extract, its names composed and marked UTF-8 (general purpose bit 11), not by Finder's Compress (`NSFileCoordinator.ReadingOptions.forUploading`). | Finder's archives leave the flag unset, so `unzip`, Python and Windows read every name outside ASCII as code page 437; Core imports no ZIP library (§5), and writing an archive of the app's own copies parses nothing untrusted. | `ArrumatorExtract/Support/ZipFolderArchiver.swift`; [APPNOTE](https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT) 4.4.4 |
 | 20 | A process tells the others with an index open that it committed by a Darwin notification named after the index, and each checks SQLite's `PRAGMA data_version` before it has its observations look again (`Database.notifyChanges(in:)`). | GRDB's observations see only their own pool's commits, and polling the index would wake every process for nothing; `data_version` tells another connection's commit from its own, so a process's own posts change nothing. | `Storage/IndexChangeSignal.swift`, `AppDatabase.othersCommits()`; `man 3 notify`; [SQLite](https://sqlite.org/pragma.html#pragma_data_version) |
+| 21 | A document read again changes nothing until it is filed, and then what it reads takes the place of everything it had, in the transaction that records its filing. | The index holds one reading of a document or the other, never parts of both, and a document is found as it was while it is read, or when a stop or a failure cuts the reading off. | `Storage/IndexStore.swift` (`replaceReading`), `Ingest/IngestCoordinator.swift` |
 
 Record a decision here when it changes the module graph, a contract in `Contracts/`, what is stored and where, the
 concurrency model, a trust boundary or a durability setting: decisions "that affect the structure, non-functional

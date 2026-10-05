@@ -8,7 +8,7 @@ import Testing
 @Suite struct RuntimeActivityTests {
     static let running = RuntimeActivity(onboarded: true, paused: false, work: .running, ingest: .idle, taskQueue: .idle,
                                          conversation: .idle, ollama: .ready(version: "0.12"), needsYou: 0, unreadableRecords: [])
-    static let filing = IngestStatus(queued: 2, reindexing: 0, current: IngestStatus.Current(job: 1, path: "/Incoming/bill.pdf", stage: .analysing,
+    static let filing = IngestStatus(queued: 2, reindexing: 0, readingAgain: 0, current: IngestStatus.Current(job: 1, path: "/Incoming/bill.pdf", stage: .analysing,
                                                                                        since: Date(timeIntervalSince1970: 0), reader: "qwen3.5:9b"),
                                      waitingForOllama: false, powerPauseReason: nil)
     static let reading = SearchTaskQueueStatus(reading: SearchTaskQueueStatus.Reading(task: 1, model: "qwen3.5:9b", since: Date(timeIntervalSince1970: 0)),

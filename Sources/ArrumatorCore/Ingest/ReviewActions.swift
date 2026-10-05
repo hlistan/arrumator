@@ -135,22 +135,40 @@ public struct ReviewActions: Sendable {
         }
     }
 
-    /// Reads the document again with the model, as after changing models, from the text read of it before, and files it
-    /// under the name it gives: where it is in the archive, or, for one back in Incoming, at the top of the archive. It
-    /// keeps its tags, which its row in the queue shows, and one in a folder in Incoming is given that folder's too
-    /// (`PipelineServices.queueReadingAgain`).
+    /// Reads the document again from the start, as after changing models, from its file, and files it under the name the
+    /// model gives: where it is in the archive, found as it was until then, or, for one back in Incoming, at the top of
+    /// the archive. It keeps its tags, which its row in the queue shows, and one in a folder in Incoming is given that
+    /// folder's too (`PipelineServices.queueReadingAgain`).
     public func retry(_ docID: Int64) async throws {
         let doc = try await document(docID)
-        try await services.queueReadingAgain(doc, content: try await services.documents.content(docID: docID),
-                                             settings: await services.settings.current)
+        try await services.queueReadingAgain(doc, settings: await services.settings.current)
         try await services.history.record(.retry, actor: .user, doc: docID, summary: "Read again: \(doc.filename)")
         await coordinator.wake()
     }
 
-    /// Keeps the document where it is; the watcher and queue leave it alone.
+    /// Reads every document of the archive again, as `retry` reads one, with the profile in use, after every file that
+    /// arrives meanwhile (`PipelineServices.queueReadingAllAgain`): what changing models, or a better Arrumator, is for.
+    /// The documents queued.
+    @discardableResult
+    public func retryAll() async throws -> [Int64] {
+        let queued = try await services.queueReadingAllAgain(settings: await services.settings.current)
+        await coordinator.wake()
+        return queued
+    }
+
+    /// Keeps the document where it is; the watcher and queue leave it alone, and a reading of it again under way changes
+    /// nothing of it (`JobStore.cancelReadingAgain`), decided with the change and recorded in History with it.
     public func hold(_ docID: Int64) async throws {
-        try await services.documents.update(docID) { $0.status = .held }
-        try await services.history.record(.needsReview, actor: .user, doc: docID, summary: "Left for later")
+        let now = services.time.now()
+        try await services.database.writer.write { db in
+            guard let read = try DocumentRecord.fetchOne(db, key: docID) else { throw IngestError.documentNotFound(docID) }
+            var held = read
+            held.status = .held
+            held.updatedAt = now
+            try held.updateChanges(db, from: read)
+            try JobStore.cancelReadingAgain(db, docID: docID, at: now)
+            try HistoryStore.insert(db, .needsReview, at: now, actor: .user, doc: docID, summary: "Left for later")
+        }
     }
 
     /// Moves a document in the archive back to Incoming, held, so it is not filed again automatically. Only a document
@@ -176,10 +194,18 @@ public struct ReviewActions: Sendable {
                                        fingerprint: nil)
         // What the file is in Incoming, which a copy to another volume changes, so a rescan knows it for this document.
         let moved = try? FileFingerprint.of(destination)
-        doc = try await services.documents.update(docID) { doc in
-            doc.path = destination.path
-            doc.status = .undone
-            if let moved { (doc.size, doc.inode, doc.fileMtime) = (moved.size, moved.inode, moved.modified) }
+        let now = services.time.now()
+        // A reading of it again under way changes nothing of it from now on (`JobStore.cancelReadingAgain`).
+        doc = try await services.database.writer.write { db in
+            guard let read = try DocumentRecord.fetchOne(db, key: docID) else { throw IngestError.documentNotFound(docID) }
+            var undone = read
+            undone.path = destination.path
+            undone.status = .undone
+            if let moved { (undone.size, undone.inode, undone.fileMtime) = (moved.size, moved.inode, moved.modified) }
+            undone.updatedAt = now
+            try undone.updateChanges(db, from: read)
+            try JobStore.cancelReadingAgain(db, docID: docID, at: now)
+            return undone
         }
         try await services.index.updateFilename(docID: docID, filename: destination.lastPathComponent)
         await services.vectors.remove(docID: docID)

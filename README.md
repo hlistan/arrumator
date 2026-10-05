@@ -37,9 +37,12 @@ say what it is in one vocabulary, so a German electricity bill and a Japanese on
 - **Tags documents by the folder you drop them in.** Put a folder such as `Taxes 2024` into Incoming, and everything in
   it, at any depth, is filed with `Taxes 2024` as a tag of yours beside the labels the model gives. Incoming shows the
   tag under each file before it is read, and the folder stays where it is, for whatever you put there next.
-- **Reads a document again when you put it in again.** An exact copy of a document already in the archive, put into
-  Incoming, is no second document: that document is read again from the start, with the profile in use, renamed and
-  indexed anew, keeping its tags and given that of the folder you put the copy in. The copy goes to the Trash.
+- **Reads a document again when you put it in again, or every document at once.** An exact copy of a document already
+  in the archive, put into Incoming, is no second document: that document is read again from the start, from its file,
+  with the profile in use. It is found as it was until it is read; then its name, labels, text and meaning take the
+  place of those it had, all at once, keeping its tags and given that of the folder you put the copy in. The copy goes
+  to the Trash. **Read All Documents Again**, under Settings › Filing, does the same for the whole archive, after the
+  files that arrive meanwhile: what a new profile, or a better Arrumator, is for.
 - **Keeps labels one vocabulary, and learns from you.** A label written the way the archive already writes it becomes
   that label, and labels that merely look alike wait for you on the Labels page. Merge two labels or remove one
   everywhere, and every document, and every one read from then on, follows: the model is shown your decisions and the
@@ -91,8 +94,9 @@ A model profile is the models Arrumator reads with: in each of these, one model 
 describes images and names files, and `bge-m3` finds documents by meaning. Choose one under [Settings ›
 Models](docs/using-arrumator.md#models-and-profiles), where you can also give any of them other models, set them back
 with Reset, or add profiles of your own. Smart's model thinks before it answers, which a search task's effort uses;
-documents are read without thinking. Documents already read keep their labels when you choose another profile: put them
-into Incoming again, as they are, to have them read with it. Fast and Standard were chosen as the best for their memory
+documents are read without thinking. Documents already read keep their labels when you choose another profile: **Read
+All Documents Again**, under Settings › Filing, reads them with it, as putting one into Incoming again, as it is, does.
+Fast and Standard were chosen as the best for their memory
 on a 16 GB Mac mini (M5) when Arrumator still filed documents into folders, and larger models do not fit such a Mac's
 memory. How well Standard labels documents is measured; Fast's labels have not been measured yet, and Smart has not been
 measured on the evaluation corpus at all, neither its labels, its speed nor its memory. The measurements are in

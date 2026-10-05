@@ -108,7 +108,7 @@ import Testing
         let id = try #require(doc.id)
         let had = (doc.labels ?? []).filter { $0.kind == .sender }
         await holding.hold(doc.filename)
-        try await h.services.queueReadingAgain(doc, content: nil, settings: await h.services.settings.current)
+        try await h.services.queueReadingAgain(doc, settings: await h.services.settings.current)
         let worker = Task { await h.coordinator.drain() }
         #expect(await Patience.until { await holding.held == doc.filename }, "the model reads the document again")
         let mine = DocumentLabel(kind: .sender, value: "Mine Lda")
@@ -130,7 +130,7 @@ import Testing
         try await h.review.edit(id, fileName: nil, labels: LabelEdit(adding: [old]))
         let doc = try #require(try await h.services.documents.document(id: id))
         await holding.hold(doc.filename)
-        try await h.services.queueReadingAgain(doc, content: nil, settings: await h.services.settings.current)
+        try await h.services.queueReadingAgain(doc, settings: await h.services.settings.current)
         let worker = Task { await h.coordinator.drain() }
         #expect(await Patience.until { await holding.held == doc.filename }, "the model reads the document again")
         try await h.review.edit(id, fileName: nil, labels: LabelEdit(adding: [tag], removing: [old]))

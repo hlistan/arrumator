@@ -33,13 +33,17 @@ public struct IngestStatus: Sendable, Hashable {
     public var queued: Int
     /// Filed documents waiting to have their text read again, after the index was rebuilt from the archive.
     public var reindexing: Int
+    /// Documents of the archive waiting to be read again with the rest of it (`PipelineServices.queueReadingAllAgain`),
+    /// the one in hand among them.
+    public var readingAgain: Int
     /// What the worker is working on now; nil while it works on nothing. Only this says a job is in hand: a job's stored
     /// stage says where it carries on, whether the worker has it now or it was stopped part way.
     public var current: Current?
     public var waitingForOllama: Bool
     public var powerPauseReason: String?
 
-    public static let idle = IngestStatus(queued: 0, reindexing: 0, current: nil, waitingForOllama: false, powerPauseReason: nil)
+    public static let idle = IngestStatus(queued: 0, reindexing: 0, readingAgain: 0, current: nil, waitingForOllama: false,
+                                          powerPauseReason: nil)
 
     /// Where `job` is, as this status says: in the worker's hands, or waiting, and how; nil for a job no longer in the
     /// queue, whatever a list read before says of it. The Incoming page shows this.
