@@ -179,6 +179,32 @@ extension IngestQueueTests {
                 "and reads no text but the original's and that of the file that found Ollama away")
     }
 
+    /// A file taken while Ollama is away that fails before the model, as one that cannot be read, says nothing of
+    /// Ollama: the wait stays as it is, and no other file is read for its text only to wait too (the review of the fix
+    /// of the final review of #17).
+    @Test func aFileThatFailsWhileOllamaIsAwayLeavesTheWaitAsItIs() async throws {
+        let h = try await Harness.make(analyzer: StubAnalyzer { name in
+            if name != "bill.txt" { throw OllamaError.unreachable("connection refused") }
+        })
+        defer { h.env.cleanup() }
+        _ = try await h.ingest("bill.txt", text: IngestTests.bill)
+        await h.coordinator.enqueue(try h.env.drop("away.txt", text: "\(IngestTests.bill) away"))
+        await h.coordinator.drain()
+        let retry = h.env.time.now().addingTimeInterval(h.env.config.ingest.retryDelays.last)
+        let copy = try h.env.drop("bill copy.txt", text: IngestTests.bill)
+        let locked = try h.env.drop("locked.txt", text: "\(IngestTests.bill) locked")
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: locked.path)
+        for url in [copy, locked] { await h.coordinator.enqueue(url) }
+        await h.coordinator.drain()
+        let failed = try await h.jobs().first { $0.sourcePath.hasSuffix("locked.txt") }
+        #expect(failed?.lastError != nil, "the file that cannot be read fails its attempt")
+        let status = await h.coordinator.status
+        #expect(status.waitingForOllama && status.retryAt == retry, "and the wait for Ollama stays as it was: \(status)")
+        let again = try await h.jobs().filter { $0.kind == .reanalyse }.map(\.state)
+        #expect(again == [.pending], "the original, to be read again for its copy, is not read only to wait: \(again)")
+        #expect(try await h.services.history.events(limit: 20, kinds: [.extracted]).count == 2, "no other text is read")
+    }
+
     /// While Ollama is away only a job whose next stage needs no model is taken (`JobStore.beforeTheModel`): a file that
     /// came, in Incoming or put into the archive, not hashed yet; not one at a later stage, nor a document read again or
     /// indexed again, whose next stage reads its text for the model.

@@ -229,6 +229,20 @@ extension CommandLineTests {
                 "which the exit code says, and standard error, naming the file: \(ingested.stderr)")
     }
 
+    /// A file that fails before it becomes a document, as one that cannot be read, is named on standard error with why,
+    /// and fails the command, though it is tried again later: it is never said to be queued, not read yet (the review of
+    /// the fix of the final review of #17).
+    @Test func ingestNamesAFileThatCouldNotBeReadWithWhy() throws {
+        let home = try Home.make()
+        defer { home.cleanup() }
+        let locked = home.root.appendingPathComponent("locked.txt")
+        try Data("Fatura de Maria Exemplo".utf8).write(to: locked)
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: locked.path)
+        let ingested = try run(home, ["ingest", "--json", locked.path])
+        #expect(ingested.status == 1 && ingested.stderr.contains("\(locked.path): ") && !ingested.stderr.contains("queued"),
+                "the file is named with why it failed: \(ingested.stderr)")
+    }
+
     /// With Ollama away, the first file is read for its text and waits, and the rest are looked at, but not read: each
     /// is shown as the document it became, waiting, as no failure (QA 2026-10-05, RA-1; the reviews of its fix). A file
     /// another process has in hand before it is looked at, as the app may, is not begun: with `--json`, which lists

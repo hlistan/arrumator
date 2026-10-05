@@ -56,10 +56,11 @@ struct Ingest: AsyncParsableCommand {
             if let doc = job?.docId ?? (try? job?.payload)?.copyOf, let document = try await runtime.services.documents.document(id: doc) {
                 docs.append(document)
                 if job?.state == .failed { failed.append((url, job?.lastError ?? "it could not be filed")) }
-            } else if job?.state.isActive == true {
+            } else if job?.state.isActive == true, job?.lastError == nil {
                 // Not begun, as one another process, such as the app, has in hand before it is looked at: no failure.
                 waiting.append(url)
             } else {
+                // One that failed before it became a document, tried again later or not, fails here, saying why.
                 failed.append((url, job?.lastError ?? "it became no document"))
             }
         }

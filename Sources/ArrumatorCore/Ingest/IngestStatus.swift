@@ -42,8 +42,8 @@ public struct IngestStatus: Sendable, Hashable {
     public var waitingForOllama: Bool
     public var powerPauseReason: String?
     /// Until when the files queued wait for Ollama, as the one that found it away is tried again then and no other is
-    /// taken meanwhile (`IngestCoordinator.ollamaRetryAt`); nil while it is not known to be away, and while that file is
-    /// tried again, in hand.
+    /// read for its text meanwhile (`IngestCoordinator.ollamaRetryAt`); nil while it is not known to be away, and while
+    /// that file is tried again, in hand.
     public var retryAt: Date?
 
     public static let idle = IngestStatus(queued: 0, reindexing: 0, readingAgain: 0, current: nil, waitingForOllama: false,

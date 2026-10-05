@@ -12,10 +12,11 @@ public enum Draining: Sendable, Equatable {
 
 /// How the worker waits when it has taken no job.
 extension IngestCoordinator {
-    /// Drains as `drain` does, then, while `job` is still to be done and no job is taken until the one that found Ollama
-    /// away is tried again (`ollamaRetryAt`), waits until then and drains again: a file held behind one that found Ollama
-    /// away, or one that found it away itself, is read once Ollama is back, as the app reads it, rather than left unread,
-    /// as `arrumatorcli eval` reads each fixture. Waits as long as Ollama is away, until the task is cancelled.
+    /// Drains as `drain` does, then, while `job` is still to be done and no job is read for its text until the one that
+    /// found Ollama away is tried again (`ollamaRetryAt`), waits until then and drains again: a file held behind one
+    /// that found Ollama away, or one that found it away itself, is read once Ollama is back, as the app reads it,
+    /// rather than left unread, as `arrumatorcli eval` reads each fixture. Waits as long as Ollama is away, until the
+    /// task is cancelled.
     public func drain(waitingOutOllamaFor job: Int64) async {
         await drain()
         while !Task.isCancelled, let until = ollamaRetryAt, await stillToDo(job) {
@@ -48,12 +49,6 @@ extension IngestCoordinator {
         let next = [await earliestDue(), nextOverdue].compactMap { $0 }.min()
         return IdleWait.seconds(untilDue: next, heldElsewhere: await heldElsewhere(),
                                 recheck: services.config.ingest.heldElsewhereRecheckSeconds, now: services.time.now())
-    }
-
-    /// How far a job's stages went: to its end, or to the text it would read while Ollama is away.
-    enum Reached {
-        case end
-        case waitingForOllama
     }
 
     /// Whether `job`, about to be read for its text, waits instead, as it would only wait for Ollama too (QA 2026-10-05,

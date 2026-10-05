@@ -11,9 +11,10 @@ public actor IngestCoordinator {
     private var worker: Task<Void, Never>?
     /// Whether the archive is away (`archive(isAway:)`).
     public private(set) var archiveAway = false
-    /// Until when no job is taken, as the last one found Ollama away and waits until then to try again (`handleFailure`):
-    /// every other job needs Ollama too, so none is read for its text meanwhile only to wait at its model's step. The
-    /// status says it (`IngestStatus.retryAt`).
+    /// Until when no job is read for its text, as the last one found Ollama away and waits until then to try again
+    /// (`handleFailure`): every other job needs Ollama too, so none is read meanwhile only to wait at its model's step;
+    /// only a file that came and is not hashed yet is taken, as a copy to hand over, and waits before its text
+    /// (`JobStore.beforeTheModel`, `waitsForOllama`). The status says it (`IngestStatus.retryAt`).
     var ollamaRetryAt: Date? {
         didSet { status.retryAt = ollamaRetryAt }
     }
@@ -171,8 +172,9 @@ public actor IngestCoordinator {
     /// Processes due jobs until none are left that this worker may take, or the task that drains them is cancelled, as
     /// Ctrl-C cancels a command (CLI and tests): a job another process has in hand, as the app beside `arrumatorcli`,
     /// is left to it, and the job in hand when the task is cancelled carries on at the next start. Which jobs it takes,
-    /// `draining` says: by default only those that come in their turn. It ends, too, once a job finds Ollama away: none
-    /// is taken until that one is tried again (`ollamaRetryAt`), which a command does not wait for.
+    /// `draining` says: by default only those that come in their turn. Once a job finds Ollama away, it takes only the
+    /// files that came and are not hashed yet, each then waiting before its text, and ends: no other is taken until that
+    /// one is tried again (`ollamaRetryAt`), which a command does not wait for.
     public func drain(_ draining: Draining = .inTurn) async {
         while !Task.isCancelled, case let .taken(job) = await nextDue(givingWay: draining == .everything) {
             await process(job)
@@ -323,24 +325,20 @@ public actor IngestCoordinator {
             if let id = job.id, overdue.remove(id) != nil {
                 throw IngestError.workLeftRunning(seconds: services.config.ingest.abandonedWorkSeconds)
             }
-            let reached = try await LeftRunning.$current.withValue(left) {
+            try await LeftRunning.$current.withValue(left) {
                 try await runStages(&job, payload: &payload, settings: settings, trace: trace)
             }
-            switch reached {
-            case .waitingForOllama:
-                await finish(trace, .waiting, docID: job.docId)
-            case .end:
-                // Only a job that went on to the model says Ollama answers; one taken while it is away ended before it.
-                if !takenWhileAway { (status.waitingForOllama, ollamaRetryAt) = (false, nil) }
-                // A copy is no document: its trace is reached from its event in its original's History (`handOver`).
-                await finish(trace, JobOutcome(ended: job.state), docID: job.docId)
-            }
+            // Only a job that went on to the model says Ollama answers: one taken while it is away ends before it, or
+            // waits before its text is read (`waitsForOllama`), which its trace ends saying.
+            if !takenWhileAway { (status.waitingForOllama, ollamaRetryAt) = (false, nil) }
+            // A copy is no document: its trace is reached from its event in its original's History (`handOver`).
+            await finish(trace, JobOutcome(ended: job.state), docID: job.docId)
         } catch IngestError.claimLost {
             // Cancelled meanwhile, or taken by a request that does more: nothing more of it is this worker's to save.
             Log.info(.ingest, "Job no longer this worker's; left as it is", ["job": String(job.id ?? 0)])
             await finish(trace, .cancelled, docID: job.docId)
         } catch {
-            await handleFailure(&job, payload: payload, error: error, trace: trace)
+            await handleFailure(&job, payload: payload, error: error, trace: trace, takenWhileAway: takenWhileAway)
         }
         // Let go of in a task of its own, as a stopped worker's database accesses are cancelled, and before the worker
         // looks for its next job, which may be this one again.
@@ -379,12 +377,12 @@ public actor IngestCoordinator {
     }
 
     private func runStages(_ job: inout JobRecord, payload: inout JobPayload, settings: AppSettings,
-                           trace: TraceContext) async throws -> Reached {
+                           trace: TraceContext) async throws {
         if job.kind == .reindex {
             try await reindex(&job, payload: &payload, settings: settings, trace: trace)
-            return .end
+            return
         }
-        guard let source = try await source(&job, payload: &payload, trace: trace) else { return .end }
+        guard let source = try await source(&job, payload: &payload, trace: trace) else { return }
         // A job that carries on from a later stage may have been given tags while it waited (`JobStore.enqueue`).
         if [.extracting, .analysing, .filing].contains(job.state), let docID = job.docId, let given = payload.tags,
            given.contains(where: \.isNew) {
@@ -397,13 +395,13 @@ public actor IngestCoordinator {
                 // A copy that went to the Trash before a stop: what is left of handing it over is done now.
                 if let id = payload.copyOf, let original = try await services.documents.document(id: id) {
                     try await handOver(source, to: original, job: &job, payload: &payload, settings: settings, trace: trace)
-                    return .end
+                    return
                 }
                 try await save(&job, &payload, state: .cancelled, trace: trace)
                 try await end(job.docId, as: .missing)
                 try await services.history.record(.missing, doc: job.docId, job: job.id, trace: trace.traceID,
                                                   summary: "\(source.lastPathComponent) disappeared before processing")
-                return .end
+                return
             }
             let (fingerprint, sha) = try await trace.measure(.hash, input: ["path": source.path],
                                                              output: { (r: (FileFingerprint, String)) in ["sha256": r.1, "size": String(r.0.size)] }) {
@@ -415,7 +413,7 @@ public actor IngestCoordinator {
             payload.inode = fingerprint.inode
             if let original = try await original(of: source, sha256: sha, job: job, trace: trace) {
                 try await handOver(source, to: original, job: &job, payload: &payload, settings: settings, trace: trace)
-                return .end
+                return
             }
             let document = try await ensureDocument(for: job, source: source, sha: sha, fingerprint: fingerprint)
             job.docId = document.id
@@ -426,7 +424,7 @@ public actor IngestCoordinator {
             try await save(&job, &payload, state: .extracting, trace: trace)
         }
         guard let docID = job.docId, let sha = payload.sha256 else { throw IngestError.documentNotPersisted }
-        if try await waitsForOllama(&job, payload: &payload, trace: trace) { return .waitingForOllama }
+        if try await waitsForOllama(&job, payload: &payload, trace: trace) { return }
 
         if job.state == .extracting {
             try checkArchiveThere()
@@ -454,7 +452,6 @@ public actor IngestCoordinator {
             try await fileDocument(&job, payload: &payload, docID: docID, content: content, outcome: outcome,
                                    settings: settings, trace: trace)
         }
-        return .end
     }
 
     /// Files the document under the name the model gave it: a new arrival at the top of the archive, a document read

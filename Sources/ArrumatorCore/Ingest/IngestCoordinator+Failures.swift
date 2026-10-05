@@ -28,7 +28,9 @@ enum JobOutcome: String {
 /// (`leaveInIncoming`); a file changed after it was read goes back to the start (`readFromTheStart`); anything else is
 /// tried again after `ingest.retryDelays`, and after `ingest.maxAttempts` the file is parked in the archive as failed.
 extension IngestCoordinator {
-    func handleFailure(_ job: inout JobRecord, payload: JobPayload, error: any Error, trace: TraceContext) async {
+    /// Handles `error`, which ended `job`'s attempt; `takenWhileAway` says the job was taken while Ollama is away, as only
+    /// one whose next stage needs no model is (`JobStore.beforeTheModel`), so its failure says nothing of Ollama.
+    func handleFailure(_ job: inout JobRecord, payload: JobPayload, error: any Error, trace: TraceContext, takenWhileAway: Bool) async {
         // Stopping interrupts the job; that is no failure. Its saved stage lets it resume where it stopped.
         guard !Task.isCancelled else {
             Log.info(.ingest, "Job interrupted by stopping", ["job": String(job.id ?? 0), "stage": job.state.rawValue])
@@ -46,9 +48,11 @@ extension IngestCoordinator {
         // Ollama away costs no attempt, however long it is away; a server that answers, but with a failure or not in time,
         // as it may for one image or one document alone, does, so the job ends rather than coming back for ever.
         let ollamaDown = await services.ollamaIsAway(error)
-        // A failure of anything else says Ollama answered.
-        status.waitingForOllama = ollamaDown
-        if !ollamaDown { ollamaRetryAt = nil }
+        // A failure of anything else says Ollama answered, but for a job that ended before the model.
+        if !takenWhileAway {
+            status.waitingForOllama = ollamaDown
+            if !ollamaDown { ollamaRetryAt = nil }
+        }
         let lastError = job.lastError
         job.lastError = message
         if case IngestError.unreadablePayload = error {
@@ -73,7 +77,7 @@ extension IngestCoordinator {
         }
         if ollamaDown {
             job.nextRunAt = services.time.now().addingTimeInterval(config.retryDelays.last)
-            // No other job is taken meanwhile: each would be read for its text only to wait for Ollama too.
+            // No other job is read for its text meanwhile, as each would only wait for Ollama too (`JobStore.beforeTheModel`).
             ollamaRetryAt = job.nextRunAt
             await keep(job, event: lastError == message ? nil : .retry, summary: "Waiting for Ollama: \(message)", trace: trace)
             await finish(trace, .waiting, docID: job.docId)
