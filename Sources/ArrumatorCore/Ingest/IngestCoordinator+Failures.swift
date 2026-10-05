@@ -48,6 +48,7 @@ extension IngestCoordinator {
         let ollamaDown = await services.ollamaIsAway(error)
         // A failure of anything else says Ollama answered.
         status.waitingForOllama = ollamaDown
+        if !ollamaDown { ollamaRetryAt = nil }
         let lastError = job.lastError
         job.lastError = message
         if case IngestError.unreadablePayload = error {
@@ -72,6 +73,8 @@ extension IngestCoordinator {
         }
         if ollamaDown {
             job.nextRunAt = services.time.now().addingTimeInterval(config.retryDelays.last)
+            // No other job is taken meanwhile: each would be read for its text only to wait for Ollama too.
+            ollamaRetryAt = job.nextRunAt
             await keep(job, event: lastError == message ? nil : .retry, summary: "Waiting for Ollama: \(message)", trace: trace)
             await finish(trace, .waiting, docID: job.docId)
             Log.warning(.ingest, "Ollama unavailable; will retry", ["job": String(job.id ?? 0), "error": message])
@@ -336,7 +339,7 @@ extension IngestCoordinator {
             if FileManager.default.fileExists(atPath: document.path), job.kind == .ingest {
                 let jobs = services.jobs
                 // The file is moved only while the job's claim holds, checked in a write just before the move.
-                let checked = FilingKeeper(planning: { _ in try await jobs.update(job) }, recording: { _, _ in })
+                let checked = FilingKeeper(planning: { _ in try await jobs.update(job) }, recording: { _, _ in .filed })
                 do {
                     _ = try await services.filer.file(document, archive: services.archive, analysis: analysis, status: .failed,
                                                       directory: services.archive,

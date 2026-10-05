@@ -32,8 +32,9 @@ enum WorkOutcome {
     /// The queue stopped: the item stays in hand, and goes back into the queue in its place when the queue starts again.
     case interrupted
     /// Ollama is away (`PipelineServices.ollamaIsAway`, as ingest decides it): it could not be reached, or did not answer
-    /// in time and does not answer a probe either. The item waits for it, spending nothing, however long it is away.
-    case away(OllamaError)
+    /// in time and does not answer a probe either. The item waits for it, spending nothing, however long it is away, and
+    /// is due again `until`, when the queue takes items again (`ModelQueue.ollamaRetryAt`), so it comes first then.
+    case away(OllamaError, until: Date)
     /// Anything else, a server that answers with a failure among it: the item fails with the reason.
     case failed(any Error)
 }
@@ -55,6 +56,9 @@ protocol ModelQueue: Actor {
     var doorbell: Doorbell { get }
     var worker: Task<Void, Never>? { get set }
     var inHand: InHand? { get set }
+    /// Until when no item is taken, as the last one found Ollama away and waits until then (`attempt`): every item needs
+    /// it, so none is begun meanwhile only to wait too.
+    var ollamaRetryAt: Date? { get set }
     /// What the queue is called in the log.
     nonisolated var name: String { get }
 
@@ -74,6 +78,17 @@ extension ModelQueue {
     /// The tag items this queue takes keep.
     var tag: String { processes.current.description }
 
+    /// Whether the queue waits for Ollama, and until when, as its status says it, from what it says now: with nothing in
+    /// hand and nothing queued, it waits for nothing; with nothing in hand while Ollama is known to be away, the items
+    /// left wait for it until the one that found it away is tried again (`ollamaRetryAt`); with an item in hand, being
+    /// tried, it says no time; otherwise as it says.
+    func ollamaWait(inHand: Bool, queued: Int, saying now: (waiting: Bool, until: Date?)) -> (waiting: Bool, until: Date?) {
+        if !inHand, queued == 0 { return (false, nil) }
+        if !inHand, let until = ollamaRetryAt, until > services.time.now() { return (true, until) }
+        // An item in hand is being tried: whether Ollama answers is not known yet, and no time to try again is said.
+        return inHand ? (now.waiting, nil) : now
+    }
+
     /// Starts the worker, unless it runs: the worker is claimed before anything is awaited, so a second start neither
     /// makes a second worker nor puts back in the queue what the first has in hand.
     func startWorker() {
@@ -85,7 +100,8 @@ extension ModelQueue {
     /// Stops the worker and waits until it has; false when it was not running. The item in hand goes back into the queue,
     /// in its place, once the worker has stopped, as nothing of this process works on it any more: whatever runtime next
     /// opens the index takes it up, as one does after an archive switch, rather than leaving it in hand until this
-    /// process ends.
+    /// process ends. Until when Ollama was found away is forgotten: a stopped queue waits for nothing, and the next start
+    /// looks again.
     func stopWorker() async -> Bool {
         guard let worker else { return false }
         worker.cancel()
@@ -93,13 +109,14 @@ extension ModelQueue {
         // Put back before the worker is let go: a start meanwhile finds it still set and waits, so it never takes an item
         // this then puts back while it is being read.
         await putBackLeft()
+        ollamaRetryAt = nil
         self.worker = nil
         return true
     }
 
     /// Works through every item that is due until none is left (the command line and tests), or until one cannot be
-    /// taken from the queue, which is logged, or until the task that drains it is cancelled, as Ctrl-C cancels a command;
-    /// the items no running process works on first go back into the queue.
+    /// taken from the queue, which is logged, or until the task that drains it is cancelled, as Ctrl-C cancels a command,
+    /// or one finds Ollama away (`ollamaRetryAt`); the items no running process works on first go back into the queue.
     func drainQueue() async {
         await putBackLeft()
         while !Task.isCancelled, let item = await next(), await run(item) {}
@@ -122,11 +139,19 @@ extension ModelQueue {
         let work = Task { try await body() }
         inHand?.work = work
         do {
-            return .done(try await withTaskCancellationHandler { try await work.value } onCancel: { work.cancel() })
+            let outcome = try await withTaskCancellationHandler { try await work.value } onCancel: { work.cancel() }
+            ollamaRetryAt = nil
+            return .done(outcome)
         } catch {
             if let ended = inHand?.ended { return .ended(ended) }
             if Cancellation.stops(error) { return .interrupted }
-            if let error = error as? OllamaError, await services.ollamaIsAway(error) { return .away(error) }
+            if let error = error as? OllamaError, await services.ollamaIsAway(error) {
+                let until = retryAt
+                ollamaRetryAt = until
+                return .away(error, until: until)
+            }
+            // A failure of anything else says Ollama answered.
+            ollamaRetryAt = nil
             return .failed(error)
         }
     }
@@ -158,8 +183,11 @@ extension ModelQueue {
             }
             // Until the next item is due, or the doorbell rings, and while another process holds items, a while at most
             // (`IdleWait`): an item due now was taken above, unless the queue could not be read, which waits for a ring.
-            let wait = IdleWait.seconds(untilDue: await earliest(), heldElsewhere: await anyHeldElsewhere(),
-                                        recheck: services.config.ingest.heldElsewhereRecheckSeconds, now: services.time.now())
+            let now = services.time.now()
+            var due = ollamaRetryAt.flatMap { $0 > now ? $0 : nil }
+            if due == nil { due = await earliest() }
+            let wait = IdleWait.seconds(untilDue: due, heldElsewhere: await anyHeldElsewhere(),
+                                        recheck: services.config.ingest.heldElsewhereRecheckSeconds, now: now)
             await doorbell.wait(timeout: wait, time: services.time)
         }
     }
@@ -177,7 +205,13 @@ extension ModelQueue {
         }
     }
 
+    /// The item due first; none while the last one waits for Ollama (`ollamaRetryAt`), which is forgotten once its time
+    /// has come: what is taken then is tried, and no time is said for it.
     private func next() async -> Item? {
+        if let until = ollamaRetryAt {
+            guard services.time.now() >= until else { return nil }
+            ollamaRetryAt = nil
+        }
         do { return try await nextDue() } catch {
             guard !Cancellation.stops(error) else { return nil }
             Log.error(.search, "Could not read the queue", ["queue": name, "error": error.localizedDescription])

@@ -200,13 +200,17 @@ public struct SettingsChange<Outcome: Sendable>: Sendable {
 /// `arrumatorcli` while the app runs, comes into (`flock(2)` on a file beside the settings): the file is read again,
 /// the change is checked, recorded by whoever records it, and saved. Settings the next launch would refuse
 /// (`AppSettings.problems`), and a file that cannot be read, are refused before anything is written, naming the file and
-/// how to mend it.
+/// how to mend it. Every change saved is told to every store of the same file, in any process (`ChangeSignal`), which
+/// reads the file again and publishes what changed (`changes()`), so the app goes on at once with a profile or a pause
+/// `arrumatorcli` saved.
 ///
 /// What the change and its record leave after a crash: the file is renamed into place before the transaction that holds
 /// the record commits, so a process that ends between the two leaves the change saved without its record. Nothing else
 /// leaves one apart from the other (`change(_:recording:)`).
 public actor SettingsStore {
     public let url: URL
+    /// What tells every store of this file, in any process, that a change was saved.
+    private let signal: ChangeSignal
     private let defaultsValue: JSONValue
     private var cached: AppSettings
     private var continuations: [UUID: AsyncStream<AppSettings>.Continuation] = [:]
@@ -225,6 +229,7 @@ public actor SettingsStore {
     ///   of `settings` mends it.
     public init(paths: AppPaths, config: SettingsLockConfig, time: any TimeSource, mending: Bool = false) throws {
         url = paths.settingsURL
+        signal = ChangeSignal(settings: paths.settingsURL)
         lockConfig = config
         self.time = time
         defaultsValue = try ConfigLoader.bundledValue(AppSettings.configurationName)
@@ -319,6 +324,7 @@ public actor SettingsStore {
             throw error
         }
         publish(after)
+        signal.post()
         return change
     }
 
@@ -399,15 +405,43 @@ public actor SettingsStore {
         return try await SettingsLock.take(beside: url, config: lockConfig, time: time)
     }
 
+    /// The settings each time they change, for as long as the stream is read: changed through this store, or saved by
+    /// another store of the file, as `arrumatorcli` does while the app runs, told by its `ChangeSignal`.
     public func changes() -> AsyncStream<AppSettings> {
         let id = UUID()
         let (stream, continuation) = AsyncStream<AppSettings>.makeStream()
         continuations[id] = continuation
+        let posts = signal.posts()
+        let listening = Task { [weak self] in
+            for await _ in posts { await self?.readOthersChange() }
+        }
         continuation.onTermination = { [weak self] _ in
+            listening.cancel()
             Task { await self?.remove(id) }
         }
         return stream
     }
+
+    /// Reads the file again when a store of it said a change was saved, and publishes what it holds when the app can run
+    /// with it (`reread`): what this store saved itself is no change. One it cannot read now is left to the next change,
+    /// which refuses it, naming the file. It is read under the lock across processes a change is made under, this
+    /// store's own included: a change saved and not recorded yet, which may yet be put back, is read once it is over,
+    /// never in between.
+    func readOthersChange() async {
+        do {
+            waitsToReadAnotherChange = true
+            defer { waitsToReadAnotherChange = false }
+            let lock = try await SettingsLock.take(beside: url, config: lockConfig, time: time)
+            defer { lock.release() }
+            _ = try reread()
+        } catch {
+            Log.warning(.app, "Could not read the settings another process saved", ["error": error.localizedDescription])
+        }
+    }
+
+    /// Whether this store waits for a change another store is making to end, before it reads what was saved: what a test
+    /// watches for before it lets that one go on.
+    private(set) var waitsToReadAnotherChange = false
 
     private func remove(_ id: UUID) { continuations[id] = nil }
 }

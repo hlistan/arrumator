@@ -96,11 +96,11 @@ Models](docs/using-arrumator.md#models-and-profiles), where you can also give an
 with Reset, or add profiles of your own. Smart's model thinks before it answers, which a search task's effort uses;
 documents are read without thinking. Documents already read keep their labels when you choose another profile: **Read
 All Documents Again**, under Settings › Filing, reads them with it, as putting one into Incoming again, as it is, does.
-Fast and Standard were chosen as the best for their memory
-on a 16 GB Mac mini (M5) when Arrumator still filed documents into folders, and larger models do not fit such a Mac's
-memory. How well Standard labels documents is measured; Fast's labels have not been measured yet, and Smart has not been
-measured on the evaluation corpus at all, neither its labels, its speed nor its memory. The measurements are in
-[docs/evaluation.md](docs/evaluation.md).
+Fast and Standard were chosen as the best for their memory on a 16 GB Mac mini (M5) when Arrumator still filed documents
+into folders, and larger models do not fit such a Mac's memory. How well Standard and Fast label documents is measured:
+Fast reads a document in about a quarter of Standard's time and finds fewer of the labels a document should get (69%
+against 96%). Smart has not been measured on the evaluation corpus at all, neither its labels, its speed nor its memory.
+The measurements are in [docs/evaluation.md](docs/evaluation.md).
 
 ## Install
 

@@ -10,15 +10,19 @@ import Testing
 /// copied the prompt's wording ("account and its number: 123456780"), numbers given as people, two labels in one, a
 /// sender the document never names, and names with a period where the date goes or a separator left dangling.
 @Suite struct LabelFormTests {
-    /// The reading of `text` an answer of `overrides` and `title` gives; without a title, one of the text's own words, its
-    /// first line, as the title is checked against them too (`ReadingGrounds.unwritten`).
+    /// The reading of `text`, in `language` when it is known, an answer of `overrides` and `title` gives, in an exchange
+    /// that `sentBack` holds what the model was told of; without a title, one of the text's own words, its first line, as
+    /// the title is checked against them too (`ReadingGrounds.unwritten`).
     static func validate(_ overrides: [LabelKind: [String]], title: String? = nil, text: String = Fixtures.edpText,
-                         preferred: [LabelPreference] = []) throws -> ValidatedAnalysis {
+                         language: String? = nil, preferred: [LabelPreference] = [],
+                         sentBack: SentBack? = nil) throws -> ValidatedAnalysis {
         var labels = try PipelineConfig.bundledDefaults().labels
         labels.maxPerKind = 6
+        // Titled by its heading, written as a sentence is, as the prompt asks even of a heading printed in capitals.
         let heading = text.split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
-        return try Fixtures.validator(labels, grounds: Fixtures.grounds(text, preferred: preferred))
-            .validate(Fixtures.answer(overrides, title: title ?? heading))
+        let sentence = heading.prefix(1).uppercased() + heading.dropFirst().lowercased()
+        return try Fixtures.validator(labels, grounds: Fixtures.grounds(text, preferred: preferred, language: language))
+            .validate(Fixtures.answer(overrides, title: title ?? sentence), sentBack: sentBack)
     }
 
     // MARK: READ-1

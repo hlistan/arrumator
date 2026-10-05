@@ -28,9 +28,9 @@ public struct AppDatabase: Sendable {
     let time: any TimeSource
     /// What tells the other processes with this index open that this one committed to it, and this one that they did
     /// (`othersCommits()`); none for an index in memory, which no other process opens.
-    let signal: IndexChangeSignal?
+    let signal: ChangeSignal?
 
-    init(_ writer: any DatabaseWriter, observationRetry: Double, time: any TimeSource, signal: IndexChangeSignal?) throws {
+    init(_ writer: any DatabaseWriter, observationRetry: Double, time: any TimeSource, signal: ChangeSignal?) throws {
         self.writer = writer
         self.observationRetry = observationRetry
         self.time = time
@@ -207,7 +207,7 @@ public struct AppDatabase: Sendable {
             try db.execute(sql: "PRAGMA synchronous = NORMAL")
         }
         let pool = try DatabasePool(path: url.path, configuration: config)
-        return try AppDatabase(pool, observationRetry: database.observationRetry, time: time, signal: IndexChangeSignal(index: url))
+        return try AppDatabase(pool, observationRetry: database.observationRetry, time: time, signal: ChangeSignal(index: url))
     }
 
     /// In-memory database for tests, configured as the bundled defaults say, and complete: it is not to be rebuilt from
@@ -263,7 +263,7 @@ extension AppDatabase {
     }
 
     /// Each time another process, or another connection of this one, has committed a change to the index, for as long
-    /// as the stream is read: what this one's observations do not see (`IndexChangeSignal`). Told by the other's
+    /// as the stream is read: what this one's observations do not see (`ChangeSignal`). Told by the other's
     /// notification, and checked by SQLite's count of commits other connections made (`PRAGMA data_version`, asked of the
     /// writer, which this process's own commits leave as it was), so this process's own posts are no change. Each
     /// change tells every observation of this index to look again (`Database.notifyChanges(in:)`), as History growing

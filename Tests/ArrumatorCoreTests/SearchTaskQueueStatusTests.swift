@@ -72,6 +72,8 @@ import Testing
         #expect(await queue.status.progress(of: try await suite.task(tasks, removed)) == .waitingForOllama(until: retry),
                 "the task's card says when it is tried again")
         #expect(try await suite.task(tasks, removed).state == .queued, "the task waits in the queue")
+        let due = try await w.h.env.database.reader.read { db in try SearchTaskRecord.fetchOne(db, key: removed)?.nextRunAt }
+        #expect(due == retry, "due again at the very time the queue says, when it takes items again, so it comes first then")
         try await tasks.delete(removed)
         #expect(await queue.status == .idle, "with nothing left to read the queue waits for nothing, Ollama included")
 
@@ -83,6 +85,69 @@ import Testing
         await queue.drain()
         #expect(try await suite.task(tasks, id).state == .ready, "once Ollama is back the task is read when it is tried again")
         #expect(await queue.status == .idle, "and the queue no longer says it waits for Ollama")
+    }
+
+    /// A request the queue takes while Ollama is away waits for it; none behind it is asked of the model meanwhile, only
+    /// to wait too (QA 2026-10-05, RA-1, the same in every queue).
+    @Test func whileOllamaIsAwayNoOtherRequestIsReadUntilTheOneThatFoundItIsTriedAgain() async throws {
+        let w = try await suite.world()
+        defer { w.h.env.cleanup() }
+        let ollama = Reachability()
+        let asked = Reachability()
+        let (queue, tasks) = w.h.searchTasks(StubInterpreter(plans: Self.plans) { _ in
+            await asked.set(up: true)
+            if await !ollama.up { throw OllamaError.unreachable("connection refused") }
+        })
+        let first = try await tasks.create(prompt: Self.phones).id
+        await queue.drain()
+        let second = try await tasks.create(prompt: SearchTaskTests.prompt).id
+        await asked.set(up: false)
+        await queue.drain()
+        let retry = w.h.env.time.now().addingTimeInterval(w.h.env.config.ingest.retryDelays.last)
+        #expect(await !asked.up, "the request asked after Ollama was found away is not read before the first is tried again")
+        #expect(await queue.status == SearchTaskQueueStatus(reading: nil, queued: 2, waitingForOllama: true, retryAt: retry),
+                "both are said to wait for Ollama, until the first is tried again")
+        await ollama.set(up: true)
+        w.h.env.time.advance(by: w.h.env.config.ingest.retryDelays.last)
+        await queue.drain()
+        let states = [try await suite.task(tasks, first).state, try await suite.task(tasks, second).state]
+        #expect(states == [.ready, .ready], "once Ollama is back, both are read in their turn")
+    }
+
+    /// The second review of the fix of QA 2026-10-05, RA-1: the status a stopped queue publishes was put back to waiting
+    /// for Ollama, until when it was last found away.
+    @Test func aStoppedQueueWaitsForNothingThoughItsTasksWaitedForOllama() async throws {
+        let w = try await suite.world()
+        defer { w.h.env.cleanup() }
+        let (queue, tasks) = w.h.searchTasks(StubInterpreter(plans: Self.plans) { _ in throw OllamaError.unreachable("connection refused") })
+        await queue.start()
+        _ = try await tasks.create(prompt: Self.phones)
+        #expect(await Patience.until { await queue.status.waitingForOllama }, "the running queue finds Ollama away")
+        await queue.stop()
+        let status = await queue.status
+        #expect(!status.waitingForOllama && status.retryAt == nil && status.reading == nil,
+                "stopped, it waits for nothing until it starts again: \(status)")
+    }
+
+    /// The third review of the fix of QA 2026-10-05, RA-1: while the request that found Ollama away was read again, the
+    /// status kept saying when it would be tried, a time already past.
+    @Test func whileARequestThatFoundOllamaAwayIsTriedAgainNoTimeIsSaid() async throws {
+        let w = try await suite.world()
+        defer { w.h.env.cleanup() }
+        let ollama = Reachability()
+        let witness = QueueWitness()
+        let (queue, tasks) = w.h.searchTasks(StubInterpreter(plans: Self.plans) { prompt in
+            await witness.look(reading: prompt)
+            if await !ollama.up { throw OllamaError.unreachable("connection refused") }
+        })
+        await witness.watch(queue, tasks)
+        _ = try await tasks.create(prompt: Self.phones)
+        await queue.drain()
+        await ollama.set(up: true)
+        w.h.env.time.advance(by: w.h.env.config.ingest.retryDelays.last)
+        await queue.drain()
+        let tried = try #require(await witness.sights.last?.status)
+        #expect(tried.reading != nil && tried.retryAt == nil, "the request in hand is being tried: no time to try it again is said: \(tried)")
     }
 
     @Test func theStatusIsRightAfterTheQueueStopsWhileARequestIsReadAndStartsAgain() async throws {

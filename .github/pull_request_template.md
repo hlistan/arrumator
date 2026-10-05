@@ -18,7 +18,9 @@
 
 ## Review
 
-<!-- Who reviewed, besides you (docs/review/code-review.md), and what was found: each finding fixed, or why it stands. -->
+<!-- Who reviewed, besides you (docs/review/code-review.md), and what was found: each finding and the change and test
+     that fixed it, or the protocol step, gate or evaluation that keeps it fixed where no test reaches it. No finding
+     stands (AGENTS.md §2, Review). A QA run of the change lists its findings here the same way. -->
 
 ## Guideline refinement
 
@@ -30,7 +32,7 @@
       `scripts/change-scope.sh main` says `checks`)
 - [ ] The documentation this change affects is updated in this pull request (AGENTS.md §4.10)
 - [ ] The diff was reviewed by me and by someone who did not write it (AGENTS.md §2, `docs/review/code-review.md`),
-      and no finding rated Blocker or Major is open
+      and no finding is open, whatever its rating, the findings of any QA run of it included
 - [ ] Eval numbers before and after are included, if analysis behaviour changed (the prompt, the answer schema and its
       validation, the `analysis` and `labels` settings, the label kinds)
 - [ ] No real documents, secrets or machine-local commit identities

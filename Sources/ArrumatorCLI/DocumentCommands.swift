@@ -50,23 +50,32 @@ struct Ingest: AsyncParsableCommand {
         // The documents these files became, whatever else the archive holds; for an exact copy of a document in the
         // archive, that document, read again in its place.
         var docs: [DocumentRecord] = []
+        var waiting: [URL] = []
         for (url, id) in jobs {
             let job = try await runtime.services.jobs.job(id: id)
             if let doc = job?.docId ?? (try? job?.payload)?.copyOf, let document = try await runtime.services.documents.document(id: doc) {
                 docs.append(document)
                 if job?.state == .failed { failed.append((url, job?.lastError ?? "it could not be filed")) }
+            } else if job?.state.isActive == true {
+                // Not begun, as while Ollama is away, which no file is read for meanwhile: no failure.
+                waiting.append(url)
             } else {
                 failed.append((url, job?.lastError ?? "it became no document"))
             }
         }
         try options.emit(docs) {
-            docs.map { document in
+            (docs.map { document in
                 "\(document.status.rawValue.padding(toLength: 11, withPad: " ", startingAt: 0)) \(document.path)"
                     + (document.labels(.tag).isEmpty ? "" : "\n            tags: " + document.labels(.tag).joined(separator: " · "))
-            }.joined(separator: "\n")
+            } + waiting.map { "\("queued".padding(toLength: 11, withPad: " ", startingAt: 0)) \($0.path)" }).joined(separator: "\n")
         }
+        // The JSON is the documents alone; a file not begun, which is none yet, is named beside it, as no failure.
+        if options.json { for url in waiting { FileHandle.standardError.write(Data("\(url.path): \(Self.notBegun)\n".utf8)) } }
         return failed
     }
+
+    /// What `--json` says of a file queued and not begun, as while Ollama is away.
+    static let notBegun = "queued, not read yet: the app or `run` files it"
 
     /// Reads and labels each file without moving it or recording anything, and shows what came of them in one list; the
     /// files that could not be read, each with why.

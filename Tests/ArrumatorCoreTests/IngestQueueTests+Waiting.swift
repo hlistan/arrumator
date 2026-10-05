@@ -120,4 +120,128 @@ extension IngestQueueTests {
         #expect(stuck.arrivals == 1 && FileManager.default.fileExists(atPath: url.path),
                 "it is never read again beside the reading that has not ended, and the file stays in Incoming, in Needs You")
     }
+
+    @Test func whileOllamaIsAwayNoOtherFileIsTakenUntilTheOneThatFoundItIsTriedAgain() async throws {
+        let h = try await Harness.make(analyzer: StubAnalyzer(error: OllamaError.unreachable("connection refused")))
+        defer { h.env.cleanup() }
+        for name in ["a.txt", "b.txt", "c.txt"] { await h.coordinator.enqueue(try h.env.drop(name, text: "\(IngestTests.bill) \(name)")) }
+        await h.coordinator.drain()
+        #expect(try await h.jobs().map(\.state) == [.analysing, .pending, .pending],
+                "the first waits for Ollama where it stopped, and the others are not read for their text only to wait too")
+        let wait = await h.coordinator.idleWait(paused: false, power: false, archiveThere: true, queueUnread: false)
+        #expect(wait == h.env.config.ingest.retryDelays.last, "the worker waits until it is tried again, rather than take the others")
+        let retry = h.env.time.now().addingTimeInterval(h.env.config.ingest.retryDelays.last)
+        let status = await h.coordinator.status
+        let progress = try await h.jobs().dropFirst().map { status.progress(of: $0) }
+        #expect(status.waitingForOllama && status.retryAt == retry && progress == [.waitingForOllama(until: retry), .waitingForOllama(until: retry)],
+                "and Incoming says the others wait for Ollama until then, not only when they arrived: \(progress)")
+
+        h.env.time.advance(by: h.env.config.ingest.retryDelays.last)
+        await h.coordinator.drain()
+        #expect(try await h.jobs().map(\.state) == [.analysing, .pending, .pending], "tried again while Ollama is still away, it waits again alone")
+        let said = try await h.services.history.events(limit: 20, kinds: [.extracted, .retry]).map(\.summary)
+        #expect(said.count == 2 && said.first?.hasPrefix("Waiting for Ollama") == true,
+                "History says once that its text was read and once that it waits, however often it is tried: \(said)")
+    }
+
+    /// The file that found Ollama away is left for later meanwhile, and nothing else is queued: nothing waits for Ollama
+    /// any more, which the status says, rather than wait for it until another file comes (the review of the fix of
+    /// QA 2026-10-05, RA-1).
+    @Test func noWaitForOllamaIsSaidOnceNothingIsLeftThatWaits() async throws {
+        let h = try await Harness.make(analyzer: StubAnalyzer(error: OllamaError.unreachable("connection refused")))
+        defer { h.env.cleanup() }
+        await h.coordinator.enqueue(try h.env.drop("a.txt", text: IngestTests.bill))
+        await h.coordinator.drain()
+        #expect(await h.coordinator.status.waitingForOllama, "the file waits for Ollama")
+        let job = try #require(try await h.jobs().first?.id)
+        _ = try await h.services.jobs.cancelActive(kinds: [.ingest])
+        await h.coordinator.drain()
+        let status = await h.coordinator.status
+        #expect(!status.waitingForOllama && status.retryAt == nil && status.queued == 0, "nothing is said to wait: \(status)")
+        #expect(try await h.services.jobs.job(id: job)?.state == .cancelled, "its job was let go")
+    }
+
+    /// What the evaluation reads each fixture with: a file queued while another waits for Ollama, which is back by the
+    /// time that one is tried again, is read then, not left unread (the second review of the fix of QA 2026-10-05,
+    /// RA-1, which found a short restart of Ollama left a stretch of fixtures unread).
+    @Test func aFileHeldWhileOllamaIsAwayIsReadOnceItIsBackWhenItsDrainWaitsForIt() async throws {
+        let ollama = Reachability()
+        let h = try await Harness.make(analyzer: StubAnalyzer(during: { _ in
+            guard await ollama.up else {
+                await ollama.set(up: true)
+                throw OllamaError.unreachable("connection refused")
+            }
+        }))
+        defer { h.env.cleanup() }
+        await h.coordinator.enqueue(try h.env.drop("a.txt", text: "\(IngestTests.bill) a"))
+        await h.coordinator.drain()
+        let held = try #require(await h.coordinator.enqueue(try h.env.drop("b.txt", text: "\(IngestTests.bill) b")))
+        let started = h.env.time.now()
+        await h.coordinator.drain(waitingOutOllamaFor: held)
+        #expect(try await h.jobs().map(\.state) == [.done, .done], "both are read once Ollama is back")
+        #expect(h.env.time.now() == started.addingTimeInterval(h.env.config.ingest.retryDelays.last),
+                "after waiting until the first was tried again, no longer")
+    }
+
+    /// A worker stopped while its file waits for Ollama no longer says it waits for it, as the queues of search tasks and
+    /// questions do not (the second review of the fix of QA 2026-10-05, RA-1).
+    @Test func aStoppedWorkerWaitsForNothingThoughItsFileWaitedForOllama() async throws {
+        let h = try await Harness.make(analyzer: StubAnalyzer(error: OllamaError.unreachable("connection refused")))
+        defer { h.env.cleanup() }
+        await h.coordinator.start()
+        await h.coordinator.enqueue(try h.env.drop("a.txt", text: IngestTests.bill))
+        #expect(await Patience.until { await h.coordinator.status.waitingForOllama }, "the running worker finds Ollama away")
+        await h.coordinator.stop()
+        let status = await h.coordinator.status
+        #expect(!status.waitingForOllama && status.retryAt == nil, "stopped, it waits for nothing until it starts again: \(status)")
+    }
+
+    /// The third review of the fix of QA 2026-10-05, RA-1: while the file that found Ollama away was tried again, and read,
+    /// the status kept saying when it would be tried, a time already past.
+    @Test func whileAFileThatFoundOllamaAwayIsTriedAgainNoTimeIsSaid() async throws {
+        let ollama = Reachability()
+        let witness = IngestWitness()
+        let h = try await Harness.make(analyzer: StubAnalyzer(during: { _ in
+            await witness.look()
+            guard await ollama.up else { throw OllamaError.unreachable("connection refused") }
+        }))
+        defer { h.env.cleanup() }
+        await witness.watch(h.coordinator)
+        await h.coordinator.enqueue(try h.env.drop("a.txt", text: IngestTests.bill))
+        await h.coordinator.drain()
+        await ollama.set(up: true)
+        h.env.time.advance(by: h.env.config.ingest.retryDelays.last)
+        await h.coordinator.drain()
+        let tried = try #require(await witness.seen.last)
+        #expect(tried.current != nil && tried.retryAt == nil, "the file in hand is being tried: no time to try it again is said")
+        #expect(try await h.jobs().map(\.state) == [.done], "and it is filed")
+    }
+
+    /// The third review: a drain that waits for Ollama on behalf of a file, once the file that found it away is let go
+    /// and its own turn is later, ends rather than look again and again for nothing.
+    @Test(.timeLimit(.minutes(1))) func aDrainThatWaitsForOllamaEndsWhenNothingIsLeftToTakeOnceItsTimeHasCome() async throws {
+        let h = try await Harness.make(analyzer: StubAnalyzer(error: OllamaError.unreachable("connection refused")))
+        defer { h.env.cleanup() }
+        let first = try #require(await h.coordinator.enqueue(try h.env.drop("a.txt", text: "\(IngestTests.bill) a")))
+        await h.coordinator.drain()
+        let held = try #require(await h.coordinator.enqueue(try h.env.drop("b.txt", text: "\(IngestTests.bill) b")))
+        var later = try #require(try await h.services.jobs.job(id: held))
+        later.nextRunAt = h.env.time.now().addingTimeInterval(10 * h.env.config.ingest.retryDelays.last)
+        try await h.services.jobs.update(later)
+        var letGo = try #require(try await h.services.jobs.job(id: first))
+        letGo.state = .cancelled
+        try await h.services.jobs.update(letGo)
+        await h.coordinator.drain(waitingOutOllamaFor: held)
+        #expect(try await h.services.jobs.job(id: held)?.state == .pending, "it ends, leaving the file to its turn")
+    }
+}
+
+/// What the ingest worker's status was each time a file was read.
+actor IngestWitness {
+    private var coordinator: IngestCoordinator?
+    private(set) var seen: [IngestStatus] = []
+    func watch(_ coordinator: IngestCoordinator) { self.coordinator = coordinator }
+    func look() async {
+        if let coordinator { seen.append(await coordinator.status) }
+    }
 }

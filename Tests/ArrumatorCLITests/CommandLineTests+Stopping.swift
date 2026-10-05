@@ -160,6 +160,25 @@ extension CommandLineTests {
         #expect(try logged(home).contains("Arrumator stopped"), "its work was stopped as the app stops its own, not cut off")
     }
 
+    /// With Ollama away, `run` says when the file waiting for it is tried again (the second review of the fix of QA
+    /// 2026-10-05, RA-1).
+    @Test func runSaysWhenAFileWaitingForOllamaIsTriedAgain() async throws {
+        let home = try Home.make()
+        defer { home.cleanup() }
+        let incoming = home.root.appendingPathComponent("Incoming", isDirectory: true)
+        try FileManager.default.createDirectory(at: incoming, withIntermediateDirectories: true)
+        try Data("Fatura de julho de Maria Exemplo".utf8).write(to: incoming.appendingPathComponent("fatura.txt"))
+        let running = try launch(home, ["run"])
+        defer { if running.isRunning { running.terminate() } }
+        let output = home.root.appendingPathComponent(Self.standardOutput)
+        let said = await Patience.until {
+            ((try? String(contentsOf: output, encoding: .utf8)) ?? "").contains("Waiting for Ollama: it cannot be reached, and is tried again at ")
+        }
+        #expect(said, "it says, as it happens, when the file is tried again: \((try? String(contentsOf: output, encoding: .utf8)) ?? "")")
+        kill(running.processIdentifier, SIGINT)
+        try #require(await Patience.until { !running.isRunning }, "Ctrl-C ends it")
+    }
+
     @Test func aSecondSignalEndsTheCommandAtOnceAndTheOllamaServerItStartedWithIt() async throws {
         let home = try Home.make()
         defer { home.cleanup() }
@@ -207,6 +226,25 @@ extension CommandLineTests {
         #expect(try JSON.decoder.decode([DocumentRecord].self, from: ingested.stdout).isEmpty, "no document came of it: \(ingested.text)")
         #expect(ingested.status == 1 && ingested.stderr.contains(missing[0]),
                 "which the exit code says, and standard error, naming the file: \(ingested.stderr)")
+    }
+
+    /// With Ollama away, the first file is read for its text and waits, and the rest are not begun: each is shown, as
+    /// queued in the list, and with `--json`, which lists documents alone, named on standard error, as no failure
+    /// (QA 2026-10-05, RA-1; the review of its fix).
+    @Test func ingestWhileOllamaIsAwayShowsEveryFileNotBegunAsQueued() throws {
+        let home = try Home.make()
+        defer { home.cleanup() }
+        let notes = ["a.txt", "b.txt", "c.txt", "d.txt"].map { home.root.appendingPathComponent($0) }
+        for (index, note) in notes.enumerated() { try Data("Fatura número \(index + 1) de Maria Exemplo".utf8).write(to: note) }
+        let ingested = try run(home, ["ingest", "--json", notes[0].path, notes[1].path])
+        #expect(try JSON.decoder.decode([DocumentRecord].self, from: ingested.stdout).map(\.originalFilename) == ["a.txt"],
+                "the JSON lists the document the first file became: \(ingested.text)")
+        #expect(ingested.status == 0 && ingested.stderr.contains("\(notes[1].path): queued, not read yet") && !ingested.stderr.contains(notes[0].path),
+                "and names the file not begun on standard error, failing nothing: \(ingested.stderr)")
+        let listed = try run(home, ["ingest", notes[2].path, notes[3].path])
+        let queued = listed.text.split(separator: "\n").filter { $0.hasPrefix("queued ") }.map { URL(fileURLWithPath: String($0.dropFirst(11))).lastPathComponent }
+        #expect(listed.status == 0 && queued == ["c.txt", "d.txt"],
+                "the list shows each as queued, while the file before them waits for Ollama: \(listed.text) \(listed.stderr)")
     }
 
     @Test func aDryRunOfSeveralFilesPrintsOneListNamingEachAndIngestShowsWhatCameOfTheRest() async throws {

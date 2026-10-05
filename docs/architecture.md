@@ -187,7 +187,7 @@ table in [AGENTS.md §5](../AGENTS.md#5-boundaries).
 |---|---|---|
 | `Contracts/` | The types and protocols modules exchange: extracted content, labels and their kinds, analysis, search plans, conversations, traces, prompt templates. | `ExtractedContent`, `LabelKind`, `DocumentLabel`, `SearchPlan`, `TraceContext`, `PromptTemplates` |
 | `Config/` | Settings and tunables, loaded strictly; process environment; where app state lives. | `PipelineConfig`, `AppSettings`, `SettingsStore`, `ConfigLoader`, `RuntimeEnvironment`, `AppPaths` |
-| `Storage/` | The index: schema and migrations, record types, one store per concern, and the notification that tells other processes it changed. | `AppDatabase`, `IndexChangeSignal`, `DocumentStore`, `JobStore`, `IndexStore`, `HistoryStore`, `TraceRecorder`, `LabelStore`, `SearchTaskStore`, `TaskConversationStore` |
+| `Storage/` | The index: schema and migrations, record types, one store per concern, and the notification that tells other processes it changed. | `AppDatabase`, `ChangeSignal`, `DocumentStore`, `JobStore`, `IndexStore`, `HistoryStore`, `TraceRecorder`, `LabelStore`, `SearchTaskStore`, `TaskConversationStore` |
 | `Records/` | The archive's record files: rendering, reading back, rebuilding the index. | `ArchiveRecords`, `ArchiveLayout`, `RecordKind`, `FrontMatter` |
 | `Ingest/` | The pipeline's state machine, filing, and what the user does with a document or a label. | `IngestCoordinator`, `PipelineServices`, `DocumentFiler`, `ReviewActions`, `LabelActions`, `ArchiveReconciler` |
 | `FileOps/` | Names, moves, identity on disk (a package is one document), the Trash. | `FilenameBuilder`, `Placer`, `FileOperations`, `HashService`, `Packages`, `Xattr`, `SystemTrash`, `FolderTrash` |
@@ -410,8 +410,9 @@ written over. The item in hand is known from before it is taken: changing or rem
 removing it or clearing its conversation stops the answer to its question, and stopping a question stops its answer.
 Ollama away, as ingest decides it (`PipelineServices.ollamaIsAway`: not reached, or not in time and not answering a
 probe), makes the item wait, spending nothing, under one trace each attempt takes up
-(`TraceRecorder.start(_:resuming:)`); any other failure, a server that answers with one among them, fails it with the
-reason.
+(`TraceRecorder.start(_:resuming:)`), and no other item is taken until it is tried again (`ModelQueue.ollamaRetryAt`),
+as the ingest worker waits (`IngestCoordinator.ollamaRetryAt`); any other failure, a server that answers with one among
+them, fails it with the reason.
 
 - **Search task.** `SearchTaskActions.create` inserts the task and its History event in one write. `SearchTaskQueue`
   takes the oldest, has `SearchPromptInterpreting` read the request into a `SearchPlan`, finds the documents with
@@ -436,7 +437,7 @@ Views never poll. `AppModel` holds one task per stream and mirrors the value:
 | `SearchTaskQueue.statusUpdates()`, `TaskConversationQueue.statusUpdates()` | Which request is read or question answered, by which model, and the answer so far. |
 | `OllamaLifecycle.states()` | Whether Ollama is ready. |
 | `ArrumatorRuntime.workUpdates()` | Whether the runtime's work runs, was refused as the index is not rebuilt from its archive, or waits as the archive is away. |
-| `SettingsStore.changes()` | Each change to the settings: one made through the store, and one another process made, found when the file is read again before a change. The settings in force are read once, beside it. |
+| `SettingsStore.changes()` | Each change to the settings: one made through the store, one another process saved, told by its `ChangeSignal` as it is saved, and one made by hand, found when the file is read again before a change. The settings in force are read once, beside it. |
 | `LookAlikeMemo.suggestionCounts()` | How many pairs of labels look alike and wait for the user, each time they are worked out. |
 
 What the app shows of the archive it is on, the values these streams last gave among it, is one `ArchiveSession`, which
@@ -520,7 +521,7 @@ change that replaces it; the earlier one stays in Git's history, as superseded c
 | 17 | A ZIP file's directory is read by the app's own code and checked against the file, every offset and size inside it, no two entries sharing a byte (the overlapping-file ZIP bomb) and its entries within limits, before ZIPFoundation opens it; an archive, workbook or presentation that fails is read for its metadata alone, and a Word document, which `textutil` converts, loses only its core properties. ZIPFoundation's entries are found for the parts about to be read in one pass, each paired with its checked entry, and only those are kept; an encrypted entry is never read. | ZIPFoundation traps on offsets and sizes it takes from the file, and a trap in a parser ends the process, which has no sandbox and no helper process to lose instead. | `ArrumatorExtract/Support/ZipDirectory.swift`; [APPNOTE](https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT) |
 | 18 | Excel workbooks are read with Foundation's `XMLParser`, as PowerPoint decks are, not with CoreXLSX: each part through the checked ZIP reader up to its cap, the main workbook read once with the sheets past the limit only counted, a sheet's rows collected as it is parsed and the parse stopped at the row limit. | CoreXLSX 0.14.2, unchanged since February 2023 and pinning XMLCoder 0.14, trapped on hostile workbooks in code the project cannot change (`Dictionary(uniqueKeysWithValues:)` on two sheets of one relationship, an overflow on a column of 14 letters, an `Array.insert` out of range on an empty relationship target), opened files with ZIPFoundation itself, and decoded whole parts into trees before any limit applied. SpreadsheetML needs only its relationships, workbook, shared strings and sheets read (ECMA-376 Part 1 §18), which a SAX parser does in a few hundred lines. | `ArrumatorExtract/Extractors/XLSXExtractor.swift`, `Support/SpreadsheetML.swift` |
 | 19 | A search task's ZIP export is written by ZIPFoundation, behind `FolderArchiving` in Extract, its names composed and marked UTF-8 (general purpose bit 11), not by Finder's Compress (`NSFileCoordinator.ReadingOptions.forUploading`). | Finder's archives leave the flag unset, so `unzip`, Python and Windows read every name outside ASCII as code page 437; Core imports no ZIP library (§5), and writing an archive of the app's own copies parses nothing untrusted. | `ArrumatorExtract/Support/ZipFolderArchiver.swift`; [APPNOTE](https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT) 4.4.4 |
-| 20 | A process tells the others with an index open that it committed by a Darwin notification named after the index, and each checks SQLite's `PRAGMA data_version` before it has its observations look again (`Database.notifyChanges(in:)`). | GRDB's observations see only their own pool's commits, and polling the index would wake every process for nothing; `data_version` tells another connection's commit from its own, so a process's own posts change nothing. | `Storage/IndexChangeSignal.swift`, `AppDatabase.othersCommits()`; `man 3 notify`; [SQLite](https://sqlite.org/pragma.html#pragma_data_version) |
+| 20 | A process tells the others with an index open that it committed by a Darwin notification named after the index, and each checks SQLite's `PRAGMA data_version` before it has its observations look again (`Database.notifyChanges(in:)`). | GRDB's observations see only their own pool's commits, and polling the index would wake every process for nothing; `data_version` tells another connection's commit from its own, so a process's own posts change nothing. | `Storage/ChangeSignal.swift`, `AppDatabase.othersCommits()`; `man 3 notify`; [SQLite](https://sqlite.org/pragma.html#pragma_data_version) |
 | 21 | A document read again changes nothing until it is filed, and then what it reads takes the place of everything it had, in the transaction that records its filing. | The index holds one reading of a document or the other, never parts of both, and a document is found as it was while it is read, or when a stop or a failure cuts the reading off. | `Storage/IndexStore.swift` (`replaceReading`), `Ingest/IngestCoordinator.swift` |
 
 Record a decision here when it changes the module graph, a contract in `Contracts/`, what is stored and where, the
@@ -597,7 +598,7 @@ Deliberate, and to be kept in mind when the load or the threat changes:
 - **No sandbox.** A flaw in a parser has the user's file access, which is why Extract is reviewed as a security
   boundary.
 - **Two processes, one index.** The app and the command line coordinate through SQLite and one Darwin notification per
-  index, posted after each commit that changed it (`IndexChangeSignal`), which carries nothing but its name. A process
+  index, posted after each commit that changed it (`ChangeSignal`), which carries nothing but its name. A process
   that ends with work in hand announces nothing; the app puts such work back at its next maintenance round.
 - **The ingest queue has no claim.** A job is taken by a read, so the app's worker and a command that works the queue
   (`ingest`, `review retry`, `labels unlabelled`) can take the same job.

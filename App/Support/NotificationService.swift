@@ -106,7 +106,7 @@ final class NotificationService {
         guard let settings, let newest = previous.first?.id else { return }
         let wanted = events.filter { event in
             (event.id ?? 0) > newest
-                && ((event.kind == .filed && settings.notifyOnFiled) || (event.kind == .needsReview && settings.notifyOnReview))
+                && ((event.announcesFiling && settings.notifyOnFiled) || (event.kind == .needsReview && settings.notifyOnReview))
         }
         guard !wanted.isEmpty else { return }
         if permission != .allowed { await requestAuthorization(timeout: askTimeout) }

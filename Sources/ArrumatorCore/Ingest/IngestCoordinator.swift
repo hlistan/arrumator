@@ -11,6 +11,12 @@ public actor IngestCoordinator {
     private var worker: Task<Void, Never>?
     /// Whether the archive is away (`archive(isAway:)`).
     public private(set) var archiveAway = false
+    /// Until when no job is taken, as the last one found Ollama away and waits until then to try again (`handleFailure`):
+    /// every other job needs Ollama too, so none is read for its text meanwhile only to wait at its model's step. The
+    /// status says it (`IngestStatus.retryAt`).
+    var ollamaRetryAt: Date? {
+        didSet { status.retryAt = ollamaRetryAt }
+    }
     private let doorbell = Doorbell()
     /// Whether the worker waits, having looked at its queue and found nothing it may take, as when it is paused or the
     /// archive is away: what a test waits for before it asserts that nothing was taken.
@@ -74,6 +80,8 @@ public actor IngestCoordinator {
         worker.cancel()
         await worker.value
         self.worker = nil
+        // A stopped worker waits for nothing, Ollama included; the next start looks again.
+        (status.waitingForOllama, ollamaRetryAt) = (false, nil)
     }
 
     public func wake() { doorbell.ring() }
@@ -163,11 +171,11 @@ public actor IngestCoordinator {
     /// Processes due jobs until none are left that this worker may take, or the task that drains them is cancelled, as
     /// Ctrl-C cancels a command (CLI and tests): a job another process has in hand, as the app beside `arrumatorcli`,
     /// is left to it, and the job in hand when the task is cancelled carries on at the next start. Which jobs it takes,
-    /// `draining` says: by default only those that come in their turn.
+    /// `draining` says: by default only those that come in their turn. It ends, too, once a job finds Ollama away: none
+    /// is taken until that one is tried again (`ollamaRetryAt`), which a command does not wait for.
     public func drain(_ draining: Draining = .inTurn) async {
         while !Task.isCancelled, case let .taken(job) = await nextDue(givingWay: draining == .everything) {
             await process(job)
-            if draining == .everything, status.waitingForOllama { break }
         }
         await refreshQueueCount()
     }
@@ -196,8 +204,14 @@ public actor IngestCoordinator {
         case unreadable
     }
 
-    /// The next job due now, taken for this worker (`JobStore.nextDue`), one that gives way only with `givingWay`.
+    /// The next job due now, taken for this worker (`JobStore.nextDue`), one that gives way only with `givingWay`; none
+    /// while the last one waits for Ollama (`ollamaRetryAt`), which is forgotten once its time has come: the job taken
+    /// then is tried, and no time is said for it, while the status says the worker waits for Ollama until it answers.
     private func nextDue(givingWay: Bool = true) async -> Look {
+        if let until = ollamaRetryAt {
+            guard services.time.now() >= until else { return .none }
+            ollamaRetryAt = nil
+        }
         do {
             return try await services.jobs.nextDue(claiming: services.claims, excluding: stillRunning(), givingWay: givingWay)
                 .map(Look.taken) ?? .none
@@ -242,6 +256,9 @@ public actor IngestCoordinator {
         do {
             let counts = try await services.jobs.counts()
             (status.queued, status.reindexing, status.readingAgain) = (counts.queued, counts.reindexing, counts.readingAgain)
+            // Nothing left waits, for Ollama or anything else, as when the job that found it away was cancelled, a
+            // document left for later meanwhile: no wait is said, nor kept, for what is gone.
+            if counts.queued + counts.reindexing + counts.readingAgain == 0 { (status.waitingForOllama, ollamaRetryAt) = (false, nil) }
         } catch {
             Log.error(.ingest, "Could not count the job queue", ["error": error.localizedDescription])
         }
@@ -309,7 +326,7 @@ public actor IngestCoordinator {
             try await LeftRunning.$current.withValue(left) {
                 try await runStages(&job, payload: &payload, settings: settings, trace: trace)
             }
-            status.waitingForOllama = false
+            (status.waitingForOllama, ollamaRetryAt) = (false, nil)
             // A copy is no document: its trace is reached from its event in its original's History (`handOver`).
             await finish(trace, JobOutcome(ended: job.state), docID: job.docId)
         } catch IngestError.claimLost {
@@ -471,6 +488,7 @@ public actor IngestCoordinator {
             let directory = job.kind == .ingest ? services.archive : document.url.deletingLastPathComponent()
             let (unfiledJob, unfiledPayload, now, jobs) = (job, payload, services.time.now(), services.jobs)
             let plannedPath = Mutex<String?>(nil)
+            let movedOnly = Mutex(false)
             // A failure after the plan was kept keeps it with the job's payload too, which the failure saves.
             defer { if let planned = plannedPath.withLock({ $0 }) { payload.plannedPath = planned } }
             filedRecord = try await services.filer.file(
@@ -486,21 +504,28 @@ public actor IngestCoordinator {
                     plannedPath.withLock { $0 = path }
                 },
                 recording: { [services] db, filed in
-                    if let rereading = unfiledPayload.rereading {
-                        try services.replaceReading(db, docID: docID, filename: filed.filename, content: content, outcome: outcome,
-                                                    rereading: rereading, jobID: unfiledJob.id, traceID: unfiledPayload.traceID, at: now)
-                    }
                     var filedPayload = unfiledPayload
                     filedPayload.targetPath = filed.path
                     var filedJob = unfiledJob
                     try filedJob.setPayload(filedPayload)
                     // The file has moved: its record commits even when the job is no longer this worker's, which then
                     // saves nothing more of the job (`IngestError.claimLost` at its next save). A document read again
-                    // that has not moved is left as it was: what the user did meanwhile, as leaving it for later, stands.
+                    // whose job is no longer this worker's, as one left for later meanwhile, is left as the user left
+                    // it: where it was when it has not moved, and else only where its file now is.
                     do { try JobStore.save(filedJob, at: now, in: db) } catch let IngestError.claimLost(id) {
-                        if unfiledPayload.rereading != nil, filed.path == document.path { throw IngestError.claimLost(id) }
+                        guard unfiledPayload.rereading != nil else { return .filed }
+                        guard filed.path != document.path else { throw IngestError.claimLost(id) }
+                        movedOnly.withLock { $0 = true }
+                        return .movedOnly
                     }
+                    if let rereading = unfiledPayload.rereading {
+                        try services.replaceReading(db, docID: docID, filename: filed.filename, content: content, outcome: outcome,
+                                                    rereading: rereading, jobID: unfiledJob.id, traceID: unfiledPayload.traceID, at: now)
+                    }
+                    return .filed
                 }), movedTo: movedTo)
+            // Set aside while it was moved: nothing of the reading is kept, nor more of the job (`claimLost`).
+            if movedOnly.withLock({ $0 }) { throw IngestError.claimLost(job.id ?? 0) }
         }
         payload.targetPath = filedRecord.path
         let traceID = trace.traceID

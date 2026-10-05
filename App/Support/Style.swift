@@ -526,7 +526,7 @@ extension JobProgress {
     /// Beside a file in Incoming's queue; the file in hand has a spinner in its place.
     var symbol: String {
         switch self {
-        case .working, .waiting: "circle"
+        case .working, .waiting, .waitingForOllama: "circle"
         case .resuming: "circle.lefthalf.filled"
         case .retrying: "exclamationmark.circle"
         }
@@ -535,7 +535,7 @@ extension JobProgress {
     var tint: Color {
         switch self {
         case .retrying: Palette.attention
-        case .working, .resuming, .waiting: .secondary
+        case .working, .resuming, .waiting, .waitingForOllama: .secondary
         }
     }
 }

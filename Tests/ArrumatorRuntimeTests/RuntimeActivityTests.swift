@@ -78,7 +78,21 @@ import Testing
             $0.ollama = .unreachable("studio.local")
             $0.conversation.waitingForOllama = true
         }
-        #expect(waiting.now == .waitingForOllama && waiting.mark == .problem, "a question waiting for a server away is said, and marked")
+        #expect(waiting.now == .waitingForOllama(until: nil) && waiting.mark == .problem,
+                "a question waiting for a server away is said, and marked")
+        let (file, question) = (Date(timeIntervalSince1970: 60), Date(timeIntervalSince1970: 90))
+        let until = Self.with {
+            $0.ollama = .unreachable("studio.local")
+            ($0.ingest.waitingForOllama, $0.ingest.retryAt) = (true, file)
+            ($0.conversation.waitingForOllama, $0.conversation.retryAt) = (true, question)
+        }
+        #expect(until.now == .waitingForOllama(until: file), "with when the first of what waits is tried again (the second review of RA-1)")
+        let tried = Self.with {
+            $0.ingest = Self.filing
+            $0.ingest.waitingForOllama = true
+        }
+        #expect(tried.now == .filing(path: "/Incoming/bill.pdf", work: JobWork(stage: .analysing, model: "qwen3.5:9b", since: Date(timeIntervalSince1970: 0))),
+                "a file in hand is being filed, though the last that was found Ollama away (the third review of RA-1)")
     }
 
     @Test func aDocumentBeingFiledComesBeforeTheTasksAndFilesQueued() {
@@ -106,6 +120,13 @@ import Testing
         begun.progress = AnswerProgress(text: "", thinking: true)
         let thinking = Self.with { $0.conversation = ConversationQueueStatus(answering: begun, queued: 0, waitingForOllama: true) }
         #expect(thinking.tasksWork == .answering(model: "qwen3.5:9b"), "and answering once they come")
+        #expect(thinking.now == .tasks(.answering(model: "qwen3.5:9b")) && waiting.now == .waitingForOllama(until: nil),
+                "which the app says it is doing now, not that it waits for Ollama (the fourth review of the fix of RA-1)")
+        let tried = Self.with {
+            ($0.ingest.waitingForOllama, $0.ingest.retryAt) = (true, Date(timeIntervalSince1970: 60))
+            ($0.taskQueue.waitingForOllama, $0.taskQueue.retryAt) = (true, nil)
+        }
+        #expect(tried.now == .waitingForOllama(until: nil), "while one waiting is tried now, no time to try again is said")
     }
 
     /// QA 2026-10-04, CNV-6: between its tries a question waiting for Ollama was not said to be waiting at all.

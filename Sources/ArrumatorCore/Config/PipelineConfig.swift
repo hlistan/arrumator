@@ -205,6 +205,10 @@ public struct ExtractionConfig: Sendable, Codable, Hashable {
         public var fullPageImageCoverage: Double
         /// Longest rendered side in pixels for page OCR, whatever the DPI (guards against huge media boxes).
         public var ocrMaxPixel: Int
+        /// How wide a gap on a line of a page's text layer is, in times the height of the letters either side of it,
+        /// for the text either side to stand apart, as two columns or a table's cells do: a tab between them, not a
+        /// space (`PDFPageText`).
+        public var columnGap: Double
     }
     public struct Image: Sendable, Codable, Hashable {
         public var ocrMaxPixel: Int

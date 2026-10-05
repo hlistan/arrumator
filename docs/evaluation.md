@@ -26,11 +26,12 @@ model in place of the profile's reading model:
 | sender writings | Of the senders the corpus expects on more than one document, how many ways each was written on average: 1 when every document from one sender got the same sender label. |
 | distinct labels | How many different labels of each kind the documents got in all, as a label list would show them: fewer, for as many expected labels found, is a tidier vocabulary. |
 
-Type, sender, date, title and language are scored only for documents the corpus expects to be filed. The median
-time per document is reported too. A second pass files the same documents again with different bytes, which shows
-how consistently they are read. `--min-accuracy <x>` fails the run when the first pass reads fewer than that share of
-type, sender, date and title right. Every score is computed by `Evaluation` in Core from what the run recorded, and
-`EvaluationTests` checks each on recorded outcomes, without a model.
+Type, sender, date, title and language are scored only for documents the corpus expects to be filed. The median time per
+document is reported too, the time a document waited for Ollama included: should Ollama be away during a run, a document
+waits for it, as in the app, and is read once it is back, never scored unread. A second pass files the same documents
+again with different bytes, which shows how consistently they are read. `--min-accuracy <x>` fails the run when the
+first pass reads fewer than that share of type, sender, date and title right. Every score is computed by `Evaluation` in
+Core from what the run recorded, and `EvaluationTests` checks each on recorded outcomes, without a model.
 
 The 21 documents of the international set (`intl/`) record the labels they should get besides their type, sender and
 date. The others record only sender, type, date, title words and language, and their other labels are measured by
@@ -54,10 +55,17 @@ two documents print beside "ФНС России" and the model now gives, as the
 2026-10-05 on the same server, asks for a title in sentence case even where a document prints its heading in capitals,
 and sends back once, beside the title, what the document may not bear out: an object with no number in it, a date given
 to a document that writes neither a date nor its year, and a reading that names two parties and no sender; the
-extractor reads a date an identity card prints with spaces (`01 02 2025`):
+extractor reads a date an identity card prints with spaces (`01 02 2025`). Version 12, measured on 2026-10-05 on the
+same server with version 11 measured again first, reads a PDF's text layer with what a page sets apart on one line, two
+columns or a label and its value, apart by a tab, and writes at once, with a note, what the document itself tells in
+place of what is written otherwise than the prompt asks: a party joined to the sender's name printed beside it as the
+other cell, a title in capitals as the document writes its words in a sentence, and a reference described by the
+field's name printed beside it as its number; what the document does not tell goes back once:
 
 | prompt | pass | status | type | sender | date | title | language | labels each | expected labels | median |
 |---|---|---|---|---|---|---|---|---|---|---|
+| 12 | 1 | 100% | 93% | 89% | 98% | 95% | 100% | 13.0 | 96% | 37.6 s |
+| 12 | 2 | 100% | 95% | 89% | 98% | 95% | 100% | 13.3 | 94% | 36.7 s |
 | 11 | 1 | 100% | 96% | 89% | 98% | 97% | 100% | 13.2 | 94% | 28.1 s |
 | 11 | 2 | 100% | 95% | 89% | 98% | 95% | 100% | 13.3 | 93% | 32.2 s |
 | 10 | 1 | 100% | 95% | 88% | 98% | 97% | 100% | 13.5 | 93% | 26.0 s |
@@ -73,6 +81,8 @@ How consistent the labels are, for the same documents:
 
 | prompt | pass | sender writings | senders | parties | topics | objects | references | jurisdictions |
 |---|---|---|---|---|---|---|---|---|
+| 12 | 1 | 1.12 | 46 | 25 | 44 | 58 | 79 | 31 |
+| 12 | 2 | 1.12 | 46 | 25 | 44 | 64 | 86 | 31 |
 | 11 | 1 | 1.12 | 46 | 26 | 40 | 61 | 89 | 30 |
 | 11 | 2 | 1.12 | 46 | 25 | 40 | 68 | 87 | 30 |
 | 10 | 1 | 1.00 | 45 | 25 | 45 | 84 | 83 | 31 |
@@ -121,6 +131,19 @@ checked since, and the extractor reads such dates. The second sent back a home p
 7", for its house number of one digit, and the model left it out in both passes; a number standing alone beside a name
 identifies an object since.
 
+What version 12 changed, against version 11 measured again the same day, whose first pass read as version 11 had and
+whose second lost a document to a restart of the server: the expected labels rose from 94% to 96% in pass 1, and to 94%
+in pass 2, where version 11 had 93% when first measured, parties from 86% to 91% and objects from 91% to 100% in pass 1,
+as a value no longer runs into the label beside it, and a reference no longer holds the field's name printed beside it,
+which leaves 79 different references rather than 89; sender, date and language read the same. Type fell from 96% to
+93% in pass 1, as two documents got another type from text that now sets its fields apart: a vehicle registration
+renewal, whose table lists a "Vehicle license fee", is a `license` rather than the `letter` the corpus accepts, in both
+passes, and a social security number's proof is a `certificate` rather than an `attestation` in one pass, as version 11
+read it in its second. Title fell from 97% to 95%, one licence certificate titled after its subscription, "Toolbox
+Subscription", rather than its product, "All Products Pack", in both passes; the pharmacy receipt version 11 titled
+"Fatura-receito" in its second pass is "Fatura-recibo" in both. The medians, measured while the server read for other
+clients too, are not compared.
+
 What the runs showed about the prompt:
 
 - **An example format anchors the model, and a described one is copied.** Without an example amount, the model left
@@ -139,7 +162,6 @@ What the runs showed about the prompt:
   - Two names on one line are sometimes kept as one party ("Thomas und Anna Beispiel").
   - A period is sometimes written at month precision where the document gives days.
   - A private seller's contract names both parties as senders.
-  - A heading in capitals is sometimes misspelled when written in sentence case ("Fatura-receito").
 
 ### Keeping labels one vocabulary
 
@@ -174,6 +196,32 @@ What the runs showed about telling the model of the archive:
   `Julien Exemple`) and senders (`ACME LTD` and `ACME`). Topics at 0.85 offered only different subjects sharing a word
   (`property tax` and `property sale`, 0.92) or a narrower topic beside a broad one (`plumbing repair`, 0.91), which
   the prompt asks for; typos and plurals score 0.97 and above, so topics are offered from 0.94.
+
+### Fast
+
+Fast's labels were first measured on 2026-10-05, on the same server and corpus, with the `fast` profile
+(`gemma4:e2b-it-qat`, `bge-m3`): version 11 first, then version 12, which was made for what the QA run of that day
+found in Fast's readings.
+
+| prompt | pass | status | type | sender | date | title | language | labels each | expected labels | median |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 12 | 1 | 100% | 84% | 88% | 86% | 95% | 98% | 14.8 | 69% | 10.4 s |
+| 12 | 2 | 100% | 88% | 84% | 88% | 93% | 97% | 14.9 | 69% | 9.5 s |
+| 11 | 1 | 100% | 88% | 86% | 86% | 93% | 97% | 14.9 | 66% | 9.1 s |
+| 11 | 2 | 100% | 88% | 84% | 88% | 93% | 97% | 15.3 | 68% | 8.2 s |
+
+Fast reads a document in about a quarter of Standard's time and finds fewer of the labels a document should get, 69%
+against 96%: most jurisdictions are missed (17%), and a third of the periods and amounts. Version 12 raised the parties
+found from 86% to 95% in both passes, as a party no longer joins the sender's name printed beside it; titles written in
+capitals fell from 14 of the 124 readings to 10, those of five documents that write their heading only in capitals,
+whose title goes back once and stands as given again, as only the document could say its small letters; and a reference
+described by the field's name printed beside it is its number ("póliza 061-2026-1596647" is "061-2026-1596647"). Type
+fell from 88% to 84% in pass 1, a French tax notice read as a `tax-return` and a Russian land register extract as an
+`id-document`, and read as version 11 did in pass 2. References found fell from 86% to 71% in pass 2: an invoice whose
+number Fast describes in the document's own Polish words, which the document runs into the number ("Faktura VAT nr
+F/11104/06/2026"), goes back once, and Fast, asked again, gave the same reference in pass 1 and left it out in pass 2.
+A booking confirmation got its sender, its title and its language right in pass 1, which version 11 had not. The
+medians, measured while the server read for other clients too, are not compared.
 
 ## Image descriptions and the model's context
 
@@ -242,8 +290,7 @@ now takes one model call instead of up to several, so these times are upper boun
 
 - **Synthetic documents.** The corpus is synthetic: 57 documents of 21 kinds in 18 languages and 8 scripts, and five
   edge cases. Real archives have more kinds and longer histories.
-- **One profile.** Labels are measured with Standard alone. Fast has been measured only in the folder-era runs above,
-  and Smart not at all.
+- **Two profiles.** Labels are measured with Standard and Fast; Smart has not been measured at all.
 - **Expected labels on a third of the corpus.** Parties, objects, references, periods, deadlines, amounts and
   jurisdictions are checked on the 21 international documents only; on the rest they are measured by coverage.
 - **No image descriptions.** Every image in the corpus has enough text for OCR, so the corpus never tests how well a

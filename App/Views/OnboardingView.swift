@@ -40,6 +40,9 @@ struct OnboardingView: View {
                     .keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent)
                 }
             }
+            // Each step's buttons are its own: kept from step to step, AppKit's buttons keep the key equivalent of the
+            // place they had, so Return pressed Back, or nothing, after the first step (QA 2026-10-05, ONB-4).
+            .id(step)
         }
         .padding(Style.onboardingPadding)
         .frame(width: Style.onboardingWindow.width, height: Style.onboardingWindow.height)

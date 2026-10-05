@@ -96,12 +96,13 @@ struct IncomingPage: View {
         }
     }
 
-    /// What a file in the queue waits for: its turn, since it arrived; carrying on where it stopped; or to be tried again
-    /// after its error.
+    /// What a file in the queue waits for: its turn, since it arrived; carrying on where it stopped; to be tried again
+    /// after its error; or Ollama, which another file found away, until that one is tried again.
     private func waiting(_ job: JobRecord, _ progress: JobProgress) -> String {
         switch progress {
         case let .retrying(error, at): error + (at.map(Wording.retrying(at:)) ?? "")
         case .resuming: Wording.carriesOn(arrived: job.createdAt)
+        case let .waitingForOllama(until): Wording.waitingForOllama(until: until)
         case .waiting, .working: Wording.arrived(job.createdAt)
         }
     }

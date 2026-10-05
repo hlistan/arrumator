@@ -185,25 +185,36 @@ func activate() {
     usleep(250_000)
 }
 
-/// The process whose window is frontmost on screen at `p`, which the pointer's events there reach. The pointer is drawn
-/// in a window of its own, at the cursor's level, which events pass through: left where the last click was, it would
-/// otherwise refuse a second click at the same place.
-func owner(at p: CGPoint) -> pid_t? {
+/// The window frontmost on screen at `p`, which the pointer's events there reach: its process, that process's name, and
+/// its layer. The pointer is drawn in a window of its own, at the cursor's level, which events pass through: left where
+/// the last click was, it would otherwise refuse a second click at the same place.
+func owner(at p: CGPoint) -> (pid: pid_t, name: String, layer: Int)? {
     let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
     let cursorLevel = Int(CGWindowLevelForKey(.cursorWindow))
     for window in list where window[kCGWindowLayer as String] as? Int != cursorLevel {
         guard (window[kCGWindowAlpha as String] as? Double ?? 0) > 0,
               let bounds = window[kCGWindowBounds as String] as? NSDictionary,
-              let rect = CGRect(dictionaryRepresentation: bounds), rect.contains(p) else { continue }
-        return window[kCGWindowOwnerPID as String] as? pid_t
+              let rect = CGRect(dictionaryRepresentation: bounds), rect.contains(p),
+              let owner = window[kCGWindowOwnerPID as String] as? pid_t else { continue }
+        return (owner, window[kCGWindowOwnerName as String] as? String ?? "?", window[kCGWindowLayer as String] as? Int ?? 0)
     }
     return nil
 }
 
-/// Refuses a pointer event at `p` that would reach another process's window, or none.
+/// Looks at `p` this many times, activating the process before each, while another window is over it there: one passing
+/// over it, as a help tag or a banner fading, or one the activation has not yet put behind the process's window.
+let ownWindowLooks = 4
+
+/// Refuses a pointer event at `p` that would reach another process's window, or none, saying whose window it is.
 func ensureOwnWindow(at p: CGPoint) {
-    guard owner(at: p) == pid else {
-        fail("refused: \(whole(p.x)),\(whole(p.y)) is not on a window of \(pid), so nothing was sent there")
+    var found = owner(at: p)
+    for _ in 1..<ownWindowLooks where found?.pid != pid {
+        activate()
+        found = owner(at: p)
+    }
+    guard let found, found.pid == pid else {
+        let over = found.map { "on a window of \($0.name) (\($0.pid)) at layer \($0.layer)" } ?? "on no window"
+        fail("refused: \(whole(p.x)),\(whole(p.y)) is \(over), not of \(pid), so nothing was sent there")
     }
 }
 

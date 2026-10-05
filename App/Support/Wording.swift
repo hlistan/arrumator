@@ -114,7 +114,7 @@ enum Wording {
     static func now(_ now: RuntimeActivity.Now) -> String {
         switch now {
         case let .held(holdup): self.holdup(holdup, inMenuBar: true)
-        case .waitingForOllama: waitingForOllama
+        case let .waitingForOllama(until): waitingForOllama(until: until)
         case let .filing(path, work): working(on: (path as NSString).lastPathComponent, stage: doing(work))
         case let .tasks(work): tasksWork(work)
         case let .queued(count): queued(count)

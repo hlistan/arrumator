@@ -95,6 +95,12 @@ public struct RuntimeActivity: Sendable, Equatable {
         case waitingForOllama(until: Date?)
         /// A question is being answered, by `model`.
         case answering(model: String)
+
+        /// Whether a request or a question is in hand, being read or answered, rather than waiting.
+        public var inHand: Bool {
+            if case .waitingForOllama = self { return false }
+            return true
+        }
     }
 
     /// What the search tasks are at work on: a request being read, else a question being answered or waiting for Ollama;
@@ -111,8 +117,9 @@ public struct RuntimeActivity: Sendable, Equatable {
     /// What the app is doing now.
     public enum Now: Sendable, Equatable {
         case held(Holdup)
-        /// A document, request or question waits for Ollama.
-        case waitingForOllama
+        /// A document, request or question waits for Ollama: until the first of them that found it away is tried again,
+        /// or, when nil, while it is being tried.
+        case waitingForOllama(until: Date?)
         /// The document at `path` is being worked on: at which stage, by which model, since when.
         case filing(path: String, work: JobWork)
         case tasks(TasksWork)
@@ -121,13 +128,17 @@ public struct RuntimeActivity: Sendable, Equatable {
         case idle
     }
 
-    /// What the app is doing now, the first that applies: what holds filing up before Ollama, anything waiting for
-    /// Ollama, the document being filed, what a search task is at work on, files queued.
+    /// What the app is doing now, the first that applies: what holds filing up before Ollama, the document being filed, a
+    /// request being read or a question being answered, anything waiting for Ollama, files queued.
     public var now: Now {
         if let held = heldBeforeOllama { return .held(held) }
-        if ingest.waitingForOllama || taskQueue.waitingForOllama || conversation.waitingForOllama { return .waitingForOllama }
+        // A document, a request or a question in hand is being worked on, Ollama answering or not yet known to.
         if let current = ingest.current { return .filing(path: current.path, work: current.work) }
-        if let tasks = tasksWork { return .tasks(tasks) }
+        if let tasks = tasksWork, tasks.inHand { return .tasks(tasks) }
+        // When it is tried again, unless something waiting is being tried now, which says none.
+        let waits = [(ingest.waitingForOllama, ingest.retryAt), (taskQueue.waitingForOllama, taskQueue.retryAt),
+                     (conversation.waitingForOllama, conversation.retryAt)].filter(\.0)
+        if !waits.isEmpty { return .waitingForOllama(until: waits.contains { $0.1 == nil } ? nil : waits.compactMap(\.1).min()) }
         return ingest.queued > 0 ? .queued(ingest.queued) : .idle
     }
 

@@ -86,6 +86,16 @@ import Testing
 
     // MARK: The model's context
 
+    /// QA 2026-10-05, CNV-8: asked for a total over bills in three currencies, the model gave none, as they differ.
+    @Test func thePromptAsksForATotalOfEachCurrencyApartNeverNoneAndNeverOneSum() async throws {
+        let w = try await world { _ in try Self.answer() }
+        defer { w.env.cleanup() }
+        let system = try w.answerer.library.render("conversation-system", [:])
+        #expect(system.contains("Amounts in more than one currency are totalled each currency apart")
+                    && system.contains("never one sum of them, and never no total because they differ"),
+                "a total is asked of each currency, and neither one sum of them nor none: \(system)")
+    }
+
     @Test func whatAnAnswerIsShownIsCutToFitTheContextTheLeastNeededFirstAndTheTraceSaysSo() async throws {
         let w = try await world { _ in try Self.answer() }
         defer { w.env.cleanup() }
