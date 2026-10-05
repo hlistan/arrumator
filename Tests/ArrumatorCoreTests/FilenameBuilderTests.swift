@@ -28,6 +28,39 @@ import Testing
                 "a name the model writes decomposed, a letter then its accent, is written composed (NFC), byte for byte")
     }
 
+    @Test func aReadingNamesADocumentByItsDateItsSenderAndItsTitleLeavingNoSeparatorForWhatItLacks() {
+        #expect(builder.made(date: "2026-07-05", sender: "EDP", title: "Fatura julho") == "2026-07-05 EDP - Fatura julho", "all three")
+        #expect(builder.made(date: "2025-08-20", sender: nil, title: "Contrat de location") == "2025-08-20 Contrat de location",
+                "no sender leaves no dash after the date")
+        #expect(builder.made(date: nil, sender: "EDP", title: "Fatura julho") == "EDP - Fatura julho", "no date leaves no space before")
+        #expect(builder.made(date: nil, sender: nil, title: " - Nota sobre a caldeira - ") == "Nota sobre a caldeira",
+                "the title alone, without separators at its ends")
+        #expect(builder.made(date: "2026-07-05", sender: "EDP", title: "") == "2026-07-05 EDP", "no title leaves no dash after the sender")
+        #expect(builder.made(date: "2026-07-05", sender: nil, title: "  ") == nil, "a date alone names nothing: the document keeps its own name")
+        #expect(builder.made(date: "2026-07-05", sender: "EDP Comercial", title: "2026-07-05 edp comercial - Fatura")
+                    == "2026-07-05 EDP Comercial - Fatura", "a title written as a whole name repeats neither its date nor its sender")
+        #expect(builder.made(date: "2026-07-05", sender: "EDP", title: "EDP 2026-07-05 - Fatura") == "2026-07-05 EDP - Fatura",
+                "in whichever order it writes them")
+        #expect(builder.made(date: nil, sender: "EDP", title: "EDPR relatório") == "EDP - EDPR relatório",
+                "a sender is taken off a title's start only as a whole word")
+    }
+
+    @Test func aReadingsNameFollowsThePartsAndSeparatorsTheConfigurationGives() throws {
+        var naming = try PipelineConfig.bundledDefaults().naming
+        naming.parts = [.sender, .title, .date]
+        naming.separators = [" · ", " _ "]
+        let ordered = FilenameBuilder(config: naming, reserved: skip)
+        #expect(ordered.made(date: "2026-07-05", sender: "EDP", title: "Fatura julho") == "EDP · Fatura julho _ 2026-07-05",
+                "each part in the configured order, each followed by its own separator")
+        #expect(ordered.made(date: "2026-07-05", sender: nil, title: "_ Fatura julho ·") == "Fatura julho _ 2026-07-05",
+                "a part the document lacks takes its separator with it, and a title loses the separators at its ends")
+        #expect(ordered.made(date: "2026-07-05", sender: "EDP", title: "") == "EDP · 2026-07-05", "a separator follows a part only when one follows it")
+        naming.parts = [.title]
+        naming.separators = []
+        #expect(FilenameBuilder(config: naming, reserved: skip).made(date: "2026-07-05", sender: "EDP", title: "EDP Fatura julho") == "Fatura julho",
+                "a name of the title alone still leaves out the sender it begins with")
+    }
+
     @Test func withoutAModelNameTheDocumentKeepsItsOwn() {
         #expect(builder.name(for: decision(named: nil), current: current, transliterate: false) == "scan_0001.pdf", "no name from the model")
         #expect(builder.name(for: decision(named: "  "), current: current, transliterate: false) == "scan_0001.pdf", "a blank name is no name")

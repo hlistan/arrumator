@@ -140,7 +140,7 @@ enum RussianFixtures {
         return .filed(file, .ru, .pdfText, type: .taxReturn,
                       correspondent: "ФНС", date: filed,
                       titleContains: ["3-НДФЛ", "2025"], identifiers: [.ruINN(ivan.inn)],
-                      acceptAlso: AcceptAlso(correspondent: ["FNS", "ИФНС России № 28 по г. Москве"]),
+                      acceptAlso: AcceptAlso(correspondent: ["FNS", "ИФНС России № 28 по г. Москве", "Федеральная налоговая служба"]),
                       payload: .pdfText(document))
     }
 
@@ -190,7 +190,7 @@ enum RussianFixtures {
                       correspondent: "ФНС", date: issued,
                       titleContains: ["Налоговое уведомление", "2025"],
                       identifiers: [.ruINN(ivan.inn), .ruINN(cast.treasury.taxID)],
-                      acceptAlso: AcceptAlso(correspondent: ["FNS", "ИФНС России № 28 по г. Москве"]),
+                      acceptAlso: AcceptAlso(correspondent: ["FNS", "ИФНС России № 28 по г. Москве", "Федеральная налоговая служба"]),
                       payload: .pdfText(document))
     }
 

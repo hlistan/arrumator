@@ -110,7 +110,8 @@ import Testing
         #expect(try w.saved()["modelProfiles"] == nil, "and settings.json no longer mentions it, so a new bundled value reaches it")
         let file = try Data(contentsOf: w.file)
         for predefined in w.bundledIDs {
-            await #expect(throws: ModelProfileError.predefined(predefined), "\(predefined): the bundled settings would bring it back") {
+            let name = try w.bundled.modelProfile(predefined).name
+            await #expect(throws: ModelProfileError.predefined(name), "\(predefined): the bundled settings would bring it back, named by its name") {
                 try await w.profiles.remove(predefined)
             }
         }
@@ -123,21 +124,21 @@ import Testing
         defer { w.h.env.cleanup() }
         let mine = try await w.profiles.add(name: "Mine")
         try await w.profiles.use(mine.id)
-        await #expect(throws: ModelProfileError.inUse(mine.id), "the profile Settings reads with stays") {
+        await #expect(throws: ModelProfileError.inUse("Mine"), "the profile Settings reads with stays, named by its name") {
             try await w.profiles.remove(mine.id)
         }
         try await w.profiles.use(w.bundled.profile)
         let (_, tasks) = w.h.searchTasks(StubInterpreter(plans: [:]))
         let first = try await tasks.create(prompt: SearchTaskTests.prompt, profile: mine.id)
         let second = try await tasks.create(prompt: SearchTaskTests.prompt, profile: mine.id)
-        await #expect(throws: ModelProfileError.namedByTasks(mine.id, count: 2), "nor one search tasks read with, which says how many") {
+        await #expect(throws: ModelProfileError.namedByTasks("Mine", count: 2), "nor one search tasks read with, which says how many") {
             try await w.profiles.remove(mine.id)
         }
-        #expect(ModelProfileError.namedByTasks(mine.id, count: 2).localizedDescription.hasPrefix("2 search tasks in this archive read with"),
+        #expect(ModelProfileError.namedByTasks("Mine", count: 2).localizedDescription.hasPrefix("2 search tasks in this archive read with"),
                 "the reason counts the tasks of the archive that is open, the only ones it knows of, so the user knows what to change first")
         #expect(try w.saved()["modelProfiles"]?[mine.id] != nil, "and nothing is removed")
         try await tasks.update(first.id, SearchTaskChange(profile: w.otherBundled))
-        await #expect(throws: ModelProfileError.namedByTasks(mine.id, count: 1), "while one task still reads with it") {
+        await #expect(throws: ModelProfileError.namedByTasks("Mine", count: 1), "while one task still reads with it") {
             try await w.profiles.remove(mine.id)
         }
         try await tasks.update(second.id, SearchTaskChange(profile: ""))
@@ -156,15 +157,15 @@ import Testing
         let recorded = try await w.events().count
         let refusals: [(ModelProfileError, String, @Sendable () async throws -> Void)] = [
             (.blankName(nil), "a new profile without a name", { _ = try await w.profiles.add(name: " \n") }),
-            (.nameTaken(name: other.name.uppercased(), by: w.otherBundled), "another profile's name in other letters",
+            (.nameTaken(name: other.name.uppercased(), by: other.name), "another profile's name in other letters, named by its name",
              { _ = try await w.profiles.add(name: other.name.uppercased()) }),
             (.nameWithoutLetterOrDigit("★ ☆"), "a name with no letter or digit to make an id of", { _ = try await w.profiles.add(name: "★ ☆") }),
             (.blankModel(profile: "Yours", role: .chat), "a new profile without a model to read with",
              { _ = try await w.profiles.add(name: "Yours", change: ModelProfileChange(models: [.chat: "  "])) }),
             (.unknown("nonexistent"), "a copy of a profile there is none of",
              { _ = try await w.profiles.add(name: "Yours", copying: "nonexistent") }),
-            (.blankName(mine.id), "a name taken away", { _ = try await w.profiles.update(mine.id, ModelProfileChange(name: "")) }),
-            (.nameTaken(name: other.name, by: w.otherBundled), "a name another profile has",
+            (.blankName("Mine"), "a name taken away", { _ = try await w.profiles.update(mine.id, ModelProfileChange(name: "")) }),
+            (.nameTaken(name: other.name, by: other.name), "a name another profile has",
              { _ = try await w.profiles.update(mine.id, ModelProfileChange(name: other.name)) }),
             (.blankModel(profile: "Mine", role: .vision), "a model to describe images taken away",
              { _ = try await w.profiles.update(mine.id, ModelProfileChange(models: [.vision: "\n"])) }),
@@ -172,7 +173,7 @@ import Testing
              { _ = try await w.profiles.update(mine.id, ModelProfileChange(models: [.embedding: ""])) }),
             (.unknown("nonexistent"), "a change to a profile there is none of",
              { _ = try await w.profiles.update("nonexistent", ModelProfileChange(models: [.chat: Self.reader])) }),
-            (.notPredefined(mine.id), "a reset of the user's own profile, which has nothing to go back to", { _ = try await w.profiles.reset(mine.id) }),
+            (.notPredefined("Mine"), "a reset of the user's own profile, which has nothing to go back to", { _ = try await w.profiles.reset(mine.id) }),
             (.unknown("nonexistent"), "a reset of a profile there is none of", { _ = try await w.profiles.reset("nonexistent") }),
             (.unknown("nonexistent"), "a removal of a profile there is none of", { _ = try await w.profiles.remove("nonexistent") }),
             (.unknown("nonexistent"), "reading with a profile there is none of", { _ = try await w.profiles.use("nonexistent") }),
@@ -185,6 +186,66 @@ import Testing
         #expect(try await w.events().count == recorded, "and nothing is recorded")
         #expect(try await w.profiles.update(mine.id, ModelProfileChange(name: "MINE")).profile.name == "MINE",
                 "a profile may take its own name in other letters")
+    }
+
+    @Test func aNewNameIsCheckedAsAddingChecksItNamingTheProfileThatHasItByItsName() async throws {
+        let w = try await world()
+        defer { w.h.env.cleanup() }
+        // Renamed, so its name and its id differ, as the user's renaming leaves them.
+        _ = try await w.profiles.update(w.otherBundled, ModelProfileChange(name: "Everyday Reader"))
+        let settings = await w.h.env.settings.current
+        let names: [(String, ModelProfileError?, String)] = [
+            ("EVERYDAY reader", .nameTaken(name: "EVERYDAY reader", by: "Everyday Reader"), "another profile's name in other letters"),
+            (" \n", .blankName(nil), "a blank name"),
+            ("!!!", .nameWithoutLetterOrDigit("!!!"), "a name with no letter or digit"),
+            (" Mine\t", nil, "a name of its own, whatever the space around it"),
+        ]
+        for (name, refusal, what) in names {
+            #expect(ModelProfileActions.refusal(ofNewName: name, in: settings) == refusal, "\(what): said as it is typed")
+            if let refusal {
+                await #expect(throws: refusal, "\(what): and refused the same when it is added") { try await w.profiles.add(name: name) }
+            }
+        }
+        let taken = ModelProfileError.nameTaken(name: "EVERYDAY reader", by: "Everyday Reader").localizedDescription
+        #expect(taken.contains("the profile “Everyday Reader”") && !taken.contains("“\(w.otherBundled)”"),
+                "the profile that has the name is named as the app lists it, never by its id: \(taken)")
+        let letterless = ModelProfileError.nameWithoutLetterOrDigit("!!!").localizedDescription
+        #expect(!letterless.contains("id"), "and the user is not told of ids, which the app never shows: \(letterless)")
+    }
+
+    @Test func whyAProfileCannotBeRemovedIsKnownBeforeItIsAskedAndIsWhatRemovingRefuses() async throws {
+        let w = try await world()
+        defer { w.h.env.cleanup() }
+        for listing in await w.profiles.list() {
+            #expect(listing.removalRefusal(searchTasks: 0) == .predefined(listing.profile.name),
+                    "\(listing.id): one that comes with Arrumator is never removed, named by its name")
+        }
+        let mine = try await w.profiles.add(name: "Mine")
+        func listed() async throws -> ModelProfileListing { try #require(await w.profiles.list().first { $0.id == mine.id }) }
+        try await w.profiles.use(mine.id)
+        #expect(try await listed().removalRefusal(searchTasks: 0) == .inUse("Mine"), "the one Settings reads with stays")
+        try await w.profiles.use(w.bundled.profile)
+        let (_, tasks) = w.h.searchTasks(StubInterpreter(plans: [:]))
+        let task = try await tasks.create(prompt: SearchTaskTests.prompt, profile: mine.id)
+        let reading = try await w.profiles.searchTasks(readingWith: mine.id)
+        #expect(reading == 1, "the tasks of the archive that read with it are counted")
+        let refusal = try #require(try await listed().removalRefusal(searchTasks: reading), "one a task reads with is not removed")
+        #expect(refusal == .namedByTasks("Mine", count: 1), "which says how many, naming the profile by its name")
+        await #expect(throws: refusal, "and removing it is refused for the very reason given before it was asked") {
+            try await w.profiles.remove(mine.id)
+        }
+        try await tasks.update(task.id, SearchTaskChange(profile: ""))
+        #expect(try await w.profiles.searchTasks(readingWith: mine.id) == 0, "a task given Settings' profile no longer reads with it")
+        #expect(try await listed().removalRefusal(searchTasks: 0) == nil, "so it can be removed")
+        _ = try await w.profiles.remove(mine.id)
+    }
+
+    @Test func thePredefinedProfilesAreNamedAsTheyComeHoweverTheUserRenamedThem() async throws {
+        let w = try await world()
+        defer { w.h.env.cleanup() }
+        let comeAs = w.bundledIDs.compactMap { w.bundled.modelProfiles[$0]?.name }
+        _ = try await w.profiles.update(w.otherBundled, ModelProfileChange(name: "Smart QA"))
+        #expect(w.profiles.predefinedNames == comeAs, "the names Arrumator comes with, in their order, not the user's: \(w.profiles.predefinedNames)")
     }
 
     @Test func eachProfileChangeIsOneHistoryEventSayingWhatChangedAndNoChangeRecordsNone() async throws {

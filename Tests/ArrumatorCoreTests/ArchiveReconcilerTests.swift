@@ -72,7 +72,7 @@ import Testing
     }
 
     @Test func aDocumentBackFromMissingTakesBackItsStatusAndItsPlaceInSearch() async throws {
-        let h = try await Harness.make(analyzer: StubAnalyzer(labels: nil, fileName: nil))
+        let h = try await Harness.make(analyzer: StubAnalyzer(labels: nil))
         defer { h.env.cleanup() }
         // Search by meaning made ready, as the runtime makes it when it opens the archive.
         await h.services.vectors.load(model: StubAnalyzer.embeddingModel, rows: [])
@@ -187,6 +187,30 @@ import Testing
         let queued = try await h.services.jobs.active()
         #expect(Xattr.get(Xattr.documentID, from: upper) == doc.uid && queued.isEmpty,
                 "its identifier stays on it, and nothing is taken in again to be read by the model")
+    }
+
+    @Test func aFolderRenamedWithItsListHasEachOfItsDocumentsRecordedMovedOnce() async throws {
+        let h = try await Harness.make()
+        defer { h.env.cleanup() }
+        let records = h.env.records()
+        let doc = try await h.ingest("bill.txt", text: IngestTests.bill)
+        let id = try #require(doc.id)
+        let inFolder = try h.moveIntoArchive(doc.url, to: "Pasta QA/\(doc.filename)")
+        try await h.reconciler.apply([.found(path: inFolder.path), .gone(path: doc.path)])
+        try await records.flush()
+        let folder = inFolder.deletingLastPathComponent()
+        let renamedFolder = folder.deletingLastPathComponent().appendingPathComponent("Pasta QA renamed", isDirectory: true)
+        try FileManager.default.moveItem(at: folder, to: renamedFolder)
+        // As the runtime's archive pump does: the record files that changed are read first, then the changes applied.
+        try await records.reconcile()
+        try await h.reconciler.apply([.found(path: renamedFolder.appendingPathComponent(doc.filename).path), .gone(path: folder.path)])
+        try await records.reconcile()
+        let followed = try #require(try await h.services.documents.document(id: id))
+        #expect(followed.path.hasSuffix("/Pasta QA renamed/\(doc.filename)") && followed.status == .filed,
+                "the document is where its folder went")
+        let moves = try await h.services.history.events(limit: 10, kinds: [.userMoved, .userRenamed, .missing], docID: id)
+        #expect(moves.map(\.kind) == [.userMoved, .userMoved] && moves.first?.summary == "\(doc.filename) moved to \(followed.path)",
+                "its folder renamed moves it, which History records once, as it records a document moved on its own: \(moves.map(\.summary))")
     }
 
     @Test(.enabled(if: Volume.ignoresCase, Volume.needsCaseInsensitive))

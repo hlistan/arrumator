@@ -17,10 +17,13 @@ import Testing
         await runtime.start()
         try await runtime.services.history.record(.paused, summary: "Paused just before quitting")
         // A task of the app's that goes on a while after it is stopped, as the settings being applied when it quits do.
-        let (stopped, letGo) = (Signal(), OneShot<Void>())
+        let (began, stopped, letGo) = (Signal(), Signal(), OneShot<Void>())
         await runtime.tasks.run(Self.lingering) {
+            began.fire()
             await withTaskCancellationHandler { await letGo.wait() } onCancel: { stopped.fire() }
         }
+        // Begun before quitting, as the work of a running app has: one cancelled before it begins hears of it only then.
+        try #require(await Patience.until { began.fired }, "the work has begun")
         // Followed from a task of its own, so a stop that never ends fails the test instead of hanging the run.
         let quit = Signal()
         let quitting = Task {

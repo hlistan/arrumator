@@ -16,8 +16,10 @@ public actor ArchiveRecords {
     private let registry: SelfChangeRegistry?
     let time: any TimeSource
     private let timeZone: TimeZone
-    /// Why each record file that cannot be read cannot, by its path, as it was last found.
-    private var unreadable: [String: String] = [:]
+    /// Why each record file that cannot be read cannot, by its path, as it was last found (`noteUnreadable`).
+    var unreadable: [String: String] = [:]
+    /// The record files read, or gone, since History was last told which cannot be read (`recordUnreadable`).
+    var readable: Set<String> = []
     /// Whether a flush, a read-back or a rebuild runs, and those waiting for their turn, the first first.
     private var busy = false
     private var waiting: [CheckedContinuation<Void, Never>] = []
@@ -105,12 +107,14 @@ public actor ArchiveRecords {
     }
 
     func noteUnreadable(_ file: UnreadableRecordFile) {
+        readable.remove(file.path)
         guard unreadable[file.path] != file.reason else { return }
         unreadable[file.path] = file.reason
         Log.error(.db, "Record file cannot be read; it is neither read nor written until it can", ["path": file.path, "reason": file.reason])
     }
 
     func noteReadable(_ path: String) {
+        readable.insert(path)
         guard unreadable.removeValue(forKey: path) != nil else { return }
         Log.info(.db, "Record file reads again", ["path": path])
     }
@@ -171,6 +175,7 @@ public actor ArchiveRecords {
             }
         }
         if written > 0 { Log.debug(.db, "Record files written", ["files": String(written)]) }
+        try await recordUnreadable()
         if let (key, error) = failures.first { throw RecordsError.notWritten(key, error.localizedDescription) }
         return written
     }
@@ -405,6 +410,8 @@ public actor ArchiveRecords {
             }
         }
         let present = Set(walk.records.map(\.1.path) + walk.unlisted.map(\.path))
+        // Gone: written again from the index, so no longer one that cannot be read.
+        readable.formUnion(unreadable.keys.filter { !present.contains($0) })
         unreadable = unreadable.filter { present.contains($0.key) }
         // A file in a folder that was not, or could not be, looked into is not known to be gone.
         for path in known.keys where !present.contains(path) && !walk.hides(path) {
@@ -460,7 +467,7 @@ public actor ArchiveRecords {
                                                               arguments: [kind.key]) ?? false)
             try db.execute(sql: "PRAGMA defer_foreign_keys = ON")
             let applied = try parsed.apply(to: db, replacing: replacing, at: now, links: try parsed.eventLinks(db, everyMonth: false),
-                                           everyDirectory: false)
+                                           everyDirectory: false, recordingMoves: true)
             for (path, hash) in parsed.hashes where !applied.notTakenIn.contains(path) { try Self.remember(db, path: path, hash: hash) }
             if replacing { try db.execute(sql: "DELETE FROM record_dirty WHERE key = ?", arguments: [kind.key]) }
             for kind in applied.rewrite { try Self.mark(db, kind) }

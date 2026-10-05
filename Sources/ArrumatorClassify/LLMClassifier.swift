@@ -151,7 +151,9 @@ public struct LLMClassifier: Sendable {
     /// and a server that is away (`OllamaError.isTransient(asking:)`) end the asking as
     /// `ModelAnswerError.interrupted`, whose `cause` the caller throws on, so the work stops or the document or task
     /// waits; any other failure, an answer that took longer than the effort's own `timeout`, which has nothing to send
-    /// back, and an answer never valid, is `ModelAnswerError.exhausted`. A stop before any call is thrown as it is.
+    /// back, and an answer never valid, is `ModelAnswerError.exhausted`; an answer whose only fault is a guess it sends back
+    /// (`GuessSentBack`) stands when no repair is left, or none comes of it, the last such answer. A stop before any call
+    /// is thrown as it is.
     ///
     /// With `partial`, each answer is streamed to it as it is written, with the number of the attempt it belongs to. With
     /// `cutOff`, an answer cut off at its length limit is neither checked nor sent back: `cutOff` makes the answer of what
@@ -169,6 +171,8 @@ public struct LLMClassifier: Sendable {
         ]
         let think = try await think(model)
         var calls: [ModelCall] = []
+        // The answer that stands should no repair come of a guess sent back (`GuessSentBack`): a guess never fails one.
+        var standing: Answer?
         var messages: [OllamaMessage] = [.system(system), .user(user)]
         for attempt in 0...effort.repairAttempts {
             var call = ModelCall(model: model, attempt: attempt, reason: attempt == 0 ? .primary : .repair,
@@ -203,9 +207,17 @@ public struct LLMClassifier: Sendable {
                 let answer = try validate(response.message.content)
                 calls.append(call)
                 return ModelAnswer(answer: answer, model: model, calls: calls)
+            } catch let guess as GuessSentBack<Answer> where attempt == effort.repairAttempts && !response.reachedLengthLimit {
+                // No repair is left to tell the model of a guess: the answer stands as it is, its notes saying so.
+                calls.append(call)
+                return ModelAnswer(answer: guess.standing, model: model, calls: calls)
             } catch {
                 // An answer cut off at its length limit is invalid for that reason, whatever is wrong with what came.
                 let error = response.reachedLengthLimit ? AnswerValidationError.cutOff(effort.options.numPredict) : error
+                if let guess = error as? GuessSentBack<Answer> {
+                    standing = guess.standing
+                    guess.sent()
+                }
                 call.error = error.localizedDescription
                 let repair = try repairPrompt(error.localizedDescription)
                 let sentBack = Self.sentBack(response.message.content, after: messages, repair: repair, room: effort.promptRoom)
@@ -217,6 +229,7 @@ public struct LLMClassifier: Sendable {
                 messages.append(.user(repair))
             }
         }
+        if let standing { return ModelAnswer(answer: standing, model: model, calls: calls) }
         throw ModelAnswerError.exhausted(calls)
     }
 

@@ -166,8 +166,8 @@ private struct TurnView: View {
     }
 }
 
-/// An answer, its Markdown shown block by block (`AnswerMarkdown`): paragraphs, headings, lists with their markers, quotes
-/// and code, each with its emphasis and inline code, and a table as its rows aligned as code is; a link shows as its words
+/// An answer, its Markdown shown block by block (`AnswerMarkdown`): paragraphs, headings, lists with their markers, quotes,
+/// code and rules, each with its emphasis and inline code, and a table as its rows aligned as code is; a link shows as its words
 /// and address, and an image as its words, so nothing in an answer can be clicked.
 private struct Answer: View {
     let text: String
@@ -202,6 +202,8 @@ private struct Answer: View {
             Text(block.text).font(.body.monospaced())
         case .paragraph:
             Text(block.text)
+        case .rule:
+            Divider()
         }
     }
 }
@@ -279,7 +281,7 @@ private struct FindingView: View {
                     } else if let id = document.id {
                         Button { add([id]) } label: { Image(systemName: "plus.circle") }
                             .buttonStyle(.plain).foregroundStyle(.secondary).help(Wording.addFoundHelp)
-                            .accessibilityLabel(Wording.addFoundHelp)
+                            .accessibilityLabel(Wording.addToTaskNamed(document.record.filename))
                     }
                 }
             }

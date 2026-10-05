@@ -10,13 +10,14 @@ extension Harness {
         try await env.database.reader.read { db in try JobRecord.order(Column("id")).fetchAll(db) }
     }
 
-    /// The name the model reads documents as in `readingOtherwise()`.
-    static let otherFileName = "2026-07-05 MEO - Contrato"
+    /// The title the model reads documents as in `readingOtherwise()`, and the name made of it with their sender.
+    static let otherTitle = "Contrato"
+    static let otherFileName = "MEO - Contrato"
 
     /// This pipeline as after the user chose another profile: its model reads every document as a contract from MEO
-    /// (`LabelingTests.meoContract`), named `otherFileName`.
+    /// (`LabelingTests.meoContract`), titled `otherTitle`, so named `otherFileName`.
     func readingOtherwise() -> (services: PipelineServices, coordinator: IngestCoordinator, analyzer: StubAnalyzer) {
-        let analyzer = StubAnalyzer(labels: LabelingTests.meoContract, fileName: Self.otherFileName)
+        let analyzer = StubAnalyzer(labels: LabelingTests.meoContract, title: Self.otherTitle)
         var services = services
         services.analyzer = analyzer
         return (services, IngestCoordinator(services: services), analyzer)
@@ -71,20 +72,20 @@ struct RefusingTrash: Trashing {
     }
 
     @Test func aDocumentTheModelGaveNoNameKeepsItsOwn() async throws {
-        let h = try await Harness.make(analyzer: StubAnalyzer(fileName: nil))
+        let h = try await Harness.make(analyzer: StubAnalyzer(title: nil))
         defer { h.env.cleanup() }
         let doc = try await h.ingest("bill.txt", text: "EDP electricity July")
         #expect(doc.filename == "bill.txt" && doc.status == .filed, "the document is still filed, under the name it came with")
     }
 
     @Test func aDocumentTheModelCouldNotReadWaitsForTheUserInTheArchive() async throws {
-        let h = try await Harness.make(analyzer: StubAnalyzer(labels: nil, fileName: nil))
+        let h = try await Harness.make(analyzer: StubAnalyzer(labels: nil))
         defer { h.env.cleanup() }
         let doc = try await h.ingest("bill.txt", text: "EDP electricity July")
         #expect(doc.status == .needsReview && doc.url.deletingLastPathComponent().standardizedFileURL == h.env.archive.standardizedFileURL,
                 "it waits for the user as a status, in the archive, not in a folder")
         #expect(doc.analysis?.problems == ["the model gave no valid answer"] && doc.labels == nil, "the user sees why it waits, and no labels are guessed")
-        #expect(try await h.services.documents.reviewQueue().map(\.id) == [doc.id], "it is in the review queue")
+        #expect(try await h.services.documents.needsYou().waiting.map(\.id) == [doc.id], "it is in the review queue")
     }
 
     @Test func aCopyOfADocumentInTheArchiveHasItReadAgainFromTheStartAndGoesToTheTrash() async throws {
@@ -178,7 +179,7 @@ struct RefusingTrash: Trashing {
             let why = IngestError.notTrashed(copy.spelledOnDisk.path, reason: RefusingTrash.reason).localizedDescription
             #expect(failed == ["bill copy.txt stays in Incoming: \(why)"], "when it \(arrival), History says why, once: \(failed)")
             let left = try #require(try await services.documents.list(DocumentFilter(), limit: 5).first { $0.id != original.id })
-            #expect(left.status == .failed && left.path == copy.spelledOnDisk.path && left.status.isReviewable,
+            #expect(left.status == .failed && left.path == copy.spelledOnDisk.path && left.status.waitsForUser,
                     "when it \(arrival), it waits for the user in Needs You, left where it is, which a rescan leaves alone")
         }
     }
@@ -406,7 +407,7 @@ struct RefusingTrash: Trashing {
     }
 
     @Test func confirmingADocumentWaitingForTheUserFilesIt() async throws {
-        let h = try await Harness.make(analyzer: StubAnalyzer(labels: nil, fileName: nil))
+        let h = try await Harness.make(analyzer: StubAnalyzer(labels: nil))
         defer { h.env.cleanup() }
         let id = try #require(try await h.ingest("bill.txt", text: "EDP electricity July").id)
         try await h.review.confirm(id)
@@ -415,23 +416,25 @@ struct RefusingTrash: Trashing {
         #expect(try await h.services.history.events(limit: 5, kinds: [.markedCorrect], docID: id).count == 1, "the confirmation is in History")
     }
 
-    @Test func correctingTheNameAndTheLabelsRenamesTheFileAndKeepsOnlyWhatIsALabel() async throws {
+    @Test func correctingTheNameAndTheLabelsRenamesTheFileAndKeepsEachLabelAsItsKindKeepsIt() async throws {
         let h = try await Harness.make()
         defer { h.env.cleanup() }
         let id = try #require(try await h.ingest("bill.txt", text: "EDP electricity July").id)
         let corrected = LabelEdit(adding: [
             DocumentLabel(kind: .sender, value: "  EDP\nEnergia "), DocumentLabel(kind: .type, value: "receipt"),
-            DocumentLabel(kind: .type, value: "invoice"), DocumentLabel(kind: .deadline, value: "tomorrow"),
-            DocumentLabel(kind: .topic, value: "Electricity"),
+            DocumentLabel(kind: .type, value: "invoice"), DocumentLabel(kind: .topic, value: "Electricity"),
         ], removing: StubAnalyzer.edpBill.filter { $0.kind == .sender })
         try await h.review.edit(id, fileName: "2026-07-05 EDP - Julho", labels: corrected)
+        await #expect(throws: LabelError.notALabel(.deadline, "tomorrow"), "what is no date is no deadline, and is refused, not dropped") {
+            try await h.review.edit(id, fileName: "Never Renamed", labels: LabelEdit(adding: [DocumentLabel(kind: .deadline, value: "tomorrow")]))
+        }
         let edited = try #require(try await h.services.documents.document(id: id))
         #expect(edited.filename == "2026-07-05 EDP - Julho.txt" && FileManager.default.fileExists(atPath: edited.path),
                 "the file on disk takes the corrected name")
         #expect(edited.analysis?.fileName == "2026-07-05 EDP - Julho", "the corrected name replaces the model's")
         #expect(edited.labels(.sender) == ["EDP Energia"], "a label is kept on one line")
         #expect(edited.labels(.type) == ["receipt"], "a document has one type")
-        #expect(edited.labels(.deadline) == ["2026-07-25"], "what is no date is no deadline")
+        #expect(edited.labels(.deadline) == ["2026-07-25"], "and a correction refused changes nothing: the deadline it had stays")
         #expect(edited.labels(.topic) == ["electricity"], "the same topic however written is one")
         let search = h.search
         #expect(try await search.fullText(SearchQuery(text: "sender:energia")).hits.map(\.id) == [id], "a corrected label is searchable")

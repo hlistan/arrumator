@@ -63,8 +63,14 @@ private struct StartFailed: View {
     }
 }
 
-/// Above every page while the archive's folder is not there, as on a disk not connected: what it is, and a way to
-/// open it again once it is back, or to file into another.
+/// Above every page while the archive's folder is not there, as on a disk not connected: what it is, the folder's path
+/// on a line of its own, shortened in the middle, and a way to open it again once it is back, or to file into another.
+///
+/// It sits outside the page's scroll view, so the window lays out as tall as it is: its text is never fixed at the
+/// height it asks for, which the split view measures at a width next to nothing, a line per character, thousands of
+/// points for a long path. The window's content was then taller than the window, centred in it, the notice above the
+/// window and the sidebar's foot below it. Its sentence takes at most `Style.archiveAwayMaxLines` lines, and the path
+/// one.
 private struct ArchiveAway: View {
     @Environment(AppModel.self) private var model
     let path: String
@@ -72,7 +78,10 @@ private struct ArchiveAway: View {
     var body: some View {
         HStack(spacing: Style.noticeSpacing) {
             Image(systemName: RuntimeActivity.Mark.problem.symbol).foregroundStyle(Palette.attention).accessibilityHidden(true)
-            Text(Wording.archiveAwayNotice(path)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: Style.archiveAwayLineSpacing) {
+                Text(Wording.archiveAwayNotice).foregroundStyle(.secondary).lineLimit(Style.archiveAwayMaxLines)
+                Text(path).foregroundStyle(.tertiary).lineLimit(1).truncationMode(.middle).textSelection(.enabled).help(path)
+            }
             Spacer(minLength: 0)
             Button(Wording.tryAgain) { model.tryOpeningAgain() }
             Button(Wording.chooseAnotherArchive) {
@@ -95,95 +104,41 @@ private struct ArchiveAway: View {
 /// labels lists only the labels written with its text in them, and a button below them clears it. Besides the labels',
 /// counts appear only where something is waiting; Tasks has a spinner instead while a search request is being read.
 ///
-/// Only the labels scroll. The lists and the filter stay at the top (`SidebarLists`) and the bar at the foot
-/// (`SidebarBar`), and the labels scroll in a sidebar list of their own between them, never under either: a hairline
-/// under the filter shows while they are scrolled.
+/// Only the labels scroll. The lists and the filter stay at the top (`SidebarLists`, `LabelFilter`) and the bar at the
+/// foot (`SidebarBar`), and the labels scroll in a container of their own between them (`SidebarLabelList`).
 struct Sidebar: View {
     @Environment(AppModel.self) private var model
     /// The labels of the documents in view, kind by kind, the most used first: every document's when none is chosen.
     @State private var usage: [LabelKind: [LabelUsage]] = [:]
     /// Text in the filter field: only the labels written with it in them are listed, each one of them.
     @State private var filter = ""
-    @State private var collapsed: Set<LabelKind> = []
-    /// Kinds whose labels are all listed, past `interface.sidebarLabelsPerKind`.
-    @State private var listedInFull: Set<LabelKind> = []
-    /// Whether the one list of labels is listed in full, past `interface.sidebarLabels`.
-    @State private var rankedInFull = false
-    /// Whether the labels are scrolled, so some are hidden under the filter.
-    @State private var labelsScrolled = false
-    /// The label the arrow keys are on: Return or Space chooses it, as a click does. Moving onto one chooses nothing, as
-    /// choosing narrows the documents and lists other labels.
-    @State private var keyed: DocumentLabel?
+    /// Kinds folded away, while the labels are grouped by kind.
+    @State private var folded: Set<LabelKind> = []
+    /// Lists of labels listed in full, past `interface.sidebarLabelsPerKind` or `interface.sidebarLabels`, until Show
+    /// Fewer.
+    @State private var inFull: Set<SidebarLabelLayout.ListID> = []
 
     var body: some View {
-        let shown = usage.matching(filter)
         VStack(spacing: 0) {
-            SidebarLists(filter: $filter, showsFilter: !usage.isEmpty || !filter.isEmpty)
-            List(selection: $keyed) { labelSections(shown) }
-                .listStyle(.sidebar)
-                .onKeyPress(keys: [.return, .space]) { _ in
-                    guard let keyed else { return .ignored }
-                    model.choose(keyed)
-                    return .handled
-                }
-                // Set once the list has laid out: a list changed while it lays out its rows is reentrant to AppKit.
-                .onScrollGeometryChange(for: Bool.self) { $0.contentOffset.y + $0.contentInsets.top > 0 } action: { _, scrolled in
-                    Task { @MainActor in if labelsScrolled != scrolled { labelsScrolled = scrolled } }
-                }
-                .overlay(alignment: .top) { if labelsScrolled { Divider() } }
+            SidebarLists()
+            // Outside the lists, as a field in a row of a list is outside the window's key view loop: Tab reaches it.
+            if !usage.isEmpty || !filter.isEmpty { LabelFilter(filter: $filter) }
+            // Until the runtime is there, there are no labels, nor limits to list them by; the bar stays at the foot.
+            if let limits = model.runtime?.config.interface {
+                SidebarLabelList(layout: layout(limits), folded: $folded, inFull: $inFull, filter: $filter)
+            } else {
+                Spacer(minLength: 0)
+            }
             SidebarBar()
         }
         .task(id: "\(model.session.labelSelection)|\(model.activity)") { await loadLabels() }
     }
 
-    /// The labels, in one list or kind by kind, and, while the filter has text, what it found and the button that
-    /// clears it.
-    @ViewBuilder private func labelSections(_ shown: [LabelKind: [LabelUsage]]) -> some View {
-        if model.settings?.groupLabelsByKind == true {
-            ForEach(LabelKind.allCases.filter { shown[$0] != nil }, id: \.self) { kind in
-                Section(isExpanded: expanded(kind)) {
-                    labels(shown[kind] ?? [], limit: listedInFull.contains(kind) ? nil : model.runtime?.config.interface.sidebarLabelsPerKind) {
-                        listedInFull.insert(kind)
-                    }
-                } header: {
-                    Text(Wording.labelKinds(kind)).foregroundStyle(Palette.labelKind(kind))
-                }
-            }
-        } else if !shown.isEmpty {
-            Section(Wording.mostUsedLabels) {
-                labels(shown.ranked(), limit: rankedInFull ? nil : model.runtime?.config.interface.sidebarLabels) { rankedInFull = true }
-            }
-        }
-        if !filter.isEmpty {
-            Section {
-                if shown.isEmpty {
-                    Text(Wording.noLabelsMatch(filter)).foregroundStyle(.secondary)
-                }
-                Button(Wording.clearFilter) { filter = "" }
-                    .buttonStyle(.plain).foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private func expanded(_ kind: LabelKind) -> Binding<Bool> {
-        Binding(get: { !collapsed.contains(kind) }, set: { if $0 { collapsed.remove(kind) } else { collapsed.insert(kind) } })
-    }
-
-    /// Labels in the order given, the most used first, up to `limit` until the user asks for the rest. A filter lists
-    /// every label it finds. Those chosen come first, which keeps that order, as every document in view has them: they
-    /// stay in sight however many other labels are as used.
-    @ViewBuilder private func labels(_ listed: [LabelUsage], limit: Int?, showAll: @escaping () -> Void) -> some View {
-        let chosen = listed.filter { model.session.labelSelection.contains($0.label) }
-        let ordered = chosen + listed.filter { !model.session.labelSelection.contains($0.label) }
-        let shown = filter.isEmpty ? Array(ordered.prefix(limit ?? ordered.count)) : ordered
-        ForEach(shown, id: \.label) { item in
-            SidebarLabel(usage: item, chosen: model.session.labelSelection.contains(item.label)) { keyed = nil }
-                .tag(item.label)
-        }
-        if shown.count < listed.count {
-            Button(Wording.showMore, action: showAll)
-                .buttonStyle(.plain).foregroundStyle(.secondary)
-        }
+    /// The labels as the sidebar lists them.
+    private func layout(_ limits: InterfaceConfig) -> SidebarLabelLayout {
+        SidebarLabelLayout(usage: usage, filter: filter, chosen: model.session.labelSelection,
+                           arrangement: .init(groupedByKind: model.settings?.groupLabelsByKind == true, folded: folded, inFull: inFull),
+                           limits: limits)
     }
 
     private func loadLabels() async {
@@ -196,27 +151,22 @@ struct Sidebar: View {
     }
 }
 
-/// The lists, and under them the label filter while there are labels to filter: a sidebar list of their own that never
-/// scrolls, so they stay in sight however far the labels are scrolled, and whose rows look and line up as the labels' do.
+/// The lists: a sidebar list of their own that never scrolls, so they stay in sight however far the labels are scrolled,
+/// and whose rows look and line up as the labels' do.
 ///
 /// A list has no height of its own, and a sidebar row is as tall as the sidebar icon size chosen in System Settings makes
 /// it, so this one is as tall as its rows measure: down to where its last row ends (`ListsEnd`), measured again when the
-/// rows change size or the filter comes or goes. Until then it is as tall as it estimates its rows at, and at least
+/// rows change size. Until then it is as tall as it estimates its rows at, and at least
 /// `Style.sidebarListsEstimatedHeight`, so that every row is laid out, to be measured, and none is cut off.
 private struct SidebarLists: View {
     @Environment(AppModel.self) private var model
     @Environment(\.sidebarRowSize) private var rowSize
-    @Binding var filter: String
-    let showsFilter: Bool
     /// Where the list begins in the window.
     @State private var top: CGFloat?
     /// Where its last row ends in the window, and for which rows.
     @State private var end: ListsEnd?
     /// How tall the list estimates its rows at, those not laid out yet included.
     @State private var estimatedHeight: CGFloat = 0
-    /// Whether the cursor is in the filter: a field in a row of a list is outside the window's key view loop, so Edit ›
-    /// Filter Labels (Option-Command-F) puts it there (`AppModel.filterLabels()`).
-    @FocusState private var filtering: Bool
 
     var body: some View {
         List(selection: Binding(get: { model.session.destination }, set: { if let d = $0 { model.go(d) } })) {
@@ -236,11 +186,8 @@ private struct SidebarLists: View {
                     }
                     .badge(count(destination))
                     .tag(destination)
-                    .listRowBackground(endMarker(last: !showsFilter && destination == Destination.lists.last))
+                    .listRowBackground(endMarker(last: destination == Destination.lists.last))
                 }
-            }
-            if showsFilter {
-                Section { filterField.listRowBackground(endMarker(last: true)) }
             }
         }
         .listStyle(.sidebar)
@@ -254,17 +201,11 @@ private struct SidebarLists: View {
         .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { minY in
             Task { @MainActor in if top != minY { top = minY } }
         }
-        // Also when the command opened the window, before this list was there to hear it.
-        .task(id: "\(model.labelFilterWanted)|\(showsFilter)") {
-            guard model.labelFilterWanted, showsFilter else { return }
-            filtering = true
-            model.labelFilterWanted = false
-        }
     }
 
     /// Down to where the last row ends, once it is measured for the rows in view; until then what the list estimates.
     private var height: CGFloat {
-        guard let top, let end, end.rowSize == rowSize, end.withFilter == showsFilter else {
+        guard let top, let end, end.rowSize == rowSize else {
             return max(Style.sidebarListsEstimatedHeight, estimatedHeight)
         }
         return max(0, end.maxY - top)
@@ -275,9 +216,9 @@ private struct SidebarLists: View {
     /// The rows of a list on macOS are laid out apart from it, where its coordinate space does not reach, so the row and
     /// the list are both measured in the window's.
     private func endMarker(last: Bool) -> some View {
-        let (rowSize, withFilter) = (rowSize, showsFilter)
+        let rowSize = rowSize
         return Color.clear.onGeometryChange(for: ListsEnd?.self) { geometry in
-            last ? ListsEnd(rowSize: rowSize, withFilter: withFilter, maxY: geometry.frame(in: .global).maxY) : nil
+            last ? ListsEnd(rowSize: rowSize, maxY: geometry.frame(in: .global).maxY) : nil
         } action: { measured in
             guard let measured else { return }
             Task { @MainActor in if end != measured { end = measured } }
@@ -292,8 +233,24 @@ private struct SidebarLists: View {
         default: 0
         }
     }
+}
 
-    private var filterField: some View {
+/// Where the last row of the sidebar's lists ends in the window, measured with rows of `rowSize`: rows of another size
+/// end elsewhere, and are measured again.
+nonisolated private struct ListsEnd: Equatable {
+    let rowSize: SidebarRowSize
+    let maxY: CGFloat
+}
+
+/// Filter Labels, between the lists and the labels while there are labels to filter: a field of its own, in no list, so
+/// Tab reaches it between them, as it does every text field (docs/review/swift-apple.md, X2 and X9); Edit › Filter
+/// Labels (Option-Command-F) puts the cursor there too (`AppModel.filterLabels()`).
+private struct LabelFilter: View {
+    @Environment(AppModel.self) private var model
+    @Binding var filter: String
+    @FocusState private var filtering: Bool
+
+    var body: some View {
         HStack(spacing: Style.filterFieldSpacing) {
             Image(systemName: "line.3.horizontal.decrease.circle").foregroundStyle(.secondary).accessibilityHidden(true)
             TextField(Wording.filterLabels, text: $filter).textFieldStyle(.plain)
@@ -308,15 +265,14 @@ private struct SidebarLists: View {
         }
         .padding(Style.filterFieldInsets)
         .background(.quaternary.opacity(Style.filterFieldFillOpacity), in: .rect(cornerRadius: Style.filterFieldCornerRadius))
+        .padding(Style.filterFieldOuterInsets)
+        // Also when the command opened the window, before this field was there to hear it.
+        .task(id: model.labelFilterWanted) {
+            guard model.labelFilterWanted else { return }
+            filtering = true
+            model.labelFilterWanted = false
+        }
     }
-}
-
-/// Where the last row of the sidebar's lists ends in the window, measured with rows of `rowSize`, with the filter under
-/// them or without: rows of another size, or the filter coming or going, end elsewhere, and are measured again.
-nonisolated private struct ListsEnd: Equatable {
-    let rowSize: SidebarRowSize
-    let withFilter: Bool
-    let maxY: CGFloat
 }
 
 /// The bar at the sidebar's foot, which never scrolls: the model profile in use, to choose another as Settings › Models
@@ -392,35 +348,5 @@ private struct SidebarBar: View {
     private func loadProfiles() async {
         guard let runtime = model.runtime else { return }
         profiles = await runtime.profiles.list()
-    }
-}
-
-/// One label in the sidebar, in its kind's colour, with how many of the documents in view have it: choosing it narrows
-/// the documents shown to those that have it, and choosing it again lets go of it.
-private struct SidebarLabel: View {
-    @Environment(AppModel.self) private var model
-    let usage: LabelUsage
-    let chosen: Bool
-    /// Told when the label is clicked, which leaves no row highlighted for the keyboard.
-    var clicked: () -> Void = {}
-
-    var body: some View {
-        let label = usage.label
-        Button {
-            clicked()
-            model.choose(label)
-        } label: {
-            Label {
-                Text(Wording.label(label)).lineLimit(1).truncationMode(.middle)
-            } icon: {
-                Image(systemName: chosen ? "tag.fill" : "tag").foregroundStyle(Palette.labelKind(label.kind))
-            }
-            .fontWeight(chosen ? .semibold : .regular)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
-        .badge(usage.documents)
-        .help(Wording.sidebarLabelHelp(label.kind, chosen: chosen))
     }
 }

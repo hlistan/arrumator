@@ -103,6 +103,10 @@ public struct OllamaConfig: Sendable, Codable, Hashable {
     public var retryDelays: [Double]
     public var healthPollStarting: Double
     public var healthPollSteady: Double
+    /// How many probes for the server's version in a row must time out before a server that was ready is taken to be
+    /// away (`OllamaLifecycle.check`): one slow probe of a server busy reading is no server gone. At least 1; a server
+    /// not yet seen ready, or one that refuses the connection, is away at its first failed probe.
+    public var failedProbesBeforeAway: Int
     public var startTimeout: Double
     public var restartBackoff: NonEmpty<Double>
     public var maxRestartsPerHour: Int
@@ -117,8 +121,13 @@ public struct OllamaConfig: Sendable, Codable, Hashable {
     /// How many characters of a prompt a token of a model's context is reckoned to hold, which ties a search task's and
     /// a question's prompt, written in characters, to the context it is read in (`num_ctx`, in tokens), so one that would
     /// not fit is cut to fit first (`PromptBudget`). An estimate, not a measurement: it fits text in Latin script and may
-    /// not others, and the trace keeps how many tokens Ollama counted and says when the context was full.
+    /// not others, and the trace keeps how many tokens Ollama counted and says when the context was full, which fits the
+    /// prompt again at what Ollama counted (`refitAttempts`).
     public var charsPerToken: Double
+    /// How often a search task's request or a question is fitted again and asked again when Ollama counted its prompt
+    /// filling the context beside the answer: fitted at the characters a token Ollama's count shows the prompt held,
+    /// as text in another script holds fewer than `charsPerToken` (`PromptBudget.measured`). 0 never asks again.
+    public var refitAttempts: Int
 
     /// How long Ollama keeps a model loaded after its last request (`keep_alive`), so the next document does not wait
     /// for it to load again.
@@ -225,6 +234,10 @@ public struct ExtractionConfig: Sendable, Codable, Hashable {
     public var ocrLanguages: [String]
     public var languageSampleChars: Int
     public var languageMinConfidence: Double
+    /// Words a text has fewer of than this is short: a request or a question of a few words, which looks like many
+    /// languages, so it is named one only at `languageShortTextMinConfidence` (`LanguageDetector.name(of:)`).
+    public var languageShortTextWords: Int
+    public var languageShortTextMinConfidence: Double
     public var maxIndexChars: Int
     public var largeFileBytes: Int64
     public var perFileTimeout: Double
@@ -294,6 +307,12 @@ public struct AnalysisConfig: Sendable, Codable, Hashable {
     public var promptIdentifiersLimit: Int
     /// Times an invalid answer goes back to the model, with what was wrong, before the document waits for the user.
     public var repairAttempts: Int
+    /// The share of a title's words of `labels.groundingLetters` letters or more the document must write, below which the
+    /// answer goes back to the model once, naming those it does not (`AnswerValidator`).
+    public var titleGroundedShare: Double
+    /// Parties a reading with no sender names before it goes back to the model once, asking who issued the document, as
+    /// a contract or a lease that names both its sides as parties and neither as its sender (`AnswerValidator`).
+    public var partiesWithoutSender: Int
 }
 
 public struct LabelsConfig: Sendable, Codable, Hashable {
@@ -301,6 +320,13 @@ public struct LabelsConfig: Sendable, Codable, Hashable {
     public var maxPerKind: Int
     /// Longest a label may be; a longer one is cut at a word boundary.
     public var maxValueChars: Int
+    /// The letters a word needs to say on its own whether the document writes a name or a title (`ReadingGrounds`): a
+    /// name's words this long must each be written in it, initials this long ground a name wherever the document writes
+    /// them in capitals, and a title's words this long count toward `analysis.titleGroundedShare`.
+    public var groundingLetters: Int
+    /// The digits a word of an object needs to identify a thing, as a number, a plate or an address writes it, which a
+    /// quantity or a size ("1L", "x6") does not: an object without one goes back to the model once (`AnswerValidator`).
+    public var objectIdentifierDigits: Int
     public var vocabulary: LabelVocabularyConfig
 }
 
@@ -332,6 +358,12 @@ public struct NamingConfig: Sendable, Codable, Hashable {
     public var forbiddenCharacters: [String]
     /// `String(format:)` pattern appended before the extension on collisions, e.g. `" (%d)"`.
     public var collisionFormat: String
+    /// What a reading's name is made of, in order (`FilenameBuilder.made`): the title, and the date and the sender when
+    /// they are listed.
+    public var parts: [NamePart]
+    /// What follows each part of `parts` but the last, when a part the document has follows it: `separators[i]` after
+    /// `parts[i]`.
+    public var separators: [String]
 }
 
 public struct SearchConfig: Sendable, Codable, Hashable {
@@ -361,6 +393,14 @@ public struct TasksConfig: Sendable, Codable, Hashable {
     public var maxValuesPerKind: Int
     /// Words a plan asks the text for at most.
     public var maxWords: Int
+    /// Words of a request at most between a word the model gives and the list of alternatives a kind's labels quote, for
+    /// the word to carry the list on as one more of them, rather than a word every document must hold; 0 is right next
+    /// to it. A word written between two of the alternatives is one of them however far (`SearchPlanValidator`).
+    public var alternativesGap: Int
+    /// Letters at the end of the shorter of two words that may differ while they are one word inflected, as a plural or a
+    /// case inflects it ("квитанции" and "квитанция"): what a conversation's request for more documents is told against
+    /// the person's question by (`SearchPlanValidator`).
+    public var inflectionLetters: Int
     /// Kinds a set is arranged by at most: the depth of an export's folders.
     public var maxGroupingDepth: Int
     /// Longest a task's name from the model may be; a longer one is cut at a word boundary.
@@ -427,94 +467,6 @@ public struct EffortPreset: Sendable, Codable, Hashable {
     }
 }
 
-/// How the model answers what is asked about a search task's documents (docs/how-it-works.md#talking-with-a-tasks-documents):
-/// the context it answers in, how much of the set and of the conversation so far it is shown there, how it writes, and
-/// how much it thinks at the task's effort. Which model answers is the task's profile's.
-///
-/// What it is shown is retrieved, as retrieval-augmented generation does (Lewis et al., "Retrieval-Augmented Generation
-/// for Knowledge-Intensive NLP Tasks", NeurIPS 2020): of a set larger than the context holds, the text of the documents
-/// most relevant to the question, and the rest by name; a long context is also used worst in its middle (Liu et al.,
-/// "Lost in the Middle", TACL 2024), so it is kept to what the question needs
-/// (docs/organizing-principles-sources.md#sources-for-conversations).
-public struct ConversationConfig: Sendable, Codable, Hashable {
-    /// Stamped on every answer's trace, so a change to the prompt shows in what it recorded.
-    public var promptVersion: Int
-    /// The context an answer is asked in (`num_ctx`): the documents' text, the conversation so far, the question and the
-    /// answer, its thinking included, must fit in it, or Ollama drops the start of the prompt. A context other than
-    /// `analysis.numCtx` has Ollama load the model again whenever it goes from reading documents to answering.
-    public var numCtx: Int
-    /// Characters of the set's text an answer is shown at most, the documents the question concerns most first.
-    public var contextChars: Int
-    /// Characters of one document's text shown at most: its start and its end, as a document is read
-    /// (`analysis.excerptTailDivisor`).
-    public var documentChars: Int
-    /// Documents shown by their name, date and labels alone, those whose text does not fit, at most.
-    public var maxListed: Int
-    /// Characters of the conversation so far shown with a question, the latest exchanges kept.
-    public var historyChars: Int
-    /// Longest a question may be.
-    public var maxQuestionChars: Int
-    /// Documents outside the set an answer suggests at most, when it was asked to find more.
-    public var maxSuggested: Int
-    /// How an answer is sampled. Writing is not reading: greedy decoding, which reads documents the same each time,
-    /// repeats itself over a long text (Holtzman et al., "The Curious Case of Neural Text Degeneration", ICLR 2020).
-    public var sampling: Sampling
-    /// How much the model thinks before it answers at each effort, with the budget that needs: every `TaskEffort` has one.
-    public var efforts: [TaskEffort: Effort]
-
-    public struct Sampling: Sendable, Codable, Hashable {
-        public var temperature: Double
-        public var topK: Int
-        public var topP: Double
-        public var seed: Int
-    }
-
-    /// What the model is told about thinking at an effort, sent as the model allows (`OllamaShowResponse.think(sending:)`),
-    /// how often an answer that cannot be read goes back to it, how long an answer may be, its thinking included, and how
-    /// many seconds it may take, in place of `ollama.timeouts.chat`.
-    public struct Effort: Sendable, Codable, Hashable {
-        public var think: OllamaThink
-        public var repairAttempts: Int
-        public var numPredict: Int
-        public var timeout: Double
-    }
-
-    /// How the model answers at `effort`.
-    public func effort(_ effort: TaskEffort) throws -> Effort {
-        guard let preset = efforts[effort] else {
-            throw ConfigError.invalid(name: "pipeline", underlying: "conversation.efforts.\(effort.rawValue) is missing")
-        }
-        return preset
-    }
-
-    /// The sampling an answer is asked with at `effort`, with the length it may take.
-    public func options(_ effort: Effort) -> AnalysisConfig.LLMOptions {
-        AnalysisConfig.LLMOptions(temperature: sampling.temperature, topK: sampling.topK, topP: sampling.topP,
-                                  numPredict: effort.numPredict, seed: sampling.seed)
-    }
-
-    var problems: [String] {
-        var problems: [String] = []
-        for effort in TaskEffort.allCases {
-            guard let preset = efforts[effort] else {
-                problems.append("conversation.efforts.\(effort.rawValue) is missing")
-                continue
-            }
-            if preset.repairAttempts < 0 { problems.append("conversation.efforts.\(effort.rawValue).repairAttempts cannot be negative") }
-            if preset.numPredict < 1 { problems.append("conversation.efforts.\(effort.rawValue).numPredict must be at least 1") }
-            if preset.numPredict >= numCtx { problems.append("conversation.efforts.\(effort.rawValue).numPredict leaves no room in conversation.numCtx") }
-            if preset.timeout <= 0 { problems.append("conversation.efforts.\(effort.rawValue).timeout must be more than 0") }
-        }
-        if contextChars < 1 { problems.append("conversation.contextChars must be at least 1") }
-        if documentChars < 1 { problems.append("conversation.documentChars must be at least 1") }
-        if maxListed < 0 { problems.append("conversation.maxListed cannot be negative") }
-        if historyChars < 0 { problems.append("conversation.historyChars cannot be negative") }
-        if maxQuestionChars < 1 { problems.append("conversation.maxQuestionChars must be at least 1") }
-        if maxSuggested < 1 { problems.append("conversation.maxSuggested must be at least 1") }
-        return problems
-    }
-}
-
 public struct LoggingConfig: Sendable, Codable, Hashable {
     public var keepDays: Int
     public var maxBytes: Int64
@@ -569,6 +521,12 @@ public struct InterfaceConfig: Sendable, Codable, Hashable {
     public var menuBarRecent: Int
     /// The latest filings, and documents waiting for the user, looked at for notifications each time the history grows.
     public var notificationEvents: Int
+    /// Seconds the app waits for macOS to answer its asking to show notifications before it says macOS would not let it
+    /// ask: macOS may never answer, as for a build not signed for distribution.
+    public var notificationAskTimeout: Double
+    /// Seconds after starting before the app says whether its menu bar icon can be seen: macOS puts the icon in the
+    /// screen's corner first, then where it goes.
+    public var menuBarSettleSeconds: Double
     /// Characters of a file's text `arrumatorcli extract` prints.
     public var extractPreviewChars: Int
 }

@@ -117,8 +117,9 @@ public struct LabelStore: Sendable {
         }
     }
 
-    /// What the model is shown of the archive: the labels it uses most, and the user's merges and unwanted labels, of the
-    /// kinds the model gives. It is shown nothing of the user's own tags, which it never gives.
+    /// What the model is told of the archive: the labels it uses most, and every merge and unwanted label of the user's,
+    /// of the kinds the model gives, of which its prompt shows the newest (`PromptBuilder.archiveBlock`). It is told
+    /// nothing of the user's own tags, which it never gives.
     public func guidance() async throws -> LabelGuidance {
         let (all, usage) = try await database.reader.read { db in (try LabelRule.order(Column("id").desc).fetchAll(db), try Self.usage(db)) }
         let rules = all.filter { !$0.kind.isUsersOwn }
@@ -128,10 +129,10 @@ public struct LabelStore: Sendable {
             let values = (usage[kind] ?? []).prefix(policy.promptLimit).map(\.label.value)
             if !values.isEmpty { used[kind] = values }
         }
-        let preferred = rules.filter { $0.action == .merge }.prefix(vocabulary.promptPreferred).compactMap { rule in
+        let preferred = rules.filter { $0.action == .merge }.compactMap { rule in
             rule.target.map { LabelPreference(from: DocumentLabel(kind: rule.kind, value: rule.value), to: $0) }
         }
-        let unwanted = rules.filter { $0.action == .ignore }.prefix(vocabulary.promptUnwanted).map { DocumentLabel(kind: $0.kind, value: $0.value) }
+        let unwanted = rules.filter { $0.action == .ignore }.map { DocumentLabel(kind: $0.kind, value: $0.value) }
         return LabelGuidance(used: used, preferred: preferred, unwanted: unwanted)
     }
 }

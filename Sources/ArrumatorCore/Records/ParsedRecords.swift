@@ -98,9 +98,10 @@ struct ParsedRecords: Sendable {
     /// delete a document, whose entry is written back instead. Other files replace their table when `replacing`, and
     /// otherwise add and update their rows. An event keeps the job and trace in `links` when it is the same event. A
     /// conversation about a task the index does not have is not taken in.
-    func apply(to db: Database, replacing: Bool, at now: Date, links: [Int64: EventLink], everyDirectory: Bool) throws -> Applied {
+    func apply(to db: Database, replacing: Bool, at now: Date, links: [Int64: EventLink], everyDirectory: Bool,
+               recordingMoves: Bool) throws -> Applied {
         var applied = Applied()
-        let (listed, rewrite, unsure) = try applyDocuments(db, at: now)
+        let (listed, rewrite, unsure) = try applyDocuments(db, at: now, recordingMoves: recordingMoves)
         applied.inTwoPlaces = unsure
         for (month, entries) in history {
             if replacing {
@@ -144,7 +145,7 @@ struct ParsedRecords: Sendable {
     /// Adds or updates every document listed, and returns the numbers of their documents in the index, the lists to write
     /// again (those whose entries were given numbers of their own, and those that list a copy, written without it), and
     /// the documents found in two lists when nothing told which is the copy's.
-    private func applyDocuments(_ db: Database, at now: Date)
+    private func applyDocuments(_ db: Database, at now: Date, recordingMoves: Bool)
         throws -> (listed: Set<Int64>, rewrite: Set<RecordKind>, unsure: [String: (document: DocumentRecord, paths: Set<String>)]) {
         var listed: Set<Int64> = []
         var renumbered: Set<RecordKind> = []
@@ -159,7 +160,7 @@ struct ParsedRecords: Sendable {
             var numbers: [Int64: Int64] = [:]
             for entry in entries {
                 let unsureOf = readHere.union(inTwoPlaces)
-                switch try Self.upsert(entry, directory: directory, db: db, at: now, unsureOf: unsureOf) {
+                switch try Self.upsert(entry, directory: directory, db: db, at: now, unsureOf: unsureOf, recordingMoves: recordingMoves) {
                 case let .taken(id, inserted):
                     if inserted { readHere.insert(entry.uid) }
                     listed.insert(id)
@@ -238,8 +239,12 @@ struct ParsedRecords: Sendable {
     /// is found (`ArchiveReconciler`, `ArchiveRecords.locateDocuments`). That holds only when where the index has the
     /// document tells it: not for a document of `unsureOf`, one this read itself put there from another list, or already
     /// found in two places, which is in two places (`DocumentInTwoPlaces`). Its document's file gone from there, the entry
-    /// is the document's, moved.
-    private static func upsert(_ entry: DocumentEntry, directory: URL, db: Database, at now: Date, unsureOf: Set<String>) throws -> Upsert {
+    /// is the document's, moved, as with its folder renamed or moved in Finder; `recordingMoves`, the move is recorded in
+    /// History in the transaction that follows it, as a document moved on its own is (`FileEvent`), once for each
+    /// document, so the archive watcher, which finds it where the index now has it, records nothing more. A rebuild,
+    /// which says where it found each document itself (`ArchiveRecords.locateDocuments`), records none here.
+    private static func upsert(_ entry: DocumentEntry, directory: URL, db: Database, at now: Date, unsureOf: Set<String>,
+                               recordingMoves: Bool) throws -> Upsert {
         var record = try entry.record(directory: directory, now: now)
         guard let existing = try DocumentRecord.filter(Column("uid") == entry.uid).fetchOne(db) else {
             if try DocumentRecord.exists(db, key: entry.id) { record.id = nil }
@@ -258,6 +263,10 @@ struct ParsedRecords: Sendable {
         record.lastTraceId = existing.lastTraceId
         record.createdAt = existing.createdAt
         try record.update(db)
+        if recordingMoves, record.path != existing.path, let id = record.id {
+            let event = FileEvent.followed(from: existing.path, named: existing.filename, to: record.path, named: record.filename)
+            try HistoryStore.insert(db, event.kind, at: now, actor: .user, doc: id, summary: event.summary, payload: event.payload)
+        }
         return .taken(record.id ?? entry.id, inserted: false)
     }
 }

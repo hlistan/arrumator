@@ -112,6 +112,18 @@ public enum DocumentOrder: String, Sendable, CaseIterable {
     }
 }
 
+/// What Needs You lists, in two groups: what waits for the user (`DocumentStatus.waitsForUser`), which it counts, and
+/// what the user set aside, left for later or undone (`DocumentStatus.isSetAside`), which it does not.
+public struct NeedsYou: Sendable, Codable, Hashable {
+    public var waiting: [DocumentRecord]
+    public var setAside: [DocumentRecord]
+
+    public init(waiting: [DocumentRecord], setAside: [DocumentRecord]) {
+        self.waiting = waiting
+        self.setAside = setAside
+    }
+}
+
 public struct DocumentStore: Sendable {
     public let database: AppDatabase
     public let time: any TimeSource
@@ -208,22 +220,27 @@ public struct DocumentStore: Sendable {
         }
     }
 
-    /// The statuses of a document that waits for the user.
-    private static var reviewable: Set<DocumentStatus> { Set(DocumentStatus.allCases.filter(\.isReviewable)) }
+    /// The statuses of a document that waits for the user (`DocumentStatus.waitsForUser`).
+    private static var waiting: Set<DocumentStatus> { Set(DocumentStatus.allCases.filter(\.waitsForUser)) }
+    /// The statuses of a document the user set aside (`DocumentStatus.isSetAside`).
+    private static var setAside: Set<DocumentStatus> { Set(DocumentStatus.allCases.filter(\.isSetAside)) }
 
-    /// Every document waiting for the user, newest first.
-    public func reviewQueue() async throws -> [DocumentRecord] {
+    /// What Needs You lists: the documents waiting for the user, then, apart, those the user set aside, each newest first.
+    public func needsYou() async throws -> NeedsYou {
         try await database.reader.read { db in
-            let (conditions, args) = try DocumentFilter(statuses: Self.reviewable).sql(db)
-            return try DocumentRecord.fetchAll(db, sql: "SELECT d.* FROM documents d WHERE 1=1\(conditions) ORDER BY \(DocumentOrder.recentlyAdded.sql)",
-                                               arguments: args)
+            let listed = { (statuses: Set<DocumentStatus>) in
+                let (conditions, args) = try DocumentFilter(statuses: statuses).sql(db)
+                return try DocumentRecord.fetchAll(db, sql: "SELECT d.* FROM documents d WHERE 1=1\(conditions) ORDER BY \(DocumentOrder.recentlyAdded.sql)",
+                                                   arguments: args)
+            }
+            return NeedsYou(waiting: try listed(Self.waiting), setAside: try listed(Self.setAside))
         }
     }
 
-    /// How many documents wait for the user: what the sidebar counts.
-    public func reviewCount() async throws -> Int {
+    /// How many documents wait for the user, those the user set aside left out: what the sidebar and the menu bar count.
+    public func waitingCount() async throws -> Int {
         try await database.reader.read { db in
-            try DocumentRecord.filter(Self.reviewable.map(\.rawValue).contains(Column("status"))).fetchCount(db)
+            try DocumentRecord.filter(Self.waiting.map(\.rawValue).contains(Column("status"))).fetchCount(db)
         }
     }
 

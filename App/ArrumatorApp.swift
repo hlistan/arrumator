@@ -37,6 +37,8 @@ protocol WindowPresenting: AnyObject {
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WindowPresenting {
     private let model = AppModel()
     private var statusItem: NSStatusItem?
+    /// Whether the icon's place has been said once, after it settled; afterwards only a change is.
+    private var reportedStatusItem = false
     private let popover = NSPopover()
     private var windows: [WindowID: NSWindow] = [:]
     /// True when macOS started the app by itself, as a login item; then no window is opened unasked.
@@ -52,7 +54,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Wind
         Task {
             await model.start()
             applyDockPolicy()
-            reportStatusItem()
+            Task {
+                // AppKit puts the icon in the corner first, then where it goes: said once it has settled.
+                // The bundled settle when the app could not start with the settings it has, which the window then says.
+                let config = model.runtime?.config ?? (try? PipelineConfig.bundledDefaults())
+                if let settle = config?.interface.menuBarSettleSeconds { try? await Task.sleep(for: .seconds(settle)) }
+                reportStatusItem()
+            }
             if case .failed = model.phase {
                 // Why the app could not start, such as settings it cannot run with, with the file and what mends it, is
                 // on the main window's first page: never onboarding, which would ask again for what is set.
@@ -68,11 +76,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Wind
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
-    /// Clicking the Dock icon (or opening the app again) brings the window back, once the model knows which one.
+    /// Clicking the Dock icon (or opening the app again) brings the window back, once the model knows which one: the
+    /// main window, or the one that sets the app up until it is (`show(_:)`).
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
-        if !hasVisibleWindows, model.phase != .starting {
-            show(model.phase == .ready && model.settings?.onboardingCompleted != true ? .onboarding : .main)
-        }
+        if !hasVisibleWindows, model.phase != .starting { show(.main) }
         return true
     }
 
@@ -110,6 +117,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Wind
         item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         item.behavior = .terminationOnRemoval
         statusItem = item
+        // macOS moves the icon as other icons come and go, and may make its window again, as when screens change: said
+        // again each time once it has settled, so that what Settings says of it is what the menu bar shows.
+        NotificationCenter.default.addObserver(forName: NSWindow.didMoveNotification, object: nil, queue: .main) { [weak self] note in
+            let moved = note.object as? NSWindow
+            MainActor.assumeIsolated {
+                guard let self, self.reportedStatusItem, moved != nil, moved === self.statusItem?.button?.window else { return }
+                self.reportStatusItem()
+            }
+        }
         popover.behavior = .transient
         popover.contentSize = Style.popover
         popover.contentViewController = NSHostingController(rootView: MenuBarView().environment(model))
@@ -117,26 +133,60 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Wind
 
     /// Records whether the icon is actually on screen: a full menu bar silently clips status items, and then the
     /// Dock icon is the only way in.
+    /// Said once each time it changes, once AppKit has had the time to lay the icon out.
     private func reportStatusItem() {
-        guard let item = statusItem, let window = item.button?.window else {
+        guard let item = statusItem, let button = item.button, button.window != nil else {
             Log.warning(.ui, "Menu bar icon could not be created")
             return
         }
-        let screen = NSScreen.main?.frame.width ?? 0
-        let clipped = window.frame.origin.x <= 0 || window.frame.maxX > screen
-        model.menuBarIconHidden = clipped
-        Log.log(clipped ? .warning : .info, .ui, clipped ? "Menu bar icon is hidden: the menu bar is full" : "Menu bar icon shown", [
-            "visible": String(item.isVisible), "x": String(Int(window.frame.origin.x)), "width": String(Int(window.frame.width)),
-            "screen": String(Int(screen)),
+        let frame = Self.iconFrame(button)
+        let hidden = Self.isHidden(button)
+        guard hidden != model.menuBarIconHidden || !reportedStatusItem else { return }
+        reportedStatusItem = true
+        model.menuBarIconHidden = hidden
+        Log.log(hidden ? .warning : .info, .ui, hidden ? "Menu bar icon is hidden: the menu bar is full" : "Menu bar icon shown", [
+            "visible": String(item.isVisible), "x": frame.map { String(Int($0.minX)) } ?? "not laid out",
+            "width": frame.map { String(Int($0.width)) } ?? "0", "screen": String(Int((button.window?.screen ?? NSScreen.main)?.frame.width ?? 0)),
         ])
     }
 
+    /// Whether the icon cannot be seen: not laid out, as macOS may leave an icon it has no room for, or laid out where it
+    /// cannot be seen (`isHidden(_:on:)`).
+    private static func isHidden(_ button: NSStatusBarButton) -> Bool {
+        iconFrame(button).map { isHidden($0, on: button.window?.screen ?? NSScreen.main) } ?? true
+    }
+
+    /// Where the icon is on screen, as AppKit has laid it out; nil until it has, its window empty in the corner.
+    private static func iconFrame(_ button: NSStatusBarButton) -> NSRect? {
+        guard let window = button.window, window.frame.height > 0 else { return nil }
+        return window.convertToScreen(button.convert(button.bounds, to: nil))
+    }
+
+    /// Whether the icon cannot be seen: pushed off its screen by a full menu bar, or put behind the camera housing of a
+    /// screen that has one, where macOS puts the icons a full menu bar has no room for. macOS keeps such an icon, and it
+    /// can still be pressed, as through accessibility, but nothing shown beside it would be seen.
+    private static func isHidden(_ icon: NSRect, on screen: NSScreen?) -> Bool {
+        guard let screen else { return false }
+        if icon.minX <= screen.frame.minX || icon.maxX > screen.frame.maxX { return true }
+        let beside = [screen.auxiliaryTopLeftArea, screen.auxiliaryTopRightArea].compactMap(\.self)
+        return !beside.isEmpty && !beside.contains { $0.minX <= icon.minX && icon.maxX <= $0.maxX }
+    }
+
+    /// Opens the popover under the icon; with the icon pushed off the screen, as by a full menu bar, a popover beside it
+    /// would open where it cannot be seen, so pressing it, as through accessibility, brings the main window forward
+    /// instead.
     @objc private func togglePopover() {
         guard let button = statusItem?.button else { return }
         if popover.isShown {
             popover.performClose(nil)
+        } else if Self.isHidden(button) {
+            model.menuBarIconHidden = true
+            show(.main)
         } else {
             NSApp.activate()
+            // Opened at the size its content takes now: one it shrinks to after opening would leave it hanging below
+            // the menu bar, where it kept its lower edge.
+            if let content = popover.contentViewController?.view { popover.contentSize = content.fittingSize }
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .maxY)
         }
     }
@@ -175,7 +225,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Wind
     /// app was not made active, and its main window opened behind the terminal's. `orderFrontRegardless()` "moves the
     /// window to the front of its level, even if its application isn't active"; the window is already key, so it takes
     /// the keyboard as soon as macOS lets the app become active, at once or at the user's first click in it.
-    func show(_ id: WindowID) {
+    ///
+    /// Until the app is set up, the main window is asked for in vain: nothing it would show is filed, so the window that
+    /// sets the app up comes in its place, however the main window was asked for (the Dock, Window › Arrumator, the menu
+    /// bar). A start that failed shows the main window, which says why.
+    func show(_ asked: WindowID) {
+        let id = asked == .main && model.phase == .ready && model.settings?.onboardingCompleted != true ? .onboarding : asked
         let window = windows[id] ?? makeWindow(id)
         window.makeKeyAndOrderFront(nil)
         window.orderFrontRegardless()

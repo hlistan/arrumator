@@ -38,8 +38,8 @@ public struct ValidatedAnswer: Sendable, Codable, Hashable {
 /// Parses and checks an answer against what it was shown. The answer is untrusted input: a source is kept only when it
 /// is the number of a document the answer was shown, as a citation is checked against the sources it claims (Gao et
 /// al., ALCE, EMNLP 2023; docs/organizing-principles-sources.md#sources-for-conversations), each once; the request for
-/// more documents is kept on one line, none when it is empty. An answer without text, or a list missing from it, goes
-/// back to the model with the reasons.
+/// more documents is kept on one line, none when it is empty. An answer without text, one that only begins an answer
+/// (`unfinished`), or a list missing from it, goes back to the model with the reasons.
 public struct ConversationAnswerValidator: Sendable {
     /// The documents the answer was shown, by number, with their names.
     public let names: [Int64: String]
@@ -61,6 +61,7 @@ public struct ConversationAnswerValidator: Sendable {
         }
         let answer = named(raw.answer).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !answer.isEmpty else { throw AnswerValidationError.invalid(["\(ConversationSchema.answerKey) is empty"]) }
+        if let unfinished = Self.unfinished(answer) { throw AnswerValidationError.invalid([unfinished]) }
         var notes: [String] = []
         var sources: [Int64] = []
         for written in raw.sources {
@@ -106,6 +107,41 @@ public struct ConversationAnswerValidator: Sendable {
             preconditionFailure("A pattern literal that does not compile: \(pattern)")
         }
     }
+
+    /// Why `answer` only begins an answer, which goes back to the model; nil when it gives one. By its Markdown alone, in
+    /// any language: an answer of headings and rules has nothing under them, a paragraph all in bold with a rule after it
+    /// being a heading too, unless a heading carries a figure, which is an answer ("# 340 € in total"); and an answer
+    /// whose one paragraph or list item, alone or under headings, ends with a colon announces what follows, and nothing
+    /// does. An answer that gives something before a last line ending with a colon is an answer: a document's own field
+    /// ("Assinatura:") or a total ("合计：") can end it.
+    static func unfinished(_ answer: String) -> String? {
+        guard let blocks = AnswerMarkdown.blocks(answer) else { return nil }
+        let written = blocks.filter { !String($0.text.characters).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        let ruled = blocks.last?.kind == .rule
+        let titles = written.filter { block in
+            if case .heading = block.kind { return true }
+            return ruled && block.kind == .paragraph && block.text.runs.allSatisfy { run in
+                run.inlinePresentationIntent?.contains(.stronglyEmphasized) == true
+                    || String(block.text[run.range].characters).allSatisfy(\.isWhitespace)
+            }
+        }
+        let figures = titles.contains { $0.text.characters.contains(where: \.isNumber) }
+        guard let last = written.last, titles.count < written.count || figures else {
+            return "\(ConversationSchema.answerKey) holds only headings or rules: give the answer itself, in full"
+        }
+        guard written.count - titles.count == 1 else { return nil }
+        switch last.kind {
+        case .paragraph, .item:
+            guard let end = String(last.text.characters).trimmingCharacters(in: .whitespacesAndNewlines).last, announcing.contains(end) else { return nil }
+            return "\(ConversationSchema.answerKey) announces what follows and ends there: give what it announces, in full"
+        case .heading, .quote, .code, .rule:
+            return nil
+        }
+    }
+
+    /// What ends a sentence that announces what follows: a colon, as Latin and other scripts write it, and as Chinese and
+    /// Japanese write it full width.
+    static let announcing: Set<Character> = [":", "："]
 
     /// How much of a name, after a number, shows the model wrote the name too.
     static func namePrefix(_ name: String) -> String { String(name.lowercased().prefix(namePrefixLength)) }
@@ -197,8 +233,9 @@ enum StreamedAnswer {
 }
 
 /// The production `TaskQuestionAnswering`. The local model answers with the app's own prompt (`conversation-system.md`),
-/// shown the documents of the set its context holds (`TaskContextBuilder`), the conversation so far, today's date and
-/// the question, in a fixed schema (`ConversationSchema`) that `ConversationAnswerValidator` checks; an answer that
+/// shown how many documents the set holds and those of them its context holds (`TaskContextBuilder`), the conversation so
+/// far, today's date, the question and the language it is written in (`LanguageDetector`), in a fixed schema
+/// (`ConversationSchema`) that `ConversationAnswerValidator` checks; an answer that
 /// cannot be read goes back to the model with what was wrong, as a document's does. One model answers: the chat model
 /// of the profile it is given, which must be installed. The task's effort (`conversation.efforts`) says how much it
 /// thinks first, with the answer length and time that needs; an answer that takes longer is no answer, and one cut off
@@ -221,68 +258,100 @@ public struct TaskAnswerer: TaskQuestionAnswering {
         let preset = try config.conversation.effort(effort)
         let model = profile.chatModel
         let system = try library.render("conversation-system", [:])
-        let budget = PromptBudget(numCtx: config.conversation.numCtx, numPredict: preset.numPredict, charsPerToken: config.ollama.charsPerToken)
-        var shown = context
-        var trim = ContextTrim()
-        var user = try userPrompt(question, context: shown, today: today)
-        // What the answer is shown is cut, the least it needs first, until the prompt fits the model's context.
-        while !budget.fits(system, user), let less = trim.less(of: shown) {
-            shown = less
-            user = try userPrompt(question, context: shown, today: today)
-        }
-        guard budget.fits(system, user) else {
-            throw PromptError.tooLong(template: "conversation-user", chars: system.count + user.count, room: budget.room)
-        }
-        let validator = ConversationAnswerValidator(names: Dictionary(shown.documents.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first }))
+        let language = LanguageDetector(config: config.extraction).name(of: question)
         let library = library
         let numPredict = preset.numPredict
-        let input = AnswerInput(effort: effort, model: model, think: preset.think, today: today, read: shown.read.count,
-                                listed: shown.listed.count, unlisted: shown.unlisted, exchanges: shown.conversation.count,
-                                trimmed: trim.isEmpty ? nil : trim)
+        // Fitted at `ollama.charsPerToken` first, then, while Ollama counts the prompt filling the context, at what it
+        // counted (`PromptBudget.measured`), as often as `ollama.refitAttempts` allows; every call is traced.
+        var charsPerToken = config.ollama.charsPerToken
+        var refits: [Double] = []
+        var earlier: [ModelCall] = []
         let started = Date()
-        do {
-            let answer = try await LLMClassifier(gate: gate, models: models, effort: .conversation(preset, config: config)).ask(
-                system: system, user: user, schema: ConversationSchema.answer, model: model,
-                repairPrompt: { try library.render("repair-user", ["errors": $0]) },
-                partial: { _, sofar in
-                    let text = StreamedAnswer.text(in: sofar.message.content)
-                    await progress(AnswerProgress(text: text, thinking: text.isEmpty && !(sofar.message.thinking ?? "").isEmpty))
-                },
-                cutOff: { content in
-                    ValidatedAnswer(text: validator.named(StreamedAnswer.text(in: content)).trimmingCharacters(in: .whitespacesAndNewlines),
-                                    sources: [], find: nil, notes: [], incomplete: AnswerValidationError.cutOff(numPredict).localizedDescription)
-                },
-                validate: { try validator.validate($0) })
-            // A model that thought until it ran out wrote nothing of its answer, which is no answer.
-            guard !answer.answer.text.isEmpty else { throw ModelAnswerError.exhausted(answer.calls) }
-            let full = budget.full(answer.calls)
-            await trace.record(.answer, status: answer.calls.count > 1 || answer.answer.incomplete != nil || full != nil ? .warn : .ok,
-                               startedAt: started, input: input,
-                               output: AnswerTrace(answer: answer.answer, promptTokens: PromptBudget.promptTokens(answer.calls),
-                                                   exchange: answer.calls), error: full)
-            return TaskAnswer(text: answer.answer.text, sources: answer.answer.sources, find: answer.answer.find, model: answer.model,
-                              problem: answer.answer.incomplete)
-        } catch let error as ModelAnswerError {
-            await trace.record(.answer, status: error.status, startedAt: started, input: input,
-                               output: AnswerTrace(answer: nil, promptTokens: PromptBudget.promptTokens(error.calls), exchange: error.calls),
-                               error: ([error.localizedDescription] + [budget.full(error.calls)].compactMap { $0 }).joined(separator: "; "))
-            if let cause = error.cause { throw cause }
-            Log.warning(.classify, "The model gave no valid answer to a question", ["error": error.localizedDescription])
-            throw error
+        while true {
+            let budget = PromptBudget(numCtx: config.conversation.numCtx, numPredict: preset.numPredict, charsPerToken: charsPerToken)
+            var shown = context
+            var trim = ContextTrim()
+            var user = try userPrompt(question, context: shown, today: today, language: language)
+            // What the answer is shown is cut, the least it needs first, until the prompt fits the model's context.
+            while !budget.fits(system, user), let less = trim.less(of: shown) {
+                shown = less
+                user = try userPrompt(question, context: shown, today: today, language: language)
+            }
+            guard budget.fits(system, user) else {
+                throw PromptError.tooLong(template: "conversation-user", chars: system.count + user.count, room: budget.room)
+            }
+            let validator = ConversationAnswerValidator(names: Dictionary(shown.documents.map { ($0.id, $0.name) },
+                                                                          uniquingKeysWith: { first, _ in first }))
+            let input = AnswerInput(effort: effort, model: model, think: preset.think, today: today, language: language, read: shown.read.count,
+                                    listed: shown.listed.count, unlisted: shown.unlisted, exchanges: shown.conversation.count,
+                                    trimmed: trim.isEmpty ? nil : trim, refitted: refits.isEmpty ? nil : refits)
+            var fitted = config
+            fitted.ollama.charsPerToken = charsPerToken
+            let calls: [ModelCall]
+            let outcome: Result<ModelAnswer<ValidatedAnswer>, ModelAnswerError>
+            do {
+                let answer = try await LLMClassifier(gate: gate, models: models, effort: .conversation(preset, config: fitted)).ask(
+                    system: system, user: user, schema: ConversationSchema.answer, model: model,
+                    repairPrompt: { try library.render("repair-user", ["errors": $0]) },
+                    partial: { _, sofar in
+                        let text = StreamedAnswer.text(in: sofar.message.content)
+                        await progress(AnswerProgress(text: text, thinking: text.isEmpty && !(sofar.message.thinking ?? "").isEmpty))
+                    },
+                    cutOff: { content in
+                        ValidatedAnswer(text: validator.named(StreamedAnswer.text(in: content)).trimmingCharacters(in: .whitespacesAndNewlines),
+                                        sources: [], find: nil, notes: [], incomplete: AnswerValidationError.cutOff(numPredict).localizedDescription)
+                    },
+                    validate: { try validator.validate($0) })
+                // A model that thought until it ran out wrote nothing of its answer, which is no answer.
+                (calls, outcome) = answer.answer.text.isEmpty ? (answer.calls, .failure(.exhausted(answer.calls))) : (answer.calls, .success(answer))
+            } catch let error as ModelAnswerError {
+                (calls, outcome) = (error.calls, .failure(error))
+            }
+            let interrupted = if case let .failure(error) = outcome { error.cause != nil } else { false }
+            if !interrupted, refits.count < config.ollama.refitAttempts, let measured = budget.measured(calls) {
+                refits.append(measured)
+                earlier += calls
+                charsPerToken = measured
+                continue
+            }
+            let full = budget.full(calls)
+            let notes = [PromptBudget.refitted(refits), full].compactMap { $0 }
+            let exchange = earlier + calls
+            switch outcome {
+            case let .success(answer):
+                await trace.record(.answer, status: exchange.count > 1 || answer.answer.incomplete != nil || !notes.isEmpty ? .warn : .ok,
+                                   startedAt: started, input: input,
+                                   output: AnswerTrace(answer: answer.answer, promptTokens: PromptBudget.promptTokens(exchange), exchange: exchange),
+                                   error: notes.isEmpty ? nil : notes.joined(separator: "; "))
+                // An answer to a prompt that still filled the context may not have read all it was shown, which it says.
+                return TaskAnswer(text: answer.answer.text, sources: answer.answer.sources, find: answer.answer.find, model: answer.model,
+                                  problem: answer.answer.incomplete ?? (full == nil ? nil : PromptBudget.contextFullProblem))
+            case let .failure(error):
+                await trace.record(.answer, status: error.status, startedAt: started, input: input,
+                                   output: AnswerTrace(answer: nil, promptTokens: PromptBudget.promptTokens(exchange), exchange: exchange),
+                                   error: ([error.localizedDescription] + notes).joined(separator: "; "))
+                if let cause = error.cause { throw cause }
+                Log.warning(.classify, "The model gave no valid answer to a question", ["error": error.localizedDescription])
+                throw error
+            }
         }
     }
 
-    /// What the model is asked: today's date, what it is shown of the set and the conversation, and the question.
-    func userPrompt(_ question: String, context: TaskContext, today: String) throws -> String {
-        try library.render("conversation-user", ["today": today, "documents": try documentsBlock(context),
-                                                 "conversation": try conversationBlock(context.conversation), "question": question])
+    /// What the model is asked: today's date, what it is shown of the set and the conversation, the question and, when it
+    /// is sure of it, the language the question is written in, which the answer is written in.
+    func userPrompt(_ question: String, context: TaskContext, today: String, language: String?) throws -> String {
+        let written = try language.map { try library.render("conversation-language", ["language": $0]) + "\n\n" } ?? ""
+        return try library.render("conversation-user", ["today": today, "documents": try documentsBlock(context),
+                                                        "conversation": try conversationBlock(context.conversation), "question": question,
+                                                        "language": written])
     }
 
-    /// The documents shown with their text, each under its number, then those listed by name alone, then how many more
-    /// there are; or that the set holds none.
+    /// How many documents the set holds, then the documents shown with their text, each under its number, then those
+    /// listed by name alone, then how many more there are; or that the set holds none.
     func documentsBlock(_ context: TaskContext) throws -> String {
         guard !context.documents.isEmpty else { return try library.render("conversation-empty", [:]) }
-        var blocks = try context.read.map { document in
+        var blocks = [try library.render("conversation-count", ["count": String(context.documents.count + context.unlisted)])]
+        blocks += try context.read.map { document in
             try library.render("conversation-document", ["number": String(document.id), "name": document.name,
                                                          "about": Self.about(document), "text": document.text ?? ""])
         }
@@ -301,30 +370,35 @@ public struct TaskAnswerer: TaskQuestionAnswering {
         return try library.render("conversation-history", ["exchanges": lines.joined(separator: "\n\n")]) + "\n\n"
     }
 
-    /// A document's date and labels, of the kinds the model gives, as it is shown them: never the user's tags.
+    /// A document's date and labels, of the kinds the model gives, as it is shown them, each label a JSON string
+    /// (`ClassificationSchema.listed`): never the user's tags.
     static func about(_ document: ContextDocument) -> String {
         let labels = ClassificationSchema.answerOrder.compactMap { kind -> String? in
             let values = document.labels.values(kind)
-            return values.isEmpty ? nil : "\(kind.rawValue): " + values.joined(separator: ", ")
+            return values.isEmpty ? nil : "\(kind.rawValue): " + ClassificationSchema.listed(values)
         }
         return labels.isEmpty ? "-" : labels.joined(separator: "; ")
     }
 }
 
 /// What answering a question records it was answered with: the effort, the model, what the effort wanted the model told
-/// about thinking, the day, and how much it was shown: documents with their text, listed by name, not shown, and
-/// earlier exchanges, and what was left out of that so the prompt fit the model's context, when anything was. What was
-/// sent is each `ModelCall` of the exchange, which retention clears.
+/// about thinking, the day, the language the model was told the question is in, when it was, and how much it was shown:
+/// documents with their text, listed by name, not shown, and earlier exchanges, and what was left out of that so the
+/// prompt fit the model's context, when anything was, with the characters a token it was fitted at again each time
+/// Ollama counted it filling the context (`PromptBudget.measured`). What was sent is each `ModelCall` of the exchange,
+/// which retention clears.
 struct AnswerInput: Encodable {
     var effort: TaskEffort
     var model: String
     var think: OllamaThink
     var today: String
+    var language: String?
     var read: Int
     var listed: Int
     var unlisted: Int
     var exchanges: Int
     var trimmed: ContextTrim?
+    var refitted: [Double]?
 }
 
 /// What answering a question records: the checked answer, the tokens each prompt took, and every model call under `TraceStep.exchangeKey`, which

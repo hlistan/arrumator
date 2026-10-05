@@ -14,7 +14,7 @@ import ArrumatorTesting
                           "v12_labelRules", "v13_traceExchanges", "v14_searchTasks", "v15_taskEffort",
                           "v16_taskProfile", "v17_tags", "v18_taskConversations", "v19_unreadIndexRefusesRecords",
                           "v20_queueWorkers", "v21_jobClaims", "v22_jobsWaitForTheirModel", "v23_endedJobsKeepNoText",
-                          "v24_documentLabels", "v25_documentsInTwoPlaces"]
+                          "v24_documentLabels", "v25_documentsInTwoPlaces", "v26_storedLabelsInTheirForm"]
 
     /// An index as a release before this one made it, migrated up to `identifier`: its first migration ran before that
     /// one marked a new index as still to be rebuilt from its archive, so it is not.

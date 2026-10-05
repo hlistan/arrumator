@@ -17,15 +17,18 @@ public struct ConversationQueueStatus: Sendable, Hashable {
     public var answering: Answering?
     /// Questions waiting to be answered, the one being answered not among them: those due and those waiting for Ollama.
     public var queued: Int
+    /// The tasks those questions are about.
+    public var queuedTasks: Set<Int64>
     /// Ollama could not be reached for the last answer: the questions waiting are tried again after the last of
     /// `ingest.retryDelays`. Until an answer reaches it, or nothing is left to answer.
     public var waitingForOllama: Bool
     /// When the question that found Ollama away is tried again, on the queue's clock; nil while nothing waits for it.
     public var retryAt: Date?
 
-    public init(answering: Answering?, queued: Int, waitingForOllama: Bool, retryAt: Date? = nil) {
+    public init(answering: Answering?, queued: Int, queuedTasks: Set<Int64> = [], waitingForOllama: Bool, retryAt: Date? = nil) {
         self.answering = answering
         self.queued = queued
+        self.queuedTasks = queuedTasks
         self.waitingForOllama = waitingForOllama
         self.retryAt = retryAt
     }
@@ -36,11 +39,25 @@ public struct ConversationQueueStatus: Sendable, Hashable {
     /// status not yet updated says.
     public func progress(of turn: TaskTurn) -> TurnProgress? {
         guard turn.state.isActive else { return nil }
-        if let answering, answering.turn == turn.id {
-            // Tried again while Ollama was away: it still waits for Ollama until the model begins.
-            return waitingForOllama && !answering.progress.begun ? .waitingForOllama(until: nil) : .answering(answering)
-        }
+        if let answering, answering.turn == turn.id { return answeringProgress(answering) }
         if turn.state == .answering { return .answering(nil) }
+        return queuedProgress
+    }
+
+    /// What the queue does with the questions about `task`, as the task's row shows it: the one being answered, else one
+    /// waiting, for its turn or for Ollama and when it is tried again; nil while none of them is in the queue.
+    public func progress(ofTask task: Int64) -> TurnProgress? {
+        if let answering, answering.task == task { return answeringProgress(answering) }
+        return queuedTasks.contains(task) ? queuedProgress : nil
+    }
+
+    /// The question being answered: tried again while Ollama was away, it still waits for Ollama until the model begins.
+    private func answeringProgress(_ answering: Answering) -> TurnProgress {
+        waitingForOllama && !answering.progress.begun ? .waitingForOllama(until: nil) : .answering(answering)
+    }
+
+    /// A question waiting in the queue: for Ollama, until it is tried again; else for its turn, or next.
+    private var queuedProgress: TurnProgress {
         if waitingForOllama { return .waitingForOllama(until: retryAt) }
         return answering == nil ? .waiting : .waitingForTurn
     }
@@ -65,6 +82,11 @@ public enum TurnProgress: Sendable, Hashable {
     case waitingForTurn
     /// Until Ollama can be reached: tried again at `until`, or being tried now when nil.
     case waitingForOllama(until: Date?)
+
+    /// Whether the model is answering, rather than the question waiting.
+    public var isAnswering: Bool {
+        if case .answering = self { true } else { false }
+    }
 }
 
 /// Answers questions about search tasks' documents, one at a time, the first asked first, with the model of the task's
@@ -128,8 +150,8 @@ public actor TaskConversationQueue: ModelQueue {
     private func publish(_ change: (inout ConversationQueueStatus) -> Void = { _ in }) async {
         countsAsked += 1
         let asked = countsAsked
-        let queued: Int?
-        do { queued = try await store.queuedCount() } catch {
+        let queued: [Int64]?
+        do { queued = try await store.queuedTasks() } catch {
             Log.error(.search, "Could not count the conversation queue", ["error": error.localizedDescription])
             queued = nil
         }
@@ -138,7 +160,8 @@ public actor TaskConversationQueue: ModelQueue {
         var next = status
         change(&next)
         if let queued, asked > countPublished {
-            next.queued = queued
+            next.queued = queued.count
+            next.queuedTasks = Set(queued)
             countPublished = asked
         }
         if next.answering == nil, next.queued == 0 {
@@ -325,7 +348,10 @@ public actor TaskConversationQueue: ModelQueue {
         }
         var finding: TurnFinding?
         if let request = answer.find {
-            finding = try await find(request, task: task, members: Set(members.map(\.document)), profile: profile, today: today, trace: trace)
+            // What the person asked so far, as a follow-up ("and those of 2023?") names what an earlier question did.
+            let asked = (earlier.map(\.question) + [record.question]).joined(separator: "\n")
+            finding = try await find(request, question: asked, task: task, members: Set(members.map(\.document)), profile: profile,
+                                     today: today, trace: trace)
         }
         guard try await store.finish(id, by: tag, answer: answer, finding: finding, trace: trace.traceID) else {
             Log.info(.search, "A question was taken out of the queue while it was answered", ["turn": String(id)])
@@ -344,11 +370,11 @@ public actor TaskConversationQueue: ModelQueue {
     /// asks for that are not in the set, nor taken out of it, the newest by their own date first, at most
     /// `conversation.maxSuggested`. A request that cannot be read says why, and so does Ollama going away meanwhile: the
     /// answer is kept all the same. Stopping is no failure, and the question is answered again.
-    private func find(_ request: String, task: SearchTaskRecord, members: Set<Int64>, profile: ModelProfile, today: String,
+    private func find(_ request: String, question: String, task: SearchTaskRecord, members: Set<Int64>, profile: ModelProfile, today: String,
                       trace: TraceContext) async throws -> TurnFinding {
         do {
             let vocabulary = try await services.labels.usage()
-            let interpretation = try await interpreter.interpret(request, effort: task.effort, profile: profile, vocabulary: vocabulary,
+            let interpretation = try await interpreter.interpret(request, question: question, effort: task.effort, profile: profile, vocabulary: vocabulary,
                                                                  today: today, config: services.config, trace: trace)
             guard let plan = interpretation.plan else {
                 return TurnFinding(request: request, plan: nil, documents: [], problem: interpretation.problem)

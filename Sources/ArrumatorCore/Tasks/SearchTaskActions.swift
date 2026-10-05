@@ -41,11 +41,14 @@ public struct SearchTaskActions: Sendable {
     public let queue: SearchTaskQueue
     /// The queue answering questions about tasks' documents, told when a task is removed.
     public let conversations: TaskConversationQueue
+    /// What packs an export into a ZIP archive.
+    public let archiver: any FolderArchiving
 
-    public init(services: PipelineServices, queue: SearchTaskQueue, conversations: TaskConversationQueue) {
+    public init(services: PipelineServices, queue: SearchTaskQueue, conversations: TaskConversationQueue, archiver: any FolderArchiving) {
         self.services = services
         self.queue = queue
         self.conversations = conversations
+        self.archiver = archiver
     }
 
     public var store: SearchTaskStore { SearchTaskStore(database: services.database, config: services.config.tasks, time: services.time) }
@@ -247,7 +250,8 @@ public struct SearchTaskActions: Sendable {
         guard let detail = try await store.detail(id: id) else { throw SearchTaskError.taskNotFound(id) }
         guard detail.tree.count > 0 else { throw SearchTaskError.nothingToExport(id) }
         let incoming = await services.settings.current.incomingURL
-        let exporter = SearchTaskExporter(builder: services.filer.placer.builder, tasks: config, excluded: [services.archive, incoming])
+        let exporter = SearchTaskExporter(builder: services.filer.placer.builder, archiver: archiver, tasks: config,
+                                          excluded: [services.archive, incoming])
         let (path, manifest) = try exporter.export(detail, into: folder, format: format)
         let now = services.time.now()
         let config = config

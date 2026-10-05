@@ -205,7 +205,7 @@ struct RefusingOne: Trashing {
         defer { base.env.cleanup() }
         let bill = base.env.incoming.appendingPathComponent("bill.txt")
         let h = pipeline(base, analyzer: Readings(readings: [StubAnalyzer(during: { _ in try await Self.change(bill) }),
-                                                             StubAnalyzer(labels: nil, fileName: nil)]), { $0.ingest.retryDelays = NonEmpty(0, []) })
+                                                             StubAnalyzer(labels: nil)]), { $0.ingest.retryDelays = NonEmpty(0, []) })
         try h.env.drop("bill.txt", text: Self.bill)
         await h.coordinator.enqueue(bill)
         await h.coordinator.drain()
@@ -241,7 +241,7 @@ struct RefusingOne: Trashing {
         let matcher = SearchPlanMatcher(database: h.env.database, archive: h.env.archive, limit: 10)
         let plan = SearchPlan(title: "", labels: [DocumentLabel(kind: .sender, value: "EDP Comercial")], words: [], grouping: [])
         #expect(try await matcher.documents(plan) == [filed.id], "a search task finds the document in the archive, not the one left in Incoming")
-        await #expect(throws: IngestError.notInArchive(try #require(left.id)),
+        await #expect(throws: IngestError.notInArchive(try #require(left.id), .confirm),
                       "nor can one left in Incoming be confirmed as filed") {
             try await h.review.confirm(try #require(left.id))
         }
@@ -275,7 +275,7 @@ struct RefusingOne: Trashing {
         #expect(stops.map(\.status) == [.failed] && stops.first?.reason == StatsService.stopReason(for: .failed).text,
                 "Statistics counts it as a document that could not be processed, never as one the user left for later")
         let left = try #require(try await h.services.documents.list(DocumentFilter(), limit: 5).first)
-        #expect(left.status.isReviewable && left.analysis?.problems.first?.hasPrefix("Not filed: ") == true,
+        #expect(left.status.waitsForUser && left.analysis?.problems.first?.hasPrefix("Not filed: ") == true,
                 "and its row says why it waits, from its problems, as for any that failed")
     }
 

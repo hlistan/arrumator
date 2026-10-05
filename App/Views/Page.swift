@@ -27,9 +27,12 @@ struct Page<Content: View>: View {
     }
 
     var body: some View {
-        // Lazy, so a long list builds the rows in sight, not every row it has.
+        // Not lazy: the rows are, in each section (`PageSection`), and a lazy stack never holds another. Nested, each
+        // estimates the rows it has not built from those it has, and an item far taller than the rest, such as a task's
+        // card with its conversation, made those estimates swing as it was built and let go of while scrolling: the page
+        // laid itself out again and again without end, the app hung.
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: Style.sectionSpacing) {
+            VStack(alignment: .leading, spacing: Style.sectionSpacing) {
                 VStack(alignment: .leading, spacing: Style.pageTitleSpacing) {
                     HStack(alignment: .firstTextBaseline, spacing: Style.titleSymbolSpacing) {
                         Image(systemName: symbol)
@@ -55,15 +58,19 @@ struct Page<Content: View>: View {
     }
 }
 
-/// A section: a small bold heading over a hairline, then its rows.
+/// A section: a small bold heading over a hairline, then its rows, built as they come into sight, or all at once
+/// (`lazily: false`) for a section of few rows that can open as a card of any height, as a task's card with its
+/// conversation: a lazy stack estimates the rows it has not built from those it has, which such a card throws off.
 struct PageSection<Content: View, Trailing: View>: View {
     let title: String
+    let lazily: Bool
     @ViewBuilder let content: () -> Content
     @ViewBuilder let trailing: () -> Trailing
 
-    init(_ title: String, @ViewBuilder content: @escaping () -> Content,
+    init(_ title: String, lazily: Bool = true, @ViewBuilder content: @escaping () -> Content,
          @ViewBuilder trailing: @escaping () -> Trailing = { EmptyView() }) {
         self.title = title
+        self.lazily = lazily
         self.content = content
         self.trailing = trailing
     }
@@ -76,7 +83,11 @@ struct PageSection<Content: View, Trailing: View>: View {
                 trailing().font(.callout)
             }
             Divider().padding(.bottom, Style.sectionRuleGap)
-            LazyVStack(alignment: .leading, spacing: 0) { content() }
+            if lazily {
+                LazyVStack(alignment: .leading, spacing: 0) { content() }
+            } else {
+                VStack(alignment: .leading, spacing: 0) { content() }
+            }
         }
     }
 }
@@ -102,7 +113,9 @@ struct ListRow: View {
             HStack(spacing: Style.rowSymbolSpacing) {
                 Group {
                     if busy {
-                        ProgressView().controlSize(.small)
+                        // The row's detail says what is happening in words. Shown to VoiceOver, the spinner would make the
+                        // row, whose children `rowAction` combines, a busy indicator carrying the row's text, not a button.
+                        ProgressView().controlSize(.small).accessibilityHidden(true)
                     } else {
                         // The row's detail says the same in words; the symbol's own name ("Selected") would mislead.
                         Image(systemName: symbol).foregroundStyle(tint).accessibilityHidden(true)

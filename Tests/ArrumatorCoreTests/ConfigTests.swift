@@ -119,9 +119,11 @@ import Testing
                          #"{"conversation": {"maxSuggested": 0}}"#, #"{"conversation": {"efforts": {"extreme": {"think": false}}}}"#,
                          #"{"extraction": {"emailReadCapBytes": 0}}"#, #"{"extraction": {"emailBodyCapBytes": -1}}"#,
                          #"{"extraction": {"image": {"maxPixels": 0}}}"#, #"{"extraction": {"pdf": {"ocrHeadPages": -1}}}"#,
-                         #"{"extraction": {"zipMaxEntries": 0}}"#,
+                         #"{"extraction": {"zipMaxEntries": 0}}"#, #"{"extraction": {"languageShortTextWords": -1}}"#,
+                         #"{"extraction": {"languageShortTextMinConfidence": 0.4}}"#, #"{"extraction": {"languageShortTextMinConfidence": 1.5}}"#,
                          #"{"extraction": {"zipEntryCapBytes": -1}}"#, #"{"extraction": {"archiveMaxEntries": -1}}"#,
-                         #"{"extraction": {"xlsx": {"maxRows": -1}}}"#] {
+                         #"{"extraction": {"xlsx": {"maxRows": -1}}}"#, #"{"analysis": {"titleGroundedShare": 0}}"#,
+                         #"{"analysis": {"titleGroundedShare": 1.5}}"#, #"{"labels": {"groundingLetters": 1}}"#] {
             try Data(override.utf8).write(to: env.paths.pipelineOverrideURL)
             #expect(throws: ConfigError.self, "\(override) would crash or stall the pipeline, so it stops the app with the reason") {
                 try PipelineConfig.load(paths: env.paths, environment: TestEnvironment.isolated)
@@ -416,6 +418,12 @@ extension ConfigTests {
         #expect(throws: why, "\(address) is refused, saying why") { _ = try OllamaEndpoint.validated(address) }
     }
 
+    @Test func aHostRefusedIsRefusedForWhatTheRuleAllowsThisMacAndTheLocalNetwork() {
+        let refusal = OllamaError.nonLocalHost("8.8.8.8").localizedDescription
+        #expect(refusal.contains("8.8.8.8") && refusal.contains("this Mac or the local network"),
+                "the refusal says what is allowed, as the note under the server's field does, never that reading stays on this Mac: \(refusal)")
+    }
+
     @Test func ollamaAnswersOnThisMacOrTheLocalNetworkOnly() throws {
         #expect(OllamaEndpoint.isThisMac(try OllamaEndpoint.validated("http://localhost:11434")), "localhost is this Mac")
         #expect(OllamaEndpoint.isThisMac(try OllamaEndpoint.validated("http://LOCALHOST:11434")), "however it is cased")
@@ -469,6 +477,9 @@ extension ConfigTests {
         config.ollama.timeouts.resolve = 0
         config.ollama.maxResponseBytes = 0
         config.ollama.modelLocationMaxAge = -1
+        config.ollama.failedProbesBeforeAway = 0
+        #expect(config.problems.contains("ollama.failedProbesBeforeAway must be at least 1"),
+                "a server would be away before any probe failed: \(config.problems)")
         #expect(config.problems.contains("ollama.timeouts.chat cannot be negative: 0 is no timeout")
                     && config.problems.contains("ollama.timeouts.resolve must be more than 0")
                     && config.problems.contains("ollama.maxResponseBytes must be at least 1")
@@ -486,6 +497,36 @@ extension ConfigTests {
                         + "conversation.maxQuestionChars takes at ollama.charsPerToken"), "\(config.problems)")
         config.ollama.charsPerToken = 0
         #expect(config.problems.contains("ollama.charsPerToken must be more than 0"), "\(config.problems)")
+        config.analysis.titleGroundedShare = 0
+        config.labels.groundingLetters = 1
+        #expect(config.problems.contains("analysis.titleGroundedShare must be more than 0 and at most 1")
+                    && config.problems.contains("labels.groundingLetters must be at least 2: a word of one letter says nothing on its own"),
+                "a title's share of the document's words is a share that some titles fall below, and a word grounds from two letters: \(config.problems)")
+        config.ollama.refitAttempts = -1
+        config.tasks.alternativesGap = -1
+        #expect(config.problems.contains("ollama.refitAttempts cannot be negative") && config.problems.contains("tasks.alternativesGap cannot be negative"),
+                "a prompt is fitted again a number of times, and alternatives are a number of words apart, neither below none: \(config.problems)")
+    }
+
+    @Test func aNamesPartsAndSeparatorsAreRefusedWhereTheyMakeNoName() throws {
+        var config = try PipelineConfig.bundledDefaults()
+        #expect(config.naming.parts == [.date, .sender, .title] && config.naming.separators == [" ", " - "],
+                "the bundled name is `YYYY-MM-DD Sender - Title`")
+        config.naming.parts = [.date, .sender, .date]
+        config.naming.separators = [" "]
+        #expect(config.problems.contains("naming.parts must list the title once, and the date and the sender at most once each")
+                    && config.problems.contains("naming.separators must give one separator for each part of naming.parts but the last"),
+                "a name without its title, a part twice, or a separator too few: \(config.problems)")
+        config.naming.parts = [.sender, .title]
+        config.naming.separators = [": "]
+        #expect(config.problems == ["naming.separators must each hold a character, and no / nor any of naming.forbiddenCharacters"],
+                "a separator that cleaning would replace: \(config.problems)")
+        config.naming.separators = [""]
+        #expect(config.problems == ["naming.separators must each hold a character, and no / nor any of naming.forbiddenCharacters"],
+                "an empty separator glues two parts together: \(config.problems)")
+        config.naming.parts = [.title]
+        config.naming.separators = []
+        #expect(config.problems.isEmpty, "a name of the title alone is a name: \(config.problems)")
     }
 }
 

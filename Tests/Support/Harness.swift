@@ -68,12 +68,13 @@ public struct Harness: Sendable {
     public var review: ReviewActions { ReviewActions(services: services, coordinator: coordinator) }
 
     /// Search tasks over this pipeline, their prompts read by `interpreter`: the queue and what the user does with them,
-    /// which tells `conversations` when a task is removed, else a queue of questions of its own.
-    public func searchTasks(_ interpreter: any SearchPromptInterpreting,
-                            conversations: TaskConversationQueue? = nil) -> (queue: SearchTaskQueue, actions: SearchTaskActions) {
+    /// which tells `conversations` when a task is removed, else a queue of questions of its own, and packs an export with
+    /// `archiver`, which lists what it was given (`ListingArchiver`) unless a test gives another.
+    public func searchTasks(_ interpreter: any SearchPromptInterpreting, conversations: TaskConversationQueue? = nil,
+                            archiver: any FolderArchiving = ListingArchiver()) -> (queue: SearchTaskQueue, actions: SearchTaskActions) {
         let queue = SearchTaskQueue(services: services, interpreter: interpreter, processes: processes)
         let answering = conversations ?? self.conversations(StubAnswerer(), interpreter: interpreter).queue
-        return (queue, SearchTaskActions(services: services, queue: queue, conversations: answering))
+        return (queue, SearchTaskActions(services: services, queue: queue, conversations: answering, archiver: archiver))
     }
     /// Conversations about tasks' documents over this pipeline, answered by `answerer`, and requests for more documents
     /// read by `interpreter`: the queue and what the user does with them.
@@ -103,8 +104,8 @@ public struct Harness: Sendable {
     }
 }
 
-/// Reads each file as `StubAnalyzer` does, named after its file, with the labels listed for its name and none for the
-/// rest.
+/// Reads each file as `StubAnalyzer` does, with the labels listed for its name and none for the rest, and no title, so
+/// that each keeps its file's name.
 public struct PerFileAnalyzer: DocumentAnalyzing {
     public let labels: [String: [DocumentLabel]]
 
@@ -112,7 +113,7 @@ public struct PerFileAnalyzer: DocumentAnalyzing {
 
     public func analyse(_ content: ExtractedContent, guidance: LabelGuidance, settings: AppSettings, config: PipelineConfig,
                         trace: TraceContext) async throws -> AnalysisOutcome {
-        var outcome = try await StubAnalyzer(fileName: content.source.stem).analyse(content, guidance: guidance, settings: settings,
+        var outcome = try await StubAnalyzer(title: nil).analyse(content, guidance: guidance, settings: settings,
                                                                                      config: config, trace: trace)
         outcome.labels = labels[content.source.originalFilename] ?? []
         return outcome

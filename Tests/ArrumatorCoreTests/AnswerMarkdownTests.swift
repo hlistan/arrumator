@@ -86,6 +86,78 @@ import Testing
         #expect(blocks[1].text.runs.allSatisfy { $0.link == nil && $0.imageURL == nil }, "and nothing in it opens anything")
     }
 
+    /// A model that opens emphasis and never closes it leaves the marks as text, which would show as asterisks
+    /// (QA 2026-10-04, CNV-2): its words show without them, while code keeps every character it holds.
+    @Test func emphasisNeverClosedShowsItsWordsWithoutTheMarks() throws {
+        let answer = """
+            - **Счёт за электроэнергию от Мосэнергосбыт, 1 234,56 RUB
+            - **EDP**: 54,21 EUR, a nota * da fatura
+
+            `2**10` e
+
+            ```
+            a ** b
+            ```
+            """
+        let blocks = try #require(AnswerMarkdown.blocks(answer))
+        #expect(blocks.map { String($0.text.characters) } == [
+            "Счёт за электроэнергию от Мосэнергосбыт, 1 234,56 RUB", "EDP: 54,21 EUR, a nota * da fatura", "2**10 e", "a ** b",
+        ], "unclosed marks go, closed ones make emphasis, a lone asterisk and code stay as written")
+        let bold = blocks[1].text.runs.first { $0.inlinePresentationIntent == .stronglyEmphasized }
+        #expect(bold.map { String(blocks[1].text[$0.range].characters) } == "EDP", "emphasis closed is still emphasis")
+    }
+
+    /// Only a mark that could have opened emphasis goes (CommonMark 0.31, 6.2: a left-flanking run, not also a closing
+    /// one): asterisks a document's own figures carry, as a masked card or account number or a power, stay as written
+    /// (review of 2026-10-04, finding 1).
+    @Test func asterisksThatOpenNoEmphasisStayAsWritten() throws {
+        let answer = """
+            Cartão ****1234
+
+            IBAN PT50 0035 **** **** 1234 5
+
+            2**10 = 1024
+
+            **Счёт за электроэнергию от Мосэнергосбыт (…):
+
+            Total **
+
+            ***Três faturas
+            """
+        let blocks = try #require(AnswerMarkdown.blocks(answer))
+        #expect(blocks.map { String($0.text.characters) } == [
+            "Cartão ****1234", "IBAN PT50 0035 **** **** 1234 5", "2**10 = 1024",
+            "Счёт за электроэнергию от Мосэнергосбыт (…):", "Total **", "Três faturas",
+        ], "a masked number, a run standing alone and one between digits keep their asterisks; an opener never closed loses its own")
+    }
+
+    /// A mask of two or three asterisks after a space, before a digit, is a document's own figure, not an opener: it
+    /// stays, while an opener never closed before a word, at the start of its block or after a space, goes (second review
+    /// of 2026-10-04, finding 3).
+    @Test func aShortMaskBeforeADigitStaysAsWritten() throws {
+        let answer = """
+            Cartão ***1234
+
+            NIF ***456789
+
+            Conta **5678
+
+            - **5678 é a conta
+
+            Ver **Resumo das faturas
+            """
+        let blocks = try #require(AnswerMarkdown.blocks(answer))
+        #expect(blocks.map { String($0.text.characters) } == [
+            "Cartão ***1234", "NIF ***456789", "Conta **5678", "**5678 é a conta", "Ver Resumo das faturas",
+        ], "masked figures keep their asterisks wherever they stand; an opener never closed before a word loses its own")
+    }
+
+    @Test func aRuleIsARuleWithNoTextOfItsOwn() throws {
+        let blocks = try #require(AnswerMarkdown.blocks("Um\n\n---\n\nDois"))
+        #expect(blocks.map(\.kind) == [.paragraph, .rule, .paragraph] && blocks[1].text.characters.isEmpty,
+                "a thematic break is drawn as a rule, not written as a character")
+    }
+
     @Test func plainTextIsOneParagraphAndUnfinishedMarkdownStillShows() throws {
         #expect(try #require(AnswerMarkdown.blocks("Duas faturas.")).map(\.kind) == [.paragraph])
         let partial = try #require(AnswerMarkdown.blocks("- EDP: **54,2"), "an answer still being written is shown as far as it came")

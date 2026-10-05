@@ -5,7 +5,7 @@ import Foundation
 
 struct Review: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
-        abstract: "Documents waiting for you, and what you can do with any document.",
+        abstract: "Documents waiting for you, those you set aside, and what you can do with any document.",
         subcommands: [List.self, Confirm.self, Rename.self, Retry.self, Hold.self, Undo.self],
         defaultSubcommand: List.self)
 
@@ -13,11 +13,13 @@ struct Review: AsyncParsableCommand {
         @OptionGroup var options: GlobalOptions
         func run() async throws {
             let runtime = try await options.runtime()
-            let docs = try await runtime.services.documents.reviewQueue()
-            try options.emit(docs) {
-                docs.isEmpty ? "Nothing to review." : Terminal.table(docs.map { d in
-                    ["#\(d.id ?? 0)", d.status.rawValue, d.filename, d.analysis?.problems.joined(separator: "; ") ?? ""]
-                })
+            let listed = try await runtime.services.documents.needsYou()
+            let rows = { (docs: [DocumentRecord]) in
+                Terminal.table(docs.map { d in ["#\(d.id ?? 0)", d.status.rawValue, d.filename, d.analysis?.problems.joined(separator: "; ") ?? ""] })
+            }
+            try options.emit(listed) {
+                let waiting = listed.waiting.isEmpty ? "Nothing waits for you." : rows(listed.waiting)
+                return listed.setAside.isEmpty ? waiting : waiting + "\n\nSet aside by you (left for later or undone):\n" + rows(listed.setAside)
             }
         }
     }

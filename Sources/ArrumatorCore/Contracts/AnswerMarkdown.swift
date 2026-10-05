@@ -5,7 +5,8 @@ import Foundation
 /// it read can tell the model what to write (OWASP, LLM05 Improper Output Handling), so nothing in it becomes active
 /// where it is shown: a link becomes its words, followed by its address as plain text when the two differ, so a click
 /// opens nothing and nothing is hidden; an image becomes its words (`inert`). A table is shown as its rows of plain text,
-/// each column as wide as its widest cell, as code is (`table`): its cells are not paragraphs of their own.
+/// each column as wide as its widest cell, as code is (`table`): its cells are not paragraphs of their own. Emphasis the
+/// model opened and never closed shows its words without the marks (`unmatched`).
 public enum AnswerMarkdown {
     /// One block: its text, what it is, and how many lists it sits within beyond the first.
     public struct Block: Sendable, Hashable, Identifiable {
@@ -22,6 +23,8 @@ public enum AnswerMarkdown {
         case item(marker: String)
         case quote
         case code
+        /// A thematic break, a rule across the answer; its text is empty.
+        case rule
     }
 
     static let bullet = "•"
@@ -31,7 +34,7 @@ public enum AnswerMarkdown {
     public static func blocks(_ markdown: String) -> [Block]? {
         let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .full, failurePolicy: .returnPartiallyParsedIfPossible)
         guard let read = try? AttributedString(markdown: markdown, options: options) else { return nil }
-        let parsed = inert(read)
+        let parsed = unmatched(inert(read))
         var blocks: [Block] = []
         var lastBlock: Int?
         var lastItem: Int?
@@ -63,7 +66,8 @@ public enum AnswerMarkdown {
             if case .item = kind, let item, item.identity == lastItem { kind = .item(marker: "") }
             lastItem = item?.identity ?? lastItem
             let lists = components.filter { [.orderedList, .unorderedList].contains($0.kind) }.count
-            blocks.append(Block(id: blocks.count, text: piece, kind: kind, depth: max(0, lists - 1)))
+            // A rule is drawn, not written: the character the parser gives it is no text of the answer's.
+            blocks.append(Block(id: blocks.count, text: kind == .rule ? AttributedString() : piece, kind: kind, depth: max(0, lists - 1)))
         }
         endTable()
         // Code ends with the line break that closes its last line, which would show as an empty line.
@@ -93,6 +97,69 @@ public enum AnswerMarkdown {
         }
         return shown
     }
+
+    /// `text` without the emphasis marks the model opened and never closed, which the parser leaves as text, so
+    /// "**Счёт за электроэнергию" shows its words, not the marks. A mark goes only when it could have opened emphasis and
+    /// nothing else (CommonMark 0.31, section 6.2): a run of two or three asterisks outside code, the lengths that make
+    /// strong emphasis, that is left-flanking and not right-flanking within its block, and not before a digit. Asterisks
+    /// that open nothing stay as the answer wrote them: one alone, which may be a footnote's; a run standing between
+    /// spaces, between letters or digits ("2**10") or before closing punctuation; a run before a digit, which is a
+    /// document's own masking ("Cartão ***1234", "Conta **5678") wherever it stands; and a longer run ("****1234"), as no
+    /// emphasis is written with it.
+    static func unmatched(_ text: AttributedString) -> AttributedString {
+        // Each character with the block it sits in and whether it is code, so a mark is judged by its neighbours within
+        // its own block: the parser joins blocks with no character between them.
+        var characters: [(character: Character, block: Int?, code: Bool)] = []
+        for run in text.runs {
+            let code = run.inlinePresentationIntent?.contains(.code) == true
+                || run.presentationIntent?.components.contains { isCodeBlock($0.kind) } == true
+            let block = run.presentationIntent?.components.first?.identity
+            characters += text[run.range].characters.map { ($0, block, code) }
+        }
+        var stray: [Range<Int>] = []
+        var index = 0
+        while index < characters.count {
+            guard characters[index].character == mark, !characters[index].code else { index += 1; continue }
+            var end = index
+            while end < characters.count, characters[end].character == mark, !characters[end].code,
+                  characters[end].block == characters[index].block { end += 1 }
+            let block = characters[index].block
+            let before = index > 0 && characters[index - 1].block == block ? characters[index - 1].character : nil
+            let after = end < characters.count && characters[end].block == block ? characters[end].character : nil
+            if opens.contains(end - index), after?.isNumber != true, flanking(before, after), !flanking(after, before) {
+                stray.append(index..<end)
+            }
+            index = end
+        }
+        var shown = text
+        for range in stray.reversed() {
+            let start = shown.characters.index(shown.startIndex, offsetBy: range.lowerBound)
+            shown.removeSubrange(start..<shown.characters.index(start, offsetBy: range.count))
+        }
+        return shown
+    }
+
+    /// Whether a run of marks between `before` and `after` (nil at the edge of its block, which counts as whitespace) is
+    /// left-flanking; with the two swapped, right-flanking (CommonMark 0.31, section 6.2).
+    private static func flanking(_ before: Character?, _ after: Character?) -> Bool {
+        guard let after, !after.isWhitespace else { return false }
+        guard isPunctuation(after) else { return true }
+        guard let before else { return true }
+        return before.isWhitespace || isPunctuation(before)
+    }
+
+    /// Unicode punctuation as CommonMark counts it: the P and S general categories.
+    private static func isPunctuation(_ character: Character) -> Bool {
+        character.isPunctuation || character.isSymbol
+    }
+
+    private static func isCodeBlock(_ kind: PresentationIntent.Kind) -> Bool {
+        if case .codeBlock = kind { true } else { false }
+    }
+
+    /// The emphasis mark, and the lengths of a run of it that open strong emphasis, alone or with emphasis.
+    static let mark: Character = "*"
+    static let opens = 2...3
 
     /// A table as it is read, row by row, its cells' words in plain text.
     struct Table {
@@ -160,6 +227,7 @@ public enum AnswerMarkdown {
             switch component.kind {
             case let .header(level): return .heading(level)
             case .codeBlock: return .code
+            case .thematicBreak: return .rule
             case .blockQuote: return .quote
             case let .listItem(ordinal):
                 let ordered = components.dropFirst(index + 1).first { [.orderedList, .unorderedList].contains($0.kind) }?.kind == .orderedList

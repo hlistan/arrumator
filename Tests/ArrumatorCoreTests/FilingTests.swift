@@ -65,7 +65,7 @@ import Testing
         let id = try #require(try await h.ingest("scan_0042.txt", text: "EDP electricity July").id)
         let filed = try #require(try await h.services.documents.document(id: id))
         #expect(filed.filename == StubAnalyzer.edpFileName + ".txt", "filed under the name the model gave")
-        for analyzer in [StubAnalyzer(labels: nil, fileName: nil), StubAnalyzer(fileName: nil)] {
+        for analyzer in [StubAnalyzer(labels: nil), StubAnalyzer(title: nil)] {
             let other = reading(h, with: analyzer)
             try await other.review.retry(id)
             await other.coordinator.drain()
@@ -233,7 +233,7 @@ import Testing
             let left = try #require(documents.first)
             #expect(documents.count == 1 && left.status == .failed && left.path == bill.spelledOnDisk.path,
                     "when it \(arrival), it is one document, left where it is, not filed, which a rescan leaves alone")
-            #expect(try await h.services.documents.reviewQueue().map(\.id) == [left.id], "in Needs You")
+            #expect(try await h.services.documents.needsYou().waiting.map(\.id) == [left.id], "in Needs You")
             let failed = try await h.services.history.events(limit: 10, kinds: [.failed, .retry], docID: left.id)
             #expect(failed.map(\.kind) == [.failed] && left.analysis?.problems.count == 1, "said once, as failed, never tried again")
             let summary = try #require(failed.first?.summary)

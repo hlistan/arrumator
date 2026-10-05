@@ -46,8 +46,8 @@ public struct StubInterpreter: SearchPromptInterpreting {
 
     public static let noAnswer = "the model gave no valid answer"
 
-    public func interpret(_ prompt: String, effort: TaskEffort, profile: ModelProfile, vocabulary: [LabelKind: [LabelUsage]], today: String,
-                          config: PipelineConfig, trace: TraceContext) async throws -> SearchInterpretation {
+    public func interpret(_ prompt: String, question: String?, effort: TaskEffort, profile: ModelProfile, vocabulary: [LabelKind: [LabelUsage]],
+                          today: String, config: PipelineConfig, trace: TraceContext) async throws -> SearchInterpretation {
         await calls.read(prompt, reading: Reading(effort: effort, profile: profile), vocabulary: vocabulary, today: today)
         try await during?(prompt)
         if let error { throw error }

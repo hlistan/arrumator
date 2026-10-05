@@ -69,6 +69,10 @@ enum Wording {
     static let archiveNotRead = "Not filing: reading the archive failed"
     /// Nothing is filed, as the archive's folder is not there, as on a disk that is not connected.
     static let archiveAway = "Not filing: the archive's folder is not there"
+    /// Nothing is filed, as the app has not been set up: nothing in Incoming is taken until it is.
+    static let notSetUp = "Not filing: Arrumator is not set up yet"
+    /// The empty Incoming page before the app is set up, when nothing dropped into Incoming is taken.
+    static let nothingWaitingNotSetUp = "Nothing waiting. Files dropped into Incoming are picked up once Arrumator is set up."
     static let waitingForOllama = "Waiting for Ollama"
 
     /// Why filing waits, such as low battery.
@@ -81,6 +85,7 @@ enum Wording {
     /// popover's status line, which says the app is starting while it waits for the folders.
     static func holdup(_ holdup: RuntimeActivity.Holdup, inMenuBar: Bool) -> String {
         switch holdup {
+        case .notSetUp: notSetUp
         case .waitingForFolders: inMenuBar ? startingForFolders : waitingForFolders
         case .archiveNotRead: archiveNotRead
         case .archiveAway: archiveAway
@@ -90,12 +95,27 @@ enum Wording {
         }
     }
 
+    /// What the user is to know at the foot of the window and on Incoming (`RuntimeActivity.Attention`).
+    static func attention(_ attention: RuntimeActivity.Attention) -> String {
+        switch attention {
+        case let .held(holdup): self.holdup(holdup, inMenuBar: false)
+        case let .recordsUnreadable(paths): recordsUnreadable(paths)
+        }
+    }
+
+    /// Record files that cannot be read, named, while filing goes on.
+    static func recordsUnreadable(_ paths: [String]) -> String {
+        let named = paths.count == 1 ? "The record file \(paths[0]) cannot be read"
+            : "\(paths.count) record files cannot be read, \(paths[0]) among them"
+        return named + ": filing goes on, and what is filed or changed is written into it once it is mended (see History)."
+    }
+
     /// What the app is doing now (`RuntimeActivity.Now`), in the menu bar popover.
     static func now(_ now: RuntimeActivity.Now) -> String {
         switch now {
         case let .held(holdup): self.holdup(holdup, inMenuBar: true)
         case .waitingForOllama: waitingForOllama
-        case let .filing(path, stage): working(on: (path as NSString).lastPathComponent, stage: doing(stage))
+        case let .filing(path, work): working(on: (path as NSString).lastPathComponent, stage: doing(work))
         case let .tasks(work): tasksWork(work)
         case let .queued(count): queued(count)
         case .idle: idle
@@ -108,30 +128,31 @@ enum Wording {
     /// The menu of the rest, at the sidebar's foot and in the menu bar popover.
     static let moreActions = "More"
     static let chooseAnotherArchive = "Choose Another Archive…"
-    /// What the main window says while the archive's folder is not there, naming it.
-    static func archiveAwayNotice(_ path: String) -> String {
-        "The archive at \(path) is not there, as on a disk that is not connected. Nothing is filed until it is back."
-    }
+    /// What the main window says while the archive's folder is not there, above the folder's path on a line of its own.
+    static let archiveAwayNotice = "The archive is not there, as on a disk that is not connected. Nothing is filed until it is back."
 
     /// What a search task is at work on (`RuntimeActivity.TasksWork`).
     static func tasksWork(_ work: RuntimeActivity.TasksWork) -> String {
         switch work {
         case let .readingRequest(model): readingRequest(with: model)
-        case .waitingForOllama: waitingForOllama
+        case let .waitingForOllama(until): turnProgressLine(.waitingForOllama(until: until))
         case let .answering(model): answeringQuestion(with: model)
         }
     }
 
-    /// What is being done to a file at a stage, while it is: "Reading its text", not the funnel's "Read".
-    static func doing(_ state: JobState) -> String {
-        switch state {
+    /// What is being done to a file (`JobWork`), while it is: "Reading its text", not the funnel's "Read"; the model
+    /// that reads it named, "Being read by qwen3.5:9b"; and how long so far once `elapsed` is given, as a search task's
+    /// reading says it: "Being read by qwen3.5:9b… 1 min, 30 sec so far".
+    static func doing(_ work: JobWork, elapsed: TimeInterval? = nil) -> String {
+        let doing = switch work.stage {
         case .pending: "Waiting"
         case .hashing: "Checking for copies"
         case .extracting: "Reading its text"
-        case .analysing: "Being read by the model"
+        case .analysing: work.model.map { "Being read by \($0)" } ?? "Being read by the model"
         case .filing: "Filing"
         case .done, .duplicate, .needsReview, .failed, .cancelled: "Finishing"
         }
+        return doing + (elapsed.map { "… \(readingTime($0)) so far" } ?? "")
     }
 
     static func queued(_ count: Int) -> String { "\(count) queued" }
@@ -140,6 +161,18 @@ enum Wording {
     /// spinner beside Tasks in the sidebar.
     static func readingRequest(with model: String) -> String { "Reading a request with \(model)" }
     static func answeringQuestion(with model: String) -> String { "Answering a question with \(model)" }
+
+    /// What the queue does with a task's questions, at the end of its row on the Tasks page
+    /// (`ConversationQueueStatus.progress(ofTask:)`).
+    static func questionRow(_ progress: TurnProgress) -> String {
+        switch progress {
+        case .answering: "Answering a question"
+        case let .waitingForOllama(until):
+            until.map { "A question waits for Ollama, tried again at \($0.formatted(date: .omitted, time: .shortened))" }
+                ?? "A question waits for Ollama, trying to reach it again"
+        case .waiting, .waitingForTurn: "A question waits to be answered"
+        }
+    }
 
     /// Notification titles.
     static let notifyFiled = "Filed"
@@ -208,6 +241,7 @@ enum Wording {
     // MARK: Shared across pages
 
     static let showMore = "Show More"
+    static let showFewer = "Show Fewer"
     static let showDocuments = "Show Documents"
     static let openIncomingFolder = "Open Incoming Folder"
     static let openArchiveFolder = "Open Archive Folder"
@@ -276,7 +310,7 @@ enum Wording {
         let reason: String? = switch document.status {
         case .filed: nil
         case .needsReview, .failed:
-            document.analysis.flatMap { $0.problems.isEmpty ? nil : "Waiting for you: " + $0.problems.joined(separator: "; ") }
+            document.analysis.flatMap { $0.problems.isEmpty ? nil : "Waiting for you: " + DocumentAnalysis.said($0.problems) }
                 ?? StatsService.stopReason(for: document.status).text
         default: StatsService.stopReason(for: document.status).text
         }
@@ -295,6 +329,7 @@ enum Wording {
     /// Who read the document, as a sentence.
     static func reader(_ analysis: DocumentAnalysis) -> String {
         guard let model = analysis.model else { return "Not read by the model" }
+        if analysis.isUnreadableFormat { return "Arrumator cannot read this kind of file, so \(model) saw only its name" }
         return analysis.hadNoText ? "No text could be taken from it, so \(model) saw only its name" : "Read by \(model)"
     }
 
@@ -306,7 +341,21 @@ enum Wording {
         if analysis.problems.contains(DocumentAnalysis.Problem.corrupted) {
             return "Read Again cannot mend a damaged file: put a good copy of it in Incoming."
         }
+        if analysis.isUnreadableFormat {
+            return "Read Again cannot read this kind of file either: open it in the app that made it, save or export it as a PDF, "
+                + "and put that in Incoming. Or confirm it as it is, named and labelled by you."
+        }
         return nil
+    }
+
+    /// Heads the documents the user set aside, below those that wait for the user on Needs You (`NeedsYou.setAside`).
+    static let setAsideHeading = "Set Aside by You"
+    static let setAsideNotes = "You left these for later, or undid their filing. They wait for nothing and are not counted: "
+        + "read one again when you want it filed."
+
+    /// On a filed document's card once the user confirmed it as it is (Looks Right), and nothing changed it since.
+    static func confirmedByYou(at date: Date) -> String {
+        "Confirmed by you \(date.formatted(date: .abbreviated, time: .shortened))"
     }
 
     /// Beneath what keeps a document left in Incoming waiting: it was not filed, and what to do.
@@ -314,6 +363,14 @@ enum Wording {
 
     /// Said once Read Again has put a document back in the queue.
     static let readAgainQueued = "Waiting to be read again, after the files already in Incoming."
+    /// Said by Needs You, which a document read again leaves, naming it, with a way to Incoming.
+    static func readAgainQueued(named name: String) -> String {
+        "“\(name)” waits to be read again, after the files already in Incoming."
+    }
+    static let showIncoming = "Show Incoming"
+    /// A document as a notice names it: by its file's name, or, before its card has it, by its number, as Core's errors
+    /// name one (`IngestError.documentNotFound`).
+    static func documentName(_ document: DocumentRecord?, id: Int64) -> String { document?.filename ?? "Document \(id)" }
 
     /// How a document arrived, under its name on its card.
     static func arrived(as name: String, at date: Date) -> String {
@@ -338,7 +395,7 @@ enum Wording {
     /// `DocumentOrder.documentDate` come under these a month at a time, the newest first, those without a date last.
     static func documentMonth(_ document: DocumentRecord) -> String {
         guard let date = document.documentDate else { return without(.date) }
-        return labelDay(date)?.formatted(.dateTime.month(.wide).year()) ?? date
+        return Format.month(date, locale: .current) ?? date
     }
 
     // MARK: Labels
@@ -431,23 +488,30 @@ enum Wording {
         }
     }
 
-    /// A label as the card shows it: a type by its name, a language by its name in the user's language, a date as a
-    /// date.
+    /// A label as the card and the sidebar show it: a type by its name, a language by its name in the user's language, a
+    /// date or deadline as a day and a period as its days, one way (`Format.day`, `Format.period`).
     static func label(_ label: DocumentLabel) -> String {
         switch label.kind {
-        case .language: return Locale.current.localizedString(forLanguageCode: label.value) ?? label.value
-        case .type: return DocumentType(rawValue: label.value)?.label ?? label.value
-        case .date, .deadline: return labelDay(label.value)?.formatted(date: .abbreviated, time: .omitted) ?? label.value
-        default: return label.value
+        case .language: Locale.current.localizedString(forLanguageCode: label.value) ?? label.value
+        case .type: DocumentType(rawValue: label.value)?.label ?? label.value
+        case .date, .deadline: Format.day(label.value, locale: .current) ?? label.value
+        case .period: Format.period(label.value, locale: .current) ?? label.value
+        default: label.value
         }
     }
 
+    /// A kind of label, as a sentence names one: "the new sender label".
+    static func labelKindName(_ kind: LabelKind) -> String {
+        switch kind {
+        case .party: "person or organisation"
+        case .object: "thing"
+        default: kind.rawValue
+        }
+    }
+
+    /// The field a card's new label is written in, as VoiceOver names it, whatever example it shows.
+    static func newLabelField(_ kind: LabelKind) -> String { "Value of the new \(labelKindName(kind)) label" }
+
     /// That documents have no label of a kind, as a heading: "No date".
     static func without(_ kind: LabelKind) -> String { "No \(labelKind(kind).lowercased())" }
-
-    /// A date label, `YYYY-MM-DD`, as the start of that day where the user is, so it is shown as the day it names in
-    /// every time zone; nil when it is no day.
-    private static func labelDay(_ value: String) -> Date? {
-        try? Date(value, strategy: Date.ISO8601FormatStyle(timeZone: .current).year().month().day())
-    }
 }

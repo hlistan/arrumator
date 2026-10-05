@@ -8,7 +8,14 @@ public protocol ContentExtracting: Sendable {
 /// Produces L2-normalised embedding vectors.
 public protocol Embedder: Sendable {
     var modelId: String { get }
-    func embed(_ texts: [String]) async throws -> [[Float]]
+    /// The vectors of `texts`. With `retrying`, a server that is away is asked again (`ollama.retryDelays`); without it,
+    /// it is thrown at once, for a caller that waits for Ollama in a way of its own and says so, as a question does.
+    func embed(_ texts: [String], retrying: Bool) async throws -> [[Float]]
+}
+
+extension Embedder {
+    /// The vectors of `texts`, a server that is away asked again.
+    public func embed(_ texts: [String]) async throws -> [[Float]] { try await embed(texts, retrying: true) }
 }
 
 /// Reads a document with the local model: its labels and the name it is filed under. Implemented by
@@ -46,6 +53,14 @@ public protocol HostResolving: Sendable {
     /// The numeric addresses `host` resolves to, an IPv6 one with its zone (`%en0`) when it has one; none when it does
     /// not resolve within `seconds`. Throws `CancellationError` as soon as the task is cancelled.
     func addresses(of host: String, within seconds: Double) async throws -> [String]
+}
+
+/// Packs a folder into a ZIP archive that other systems read as the Mac does: its entries under the folder's own name,
+/// each name composed (NFC) and marked as UTF-8 (APPNOTE.TXT 4.4.4, bit 11), whatever the disk holds. Implemented by
+/// `ArrumatorExtract.ZipFolderArchiver`, as Core writes no ZIP archive itself (AGENTS.md §5).
+public protocol FolderArchiving: Sendable {
+    /// Writes a ZIP archive of `directory` at `destination`, which is not there yet.
+    func zip(_ directory: URL, to destination: URL) throws
 }
 
 /// Where a file the app has no more use for goes, so the user can still take it back: never deleted (AGENTS.md §4.2).

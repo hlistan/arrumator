@@ -163,10 +163,15 @@ import Testing
         let retry = w.h.env.time.now().addingTimeInterval(w.h.env.config.ingest.retryDelays.last)
         #expect(status.waitingForOllama && status.queued == 1 && status.retryAt == retry, "and the queue says it waits for Ollama, until when")
         #expect(status.progress(of: waiting) == .waitingForOllama(until: retry), "which the question shows")
+        // QA 2026-10-04, CNV-6: the task's row said "Answering a question" and the command line "answering" meanwhile.
+        #expect(status.progress(ofTask: w.task.id) == .waitingForOllama(until: retry) && status.progress(ofTask: 999) == nil,
+                "and so does its task's row, with when it is tried again; another task has no question waiting")
+        #expect(waiting.retryAt == retry, "as the question read from the index says, for the command line")
         let (back, _) = w.h.conversations(StubAnswerer(fallback: Self.reply), interpreter: StubInterpreter(plans: [:]))
         await back.drain()
         #expect(try await turn(talk, asked.id).state == .queued, "it is not tried again before its time")
         w.h.env.time.advance(by: w.h.env.config.ingest.retryDelays.last)
+        #expect(try await turn(talk, asked.id).retryAt == nil, "and once its time has come, it no longer waits for it")
         await back.drain()
         #expect(try await turn(talk, asked.id).answer == Self.reply.text, "and is answered once it is due and Ollama answers")
     }
@@ -355,38 +360,6 @@ import Testing
         #expect(await Patience.until { seen.withLock { $0.last?.answering == nil } }, "and that nothing is answered once it is done")
     }
 
-    @Test func whereAQuestionIsInTheQueueFollowsTheStatus() {
-        let asked = TaskTurn(id: 7, task: 1, question: "?", state: .queued, answer: nil, sources: [], finding: nil, model: nil, problem: nil,
-                             lastTrace: nil, asked: TestTime.start, answered: nil)
-        let answering = ConversationQueueStatus.Answering(task: 1, turn: 7, model: "m", since: TestTime.start,
-                                                          progress: AnswerProgress(text: "So far", thinking: false))
-        let other = ConversationQueueStatus.Answering(task: 1, turn: 8, model: "m", since: TestTime.start,
-                                                      progress: AnswerProgress(text: "", thinking: true))
-        #expect(ConversationQueueStatus.idle.progress(of: asked) == .waiting, "next, while nothing is answered")
-        #expect(ConversationQueueStatus(answering: other, queued: 1, waitingForOllama: false).progress(of: asked) == .waitingForTurn,
-                "behind the question being answered")
-        let retry = TestTime.start.addingTimeInterval(30)
-        #expect(ConversationQueueStatus(answering: nil, queued: 1, waitingForOllama: true, retryAt: retry).progress(of: asked)
-                    == .waitingForOllama(until: retry), "until Ollama can be reached, tried again then")
-        var taken = asked
-        taken.state = .answering
-        #expect(ConversationQueueStatus(answering: answering, queued: 0, waitingForOllama: false).progress(of: taken) == .answering(answering),
-                "being answered, with what has come of it")
-        #expect(ConversationQueueStatus.idle.progress(of: taken) == .answering(nil), "or by another process, which this one cannot say")
-        var trying = answering
-        trying.progress = .notBegun
-        #expect(ConversationQueueStatus(answering: trying, queued: 0, waitingForOllama: true, retryAt: retry).progress(of: taken)
-                    == .waitingForOllama(until: nil), "tried again while Ollama was away, it waits for Ollama until the model begins")
-        #expect(ConversationQueueStatus(answering: trying, queued: 0, waitingForOllama: false).progress(of: taken) == .answering(trying),
-                "with Ollama there, it is being answered, the model not yet begun")
-        var done = asked
-        done.state = .answered
-        #expect(ConversationQueueStatus(answering: answering, queued: 0, waitingForOllama: false).progress(of: done) == nil,
-                "an answered question is in the queue no more, whatever a status not yet updated says")
-        #expect(ConversationQueueStatus(answering: answering, queued: 0, waitingForOllama: false).settled.answering?.progress.text == "",
-                "what a list of questions reloads on leaves out the words being written")
-    }
-
     // MARK: The archive's record
 
     @Test func aConversationIsWrittenIntoTheArchiveAndComesBackAfterARebuild() async throws {
@@ -476,5 +449,58 @@ extension Array {
         var values: [T] = []
         for element in self { values.append(try await transform(element)) }
         return values
+    }
+}
+
+/// Where a question, and a task's questions, are in the queue, as the status the app follows says.
+extension ConversationTests {
+    @Test func whereAQuestionIsInTheQueueFollowsTheStatus() {
+        let asked = TaskTurn(id: 7, task: 1, question: "?", state: .queued, answer: nil, sources: [], finding: nil, model: nil, problem: nil,
+                             lastTrace: nil, asked: TestTime.start, answered: nil, retryAt: nil)
+        let answering = ConversationQueueStatus.Answering(task: 1, turn: 7, model: "m", since: TestTime.start,
+                                                          progress: AnswerProgress(text: "So far", thinking: false))
+        let other = ConversationQueueStatus.Answering(task: 1, turn: 8, model: "m", since: TestTime.start,
+                                                      progress: AnswerProgress(text: "", thinking: true))
+        #expect(ConversationQueueStatus.idle.progress(of: asked) == .waiting, "next, while nothing is answered")
+        #expect(ConversationQueueStatus(answering: other, queued: 1, waitingForOllama: false).progress(of: asked) == .waitingForTurn,
+                "behind the question being answered")
+        let retry = TestTime.start.addingTimeInterval(30)
+        #expect(ConversationQueueStatus(answering: nil, queued: 1, waitingForOllama: true, retryAt: retry).progress(of: asked)
+                    == .waitingForOllama(until: retry), "until Ollama can be reached, tried again then")
+        var taken = asked
+        taken.state = .answering
+        #expect(ConversationQueueStatus(answering: answering, queued: 0, waitingForOllama: false).progress(of: taken) == .answering(answering),
+                "being answered, with what has come of it")
+        #expect(ConversationQueueStatus.idle.progress(of: taken) == .answering(nil), "or by another process, which this one cannot say")
+        var trying = answering
+        trying.progress = .notBegun
+        #expect(ConversationQueueStatus(answering: trying, queued: 0, waitingForOllama: true, retryAt: retry).progress(of: taken)
+                    == .waitingForOllama(until: nil), "tried again while Ollama was away, it waits for Ollama until the model begins")
+        #expect(ConversationQueueStatus(answering: trying, queued: 0, waitingForOllama: false).progress(of: taken) == .answering(trying),
+                "with Ollama there, it is being answered, the model not yet begun")
+        var done = asked
+        done.state = .answered
+        #expect(ConversationQueueStatus(answering: answering, queued: 0, waitingForOllama: false).progress(of: done) == nil,
+                "an answered question is in the queue no more, whatever a status not yet updated says")
+        #expect(ConversationQueueStatus(answering: answering, queued: 0, waitingForOllama: false).settled.answering?.progress.text == "",
+                "what a list of questions reloads on leaves out the words being written")
+    }
+
+    @Test func whatTheQueueDoesWithATasksQuestionsFollowsTheStatus() {
+        let answering = ConversationQueueStatus.Answering(task: 1, turn: 7, model: "m", since: TestTime.start,
+                                                          progress: AnswerProgress(text: "So far", thinking: false))
+        let retry = TestTime.start.addingTimeInterval(30)
+        let busy = ConversationQueueStatus(answering: answering, queued: 1, queuedTasks: [2], waitingForOllama: false)
+        #expect(busy.progress(ofTask: 1) == .answering(answering) && busy.progress(ofTask: 1)?.isAnswering == true,
+                "a task whose question is answered says so")
+        #expect(busy.progress(ofTask: 2) == .waitingForTurn && busy.progress(ofTask: 2)?.isAnswering == false,
+                "one whose question waits behind it says that")
+        #expect(busy.progress(ofTask: 3) == nil, "and one with no question in the queue says nothing")
+        let away = ConversationQueueStatus(answering: nil, queued: 1, queuedTasks: [1], waitingForOllama: true, retryAt: retry)
+        #expect(away.progress(ofTask: 1) == .waitingForOllama(until: retry), "waiting for Ollama, it says until when")
+        var trying = answering
+        trying.progress = .notBegun
+        #expect(ConversationQueueStatus(answering: trying, queued: 0, waitingForOllama: true).progress(ofTask: 1) == .waitingForOllama(until: nil),
+                "and tried again, it waits for Ollama until the model begins, never “Answering” before")
     }
 }

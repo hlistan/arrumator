@@ -17,6 +17,8 @@ public struct SearchTaskQueueStatus: Sendable, Hashable {
     /// Ollama could not be reached for the last reading: the tasks waiting are tried again after the last of
     /// `ingest.retryDelays`. Until a reading reaches it, or nothing is left to read.
     public var waitingForOllama: Bool
+    /// When the tasks waiting for Ollama are tried again; nil while none waits for it.
+    public var retryAt: Date?
 
     public static let idle = SearchTaskQueueStatus(reading: nil, queued: 0, waitingForOllama: false)
 
@@ -26,7 +28,7 @@ public struct SearchTaskQueueStatus: Sendable, Hashable {
         guard task.state.isActive else { return nil }
         if let reading, reading.task == task.id { return .reading(reading) }
         if task.state == .interpreting { return .reading(nil) }
-        if waitingForOllama { return .waitingForOllama }
+        if waitingForOllama { return .waitingForOllama(until: retryAt) }
         return reading == nil ? .waiting : .waitingForTurn
     }
 }
@@ -36,8 +38,8 @@ public enum SearchTaskProgress: Sendable, Hashable {
     /// Its request is being read: by the model this queue names, since then; nil when the task is stored as being read
     /// but this queue does not read it, as when the command line does.
     case reading(SearchTaskQueueStatus.Reading?)
-    /// Waiting until Ollama can be reached again.
-    case waitingForOllama
+    /// Waiting until Ollama can be reached again: tried again at `until`, or being tried now when nil.
+    case waitingForOllama(until: Date?)
     /// Waiting while another task's request is read first.
     case waitingForTurn
     /// Waiting to be read, next.
@@ -119,7 +121,10 @@ public actor SearchTaskQueue: ModelQueue {
             next.queued = queued
             countPublished = asked
         }
-        if next.reading == nil, next.queued == 0 { next.waitingForOllama = false }
+        if next.reading == nil, next.queued == 0 {
+            next.waitingForOllama = false
+            next.retryAt = nil
+        }
         status = next
     }
 
@@ -142,6 +147,7 @@ public actor SearchTaskQueue: ModelQueue {
         await publish {
             $0.reading = nil
             $0.waitingForOllama = false
+            $0.retryAt = nil
         }
     }
 
@@ -191,7 +197,10 @@ public actor SearchTaskQueue: ModelQueue {
         let reached = await read(record, id: id)
         await publish {
             $0.reading = nil
-            if let reached { $0.waitingForOllama = !reached }
+            if let reached {
+                $0.waitingForOllama = !reached
+                if reached { $0.retryAt = nil }
+            }
         }
         return true
     }
@@ -229,9 +238,11 @@ public actor SearchTaskQueue: ModelQueue {
         case let .away(error):
             outcome = TraceRecorder.waitingOutcome
             reached = false
-            do { try await store.postpone(id, by: tag, until: retryAt, trace: trace.traceID) } catch {
+            let until = retryAt
+            do { try await store.postpone(id, by: tag, until: until, trace: trace.traceID) } catch {
                 Log.error(.search, "Could not put a search task back in the queue", ["task": String(id), "error": error.localizedDescription])
             }
+            await publish { $0.retryAt = until }
             Log.warning(.search, "Ollama unavailable; the search task waits", ["task": String(id), "error": error.localizedDescription])
         case let .failed(error):
             outcome = SearchTaskState.failed.rawValue
@@ -256,7 +267,7 @@ public actor SearchTaskQueue: ModelQueue {
     private func interpret(_ record: SearchTaskRecord, id: Int64, profile: ModelProfile, trace: TraceContext) async throws -> String {
         let vocabulary = try await services.labels.usage()
         let today = services.time.now().formatted(Date.ISO8601FormatStyle(timeZone: services.timeZone).year().month().day())
-        let interpretation = try await interpreter.interpret(record.prompt, effort: record.effort, profile: profile, vocabulary: vocabulary,
+        let interpretation = try await interpreter.interpret(record.prompt, question: nil, effort: record.effort, profile: profile, vocabulary: vocabulary,
                                                              today: today, config: services.config, trace: trace)
         guard let plan = interpretation.plan else {
             try await store.fail(id, by: tag, interpretation: interpretation, trace: trace.traceID)

@@ -35,11 +35,13 @@ import Testing
         #expect(await Patience.until { await holding.held == "a.txt" }, "the worker takes the first file to arrive, and the model reads it")
         let reading = try await h.jobs()
         let a = try #require(reading.first?.id)
-        let inHand = IngestStatus.Current(job: a, path: try #require(reading.first?.sourcePath), stage: .analysing)
+        let reader = try await h.services.settings.current.modelProfile().chatModel
+        let inHand = IngestStatus.Current(job: a, path: try #require(reading.first?.sourcePath), stage: .analysing,
+                                          since: h.env.time.now(), reader: reader)
         let status = await h.coordinator.status
         #expect(status.current == inHand, "the status names the file in hand and the stage it is at")
         #expect(await Patience.until { await follower.received.last?.current == inHand }, "and a subscriber, as the app is one, is sent it")
-        #expect(reading.map { status.progress(of: $0) } == [.working(.analysing), .waiting, .waiting],
+        #expect(reading.map { status.progress(of: $0) } == [.working(JobWork(stage: .analysing, model: reader, since: h.env.time.now())), .waiting, .waiting],
                 "the file in hand is the one being worked on; the others wait their turn")
         await h.coordinator.stop()
         let stopped = try await h.jobs()
@@ -113,6 +115,42 @@ import Testing
         #expect(filed.filter { $0.labels?.contains(tag) == true }.map(\.originalFilename).sorted() == ["a.txt", "c.txt"]
                     && filed.first { $0.originalFilename == "b.txt" }?.labels == StubAnalyzer.edpBill,
                 "started again, the files in the folder are filed with its tag, and the other with none")
+    }
+
+    /// Reads a file as `PlainTestExtractor` does, taking `seconds` of test time to read it, as OCR of a scan does.
+    struct SlowExtractor: ContentExtracting {
+        let time: TestTime
+        let seconds: Double
+
+        func extract(_ url: URL, sha256: String, context: ExtractionContext, trace: TraceContext) async throws -> ExtractedContent {
+            time.advance(by: seconds)
+            return try await PlainTestExtractor().extract(url, sha256: sha256, context: context, trace: trace)
+        }
+    }
+
+    @Test func theFileTheModelReadsNamesTheModelAndCountsFromWhenItsReadingBegan() async throws {
+        let holding = Holding()
+        let (world, _) = try await world(holding)
+        defer { world.env.cleanup() }
+        var services = world.services
+        let extracting = 45.0
+        services.extractor = SlowExtractor(time: world.env.time, seconds: extracting)
+        let h = Harness(env: world.env, services: services)
+        await h.coordinator.enqueue(try h.env.drop("bill.txt", text: "EDP electricity July"))
+        let reader = try await h.services.settings.current.modelProfile().chatModel
+        h.env.time.advance(by: 60)
+        // The file is taken now, and its text read for `extracting` seconds before the model begins to read it.
+        let began = h.env.time.now().addingTimeInterval(extracting)
+        await holding.hold("bill.txt")
+        await h.coordinator.start()
+        #expect(await Patience.until { await holding.held == "bill.txt" }, "the worker takes the file, and the model reads it")
+        // The model takes its time, as the first reading after a start waits for the model to load.
+        h.env.time.advance(by: 90)
+        let job = try #require(try await h.jobs().first)
+        let progress = await h.coordinator.status.progress(of: job)
+        #expect(progress == .working(JobWork(stage: .analysing, model: reader, since: began)),
+                "read by the profile's model since its reading began, not since the file was taken or the status read: \(String(describing: progress))")
+        await h.coordinator.stop()
     }
 
     @Test func aFileWaitingToBeTriedAgainHoldsUpNoneBehindItAndThenTakesItsPlaceByWhenItArrived() async throws {
@@ -201,24 +239,27 @@ import Testing
         #expect(idle.progress(of: failed) == .retrying("the file could not be read", at: TestTime.start),
                 "one whose stage failed waits to be tried again, with why and when")
 
+        let (reader, since) = ("qwen3.5:9b", TestTime.start.addingTimeInterval(90))
         func working(_ job: JobRecord, at stage: JobState) throws -> IngestStatus {
             var status = IngestStatus.idle
-            status.current = IngestStatus.Current(job: try #require(job.id), path: job.sourcePath, stage: stage)
+            status.current = IngestStatus.Current(job: try #require(job.id), path: job.sourcePath, stage: stage, since: since, reader: reader)
             return status
         }
         let onStopped = try working(stopped, at: .analysing)
-        #expect(onStopped.progress(of: stopped) == .working(.analysing), "the file the worker names is in hand, at the stage it names")
+        #expect(onStopped.progress(of: stopped) == .working(JobWork(stage: .analysing, model: reader, since: since)),
+                "the file the worker names is in hand, at the stage it names, read by the model that reads it, since the stage began")
         #expect(onStopped.progress(of: waiting) == .waiting && onStopped.progress(of: failed) == idle.progress(of: failed),
                 "while the others wait as they did")
-        #expect(try working(stopped, at: .filing).progress(of: stopped) == .working(.filing),
-                "the worker's stage is the one shown, newer than a list read before")
-        #expect(try working(failed, at: .extracting).progress(of: failed) == .working(.extracting), "a file tried again is in hand while it is")
+        #expect(try working(stopped, at: .filing).progress(of: stopped) == .working(JobWork(stage: .filing, model: nil, since: since)),
+                "the worker's stage is the one shown, newer than a list read before, naming no model at a stage no model reads it at")
+        #expect(try working(failed, at: .extracting).progress(of: failed) == .working(JobWork(stage: .extracting, model: nil, since: since)),
+                "a file tried again is in hand while it is")
         #expect(try working(stopped, at: .done).progress(of: stopped) == nil,
                 "a file the worker has just finished is no longer in the queue, whatever a list read before says")
         var done = stopped
         done.state = .done
         #expect(idle.progress(of: done) == nil, "nor is a file filed")
-        #expect(JobProgress.working(.hashing).isWorking
+        #expect(JobProgress.working(JobWork(stage: .hashing, model: nil, since: since)).isWorking
                     && ![JobProgress.resuming(.analysing), .retrying("", at: nil), .waiting].contains(where: \.isWorking),
                 "only the file in hand is said to be worked on")
     }

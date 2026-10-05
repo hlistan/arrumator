@@ -157,9 +157,10 @@ public actor InferenceGate {
         }
     }
 
-    public func embed(_ request: OllamaEmbedRequest) async throws -> OllamaEmbedResponse {
+    /// The vectors `request` asks for. Without `retrying`, a transient failure is thrown at once, as `chat` throws it.
+    public func embed(_ request: OllamaEmbedRequest, retrying: Bool = true) async throws -> OllamaEmbedResponse {
         let api = api
-        let delays = retryDelays
+        let delays = retrying ? retryDelays : []
         let time = time
         return try await embedding.withPermit {
             try await Retry.run(delays: delays, time: time, shouldRetry: { ($0 as? OllamaError)?.isTransient ?? false },
@@ -186,10 +187,10 @@ public struct OllamaEmbedder: Embedder {
         self.numCtx = numCtx
     }
 
-    public func embed(_ texts: [String]) async throws -> [[Float]] {
+    public func embed(_ texts: [String], retrying: Bool) async throws -> [[Float]] {
         guard !texts.isEmpty else { return [] }
         let response = try await gate.embed(OllamaEmbedRequest(model: modelId, input: texts, keepAlive: keepAlive, truncate: true,
-                                                               options: ["num_ctx": .number(Double(numCtx))]))
+                                                               options: ["num_ctx": .number(Double(numCtx))]), retrying: retrying)
         guard response.embeddings.count == texts.count else {
             throw OllamaError.decoding("expected \(texts.count) embeddings, got \(response.embeddings.count)")
         }

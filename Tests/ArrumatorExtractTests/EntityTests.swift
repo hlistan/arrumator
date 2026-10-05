@@ -121,6 +121,15 @@ struct EntityTests {
         #expect(!days.contains("2024-05-01"), "a month and year alone is not a day")
     }
 
+    @Test("A date an identity card prints day first with spaces is read; other numbers spaced alike are not (QA 2026-10-04)")
+    func spacedDates() {
+        let scanner = DateScanner(twoDigitYearPivot: 2027)
+        let card = "DATA DE NASCIMENTO / DATE OF BIRTH\n14 05 1990\nVÁLIDO ATÉ / DATE OF EXPIRY\n01 02 2027\nEMITIDO EM / DATE OF ISSUE\n01 02 2025"
+        #expect(scanner.candidates(in: card).map(\.day.iso) == ["1990-05-14", "2027-02-01", "2025-02-01"], "each date the card prints is read")
+        #expect(scanner.candidates(in: "Tel. 21 12 3456 78; Rua Exemplo 1 2 2024; NIB 0035 01 23 4567").isEmpty,
+                "a phone, a house and floor, or an account spaced in groups, is no date")
+    }
+
     @Test("A date in the digits of any script is read; both ends of a range written without spaces are read day first")
     func digitsAndRanges() {
         let scanner = DateScanner(twoDigitYearPivot: 2027)

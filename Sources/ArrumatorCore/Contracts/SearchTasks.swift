@@ -109,11 +109,13 @@ public protocol SearchPromptInterpreting: Sendable {
     /// `effort` is how much that model thinks before it answers (`tasks.efforts`), and `profile` the model profile whose
     /// chat model reads it: the task's own, else the one Settings uses. `vocabulary` is the archive's labels in use, the most used
     /// first, which the model is shown so it asks for them as the archive writes them; `today` is the ISO day the prompt
-    /// is read on, which "last year" counts from. Without a valid answer the interpretation says why and has no plan; a
-    /// model that cannot be reached throws, so the task waits, and one that is missing throws, so the task fails saying
-    /// which it needs.
-    func interpret(_ prompt: String, effort: TaskEffort, profile: ModelProfile, vocabulary: [LabelKind: [LabelUsage]], today: String,
-                   config: PipelineConfig, trace: TraceContext) async throws -> SearchInterpretation
+    /// is read on, which "last year" counts from. `question` is the person's own question when `prompt` is the model's
+    /// request for more documents made from it: a kind of document it names that the question does not goes back to the
+    /// model; nil for a task's request, the person's own words. Without a valid answer the interpretation says why and
+    /// has no plan; a model that cannot be reached throws, so the task waits, and one that is missing throws, so the task
+    /// fails saying which it needs.
+    func interpret(_ prompt: String, question: String?, effort: TaskEffort, profile: ModelProfile, vocabulary: [LabelKind: [LabelUsage]],
+                   today: String, config: PipelineConfig, trace: TraceContext) async throws -> SearchInterpretation
 }
 
 /// How much the model thinks before it answers a search task's request: low not at all, medium, high the most. Which

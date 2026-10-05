@@ -43,6 +43,9 @@ public actor OllamaLifecycle {
     private var address: URL
     private var process: Process?
     private var restarts: [Date] = []
+    /// How many probes in a row have found no server answering in time since it was last ready (`check()`): a server
+    /// that answers, whether a probe or a start found it so, has failed none.
+    private var failedProbes = 0
     private var monitorTask: Task<Void, Never>?
     /// The start under way (`ensureRunning()`), which every caller meanwhile waits for.
     private var starting: Task<Start, Never>?
@@ -57,6 +60,7 @@ public actor OllamaLifecycle {
     private var continuations: [UUID: AsyncStream<OllamaState>.Continuation] = [:]
     public private(set) var state: OllamaState = .unknown {
         didSet {
+            if state.isReady { failedProbes = 0 }
             guard state != oldValue else { return }
             Log.info(.ollama, "Ollama's state changed", ["state": state.summary])
             for c in continuations.values { c.yield(state) }
@@ -130,20 +134,29 @@ public actor OllamaLifecycle {
 
     // MARK: Health
 
-    /// Checks the server once and updates `state`. A server that cannot be reached (`OllamaError.isAway`), or does not
-    /// answer this probe in time (`timedOut`: it answers nothing else either), is not running; one that answers with a
-    /// failure runs, unhealthy, and is never started again beside itself. Stopped meanwhile, it learns nothing, whatever
-    /// failure the stop brought, and `state` stays as it was.
+    /// Checks the server once and updates `state`. A server that does not answer this probe in time (`timedOut`: it
+    /// answers nothing else either) is not running once `ollama.failedProbesBeforeAway` probes in a row have found it so
+    /// when it was ready: one probe a server busy reading answers late is no server gone, which History would say, and
+    /// say back a minute later. One that cannot be reached otherwise (`OllamaError.isAway`), as a connection refused when
+    /// it has crashed, is not running at once, so supervision starts it again without waiting out probes that could only
+    /// say the same. One that answers with a failure runs, unhealthy, and is never started again beside itself. Stopped
+    /// meanwhile, it learns nothing, whatever failure the stop brought, and `state` stays as it was.
     @discardableResult
     public func check() async -> OllamaState {
         do {
-            let v = try await api.version()
-            state = .ready(version: v)
+            state = .ready(version: try await api.version())
         } catch where Cancellation.stops(error) {
             // Stopped while it asked: nothing was learnt of the server, not even that it failed.
         } catch let failure as OllamaError where !failure.isAway && !failure.timedOut {
+            failedProbes = 0
             state = .unhealthy(failure.localizedDescription)
         } catch {
+            failedProbes += 1
+            if state.isReady, (error as? OllamaError)?.timedOut == true, failedProbes < config.failedProbesBeforeAway {
+                Log.info(.ollama, "A probe of a ready server timed out; it is asked again before it is taken to be away",
+                         ["failed": String(failedProbes), "error": error.localizedDescription])
+                return state
+            }
             if !OllamaEndpoint.isThisMac(address) {
                 // What is installed on this Mac says nothing of a server on another machine.
                 state = .unreachable(address.host(percentEncoded: false) ?? address.absoluteString)

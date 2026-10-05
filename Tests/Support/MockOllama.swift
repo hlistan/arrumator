@@ -28,9 +28,13 @@ public actor MockOllama: OllamaAPI {
     private var embedFailure: (any Error & Sendable)?
     private var thoughts: String?
     private var streamFailure: (words: Int, error: any Error & Sendable)?
-    private var holding = false
+    private var holdingAfter: Int?
     private var versionFailure: OllamaError?
     private var listingFailure: OllamaError?
+    private var promptTokens: @Sendable (OllamaChatRequest) -> Int = { _ in MockOllama.promptTokens }
+
+    /// The tokens Ollama says a prompt took (`prompt_eval_count`), unless `countPromptTokens` says otherwise.
+    public static let promptTokens = 10
     public nonisolated let baseURL: URL
 
     /// Where a mock answers unless it is given another server: this Mac, as the app's own default is.
@@ -86,13 +90,19 @@ public actor MockOllama: OllamaAPI {
 
     /// Makes every request for an answer or an embedding, from now on, wait until it is cancelled and then throw
     /// `CancellationError`, as a model that thinks for minutes: what a test holds a lane or a stage with.
-    public func hold() { holding = true }
+    /// With `afterAnswering`, the requests of each kind after that many are held, the first answered as ever: what a test
+    /// cancels work in its second call with.
+    public func hold(afterAnswering answered: Int = 0) { holdingAfter = answered }
 
     /// Waits until the request is cancelled, when the mock holds requests.
-    private func holdIfAsked() async throws {
-        guard holding else { return }
+    private func holdIfAsked(after earlier: Int) async throws {
+        guard let holdingAfter, earlier >= holdingAfter else { return }
         try await TestTime(.blocks).sleep(seconds: 0)
     }
+
+    /// Makes every answer from now on say its prompt took `count` of the request's tokens, as Ollama counts them: as a
+    /// model's tokenizer that holds fewer characters a token in another script.
+    public func countPromptTokens(_ count: @escaping @Sendable (OllamaChatRequest) -> Int) { promptTokens = count }
 
     /// Makes `version` fail with `error` from now on, as a server that answers nothing.
     public func failVersion(with error: OllamaError) { versionFailure = error }
@@ -128,7 +138,7 @@ public actor MockOllama: OllamaAPI {
     /// the whole of it comes back.
     public func chat(_ request: OllamaChatRequest, partial: (@Sendable (OllamaChatResponse) async -> Void)?) async throws -> OllamaChatResponse {
         chatRequests.append(request)
-        try await holdIfAsked()
+        try await holdIfAsked(after: chatRequests.count - 1)
         let given = try handler(request)
         let cut = given.hasPrefix(Self.cutOff)
         let content = cut ? String(given.dropFirst(Self.cutOff.count)) : given
@@ -151,7 +161,8 @@ public actor MockOllama: OllamaAPI {
         var message = OllamaMessage.assistant(content)
         message.thinking = thoughts
         return OllamaChatResponse(model: request.model, message: message, done: true,
-                                  doneReason: cut ? OllamaChatResponse.lengthReason : "stop", totalDuration: 1_000_000, loadDuration: 0, promptEvalCount: 10,
+                                  doneReason: cut ? OllamaChatResponse.lengthReason : "stop", totalDuration: 1_000_000, loadDuration: 0,
+                                  promptEvalCount: promptTokens(request),
                                   promptEvalDuration: 500_000, evalCount: 5, evalDuration: 500_000)
     }
 
@@ -172,7 +183,7 @@ public actor MockOllama: OllamaAPI {
 
     public func embed(_ request: OllamaEmbedRequest) async throws -> OllamaEmbedResponse {
         embedRequests.append(request)
-        try await holdIfAsked()
+        try await holdIfAsked(after: embedRequests.count - 1)
         if let embedFailure { throw embedFailure }
         return OllamaEmbedResponse(model: request.model, embeddings: request.input.map { Self.hashEmbedding($0, dimension: dimension) },
                                    totalDuration: nil, loadDuration: nil, promptEvalCount: nil)

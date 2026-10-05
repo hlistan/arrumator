@@ -180,6 +180,7 @@ extension Terminal {
             lines += ["", "Looked for “\(finding.request)”: " + (finding.problem ?? found)]
         }
         if let problem = turn.problem { lines += ["", (turn.state == .failed ? "Not answered: " : "Incomplete: ") + problem] }
+        if let retryAt = turn.retryAt { lines += ["", "Waiting for Ollama: it cannot be reached, and is tried again at \(Format.date(retryAt))"] }
         return lines.joined(separator: "\n")
     }
 }

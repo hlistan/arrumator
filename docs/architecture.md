@@ -175,7 +175,8 @@ Every arrow points inward, towards Core; none points back.*
 The dependency rule is the one of the [clean architecture](https://blog.cleancoder.com/uncle-bob/2012/08/13/the-clean-architecture.html):
 source dependencies point inward, and "nothing in an inner circle can know anything at all about something in an outer
 circle". Core defines the ports (`ContentExtracting`, `DocumentAnalyzing`, `SearchPromptInterpreting`,
-`TaskQuestionAnswering`, `Embedder`, `OllamaAPI`, `TimeSource`, `Trashing`, `TraceSink`); Extract and Classify
+`TaskQuestionAnswering`, `Embedder`, `OllamaAPI`, `TimeSource`, `Trashing`, `TraceSink`, `FolderArchiving`); Extract
+and Classify
 implement them; Runtime is the one place that builds the concrete services and hands them over, a
 [composition root](https://blog.ploeh.dk/2011/07/28/CompositionRoot/). What each module owns and may import is the
 table in [AGENTS.md §5](../AGENTS.md#5-boundaries).
@@ -186,7 +187,7 @@ table in [AGENTS.md §5](../AGENTS.md#5-boundaries).
 |---|---|---|
 | `Contracts/` | The types and protocols modules exchange: extracted content, labels and their kinds, analysis, search plans, conversations, traces, prompt templates. | `ExtractedContent`, `LabelKind`, `DocumentLabel`, `SearchPlan`, `TraceContext`, `PromptTemplates` |
 | `Config/` | Settings and tunables, loaded strictly; process environment; where app state lives. | `PipelineConfig`, `AppSettings`, `SettingsStore`, `ConfigLoader`, `RuntimeEnvironment`, `AppPaths` |
-| `Storage/` | The index: schema and migrations, record types, one store per concern. | `AppDatabase`, `DocumentStore`, `JobStore`, `IndexStore`, `HistoryStore`, `TraceRecorder`, `LabelStore`, `SearchTaskStore`, `TaskConversationStore` |
+| `Storage/` | The index: schema and migrations, record types, one store per concern, and the notification that tells other processes it changed. | `AppDatabase`, `IndexChangeSignal`, `DocumentStore`, `JobStore`, `IndexStore`, `HistoryStore`, `TraceRecorder`, `LabelStore`, `SearchTaskStore`, `TaskConversationStore` |
 | `Records/` | The archive's record files: rendering, reading back, rebuilding the index. | `ArchiveRecords`, `ArchiveLayout`, `RecordKind`, `FrontMatter` |
 | `Ingest/` | The pipeline's state machine, filing, and what the user does with a document or a label. | `IngestCoordinator`, `PipelineServices`, `DocumentFiler`, `ReviewActions`, `LabelActions`, `ArchiveReconciler` |
 | `FileOps/` | Names, moves, identity on disk (a package is one document), the Trash. | `FilenameBuilder`, `Placer`, `FileOperations`, `HashService`, `Packages`, `Xattr`, `SystemTrash`, `FolderTrash` |
@@ -196,13 +197,13 @@ table in [AGENTS.md §5](../AGENTS.md#5-boundaries).
 | `Search/` | Full-text search fused with search by meaning. | `SearchService`, `VectorIndex`, `SearchPlanMatcher` |
 | `Vocabulary/` | Keeping labels one vocabulary. | `LabelConsolidator`, `LabelSimilarity` |
 | `Observability/` | What the pipeline did, in numbers; how an eval run read its corpus; the doctor; the diagnostics export. | `StatsService`, `ProcessingFunnel`, `Evaluation`, `Doctor`, `DiagnosticsExporter` |
-| `Domain/`, `System/`, `Logging/` | Deadlines, retries, the worker's doorbell, identifiers and the words that label them; power state; structured logs. | `Deadline`, `Retry`, `Doorbell`, `AsyncSemaphore`, `PowerState`, `Log` |
+| `Domain/`, `System/`, `Logging/` | Deadlines, retries, the worker's doorbell, identifiers and the words that label them, the language a text is written in (a document's, a request's, a question's); power state; structured logs. | `Deadline`, `Retry`, `Doorbell`, `AsyncSemaphore`, `LanguageDetector`, `PowerState`, `Log` |
 
 ### The other modules
 
 | Module | Shape |
 |---|---|
-| `ArrumatorExtract` | `ExtractorRegistry` resolves a file's type and hands it to one `FileExtractor` (PDF, image, plain text, `textutil`, XLSX, PPTX, e-mail, archive, media, Quick Look, metadata only) under a deadline, then normalises the text and finds the language, dates and identifiers. An extractor's own failure becomes a warning and a metadata-only result; a file that cannot be read, and the deadline, fail the stage. |
+| `ArrumatorExtract` | `ExtractorRegistry` resolves a file's type and hands it to one `FileExtractor` (PDF, image, plain text, `textutil`, XLSX, PPTX, e-mail, archive, media, Quick Look, metadata only) under a deadline, then normalises the text and finds the language, dates and identifiers. An extractor's own failure becomes a warning and a metadata-only result; a file that cannot be read, and the deadline, fail the stage. `ZipFolderArchiver` packs a search task's export into a ZIP archive (`FolderArchiving`). |
 | `ArrumatorClassify` | `PromptBuilder` fills templates from `Prompts/*.md`; `LLMClassifier` asks the model with a JSON schema and repairs an invalid answer a bounded number of times; `DocumentAnalyzer`, `SearchPromptInterpreter` and `TaskAnswerer` are the three callers, each with a validator of its own. |
 | `ArrumatorRuntime` | `ArrumatorRuntime` builds every service from configuration, starts and stops the background work, and switches archives. The app and the command line hand it the environment and the Trash, and build no other service. |
 | `ArrumatorCLI` | One `AsyncParsableCommand` per action; `GlobalOptions.runtime()` bootstraps the same runtime the app uses. |
@@ -414,7 +415,8 @@ Views never poll. `AppModel` holds one task per stream and mirrors the value:
 | Stream | Says |
 |---|---|
 | `AppDatabase.activity()` | Something was recorded in History: pages reload. |
-| `IngestCoordinator.statusUpdates()` | Which file is in hand, at which stage, and how many wait. |
+| `AppDatabase.othersCommits()` | Another process, such as `arrumatorcli`, committed to the index, and once as it begins to listen, so a commit made while it began is not missed: every observation of it looks again, the ones above among them, and the runtime wakes its three queues (`ArrumatorRuntime.followOtherProcesses`). |
+| `IngestCoordinator.statusUpdates()` | Which file is in hand, at which stage since when, by which model it is read, and how many wait. |
 | `SearchTaskQueue.statusUpdates()`, `TaskConversationQueue.statusUpdates()` | Which request is read or question answered, by which model, and the answer so far. |
 | `OllamaLifecycle.states()` | Whether Ollama is ready. |
 | `ArrumatorRuntime.workUpdates()` | Whether the runtime's work runs, was refused as the index is not rebuilt from its archive, or waits as the archive is away. |
@@ -471,7 +473,7 @@ The rules a change must keep:
 | Errors | Each module throws its own `LocalizedError` enum carrying the path, document or model involved. A failure that affects a document is recorded in History and its trace. No `fatalError`, no `try!`. | §3 |
 | Time | `TimeSource` is injected where something schedules, waits or stamps a record, so a test sets the time and waits for nothing. Trace steps and log lines stamp themselves with the system clock. | §3, determinism |
 | Audit | Logs say what the app did; traces say how a document was read; History says what was decided; the funnel counts both. Diagnostics bundle them for a bug report. | §4.4 |
-| Paths | The app builds every path itself. The model supplies a file name, which `FilenameBuilder` cleans and `FileOperations` refuses unless it is one name. | §4.5 |
+| Paths | The app builds every path itself. The model supplies a title, which `FilenameBuilder.made` names the file by, with the date and sender the user's rules kept (`PipelineServices.read`), in the parts `naming.parts` lists, and `FilenameBuilder` cleans the name and `FileOperations` refuses unless it is one name. | §4.5 |
 | Identity | A document is known by a UID stored on the file as an extended attribute, so a move or rename in Finder is followed. | [Storage](storage.md) |
 | Unicode | Text is normalised to NFC and cut by characters, never bytes; names leaving the Mac are composed. | §3, semantic assertions |
 | The model's contract | Schemas, prompts and what the model is shown are built from the kinds it gives (`LabelKind.modelKinds`), never from the user's own `tag`. | §4.5 |
@@ -501,6 +503,8 @@ change that replaces it; the earlier one stays in Git's history, as superseded c
 | 16 | An AppKit shell with an explicit status item hosts the SwiftUI views. | A SwiftUI status item proved unreliable, and a full menu bar can hide it. | `App/ArrumatorApp.swift` |
 | 17 | A ZIP file's directory is read by the app's own code and checked against the file, every offset and size inside it, no two entries sharing a byte (the overlapping-file ZIP bomb) and its entries within limits, before ZIPFoundation opens it; an archive, workbook or presentation that fails is read for its metadata alone, and a Word document, which `textutil` converts, loses only its core properties. ZIPFoundation's entries are found for the parts about to be read in one pass, each paired with its checked entry, and only those are kept; an encrypted entry is never read. | ZIPFoundation traps on offsets and sizes it takes from the file, and a trap in a parser ends the process, which has no sandbox and no helper process to lose instead. | `ArrumatorExtract/Support/ZipDirectory.swift`; [APPNOTE](https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT) |
 | 18 | Excel workbooks are read with Foundation's `XMLParser`, as PowerPoint decks are, not with CoreXLSX: each part through the checked ZIP reader up to its cap, the main workbook read once with the sheets past the limit only counted, a sheet's rows collected as it is parsed and the parse stopped at the row limit. | CoreXLSX 0.14.2, unchanged since February 2023 and pinning XMLCoder 0.14, trapped on hostile workbooks in code the project cannot change (`Dictionary(uniqueKeysWithValues:)` on two sheets of one relationship, an overflow on a column of 14 letters, an `Array.insert` out of range on an empty relationship target), opened files with ZIPFoundation itself, and decoded whole parts into trees before any limit applied. SpreadsheetML needs only its relationships, workbook, shared strings and sheets read (ECMA-376 Part 1 §18), which a SAX parser does in a few hundred lines. | `ArrumatorExtract/Extractors/XLSXExtractor.swift`, `Support/SpreadsheetML.swift` |
+| 19 | A search task's ZIP export is written by ZIPFoundation, behind `FolderArchiving` in Extract, its names composed and marked UTF-8 (general purpose bit 11), not by Finder's Compress (`NSFileCoordinator.ReadingOptions.forUploading`). | Finder's archives leave the flag unset, so `unzip`, Python and Windows read every name outside ASCII as code page 437; Core imports no ZIP library (§5), and writing an archive of the app's own copies parses nothing untrusted. | `ArrumatorExtract/Support/ZipFolderArchiver.swift`; [APPNOTE](https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT) 4.4.4 |
+| 20 | A process tells the others with an index open that it committed by a Darwin notification named after the index, and each checks SQLite's `PRAGMA data_version` before it has its observations look again (`Database.notifyChanges(in:)`). | GRDB's observations see only their own pool's commits, and polling the index would wake every process for nothing; `data_version` tells another connection's commit from its own, so a process's own posts change nothing. | `Storage/IndexChangeSignal.swift`, `AppDatabase.othersCommits()`; `man 3 notify`; [SQLite](https://sqlite.org/pragma.html#pragma_data_version) |
 
 Record a decision here when it changes the module graph, a contract in `Contracts/`, what is stored and where, the
 concurrency model, a trust boundary or a durability setting: decisions "that affect the structure, non-functional
@@ -575,8 +579,9 @@ Deliberate, and to be kept in mind when the load or the threat changes:
 - **Vectors in memory, searched exactly.** Linear in the number of documents; fine for a personal archive.
 - **No sandbox.** A flaw in a parser has the user's file access, which is why Extract is reviewed as a security
   boundary.
-- **Two processes, one index.** The app and the command line coordinate only through SQLite. A process does not see
-  another's commits as observations, so the app notices work the command line queued at its next maintenance round.
+- **Two processes, one index.** The app and the command line coordinate through SQLite and one Darwin notification per
+  index, posted after each commit that changed it (`IndexChangeSignal`), which carries nothing but its name. A process
+  that ends with work in hand announces nothing; the app puts such work back at its next maintenance round.
 - **The ingest queue has no claim.** A job is taken by a read, so the app's worker and a command that works the queue
   (`ingest`, `review retry`, `labels unlabelled`) can take the same job.
 - **The app target has no unit tests.** What is tested is the logic below it; the app is tested as a user meets it, by

@@ -31,7 +31,8 @@ import Testing
                 "each with its date and labels")
 
         let earlier = TaskTurn(id: 1, task: w.task.id, question: "Which is the contract?", state: .answered, answer: "This one.",
-                               sources: [contract], finding: nil, model: "m", problem: nil, lastTrace: nil, asked: TestTime.start, answered: nil)
+                               sources: [contract], finding: nil, model: "m", problem: nil, lastTrace: nil, asked: TestTime.start, answered: nil,
+                               retryAt: nil)
         config.conversation.contextChars = try #require(texts["edp_contract.txt"]).count
         let followed = try await TaskContextBuilder(database: w.h.env.database, search: w.h.search, config: config)
             .context(for: "translate it", set: set, earlier: [earlier]).shown
@@ -134,7 +135,7 @@ import Testing
     @Test func anAnswerIsShownTheLatestExchangesThatFitTheLatestCutWhenItAloneIsLonger() {
         func turn(_ id: Int64, _ question: String, _ answer: String?, _ state: TurnState = .answered) -> TaskTurn {
             TaskTurn(id: id, task: 1, question: question, state: state, answer: answer, sources: [], finding: nil, model: nil, problem: nil,
-                     lastTrace: nil, asked: TestTime.start, answered: nil)
+                     lastTrace: nil, asked: TestTime.start, answered: nil, retryAt: nil)
         }
         let earlier = [turn(1, "q1", "aaaa"), turn(2, "q2", "bbbb"), turn(3, "q3", nil, .failed), turn(4, "q4", "cccc")]
         #expect(TaskContextBuilder.exchanges(earlier, maxChars: 12) == [Exchange(question: "q2", answer: "bbbb"), Exchange(question: "q4", answer: "cccc")],

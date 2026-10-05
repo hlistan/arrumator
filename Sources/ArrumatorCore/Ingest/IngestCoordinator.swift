@@ -268,7 +268,12 @@ public actor IngestCoordinator {
             return
         }
         let settings = await services.settings.current
-        status.current = job.id.map { IngestStatus.Current(job: $0, path: job.sourcePath, stage: job.state, tags: job.tags) }
+        // The model that reads the file: the one `DocumentAnalyzer` reads with, from these settings. A profile that is
+        // gone names none, and its reading fails saying so.
+        let reader = try? settings.modelProfile().chatModel
+        status.current = job.id.map {
+            IngestStatus.Current(job: $0, path: job.sourcePath, stage: job.state, since: services.time.now(), reader: reader, tags: job.tags)
+        }
         let activity = ProcessInfo.processInfo.beginActivity(options: .userInitiatedAllowingIdleSystemSleep,
                                                              reason: "Filing \(URL(fileURLWithPath: job.sourcePath).lastPathComponent)")
         defer {
@@ -340,7 +345,10 @@ public actor IngestCoordinator {
             }
             try job.setPayload(payload)
         }
-        status.current?.stage = state
+        if status.current?.stage != state {
+            status.current?.stage = state
+            status.current?.since = services.time.now()
+        }
         status.current?.tags = job.tags
     }
 

@@ -3,8 +3,9 @@ import SwiftUI
 
 /// What is being worked on, what is waiting, and what was just filed, by day as on the Processed page: the whole
 /// flow on one page. In Progress is the file the worker has in hand now, as its status says
-/// (`IngestStatus.progress(of:)`); every other file waits under Queued, in the order the queue takes them, a file stopped
-/// part way, as when the app quit, saying that it carries on where it stopped. Beneath its name, a file shows the tags it
+/// (`IngestStatus.progress(of:)`), with what is being done to it, by which model, and for how long; every other file
+/// waits under Queued, in the order the queue takes them, a file stopped part way, as when the app quit, saying that it
+/// carries on where it stopped. Beneath its name, a file shows the tags it
 /// will be given, such as the name of the folder in Incoming it was put in (`JobRecord.tags`), as a document shows its
 /// labels.
 struct IncomingPage: View {
@@ -20,23 +21,27 @@ struct IncomingPage: View {
     var body: some View {
         Page(.incoming) {
             if let attention = model.attention {
-                Notice(text: attention, action: model.settings?.paused == true
-                    ? (Wording.resume, { Task { await model.setPaused(false) } }) : nil)
+                Notice(text: attention, action: holdupAction)
             }
             if model.session.ingest.reindexing > 0 {
                 Notice(text: Wording.reindexing(model.session.ingest.reindexing))
             }
             if jobs.isEmpty {
-                EmptyState(symbol: "tray", text: Wording.nothingWaiting) {
+                EmptyState(symbol: "tray", text: model.runtimeActivity.holdup == .notSetUp ? Wording.nothingWaitingNotSetUp : Wording.nothingWaiting) {
                     Button(Wording.openIncomingFolder) { if let path = model.settings?.incomingURL.path { model.open(path) } }
                 }
             }
             if !working.isEmpty {
                 PageSection(Wording.inProgress) {
                     ForEach(working) { job in
-                        if let progress = model.session.ingest.progress(of: job), case let .working(stage) = progress {
-                            ListRow(symbol: progress.symbol, tint: progress.tint, title: job.filename, detail: Wording.doing(stage),
-                                    subtitle: Wording.labels(job.tags), subtitleKind: .tag, busy: true)
+                        if let progress = model.session.ingest.progress(of: job), case let .working(work) = progress {
+                            // How long counts on by itself from when the stage began, as a search task's reading does.
+                            TimelineView(.periodic(from: work.since, by: Style.readingTimeTick)) { context in
+                                let elapsed = context.date.timeIntervalSince(work.since)
+                                ListRow(symbol: progress.symbol, tint: progress.tint, title: job.filename,
+                                        detail: Wording.doing(work, elapsed: elapsed >= Style.readingTimeShownAfter ? elapsed : nil),
+                                        subtitle: Wording.labels(job.tags), subtitleKind: .tag, busy: true)
+                            }
                         }
                     }
                 }
@@ -73,6 +78,16 @@ struct IncomingPage: View {
         }) {
             recentCount = processed.count
             recent = DocumentSection.sections(of: model.listed(processed), heading: Wording.processedDay)
+        }
+    }
+
+    /// What lets filing go on from the notice that says why it does not: Resume while it is paused, Set Up before the
+    /// app is set up (`RuntimeActivity.Holdup`).
+    private var holdupAction: (title: String, run: () -> Void)? {
+        switch model.runtimeActivity.holdup {
+        case .paused: (Wording.resume, { Task { await model.setPaused(false) } })
+        case .notSetUp: (Wording.setUpApp, { model.show(.onboarding) })
+        default: nil
         }
     }
 

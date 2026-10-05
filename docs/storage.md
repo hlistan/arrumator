@@ -15,7 +15,7 @@ no other folders in the archive.
 
 | What | File | Contents |
 |---|---|---|
-| The documents in a directory | `<directory>/_documents.md` | One entry per file in that directory: identity, original name, checksum, size, content type, pages, status, the labels that describe it (each a kind and a value, your tags among them; absent while it has none and the model has not labelled it), `tags_only: true` while those labels are only its tags because the model has not labelled it yet, and how it was read: the file name the model gave it, the model, and why it waits for you, if it does. The table below the data shows each file's date, sender, type and other labels. |
+| The documents in a directory | `<directory>/_documents.md` | One entry per file in that directory: identity, original name, checksum, size, content type, pages, status, the labels that describe it (each a kind and a value, your tags among them; absent while it has none and the model has not labelled it), `tags_only: true` while those labels are only its tags because the model has not labelled it yet, and how it was read: the file name its reading gave it, the model, and why it waits for you, if it does. The table below the data shows each file's date, sender, type and other labels. |
 | History | `System/History/_<year>-<month>.md` | One line per event, newest last. |
 | Rules for labels | `System/_labels.md` | Your decisions about labels ([how](how-it-works.md#keeping-labels-one-vocabulary)): each rule's number, kind, label, what it decides (`merge`, `ignore` or `keepApart`), the other label of a merge or of a pair kept apart, and when it was made. There is no file while there are no rules. |
 | Conversations | `System/Conversations/_<task>.md` | The questions about one search task's documents ([how](how-it-works.md#talking-with-a-tasks-documents)), by the task's number: each question's number, when it was asked, the question, its state (`queued`, `answered` or `failed`; one being answered is written as `answering` and waits again after a rebuild), the model that answered, why the answer is incomplete or missing, when it was answered, the answer, the documents it draws on by number, and what it found outside the set when asked for more: the request it wrote, what that was read as, the documents found and why none could be, if so. Below the data, each question with its answer and the documents by name, for people. There is no file while the task has no questions; removing the task removes it. |
@@ -144,7 +144,9 @@ Some working state is deliberately not kept in files, so a lost index loses it:
    nor are the files in a folder of the archive whose contents cannot be listed, nor any while the archive's own
    folder is not there, where no folder is made:
    the app logs which file or folder and why (the line and column where the YAML breaks, or the field whose value it
-   does not read, never what the file says there), `arrumatorcli doctor` names it, every other file is still read, and
+   does not read, never what the file says there), `arrumatorcli doctor` names it, History says so once, whichever
+   process finds it, and once more when it reads again (the index keeps which it said, under `records_unreadable` in
+   its `meta`), the app says so at the foot of its window while filing goes on, every other file is still read, and
    the index keeps what it holds and writes the file's changes once it reads again. That is so for an index that holds
    the archive; a new one is not rebuilt without the file (see [Rebuilding](#rebuilding)).
 

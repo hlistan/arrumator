@@ -31,7 +31,10 @@ final class ArchiveSession {
     var work = RuntimeWork.idle
     /// The latest filings and the like, to announce those that come after them.
     var recent: [EventRecord] = []
+    /// How many documents wait for the user, those the user set aside left out (`DocumentStore.waitingCount`).
     var reviewCount = 0
+    /// The record files History last said cannot be read, by their paths (`ArchiveRecords.unreadableRecorded`).
+    var unreadableRecords: [String] = []
     /// Pairs of alike labels waiting for the user to merge them or keep them apart, as the runtime last counted them.
     var labelSuggestionCount = 0
     var destination: Destination = .incoming
@@ -41,6 +44,12 @@ final class ArchiveSession {
     var openLabel: DocumentLabel?
     /// The search task opened in place as a card on the Tasks page.
     var openTask: Int64?
+    /// What each task's card shows, its documents or its conversation, as the user last chose: kept here, not by the
+    /// card, which is built anew when its task moves between In Progress and Earlier, as Find Again moves it.
+    var taskCardSections: [Int64: TaskCard.Section] = [:]
+    /// The document a card was last asked to read again, by its number and name, until another page is shown: a page
+    /// it leaves, as Needs You, which lists it no longer once it waits in Incoming, says where it went.
+    var readAgain: (id: Int64, name: String)?
     /// The search task whose set documents are being added to, as the user narrows them down by labels in the sidebar:
     /// every document row then shows whether it is in the set, and adds it or takes it out.
     fileprivate(set) var collecting: SearchTask?
@@ -85,7 +94,8 @@ final class AppModel {
     private var watcherStart: Task<Void, Never>?
     /// True while the app closes one archive and opens another.
     private(set) var switchingArchive = false
-    private let notifications = NotificationService()
+    /// Posts notifications, and says whether macOS lets it.
+    let notifications = NotificationService()
 
     /// The archive the app is on: the runtime's, which it acts on whatever the settings name later.
     var archive: URL? { runtime?.archive }
@@ -246,9 +256,15 @@ final class AppModel {
         do {
             let events = try await runtime.services.history.events(
                 limit: runtime.config.interface.notificationEvents, kinds: [.filed, .needsReview, .duplicate, .failed, .userMoved])
-            await notifications.announce(events, previous: session.recent, settings: settings)
+            // On its own, so that waiting for macOS, which may never answer an asking, never holds up the lists.
+            let notifications = notifications, settings = settings, previous = session.recent
+            Task {
+                await notifications.announce(events, previous: previous, settings: settings,
+                                             askTimeout: runtime.config.interface.notificationAskTimeout)
+            }
             session.recent = events
-            session.reviewCount = try await runtime.services.documents.reviewCount()
+            session.reviewCount = try await runtime.services.documents.waitingCount()
+            session.unreadableRecords = try await runtime.records.unreadableRecorded().map(\.path)
             if let id = session.collecting?.id {
                 session.collecting = try await runtime.searchTasks.store.task(id: id)
             }
@@ -331,6 +347,7 @@ final class AppModel {
         session.openDocument = nil
         session.openLabel = nil
         session.openTask = nil
+        session.readAgain = nil
         if destination != .labelled { session.labelSelection = [] }
         if destination != .labelled && destination != .processed { session.collecting = nil }
     }
@@ -417,12 +434,16 @@ final class AppModel {
     var runtimeActivity: RuntimeActivity {
         RuntimeActivity(onboarded: settings?.onboardingCompleted == true, paused: settings?.paused == true, work: session.work,
                         ingest: session.ingest, taskQueue: session.taskQueue, conversation: session.conversation,
-                        ollama: session.ollama, needsYou: session.reviewCount)
+                        ollama: session.ollama, needsYou: session.reviewCount, unreadableRecords: session.unreadableRecords)
     }
 
     /// What the search tasks are at work on, seen from any page; nil while neither a request is read nor a question
-    /// answered.
-    var tasksAtWork: String? { runtimeActivity.tasksWork.map(Wording.tasksWork) }
+    /// answered or tried, as while a question only waits to try Ollama again, which the popover says.
+    var tasksAtWork: String? {
+        guard let work = runtimeActivity.tasksWork else { return nil }
+        if case .waitingForOllama(until: _?) = work { return nil }
+        return Wording.tasksWork(work)
+    }
 
     var statusSymbol: String {
         if case .failed = phase { return RuntimeActivity.Mark.problem.symbol }
@@ -432,7 +453,7 @@ final class AppModel {
     /// Why the app is not filing right now, or nil when everything is working.
     var attention: String? {
         if case let .failed(why) = phase { return why }
-        return runtimeActivity.holdup.map { Wording.holdup($0, inMenuBar: false) }
+        return runtimeActivity.attention.map(Wording.attention)
     }
 
     /// What the app is doing, in the menu bar popover: a document being filed first, then a search request being read or a

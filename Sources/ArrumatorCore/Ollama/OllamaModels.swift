@@ -6,6 +6,8 @@ public enum OllamaError: Error, LocalizedError, Equatable {
     /// The address the app was to talk to cannot be used, for `reason`: it says where the address came from and how to
     /// give another, as nothing can start without one.
     case unusableAddress(OllamaEndpoint.Source, reason: String)
+    /// The host is beyond this Mac and the local network, or a request went to another than the one server the app talks
+    /// to (`NetworkGuardProtocol`).
     case nonLocalHost(String)
     /// The `.local` name `host` also stands for addresses beyond the local network (`beyond`), which a request to the name
     /// may go to, as one of a machine with a global IPv6 address does: the server is given by its address on the local
@@ -42,7 +44,7 @@ public enum OllamaError: Error, LocalizedError, Equatable {
         case let .unusableAddress(.environment, reason):
             "The Ollama address \(RuntimeEnvironment.ollamaURLVariable) gives cannot be used. \(reason). Unset the variable, or set it "
                 + "to an address on this Mac or the local network, such as \(OllamaEndpoint.example)"
-        case let .nonLocalHost(h): "Refusing to contact non-local host \(h): recognition must stay on this Mac"
+        case let .nonLocalHost(h): "Refusing to contact \(h): Arrumator talks only to an Ollama server on this Mac or the local network"
         case let .nameReachesBeyond(host, beyond, instead):
             "\(host) also stands for \(beyond.joined(separator: ", ")), beyond the local network, where a request to the name may go: "
                 + "give the server by its address on the local network instead" + (instead.map { ", \($0)" } ?? ", its IPv4 address")

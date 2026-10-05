@@ -150,29 +150,48 @@ These are rules you can check, not aspirations. Each row says how it is checked;
    History (`EventKind`): a setting changes only through `SettingsActions` or an action of its own, such as
    `setPaused`. A change that is made is recorded once: an event that cannot be recorded yet, as on an index not
    rebuilt from its archive, is held and recorded when it can (`HistoryStore.insert`), never refused after the change.
+   An action that would change nothing records nothing, and one that does not apply to the item as it is, such as an
+   undo of a document not in the archive, is refused before it touches a file, both decided where they act
+   (`ReviewActions.confirm`, `undo`). What History says is what happened: never a move to where a file was, a name it no
+   longer had, or "nothing worth a label" for a file nothing could be read of (`DocumentFiler.summary`), and paths in
+   one spelling, as the disk spells them.
    Its counts and drop-off reasons show up under the right funnel step (`ProcessingFunnel`) in Statistics and in
    `arrumatorcli funnel`.
 5. **What the model is asked is a contract; what it answers is untrusted input.** Its answer schemas, its prompts and
    what it is shown of the archive (labels in use, the user's rules) are built from the kinds it gives
    (`LabelKind.modelKinds`, written in `ClassificationSchema.answerOrder`), never from every case of `LabelKind`, which
-   also holds the user's own `tag`: a kind added for the user never changes what the model reads, is asked or is
-   decoded from (the classify tests fail when one reaches a schema or prompt, and `PipelineConfig.problems` refuses one
-   in its configuration). Decode its answer into the typed schema, validate it with `AnswerValidator`, and send a
-   document without a valid answer to Needs You. Names from the model go through `FilenameBuilder` before they reach
-   the disk. The app builds every path itself: the model supplies a file name, never a directory. Nothing the model
-   writes becomes active where it is shown: a link or an image in its Markdown is plain text (`AnswerMarkdown`). A file
-   put into Incoming is untrusted input too. It is parsed within budgets checked on the sizes and counts it declares
-   before anything is decoded, with overflow-checked arithmetic, in passes linear in its size, and each limit has a
-   hostile-input test bounded by `.timeLimit` (`ZipDirectory`, `SpreadsheetML`, `HTMLText`). A library that cannot be
-   held to those bounds does not parse it. What extraction produces is the same on every Mac and in every
-   script: a day is reckoned in an explicit Gregorian calendar and the time zone the runtime gives (calendar gate), a
-   number by its value in any script, words as `NLTokenizer` tells them apart; every limit that leaves content out
-   says what it left out, and text already read, such as a PDF's text layer, is dropped only for a reading that
-   replaces it. Reading knowledge moved from code into configuration keeps its meaning: the old code's outputs over
-   generated variants (every separator, none included, values starting with digits and with letters) are frozen as a
-   fixture, and every difference is listed (`StableKeysTests`).
+   also holds the user's own `tag`: a kind added for the user never changes what the model reads, is asked or is decoded
+   from (the classify tests fail when one reaches a schema or prompt, and `PipelineConfig.problems` refuses one in its
+   configuration). Every example a prompt gives of a label is a value in its kind's form, which validation keeps as it
+   is (`LabelFormTests`), never a description of the form or a placeholder that passes as a value (`XXX`), which the
+   model copies as a template, and examples of what it writes in the document's language are in several languages, as it
+   copies an example's language too; a label is listed to the model as a JSON string, never joined by a separator a
+   label can hold. Decode its answer into the typed schema, validate it with `AnswerValidator`, which holds the model's
+   labels, as `DocumentLabel.normalized` holds the user's, to their kind's form and the model's names to the document's
+   own words, and send a document without a valid answer to Needs You. A validator checks an answer's form and grounding
+   by structure, never by a list of words: what only begins an answer goes back
+   (`ConversationAnswerValidator.unfinished`), and a label is kept only for words of the request that limit, not arrange
+   (`SearchPlanValidator`); a structural guess that would change the result is sent back to the model, naming what it
+   found, never dropped unseen, and the model's answer given again stands, as does an answer whose only fault is such a
+   guess when no repair is left (`GuessSentBack`): a guess never fails a reading; and what Ollama counts, such as a
+   prompt filling its context, overrides the estimate the prompt was fitted by (`PromptBudget.measured`). Names from
+   the model go through `FilenameBuilder` before they reach the disk, and what is made of its labels, a file name
+   above all, is made of those the user's rules keep (`PipelineServices.read`), never of what the model wrote before
+   them. The app builds every path itself: the model supplies a file name, never a directory. Nothing the model
+   writes becomes active where it is shown: a link or an image in its Markdown is plain text (`AnswerMarkdown`). A
+   file put into Incoming is untrusted input too. It is parsed within budgets checked on the sizes and counts it
+   declares before anything is decoded, with overflow-checked arithmetic, in passes linear in its size, and each
+   limit has a hostile-input test bounded by `.timeLimit` (`ZipDirectory`, `SpreadsheetML`, `HTMLText`). A library
+   that cannot be held to those bounds does not parse it. What extraction produces is the same on every Mac and in
+   every script: a day is reckoned in an explicit Gregorian calendar and the time zone the runtime gives (calendar
+   gate), a number by its value in any script, words as `NLTokenizer` tells them apart; every limit that leaves
+   content out says what it left out, and text already read, such as a PDF's text layer, is dropped only for a
+   reading that replaces it. Reading knowledge moved from code into configuration keeps its meaning: the old code's
+   outputs over generated variants (every separator, none included, values starting with digits and with letters) are
+   frozen as a fixture, and every difference is listed (`StableKeysTests`).
 6. **Logic stays below the UI.** Views and CLI commands call Runtime and Core, and they only present and parse. Views
-   learn of a change only from Core, through History (`AppDatabase.activity()`) or a stream of live state (the queues'
+   learn of a change only from Core, whichever process made it (`AppDatabase.othersCommits()`, tested with a second
+   connection to the index), through History (`AppDatabase.activity()`) or a stream of live state (the queues'
    `statusUpdates()`, `OllamaLifecycle.states()`, `SettingsStore.changes()`): a state the user watches is recorded in
    History when it is a decision, otherwise published on such a stream, and a test proves a subscriber is sent it. What
    is happening now, a file being filed, a request being read or a question answered, is decided in Core from such a
@@ -204,9 +223,19 @@ These are rules you can check, not aspirations. Each row says how it is checked;
    Everything can be done without the pointer and heard: a text field and a switch have a name VoiceOver reads, an
    icon-only button says what it does to what ("Remove “EDP”"), an action shown only under the pointer is also an
    accessibility action and a menu item, and a row that opens on a click opens with Return, Space and VoiceOver's
-   default action through `rowAction` (rows gate in `scripts/lint.sh`). A progress line says what is happening now: a
+   default action through `rowAction` (rows gate in `scripts/lint.sh`), whose element is the row itself, a spinner in it
+   hidden from VoiceOver. A progress line says what is happening now: a
    question or request waits for the model, its turn or Ollama, with when it is tried again, until the model's first
-   words come, never "Answering" before.
+   words come, never "Answering" before, on every surface that shows it (card, row, menu bar, command line), decided in
+   Core; and nothing beneath such a wait asks Ollama again meanwhile, embeddings included (`retrying: false`). What
+   Core would refuse is said before it is asked, by the very rule the action applies (`LabelError.refusal(of:)`,
+   `ModelProfileActions.refusal(ofNewName:in:)`, `ModelProfileListing.removalRefusal`): the control is dimmed or the
+   field says why as it is typed, nothing given is dropped without a word, and a refusal names things as the app shows
+   them, never by an id; a field's accessible name is stable, never the example its placeholder shows. Layout never
+   feeds back on itself: a lazy stack never holds another or a row of unbounded height, text outside a scroll view is
+   never sized to its full height without a line limit, and a collection an update replaces wholesale, as narrowing or
+   filtering does, is never a SwiftUI `List`, whose AppKit table re-enters itself on such a change, but a lazy stack
+   that is one focus stop moved through with the arrow keys, its rows each with `rowAction` (`SidebarLabelList`).
 8. **Ask before irreversible or outward-facing actions:**
    - committing or pushing when the user has not asked for the change to be delivered (a delivered change follows §8
      to the end, including its squash merge, which publishes a release when it changes code);

@@ -3,9 +3,10 @@ import Foundation
 
 /// The production `DocumentAnalyzing`. The chat model of the profile in use reads the document once, with the app's own
 /// prompt (`labels-system.md`) and what the archive's labels and the user's decisions about them say
-/// (`archive-labels.md`), picks out its signals, which become its labels and all it is described by, and names its file;
-/// an invalid answer goes back to it `analysis.repairAttempts` times. Its embedding model makes the vector the document
-/// is found by meaning with. Every model call is recorded in the trace.
+/// (`archive-labels.md`), picks out its signals, which become its labels and all it is described by, and its title, which
+/// its file is named by with its date and sender once the user's rules have kept them (`AnswerValidator`, checked against
+/// the document's own words: `ReadingGrounds`; `PipelineServices.read`); an invalid answer goes back to it `analysis.repairAttempts` times. Its embedding model makes the
+/// vector the document is found by meaning with. Every model call is recorded in the trace.
 public struct DocumentAnalyzer: DocumentAnalyzing {
     public let gate: InferenceGate
     public let models: ModelManager
@@ -20,7 +21,10 @@ public struct DocumentAnalyzer: DocumentAnalyzing {
     public func analyse(_ content: ExtractedContent, guidance: LabelGuidance, settings: AppSettings, config: PipelineConfig,
                         trace: TraceContext) async throws -> AnalysisOutcome {
         let model = try settings.modelProfile().chatModel
-        let validator = AnswerValidator(labels: config.labels)
+        let validator = AnswerValidator(labels: config.labels, titleGroundedShare: config.analysis.titleGroundedShare,
+                                        partiesWithoutSender: config.analysis.partiesWithoutSender,
+                                        grounds: ReadingGrounds(content: content, guidance: guidance, letters: config.labels.groundingLetters))
+        let sentBack = SentBack()
         let input = ["model": model]
         let started = Date()
         var answer: ModelAnswer<ValidatedAnalysis>?
@@ -28,7 +32,7 @@ public struct DocumentAnalyzer: DocumentAnalyzing {
             answer = try await LLMClassifier(gate: gate, models: models, effort: .documents(config)).ask(
                 system: try prompts.analysisSystem(), user: try prompts.analysisUser(content: content, guidance: guidance),
                 schema: ClassificationSchema.analysis(maxPerKind: config.labels.maxPerKind), model: model,
-                repairPrompt: { try prompts.repair(errors: $0) }, validate: { try validator.validate($0) })
+                repairPrompt: { try prompts.repair(errors: $0) }, validate: { try validator.validate($0, sentBack: sentBack) })
             await trace.record(.analyse, status: (answer?.calls.count ?? 0) > 1 ? .warn : .ok, startedAt: started, input: input,
                                output: AnalysisTrace(answer: answer?.answer, exchange: answer?.calls ?? []))
         } catch let error as ModelAnswerError {
@@ -41,16 +45,11 @@ public struct DocumentAnalyzer: DocumentAnalyzing {
         let labels = answer?.answer.labels
         let embedding = try await embedding(for: content, senders: labels?.values(.sender) ?? [], settings: settings, config: config,
                                             trace: trace)
-        var problems: [String] = []
-        if answer == nil { problems.append(DocumentAnalysis.Problem.noAnswer) }
-        if content.hasWarning(.encrypted) { problems.append(DocumentAnalysis.Problem.encrypted) }
-        if content.hasWarning(.corrupted) { problems.append(DocumentAnalysis.Problem.corrupted) }
-        if content.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && content.visual == nil {
-            problems.append(DocumentAnalysis.Problem.noText)
-        }
+        let problems = DocumentAnalysis.problems(answered: answer != nil, content: content)
         // A document that waits for the user keeps its own name: what the model read of it is in doubt.
-        let analysis = DocumentAnalysis(fileName: problems.isEmpty ? answer?.answer.fileName : nil, model: answer?.model, problems: problems)
-        return AnalysisOutcome(analysis: analysis, labels: labels, embedding: embedding?.vector, embeddingModel: embedding?.model)
+        let analysis = DocumentAnalysis(model: answer?.model, problems: problems)
+        return AnalysisOutcome(analysis: analysis, labels: labels, title: problems.isEmpty ? answer?.answer.title : nil,
+                               embedding: embedding?.vector, embeddingModel: embedding?.model)
     }
 
     public func embedding(for content: ExtractedContent, senders: [String], settings: AppSettings, config: PipelineConfig,

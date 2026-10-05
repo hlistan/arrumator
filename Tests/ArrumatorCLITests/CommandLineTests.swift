@@ -120,19 +120,21 @@ import UniformTypeIdentifiers
         let reset = try JSON.decoder.decode(ModelProfileListing.self, from: try run(home, ["profiles", "reset", other, "--json"]).stdout)
         #expect(try saved()?[other] == nil && !reset.changed && reset.profile == source, "reset, it is the bundled profile again, and the file forgets it")
         let removePredefined = try run(home, ["profiles", "remove", other])
-        #expect(removePredefined.status == 1 && removePredefined.stderr.contains(other), "a predefined profile is never removed: \(removePredefined.stderr)")
+        #expect(removePredefined.status == 1 && removePredefined.stderr.contains("“\(source.name)”"),
+                "a predefined profile is never removed, named as the app lists it: \(removePredefined.stderr)")
         let resetOwn = try run(home, ["profiles", "reset", mine.id])
-        #expect(resetOwn.status == 1 && resetOwn.stderr.contains(mine.id), "the user's own has nothing to reset to: \(resetOwn.stderr)")
+        #expect(resetOwn.status == 1 && resetOwn.stderr.contains("“\(mine.profile.name)”"), "the user's own has nothing to reset to: \(resetOwn.stderr)")
 
         #expect(try run(home, ["settings", "--profile", mine.id]).status == 0, "Settings reads with the new profile")
         #expect(try listings().filter(\.inUse).map(\.id) == [mine.id], "and the list marks it in use")
         let removeInUse = try run(home, ["profiles", "remove", mine.id])
-        #expect(removeInUse.status == 1 && removeInUse.stderr.contains(mine.id), "the profile in use stays: \(removeInUse.stderr)")
+        #expect(removeInUse.status == 1 && removeInUse.stderr.contains("“\(mine.profile.name)”"), "the profile in use stays: \(removeInUse.stderr)")
         #expect(try run(home, ["settings", "--profile", bundled.profile]).status == 0, "Settings reads with its profile again")
         let task = try JSON.decoder.decode(SearchTaskDetail.self, from: try run(home, ["tasks", "new", "--queue-only", "--json", "--profile", mine.id,
                                                                                        "water", "bills"]).stdout).task
         let removeNamed = try run(home, ["profiles", "remove", mine.id])
-        #expect(removeNamed.status == 1 && removeNamed.stderr.contains("1 search task in this archive") && removeNamed.stderr.contains(mine.id),
+        #expect(removeNamed.status == 1 && removeNamed.stderr.contains("1 search task in this archive")
+                    && removeNamed.stderr.contains("“\(mine.profile.name)”"),
                 "so does one a search task of the archive reads with, saying how many and of which archive: \(removeNamed.stderr)")
         #expect(try run(home, ["tasks", "update", String(task.id), "--queue-only", "--profile", ""]).status == 0, "the task follows Settings again")
         let removed = try run(home, ["profiles", "remove", mine.id, "--json"])
@@ -161,7 +163,8 @@ import UniformTypeIdentifiers
         let home = try Home.make()
         defer { home.cleanup() }
         let review = try run(home, ["review", "list", "--json"])
-        #expect(try JSON.decoder.decode([DocumentRecord].self, from: review.stdout).isEmpty, "an empty archive has nothing waiting")
+        #expect(try JSON.decoder.decode(NeedsYou.self, from: review.stdout) == NeedsYou(waiting: [], setAside: []),
+                "an empty archive has nothing waiting and nothing set aside, as two lists")
         let archive = try JSONSerialization.jsonObject(with: try run(home, ["archive", "show", "--json"]).stdout) as? [String: String]
         #expect(archive?["archive"] == home.archive.path, "the archive the settings name")
         let stats = try JSONSerialization.jsonObject(with: try run(home, ["stats", "--json"]).stdout) as? [String: Any]

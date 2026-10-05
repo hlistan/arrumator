@@ -9,10 +9,13 @@ import Foundation
 /// named after its label as a file name is cleaned (`FilenameBuilder`), so a label can never reach another directory
 /// (AGENTS.md §4.5). Once the export's own folder is made, it is finished and recorded whatever fails in it: a document
 /// that cannot be copied, or whose group's folder cannot be made, is skipped with the reason, so no folder is left that
-/// its task does not record.
+/// its task does not record. A ZIP archive is packed by `archiver`, which composes its names and marks them UTF-8, and
+/// put in the folder only once it is whole: one that fails leaves nothing there.
 struct SearchTaskExporter {
     /// What cleans the names of the folders and finds free names for what is made.
     let builder: FilenameBuilder
+    /// What packs the folder into a ZIP archive.
+    let archiver: any FolderArchiving
     let tasks: TasksConfig
     /// Folders an export may not go into: the archive and Incoming, which would take the copies in as documents.
     let excluded: [URL]
@@ -41,15 +44,23 @@ struct SearchTaskExporter {
             }
             return (root, manifest)
         case .zip:
-            // The folder is put together beside where the archive goes, then packed; the temporary folder holds only the
-            // copies made here, and goes when the archive is made.
+            // The folder is put together and packed in a temporary folder on the same volume as where the archive goes,
+            // and the archive moved there only once it is whole, so an archive that fails part way leaves nothing in the
+            // user's folder. The temporary folder holds only what is made here, and goes once the archive is moved.
             let staging = try FileManager.default.url(for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: folder, create: true)
             defer { try? FileManager.default.removeItem(at: staging) }
             let root = staging.appendingPathComponent(top, isDirectory: true)
             let manifest = copy(detail.tree, into: root)
-            let (archive, _) = try builder.uniqueDestination(directory: folder, filename: top + "." + Self.zipExtension)
-            try Self.composeNames(under: root)
-            try Self.zip(root, to: archive)
+            let name = top + "." + Self.zipExtension
+            let packed = staging.appendingPathComponent(name)
+            let (archive, _) = try builder.uniqueDestination(directory: folder, filename: name)
+            do {
+                try archiver.zip(root, to: packed)
+                // A move never replaces a file: one put there meanwhile fails the export rather than be written over.
+                try FileManager.default.moveItem(at: packed, to: archive)
+            } catch {
+                throw SearchTaskError.exportFailed(archive.path, error.localizedDescription)
+            }
             return (archive, manifest)
         }
     }
@@ -130,34 +141,6 @@ struct SearchTaskExporter {
         }
         return try shown.flatMap { builder.bounded($0, fileExtension: "") }
             ?? builder.bounded(tasks.withoutLabelFolder(kind), fileExtension: "") ?? ""
-    }
-
-    /// Renames everything under `directory` to its composed (NFC) name. A Mac may write names decomposed, a letter then
-    /// its accent, and a ZIP archive keeps the bytes it finds, which other systems show as loose marks ("Joa\u{0303}o").
-    /// POSIX `rename` writes the bytes it is given, whatever the name looks like as a `String`, and the file system finds a
-    /// name however it is composed; the deepest names go first, so every parent path still holds.
-    static func composeNames(under directory: URL) throws {
-        let walker = FileManager.default.enumerator(at: directory, includingPropertiesForKeys: nil)
-        let entries = (walker?.allObjects as? [URL] ?? []).sorted { $0.pathComponents.count > $1.pathComponents.count }
-        for entry in entries {
-            let name = entry.lastPathComponent, composed = name.precomposedStringWithCanonicalMapping
-            let parent = entry.deletingLastPathComponent().path
-            guard rename(parent + "/" + name, parent + "/" + composed) == 0 else {
-                throw SearchTaskError.exportFailed(entry.path, String(cString: strerror(errno)))
-            }
-        }
-    }
-
-    /// Packs `directory` into a ZIP archive at `destination`, as Finder's Compress does: Foundation zips a directory read
-    /// for uploading (Apple, `NSFileCoordinator.ReadingOptions.forUploading`), into a temporary file it removes once the
-    /// block returns, so the block copies it out.
-    static func zip(_ directory: URL, to destination: URL) throws {
-        var coordination: NSError?
-        var copying: (any Error)?
-        NSFileCoordinator().coordinate(readingItemAt: directory, options: [.forUploading], error: &coordination) { zipped in
-            do { try FileManager.default.copyItem(at: zipped, to: destination) } catch { copying = error }
-        }
-        if let error = coordination ?? copying { throw SearchTaskError.exportFailed(destination.path, error.localizedDescription) }
     }
 
     /// Whether `url` is `root` or inside it, however either is spelled: through a link, `/private` or not, in any case.

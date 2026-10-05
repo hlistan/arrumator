@@ -17,6 +17,7 @@ extension OllamaConfig {
                                                    "startTimeout": startTimeout])
         if retryDelays.contains(where: { $0 < 0 }) { problems.append("ollama.retryDelays cannot be negative") }
         if restartBackoff.all.contains(where: { $0 < 0 }) { problems.append("ollama.restartBackoff cannot be negative") }
+        if failedProbesBeforeAway < 1 { problems.append("ollama.failedProbesBeforeAway must be at least 1") }
         if maxRestartsPerHour < 0 { problems.append("ollama.maxRestartsPerHour cannot be negative: 0 never starts it again") }
         if requiredFreeDiskGBAfterPull < 0 { problems.append("ollama.requiredFreeDiskGBAfterPull cannot be negative") }
         return problems

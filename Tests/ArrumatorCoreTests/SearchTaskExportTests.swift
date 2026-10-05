@@ -72,7 +72,7 @@ import Testing
         #expect(try await tasks.store.task(id: id)?.exports.map(\.path) == [first.path, second.path], "both are the task's")
     }
 
-    @Test func aZipArchiveHoldsTheSameFolders() async throws {
+    @Test func aZipArchiveIsPackedFromTheSameFoldersAndNothingElseIsLeft() async throws {
         let (w, tasks, id) = try await prepared()
         defer { w.h.env.cleanup() }
         let edp = try w.id("edp_2025_03.txt")
@@ -82,54 +82,36 @@ import Testing
                 "an archive named after the task")
         #expect(try FileManager.default.contentsOfDirectory(atPath: out(w).path) == ["Utility invoices 2025.zip"],
                 "and nothing else is left beside it")
-        // Unpacked as Finder does, with the tool macOS ships for it.
-        let unpacked = w.h.env.root.appendingPathComponent("Unpacked", isDirectory: true)
-        let ditto = Process()
-        ditto.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
-        ditto.arguments = ["-x", "-k", export.path, unpacked.path]
-        try ditto.run()
-        ditto.waitUntilExit()
-        #expect(ditto.terminationStatus == 0, "the archive is a ZIP archive macOS unpacks")
-        #expect(files(under: unpacked) == ["Utility invoices 2025/Águas do Porto/aguas_2025_05.txt", "Utility invoices 2025/EDP Comercial/Fatura João Eletrónico.txt"],
-                "holding the task's folder, arranged as a folder export is")
+        // The archiver double lists what it was handed to pack (`ListingArchiver`); the real one is `ZipFolderArchiver`.
+        #expect(try ListingArchiver.files(in: URL(fileURLWithPath: export.path))
+                    == ["Utility invoices 2025/Águas do Porto/aguas_2025_05.txt", "Utility invoices 2025/EDP Comercial/Fatura João Eletrónico.txt"],
+                "the task's folder, arranged as a folder export is, is what is packed")
         #expect(Set(export.files.map(\.path)) == ["Águas do Porto/aguas_2025_05.txt", "EDP Comercial/Fatura João Eletrónico.txt"],
-                "and records the same paths")
-        #expect(try Self.entryNames(URL(fileURLWithPath: export.path)).allSatisfy {
-            Array($0.utf8) == Array($0.precomposedStringWithCanonicalMapping.utf8)
-        }, "every name in the archive is composed")
+                "and the export records the same paths")
     }
 
-    @Test func aZipArchiveNamesItsFilesWithComposedAccentsWhateverTheDiskHolds() async throws {
-        let env = try await TestEnvironment.make()
-        defer { env.cleanup() }
-        // A Mac may hold names decomposed (a letter, then its accent); POSIX calls write the bytes as given.
-        let root = env.root.appendingPathComponent("Export", isDirectory: true)
-        let folder = "João".decomposedStringWithCanonicalMapping, file = "Recibo Eletrónico.txt".decomposedStringWithCanonicalMapping
-        #expect(mkdir(root.path, 0o755) == 0 && mkdir(root.path + "/" + folder, 0o755) == 0)
-        #expect(FileManager.default.createFile(atPath: root.path + "/" + folder + "/" + file, contents: Data("x".utf8)))
-        try SearchTaskExporter.composeNames(under: root)
-        let zip = env.root.appendingPathComponent("Export.zip")
-        try SearchTaskExporter.zip(root, to: zip)
-        let names = try Self.entryNames(zip)
-        // Bytes, not strings: Swift holds a letter and its accent equal to the composed letter.
-        #expect(names.map { Array($0.utf8) } == [Array("Export/João/Recibo Eletrónico.txt".precomposedStringWithCanonicalMapping.utf8)],
-                "the archive's names are composed, so other systems show letters, not loose accents: \(names)")
-    }
-
-    /// The names a ZIP archive's central directory holds, byte for byte as written (APPNOTE.TXT 4.3.12).
-    static func entryNames(_ zip: URL) throws -> [String] {
-        let data = try Data(contentsOf: zip)
-        let bytes = [UInt8](data)
-        func word(_ at: Int, _ size: Int) -> Int { (0..<size).reduce(0) { $0 | Int(bytes[at + $1]) << (8 * $1) } }
-        var names: [String] = []
-        var at = 0
-        while at + 46 <= bytes.count {
-            guard word(at, 4) == 0x0201_4b50 else { at += 1; continue }
-            let length = word(at + 28, 2), extra = word(at + 30, 2), comment = word(at + 32, 2)
-            names.append(String(decoding: bytes[(at + 46)..<(at + 46 + length)], as: UTF8.self))
-            at += 46 + length + extra + comment
+    @Test func aZipArchiveThatCannotBeWrittenFailsTheExportSayingWhy() async throws {
+        // Fails part way, as a full disk does, once it has begun writing the archive.
+        struct Refusing: FolderArchiving {
+            func zip(_ directory: URL, to destination: URL) throws {
+                #expect(FileManager.default.createFile(atPath: destination.path, contents: Data("PK\u{3}\u{4}".utf8)), "the archive is begun")
+                throw CocoaError(.fileWriteOutOfSpace)
+            }
         }
-        return names
+        let w = try await suite.world()
+        defer { w.h.env.cleanup() }
+        let (queue, tasks) = w.h.searchTasks(StubInterpreter(plans: [SearchTaskTests.prompt: SearchTaskTests.invoices2025]), archiver: Refusing())
+        let id = try await tasks.create(prompt: SearchTaskTests.prompt).id
+        await queue.drain()
+        await #expect("an archive that cannot be written fails the export") {
+            try await tasks.export(id, to: out(w), format: .zip)
+        } throws: { error in
+            guard case let SearchTaskError.exportFailed(path, _) = error else { return false }
+            return path == out(w).appendingPathComponent("Utility invoices 2025.zip").path
+        }
+        #expect(try await tasks.store.task(id: id)?.exports.isEmpty == true, "and records none")
+        #expect(try FileManager.default.contentsOfDirectory(atPath: out(w).path).isEmpty,
+                "and leaves nothing in the folder, not even the part of an archive written before it failed")
     }
 
     @Test func aLabelCanNeverPlaceAFileOutsideTheExport() async throws {
@@ -139,7 +121,12 @@ import Testing
         let meo = try w.id("meo_2025_01.txt")
         try await w.h.review.edit(meo, fileName: nil, labels: LabelEdit(adding: [SearchTaskTests.label(.sender, "../../../etc")], removing: [SearchTaskTests.label(.sender, "MEO")]))
         let edp = try w.id("edp_2024_11.txt")
-        try await w.h.review.edit(edp, fileName: nil, labels: LabelEdit(adding: [SearchTaskTests.label(.sender, "...")], removing: [SearchTaskTests.label(.sender, "EDP Comercial")]))
+        // A sender with nothing left after cleaning can no longer be given, by the user or the model (it has no letter), but
+        // one an earlier version kept may still be in the index.
+        _ = try await w.h.services.documents.update(edp) { record in
+            let kept = (record.labels ?? []).filter { $0 != SearchTaskTests.label(.sender, "EDP Comercial") }
+            record.labelsJson = try JSON.string(kept + [SearchTaskTests.label(.sender, "...")])
+        }
         try await findAgain(tasks, id)
         let export = try await tasks.export(id, to: out(w), format: .folder)
         #expect(URL(fileURLWithPath: export.path).deletingLastPathComponent().standardizedFileURL == out(w).standardizedFileURL,

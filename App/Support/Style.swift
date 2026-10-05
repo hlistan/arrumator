@@ -124,6 +124,8 @@ enum Style {
     static let inlineControlSpacing: CGFloat = 6
     /// Width of the kind chooser where a label is added on a document's card.
     static let labelKindPickerWidth: CGFloat = 130
+    /// Between a field and why what is written in it is refused, under it.
+    static let fieldRefusalSpacing: CGFloat = 4
     /// Between the parts of a label's card and of two alike labels' card.
     static let labelCardSpacing: CGFloat = 12
     /// Between a label's name and its kind at the top of its card.
@@ -210,8 +212,16 @@ enum Style {
     static let filterFieldCornerRadius: CGFloat = 7
     /// How strongly the sidebar's label filter is filled.
     static let filterFieldFillOpacity = 0.6
+    /// Around the sidebar's label filter, between the lists and the labels: in line with their rows' insides.
+    static let filterFieldOuterInsets = EdgeInsets(top: 2, leading: 10, bottom: 6, trailing: 10)
     /// Around what the main window says above every page while the archive is away.
     static let archiveAwayInsets = EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16)
+    /// Between that notice's sentence and the archive's path under it.
+    static let archiveAwayLineSpacing: CGFloat = 2
+    /// The most lines that notice's sentence takes, at whatever width it is measured: outside the page's scroll view, a
+    /// text that takes as many lines as a narrow width gives it makes the window's content taller than the window, and
+    /// pushes the notice, and the sidebar's foot, out of it.
+    static let archiveAwayMaxLines = 3
     /// Least space between a list's name in the sidebar and the spinner after it while it is at work, as Tasks while a
     /// search request is read.
     static let sidebarSpinnerSpacing: CGFloat = 6
@@ -219,6 +229,40 @@ enum Style {
     /// with medium sidebar icons, the default. Rows a larger size makes taller are laid out as tall as the list
     /// estimates them, and the lists then end where their rows do (`SidebarLists`).
     static let sidebarListsEstimatedHeight: CGFloat = 220
+    /// Around the sidebar's labels, in line with the lists' rows above them.
+    static let sidebarLabelsInsets = EdgeInsets(top: 0, leading: 10, bottom: 8, trailing: 10)
+    /// Left and right inside a row of the sidebar's labels, a heading's and a button's too: in line with the lists' rows.
+    static let sidebarLabelRowPadding: CGFloat = 8
+    /// Between a label's tag, its name and its count in the sidebar.
+    static let sidebarLabelSpacing: CGFloat = 6
+    /// The column a label's tag sits in, so names line up, as the lists' symbols do.
+    static let sidebarLabelSymbolWidth: CGFloat = 20
+    /// Above a heading of the sidebar's labels, apart from the labels before it.
+    static let sidebarLabelHeadingTopPadding: CGFloat = 8
+    /// Behind the label, heading or button the arrow keys are on, while the sidebar's labels have the keyboard.
+    static let sidebarLabelKeyed = Color.accentColor.opacity(0.22)
+
+    /// How tall a row of the sidebar's labels is, as tall as the lists' rows above at the sidebar icon size chosen in
+    /// System Settings: the labels are not a list, which would size them so.
+    static func sidebarLabelRowHeight(_ size: SidebarRowSize) -> CGFloat {
+        switch size {
+        case .small: 24
+        case .medium: 28
+        case .large: 32
+        @unknown default: 28
+        }
+    }
+
+    /// The font of a row of the sidebar's labels, as the lists' rows above have it at the sidebar icon size chosen.
+    static func sidebarLabelFont(_ size: SidebarRowSize) -> Font {
+        switch size {
+        case .small: .subheadline
+        case .medium: .body
+        case .large: .title3
+        @unknown default: .body
+        }
+    }
+
     /// Between the parts of the bar at the sidebar's foot: the profile in use, pause, and its menu.
     static let sidebarBarSpacing: CGFloat = 10
     /// Between why the app waits and the controls under it, in the bar at the sidebar's foot.
@@ -450,7 +494,7 @@ enum EventStyle {
         case .filed: "checkmark.circle"
         case .needsReview: "questionmark.circle"
         case .duplicate, .foundInTwoPlaces: "doc.on.doc"
-        case .error, .failed: "exclamationmark.triangle"
+        case .error, .failed, .recordFileUnreadable: "exclamationmark.triangle"
         case .retry: "arrow.clockwise"
         case .corrected, .userMoved, .userRenamed, .markedCorrect: "hand.point.up.left"
         case .undone: "arrow.uturn.backward"
@@ -472,7 +516,7 @@ enum EventStyle {
         switch kind {
         case .filed, .taskPrepared: Palette.progress
         case .needsReview, .retry: Palette.attention
-        case .error, .failed, .taskFailed: Palette.problem
+        case .error, .failed, .taskFailed, .recordFileUnreadable: Palette.problem
         default: .secondary
         }
     }

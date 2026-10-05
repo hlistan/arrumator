@@ -1,8 +1,9 @@
 import Foundation
 
-/// Produces safe, bounded file names, and finds a free one in a directory. The name is the model's; a document the
-/// model gave no name it can have keeps its own. No document is given a name the app keeps for its own files or that
-/// its watchers never take in (`SkipRules.ignoreReason(name:)`), such as a record file's.
+/// Produces safe, bounded file names, and finds a free one in a directory. The name a reading gives is made here, of
+/// the labels kept and the model's title (`made`); a document that reading gave no name it can have keeps its own. No
+/// document is given a name the app keeps for its own files or that its watchers never take in
+/// (`SkipRules.ignoreReason(name:)`), such as a record file's.
 public struct FilenameBuilder: Sendable {
     public let config: NamingConfig
     /// The names no document may have: those of the app's own files, and those the watchers ignore.
@@ -41,6 +42,37 @@ public struct FilenameBuilder: Sendable {
     }
 
     private func fits(_ s: String) -> Bool { s.count <= config.maxChars && s.utf8.count <= config.maxBytes }
+
+    /// What a title may not begin or end with besides the separators of the name it goes into (`naming.separators`):
+    /// white space, the dashes and the colon a title copied from a whole name is left with.
+    static let titleEdges = CharacterSet.whitespaces.union(CharacterSet(charactersIn: "-–—:"))
+
+    /// The name a reading makes of a document's date, its sender and its title, the parts `naming.parts` lists in its
+    /// order, each followed by its separator (`naming.separators`) only when a part the document has follows it:
+    /// `YYYY-MM-DD Sender - Title` by default, `YYYY-MM-DD Title` without a sender, `Sender - Title` without a date. The
+    /// date is the document's `date` label, a day, and nothing else; the sender its first `sender` label, both as the
+    /// user's rules keep them. A title that begins with the date or the sender, as a whole name does, does not repeat
+    /// them. Nil when nothing but the date is left, which names nothing; the document then keeps its own
+    /// (`name(for:current:transliterate:)`).
+    public func made(date: String?, sender: String?, title: String) -> String? {
+        let edges = Self.titleEdges.union(CharacterSet(charactersIn: config.separators.joined()))
+        var title = title.trimmingCharacters(in: edges)
+        let given = [date, sender].compactMap { $0 }.filter { !$0.isEmpty }
+        // In whichever order the title writes them, each a whole word.
+        while let rest = given.lazy.compactMap({ part -> String? in
+            guard let range = title.range(of: part, options: [.anchored, .caseInsensitive, .diacriticInsensitive]),
+                  range.upperBound == title.endIndex || !(title[range.upperBound].isLetter || title[range.upperBound].isNumber) else { return nil }
+            return String(title[range.upperBound...]).trimmingCharacters(in: edges)
+        }).first {
+            title = rest
+        }
+        let values: [NamePart: String] = [.date: date ?? "", .sender: sender ?? "", .title: title]
+        let present = config.parts.indices.filter { !(values[config.parts[$0]] ?? "").isEmpty }
+        guard present.contains(where: { config.parts[$0] != .date }) else { return nil }
+        return present.enumerated().map { n, i in
+            (values[config.parts[i]] ?? "") + (n < present.count - 1 && i < config.separators.count ? config.separators[i] : "")
+        }.joined()
+    }
 
     /// What a name cut to its limits may not begin or end with.
     static let trimmed = CharacterSet(charactersIn: " .-")
@@ -112,4 +144,14 @@ public struct FilenameBuilder: Sendable {
         guard let n = Int(String(suffix.filter { $0.isASCII && $0.isNumber })), n >= 2 else { return false }
         return folded(collided(planned, n)) == current
     }
+}
+
+/// A part of the name a reading makes (`NamingConfig.parts`).
+public enum NamePart: String, Sendable, Codable, Hashable, CaseIterable {
+    /// The document's `date` label, the day it was issued.
+    case date
+    /// Its first `sender` label.
+    case sender
+    /// The title the model gave it.
+    case title
 }

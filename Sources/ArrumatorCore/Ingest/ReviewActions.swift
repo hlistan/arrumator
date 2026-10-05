@@ -13,12 +13,16 @@ public struct LabelEdit: Sendable, Hashable {
     }
 
     /// `labels` with this change made: those taken off gone, those added after the rest, each kept as
-    /// `DocumentLabel.normalized` keeps it, once. One added of a single-valued kind (`LabelKind.isSingle`) takes the place
-    /// of the one there, in its place, from the app and the command line alike, and only when it is written otherwise
-    /// (`DocumentLabel.distinctKey`): the one there given again changes nothing. Of several added of such a kind, the
-    /// first.
+    /// `DocumentLabel.normalized` keeps it, once. One taken off is the label its kind keeps or the one written so, as an
+    /// earlier reading may have given a label in a form its kind no longer keeps. One added of a single-valued kind
+    /// (`LabelKind.isSingle`) takes the place of the one there, in its place, from the app and the command line alike,
+    /// and only when it is written otherwise (`DocumentLabel.distinctKey`): the one there given again changes nothing. Of
+    /// several added of such a kind, the first.
     public func applied(to labels: [DocumentLabel]) -> [DocumentLabel] {
-        let removed = Set(removing.compactMap { DocumentLabel.normalized($0.value, kind: $0.kind) })
+        let removed = Set(removing.flatMap { label in
+            [DocumentLabel.normalized(label.value, kind: label.kind), DocumentLabel(kind: label.kind, value: DocumentLabel.oneLine(label.value))]
+                .compactMap { $0 }
+        })
         var kept = labels.filter { !removed.contains($0) }
         var appended: [DocumentLabel] = []
         var single = Set<LabelKind>()
@@ -41,15 +45,20 @@ public enum DocumentAction: String, Sendable, Hashable, CaseIterable {
     case undo, confirm, hold, readAgain
 }
 
-/// What a document's card offers, decided where the document is: the actions in the order they are shown, and whether
-/// it was left in Incoming not filed, which its card says, with what to do.
+/// What a document's card offers, decided where the document is: the actions in the order they are shown, whether it
+/// was left in Incoming not filed, which its card says, with what to do, and when the user confirmed it as it is, which
+/// its card says too.
 public struct DocumentChoices: Sendable, Hashable {
     public var actions: [DocumentAction]
     public var notFiled: Bool
+    /// When the user confirmed the filed document as it is (`ReviewActions.confirm`), if nothing has read, corrected,
+    /// undone, renamed or moved it since; nil otherwise.
+    public var confirmed: Date?
 
-    public init(actions: [DocumentAction], notFiled: Bool) {
+    public init(actions: [DocumentAction], notFiled: Bool, confirmed: Date? = nil) {
         self.actions = actions
         self.notFiled = notFiled
+        self.confirmed = confirmed
     }
 }
 
@@ -70,32 +79,60 @@ public struct ReviewActions: Sendable {
     }
 
     /// What `document`'s card offers, by its status and by where its file is: a document left in Incoming (failed, not
-    /// filed) can be read again or left for later, never confirmed as filed or undone, as it is in no archive.
-    public func choices(for document: DocumentRecord) async -> DocumentChoices {
+    /// filed) can be read again or left for later, never confirmed as filed or undone, as it is in no archive. One filed
+    /// and confirmed as it is (`confirmation`) is not offered to be confirmed again, and its card says when it was.
+    public func choices(for document: DocumentRecord) async throws -> DocumentChoices {
         let inArchive = services.isInArchive(document)
+        var confirmed: Date?
+        if document.status == .filed, inArchive, let id = document.id {
+            confirmed = try await services.database.reader.read { db in try Self.confirmation(db, docID: id) }
+        }
         let actions: [DocumentAction] = switch document.status {
-        case .filed: inArchive ? [.undo, .confirm] : []
+        case .filed: inArchive ? (confirmed == nil ? [.undo, .confirm] : [.undo]) : []
         case .needsReview, .failed: inArchive ? [.hold, .readAgain, .confirm] : [.hold, .readAgain]
         case .held, .undone: [.readAgain]
         case .arrived, .processing, .duplicate, .missing: []
         }
-        return DocumentChoices(actions: actions, notFiled: !inArchive && document.status == .failed)
+        return DocumentChoices(actions: actions, notFiled: !inArchive && document.status == .failed, confirmed: confirmed)
     }
 
-    /// Confirms the document as it is: its name and labels are right. One waiting for the user is filed.
+    /// The events that change what a confirmation was of: a reading, a filing, a correction, an undo, and a change to its
+    /// name or place made outside the app, as a rename or a move in Finder, or its file going and coming back.
+    private static let confirmable: [EventKind] = [.markedCorrect, .analysed, .filed, .needsReview, .corrected, .undone, .retry, .error,
+                                                   .userRenamed, .userMoved, .missing, .adopted]
+
+    /// When the user last confirmed document `docID` as it is, read in the transaction of `db`: the time of its
+    /// `markedCorrect` event when no reading, filing, correction, undo or change to its name or place has come after
+    /// it; nil otherwise. History is the
+    /// record of it, so a rebuild keeps it.
+    static func confirmation(_ db: Database, docID: Int64) throws -> Date? {
+        let last = try EventRecord.filter(Column("doc_id") == docID)
+            .filter(confirmable.map(\.rawValue).contains(Column("kind")))
+            .order(Column("at").desc, Column("id").desc).fetchOne(db)
+        return last?.kind == .markedCorrect ? last?.at : nil
+    }
+
+    /// Confirms the document as it is: its name and labels are right. One waiting for the user is filed. One already
+    /// filed and confirmed, with nothing read or changed since (`confirmation`), is left as it is and nothing is recorded
+    /// again: decided in the transaction that would record it.
     public func confirm(_ docID: Int64) async throws {
         let services = services
-        let doc = try await services.documents.update(docID) { doc in
-            // Decided on the document as the transaction that changes it reads it.
+        let now = services.time.now()
+        try await services.database.writer.write { db in
+            guard var doc = try DocumentRecord.fetchOne(db, key: docID) else { throw IngestError.documentNotFound(docID) }
             guard [.filed, .needsReview, .failed].contains(doc.status), services.isInArchive(doc) else {
-                throw IngestError.notInArchive(docID)
+                throw IngestError.notInArchive(docID, .confirm)
             }
             var analysis = doc.analysis ?? DocumentAnalysis()
+            if doc.status == .filed, analysis.problems.isEmpty, try Self.confirmation(db, docID: docID) != nil { return }
+            let read = doc
             analysis.problems = []
             doc.status = .filed
             doc.analysisJson = try JSON.string(analysis)
+            doc.updatedAt = now
+            try doc.updateChanges(db, from: read)
+            try HistoryStore.insert(db, .markedCorrect, at: now, actor: .user, doc: docID, summary: "Confirmed \(doc.filename)")
         }
-        try await services.history.record(.markedCorrect, actor: .user, doc: docID, summary: "Confirmed \(doc.filename)")
     }
 
     /// Reads the document again with the model, as after changing models, from the text read of it before, and files it
@@ -116,20 +153,25 @@ public struct ReviewActions: Sendable {
         try await services.history.record(.needsReview, actor: .user, doc: docID, summary: "Left for later")
     }
 
-    /// Moves a filed document back to Incoming, held, so it is not filed again automatically. Incoming may be on
-    /// another volume than the archive; the move is then a copy checked against the document's hash before the
-    /// archive's file goes to the Trash (`FileOperations`), never a delete, and a file the Trash will not take stays
-    /// where it is, undone in nothing.
+    /// Moves a document in the archive back to Incoming, held, so it is not filed again automatically. Only a document
+    /// kept in the archive as itself (`DocumentStatus.inArchive`, its file in the archive) is undone: one already undone,
+    /// or left in Incoming, is refused (`IngestError.notInArchive`) and its file left as it is. Incoming may be on another
+    /// volume than the archive; the move is then a copy checked against the document's hash before the archive's file
+    /// goes to the Trash (`FileOperations`), never a delete, and a file the Trash will not take stays where it is, undone
+    /// in nothing. History records where the file was and went as the disk spells both (`URL.spelledOnDisk`), the one
+    /// form a path in Incoming is recorded in.
     public func undo(_ docID: Int64) async throws {
         var doc = try await document(docID)
+        guard DocumentStatus.inArchive.contains(doc.status), services.isInArchive(doc) else { throw IngestError.notInArchive(docID, .undo) }
         let settings = await services.settings.current
         guard FileManager.default.fileExists(atPath: doc.path) else { throw IngestError.sourceMissing(doc.path) }
-        let from = doc.path
+        let from = doc.url.spelledOnDisk.path
         let placer = services.filer.placer
         // Spelled as the watcher and `enqueue` spell a path in Incoming, so a rescan finds the undone document there.
         let incoming = settings.incomingURL.folderOnDisk
         let (destination, collision) = try placer.builder.uniqueDestination(directory: incoming, filename: doc.originalFilename)
-        await services.filer.registry.expect([from, destination.path])
+        // The archive's watcher names what changes in it under the archive as the runtime names it, as `doc.path` does.
+        await services.filer.registry.expect([doc.path, destination.path])
         _ = try placer.operations.move(doc.url, to: destination, within: incoming, collision: collision, expectedSHA256: doc.sha256,
                                        fingerprint: nil)
         // What the file is in Incoming, which a copy to another volume changes, so a rescan knows it for this document.
@@ -149,8 +191,10 @@ public struct ReviewActions: Sendable {
     /// applied to the labels the document has when the change is made (`LabelEdit.applied(to:)`), read and written in
     /// one transaction with the event that records them, so changes made one after another, such as two labels taken off
     /// a card, each keep what the other did. A label of another kind than a tag labels a document not labelled yet; a
-    /// tag, the user's own, does not (`DocumentLabel.stored`).
+    /// tag, the user's own, does not (`DocumentLabel.stored`). A label added that is no label of its kind
+    /// (`LabelError.refusal(of:)`) is refused, saying what the kind takes, before anything changes.
     public func edit(_ docID: Int64, fileName: String?, labels: LabelEdit?) async throws {
+        if let refused = labels?.adding.lazy.compactMap(LabelError.refusal(of:)).first { throw refused }
         let placer = services.filer.placer
         var doc = try await document(docID)
         let target = try fileName.map { name in

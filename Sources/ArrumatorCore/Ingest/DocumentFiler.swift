@@ -94,13 +94,25 @@ public struct DocumentFiler: Sendable {
             try d.update(db)
             let kind = event ?? (status == .needsReview ? .needsReview : .filed)
             try HistoryStore.insert(db, kind, at: now, actor: actor, doc: docID, trace: trace.traceID,
-                                    summary: "\(document.originalFilename) → \(filedName)",
+                                    summary: Self.summary(named: document.filename, filedAs: filedName, problems: analysis.problems),
                                     payload: FiledPayload(from: document.path, to: finalPath, problems: analysis.problems))
             try keeping?.recording(db, d)
             return d
         }
         try await index.updateFilename(docID: docID, filename: filedName)
         return updated
+    }
+}
+
+extension DocumentFiler {
+    /// What History says of a filing: the name the file had when it was filed, as a document read again in the archive
+    /// has its own, never the one it arrived under, and the name it was given, when that is another; that it kept its
+    /// name, when it did; and why it waits for the user, when it does. Where it went is the event's payload
+    /// (`FiledPayload`).
+    static func summary(named name: String, filedAs filedName: String, problems: [String]) -> String {
+        let waits = problems.isEmpty ? nil : "waits for you: " + DocumentAnalysis.said(problems)
+        guard name != filedName else { return "\(filedName) " + (waits ?? "keeps its name") }
+        return (["\(name) → \(filedName)"] + [waits].compactMap { $0 }).joined(separator: "; ")
     }
 }
 

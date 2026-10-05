@@ -22,7 +22,8 @@ public enum DocumentType: String, Sendable, Codable, CaseIterable {
 /// How the local model read a document, besides the labels it gave it: the name its file is to have, which model
 /// read it, and why it waits for the user, if it does. Stored with the document and its trace.
 public struct DocumentAnalysis: Sendable, Codable, Hashable {
-    /// The file name the model chose, without extension; nil when it gave none, and the file keeps its own.
+    /// The file name the reading gave, without extension, made of the labels kept and the model's title
+    /// (`FilenameBuilder.made`), or the name the user gave; nil when there is none, and the file keeps its own.
     public var fileName: String?
     /// The model that answered; nil when none did.
     public var model: String?
@@ -41,24 +42,65 @@ public struct DocumentAnalysis: Sendable, Codable, Hashable {
         public static let encrypted = "encrypted"
         public static let corrupted = "corrupted"
         public static let noText = "no text could be read"
+        /// A kind of file no extractor reads (`WarningCode.unsupportedFormat`), whose name alone is known: no blank scan,
+        /// which reading again cannot change.
+        public static let unreadableFormat = "a kind of file Arrumator cannot read"
+    }
+
+    /// Why a document read from `content` waits for the user, in the order the card lists them: the model gave no valid
+    /// answer (`answered` false), the file is encrypted or damaged, and nothing was read of it, either as it is of a kind
+    /// no extractor reads or as it holds no text and no image description, such as a blank scan. Empty when it does not
+    /// wait. Decided here, for every reader of documents alike.
+    public static func problems(answered: Bool, content: ExtractedContent) -> [String] {
+        var problems: [String] = []
+        if !answered { problems.append(Problem.noAnswer) }
+        if content.hasWarning(.encrypted) { problems.append(Problem.encrypted) }
+        if content.hasWarning(.corrupted) { problems.append(Problem.corrupted) }
+        if content.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && content.visual == nil {
+            problems.append(content.hasWarning(.unsupportedFormat) ? Problem.unreadableFormat : Problem.noText)
+        }
+        return problems
+    }
+
+    /// `problems` as a person reads them, joined: an encrypted or damaged file said so, the others as they are. `problems`
+    /// keeps each as the identifier the app tells them apart by (`Problem`), so what is stored never changes with the words.
+    public static func said(_ problems: [String]) -> String {
+        problems.map { problem in
+            switch problem {
+            case Problem.encrypted: "the file is encrypted"
+            case Problem.corrupted: "the file is damaged"
+            default: problem
+            }
+        }.joined(separator: "; ")
     }
 
     /// The document had no text to give the model, which saw only its name and format.
     public var hadNoText: Bool { problems.contains(Problem.noText) }
+
+    /// The document is of a kind of file Arrumator cannot read, so the model saw only its name.
+    public var isUnreadableFormat: Bool { problems.contains(Problem.unreadableFormat) }
 }
 
-/// Output of the analysis stage: the analysis, the labels (nil without a valid answer), and the document's embedding
-/// for search by meaning.
+/// Output of the analysis stage: the analysis, the labels (nil without a valid answer), the title the model gave, and
+/// the document's embedding for search by meaning.
 public struct AnalysisOutcome: Sendable, Codable {
     public var analysis: DocumentAnalysis
     public var labels: [DocumentLabel]?
+    /// The title the model gave a document that does not wait for the user, which the file name is made of once the
+    /// user's rules have kept its labels (`PipelineServices.read`). Never stored: the job carries the name made of it.
+    public var title: String?
     public var embedding: [Float]?
     public var embeddingModel: String?
 
-    public init(analysis: DocumentAnalysis, labels: [DocumentLabel]?, embedding: [Float]? = nil, embeddingModel: String? = nil) {
+    public init(analysis: DocumentAnalysis, labels: [DocumentLabel]?, title: String? = nil, embedding: [Float]? = nil,
+                embeddingModel: String? = nil) {
         self.analysis = analysis
         self.labels = labels
+        self.title = title
         self.embedding = embedding
         self.embeddingModel = embeddingModel
     }
+
+    /// What a job's payload holds of it: the title is not, as the name made of it is in `analysis`.
+    private enum CodingKeys: String, CodingKey { case analysis, labels, embedding, embeddingModel }
 }

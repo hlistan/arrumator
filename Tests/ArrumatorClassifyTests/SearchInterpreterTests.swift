@@ -9,7 +9,7 @@ import Testing
 @Suite struct SearchInterpreterTests {
     static func validator() throws -> SearchPlanValidator {
         let config = try PipelineConfig.bundledDefaults()
-        return SearchPlanValidator(tasks: config.tasks, labels: config.labels)
+        return SearchPlanValidator(tasks: config.tasks, labels: config.labels, languages: LanguageDetector(config: config.extraction))
     }
 
     static let request = "EDP electricity invoices from 2025, by sender and year"
@@ -18,6 +18,9 @@ import Testing
     static func asked(_ value: String, _ askedAs: String) -> JSONValue {
         .object(["value": .string(value), "asked_as": .string(askedAs)])
     }
+
+    /// An arrangement by each of `kinds`, as the model gives it, each with words of `request` that ask for it.
+    static func grouped(_ kinds: (String, String)...) -> JSONValue { .array(kinds.map { asked($0.0, $0.1) }) }
 
     /// The answer to `request`: EDP's electricity invoices of 2025, by sender and year. `overrides` replaces a list,
     /// `omitting` leaves one out.
@@ -29,7 +32,7 @@ import Testing
         fields["topics"] = .array([asked("Electricity", "electricity")])
         fields["dates"] = .array([asked("2025", "2025")])
         fields["words"] = .array([])
-        fields["group_by"] = .array([.string("sender"), .string("date")])
+        fields["group_by"] = grouped(("sender", "by sender"), ("date", "year"))
         fields["title"] = .string("EDP invoices 2025")
         for (key, value) in overrides { fields[key] = value }
         if let omitting { fields[omitting] = nil }
@@ -60,7 +63,7 @@ import Testing
         #expect(checked.plan == Self.edp2025 && checked.notes.isEmpty, "a list of tags in the answer is not read")
         #expect(throws: AnswerValidationError.invalid(["group_by: “tag” is no kind of label"]),
                 "nor an arrangement by tags, which the schema does not offer; the user arranges a set by them") {
-            try Self.validator().validate(Self.answer(["group_by": Self.strings("tag")]), request: request)
+            try Self.validator().validate(Self.answer(["group_by": Self.grouped(("tag", "by sender"))]), request: request)
         }
     }
 
@@ -70,7 +73,7 @@ import Testing
             "senders": .array([]), "types": .array([Self.asked("invoice", "FACTURAS")]),
             "topics": .array([Self.asked("electricity", "luz")]),
             "dates": .array([Self.asked("2026-08", "agosto de 2026"), Self.asked("2026-09", "septiembre 2026")]),
-            "jurisdictions": .array([Self.asked("Spain", "facturas de la luz"), Self.asked("Portugal", "")]),
+            "jurisdictions": .array([Self.asked("Spain", "la luz"), Self.asked("Portugal", "")]),
             "languages": .array([Self.asked("es", "Spanish")]),
             "words": Self.strings("luz", "contador"),
         ]), request: request)
@@ -126,12 +129,12 @@ import Testing
                              Self.asked("last year", "last year")]),
             "deadlines": .array([Self.asked("2026", "due in 2026")]), "senders": .array([]), "topics": .array([]),
             "languages": .array([Self.asked("Portuguese", "Portuguese"), Self.asked("Klingonese", "in")]),
-            "amounts": .array([Self.asked("EUR 54.21", "54.21 euros")]),
+            "amounts": .array([Self.asked("EUR 54.21", "54.21 euros"), Self.asked("54,21", "54.21"), Self.asked("5 %", "54.21")]),
         ]), request: request)
         #expect(checked.plan.labels.values(.date) == ["2025-03", "2025-04-01/2025-06-30"], "a month, or a span of days written day first")
         #expect(checked.plan.labels.values(.deadline) == ["2026"], "a deadline in a year")
-        #expect(checked.plan.labels.values(.language) == ["pt"] && checked.plan.labels.values(.amount) == ["54.21 EUR"],
-                "a language by its code, an amount as the archive writes it")
+        #expect(checked.plan.labels.values(.language) == ["pt"] && checked.plan.labels.values(.amount) == ["54.21 EUR", "54.21"],
+                "a language by its code, an amount as the archive writes it, or its number alone in any currency, never a percentage")
         #expect(checked.notes.contains("dates: “last year” is no date, dropped") && checked.notes.contains("languages: “Klingonese” is no language, dropped"),
                 "what is no label of its kind is dropped and noted for the trace: \(checked.notes)")
     }
@@ -144,9 +147,9 @@ import Testing
             "senders": .array(many.map { Self.asked($0, $0) } + [Self.asked("sender 1", "Sender 1")]),
             "types": .array([Self.asked("letter", "letters")]), "topics": .array([]), "dates": .array([]),
             "words": Self.strings("meter", "METER", "", "—", "reading", "contador", "leitura", "kwh"),
-            "group_by": Self.strings("sender", "date", "sender", "topic", "type"),
+            "group_by": Self.grouped(("sender", ""), ("date", ""), ("sender", ""), ("topic", ""), ("type", "")),
             "title": .string(String(repeating: "Letters ", count: 20)),
-        ]), request: request)
+        ]), request: request, sentBack: Self.toldOfItsTitle())
         #expect(checked.plan.labels.values(.sender) == Array(many.prefix(config.maxValuesPerKind)), "a kind keeps its first few, each once")
         #expect(checked.plan.words == Array(["meter", "reading", "contador", "leitura", "kwh"].prefix(config.maxWords)),
                 "words once each, however cased, and only those with something to look for")
@@ -161,7 +164,7 @@ import Testing
             try validator.validate(Self.answer(omitting: "group_by"), request: Self.request)
         }
         #expect(throws: AnswerValidationError.invalid(["group_by: “colour” is no kind of label"]), "an arrangement by what is no kind") {
-            try validator.validate(Self.answer(["group_by": Self.strings("colour")]), request: Self.request)
+            try validator.validate(Self.answer(["group_by": Self.grouped(("colour", "by sender"))]), request: Self.request)
         }
         let unfounded = try Self.answer(["senders": .array([Self.asked("MEO", "phone")]), "types": .array([]), "topics": .array([]),
                                      "dates": .array([Self.asked("someday", "someday")])])
@@ -185,7 +188,7 @@ import Testing
         func interpret(_ prompt: String, effort: TaskEffort = .medium, profile: ModelProfile? = nil,
                        vocabulary: [LabelKind: [LabelUsage]] = [:], config: PipelineConfig? = nil) async throws -> SearchInterpretation {
             let profile = if let profile { profile } else { try await env.settings.current.modelProfile() }
-            return try await interpreter.interpret(prompt, effort: effort, profile: profile, vocabulary: vocabulary, today: Self.today,
+            return try await interpreter.interpret(prompt, question: nil, effort: effort, profile: profile, vocabulary: vocabulary, today: Self.today,
                                                    config: config ?? env.config, trace: TraceContext(traceID: 1, sink: sink))
         }
 
@@ -230,7 +233,7 @@ import Testing
         #expect(read.plan == Self.edp2025 && read.model == Self.chat && read.problem == nil, "the answer is the plan")
         let request = try #require(await w.mock.chatRequests.first)
         let text = request.allText
-        #expect(text.contains("- senders: EDP Comercial; MEO"), "the archive's senders are listed, the most used first")
+        #expect(text.contains(#"- senders: "EDP Comercial", "MEO""#), "the archive's senders are listed, each as one, the most used first")
         #expect(!text.contains("invoice FT 2026/1"), "a kind the effort's promptLabels does not list is not shown: references are each document's own")
         #expect(text.contains("## TODAY\n2026-07-05") && text.contains("## REQUEST\n" + Self.request),
                 "with today's date and the request as written")
@@ -261,6 +264,30 @@ import Testing
         let read = try await never.interpret("EDP invoices")
         #expect(read.plan == nil && read.problem?.hasPrefix("the model gave no valid answer") == true,
                 "without a valid answer there is no plan, and the task will say why rather than fail on an error")
+    }
+
+    /// Alternatives given as words go back to the model naming them, and the repaired answer is the plan; the trace keeps
+    /// both answers and why the first went back (review of 2026-10-04, finding 11).
+    @Test func alternativesGivenAsWordsAreSentBackAndTheTraceSaysWhy() async throws {
+        let request = "bills for electricity, water, insurance or rent"
+        @Sendable func topics(_ values: String...) -> JSONValue { .array(values.map { Self.asked($0, $0) }) }
+        let w = try await world { asked in
+            try Self.answer(asked.messages.count > 2
+                ? ["senders": .array([]), "dates": .array([]), "types": .array([Self.asked("invoice", "bills")]),
+                   "topics": topics("electricity", "water", "insurance", "rent"), "group_by": .array([])]
+                : ["senders": .array([]), "dates": .array([]), "types": .array([Self.asked("invoice", "bills")]),
+                   "topics": topics("electricity", "water", "rent"), "words": Self.strings("insurance"), "group_by": .array([])])
+        }
+        defer { w.env.cleanup() }
+        let read = try await w.interpret(request)
+        #expect(read.plan?.labels.values(.topic) == ["electricity", "water", "insurance", "rent"] && read.plan?.words == [],
+                "the repaired answer asks for insurance as one more topic")
+        #expect(await w.mock.chatRequests.last?.messages.last?.content.contains("“insurance” sit among the topics") == true,
+                "the repair names the word and what to give it as")
+        let step = try #require(await w.sink.steps.first { $0.stage == .interpret })
+        let calls = try step.exchange()
+        #expect(step.status == .warn && calls.count == 2 && calls[0].error?.contains("“insurance”") == true && calls[1].error == nil,
+                "the trace has both answers, and why the first went back")
     }
 
     // MARK: Effort and profile
@@ -388,7 +415,7 @@ import Testing
             let limit = try #require(efforts[effort]?.promptLabels[.sender])
             let shown = try #require(await w.mock.chatRequests.first?.messages.last?.content
                 .split(separator: "\n").first { $0.hasPrefix("- senders: ") }, "the request tells the model the archive's senders")
-            #expect(shown == "- senders: " + senders.prefix(limit).joined(separator: "; "),
+            #expect(shown == "- senders: " + senders.prefix(limit).map { "\"\($0)\"" }.joined(separator: ", "),
                     "\(effort): the \(limit) most used senders, no more")
         }
     }
