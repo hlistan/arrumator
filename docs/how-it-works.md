@@ -78,7 +78,8 @@ app-managed file.
 Nothing in reading a document is tied to a language. The extractor tells the language of the text among all that
 Apple's NaturalLanguage knows. Its dates are found with month names in every language the system has a calendar for,
 in each form it writes them (`15 мая 2024`, `3. März 2025`, `2025年3月5日`), and in numeric forms from day first to
-year first, in the digits of any script (`٢٠/٠٥/٢٠٢٦`), each end of a range such as `01/03/2024-31/03/2024` too. Every
+year first, in the digits of any script (`٢٠/٠٥/٢٠٢٦`), each end of a range such as `01/03/2024-31/03/2024` too, and
+day first with spaces, as an identity card prints it (`01 02 2025`). Every
 date is a day of the Gregorian calendar, as ISO dates are, whatever calendar the Mac is set to (Buddhist, Japanese,
 Persian). A file's own dates, which have no zone, are the day they were in the Mac's time zone; a PDF's creation date,
 a recording's capture date and an e-mail's Date header are the day they write, in the zone they are written in, which
@@ -106,21 +107,35 @@ is, and it reads with a context of `analysis.numCtx` tokens, the one images are 
 does both stays loaded once. It is
 given the document's text (an excerpt of `analysis.excerptChars` characters) and the dates and identifiers the
 extractor found, after what the archive's labels say ([below](#keeping-labels-one-vocabulary)), and it answers in a
-fixed schema: one list of signals for each kind of label, then the file name.
-Under constrained decoding the model writes the lists in the schema's order, so the facts a file name is made of come
-first (the sender, the type, the date) and the name last, built from them as `YYYY-MM-DD Sender - Description`, in the
-document's language.
+fixed schema: one list of signals for each kind of label, then the document's title, what it is, in the document's
+language. Under constrained decoding the model writes the lists in the schema's order, the facts first and the title
+last. The prompt asks for labels only of what the document's own text states: never a sender, a party, a date or an
+amount taken from the archive's labels, the file's name or what the model knows of the world, and never a date it
+would have to complete, such as a day and a month without a year; the sender of a contract or a lease is the party that
+issues it, the landlord, the seller or the employer, whom it names. The prompt shows each kind by values in its form
+(`54.21 EUR`, `2026-06`), never by a pattern the model would copy, and the title by examples in several languages, as
+the title is in the language of the document's own text.
 
 The answer is untrusted input. It is decoded into typed values and checked, each label as described below; an answer
 that cannot be read, or leaves a list out, goes back to the model with what was wrong (`analysis.repairAttempts` times),
 and one cut off at its length limit (`analysis.llmOptions.numPredict` tokens) goes back saying so. No other model is
-asked after it: a document it never answers validly waits for you ([below](#documents-that-wait-for-you)). The file name
-goes through the same cleaning every file name does: no path separators or other characters `naming.forbiddenCharacters`
-lists (one between words, as in "Fatura: julho", becomes " - ", one inside a word or number a "-"), no invisible
-characters but the joiners some scripts and emoji are written with, bounded length, and, when Settings says so,
-transliterated. A name cleaning leaves nothing of, as one of dots and dashes, is no name, and nor is one of the app's
-own files or one Incoming never takes in (a record file's `_….md`, a lock file's `~$…`): the document then keeps the
-name it has, the one it arrived with, or, read again in the archive, the one it has there.
+asked after it: a document it never answers validly waits for you ([below](#documents-that-wait-for-you)).
+
+The app, not the model, makes the file name, of the labels it kept and the title: `YYYY-MM-DD Sender - Title`, as
+`2026-07-05 EDP Comercial - Fatura eletricidade julho` (the parts and their order are `naming.parts`, and what follows
+each `naming.separators`). The date is the document's `date` label, the day it was issued, never a period or a
+deadline, and the sender its first `sender` label, both as your rules keep them
+([below](#keeping-labels-one-vocabulary)): after "merge EDP Comercial into EDP" the bill is named `2026-07-05 EDP -
+Fatura eletricidade julho`, and a sender you do not want names nothing. What a document lacks is left out with
+what separates it: `2025-08-20 Contrat de location` without a sender, `EDP Comercial - Fatura` without a date, the title
+alone without either. A title that begins with the date or the sender, as a whole name would, does not repeat them. A
+document with neither a sender nor a title keeps its own name. The file name goes through the same cleaning every file
+name does: no path separators or other characters `naming.forbiddenCharacters` lists (one between words, as in "Fatura:
+julho", becomes " - ", one inside a word or number a "-"), no invisible characters but the joiners some scripts and
+emoji are written with, bounded length, and, when Settings says so, transliterated. A name cleaning leaves nothing
+of, as one of dots and dashes, is no name, and nor is one of the app's own files or one Incoming never takes in (a
+record file's `_….md`, a lock file's `~$…`): the document then keeps the name it has, the one it arrived with, or, read
+again in the archive, the one it has there.
 
 ## Labels
 
@@ -129,16 +144,16 @@ becomes a label of one of the first twelve of these kinds. The last, `tag`, is y
 
 | Kind | What it holds | Value |
 |---|---|---|
-| `sender` | Who issued or sent the document: the company, authority, institution or person on its letterhead or signature. | As the document writes it. |
-| `party` | Another person or organisation it concerns: whom it is addressed to, whose it is, whom it is about. | As the document writes it, without titles. |
+| `sender` | Who issued or sent the document: the company, authority, institution or person on its letterhead or signature. | As the document writes it: a name, with a letter in it. |
+| `party` | Another person or organisation it concerns: whom it is addressed to, whose it is, whom it is about. | As the document writes it, without titles: a name, never a number alone. |
 | `type` | The form of the document. At most one. | One of invoice, receipt, statement, contract, tax-return, tax-assessment, payslip, certificate, attestation, id-document, letter, application, policy, medical-report, prescription, ticket, license, manual, quote, legal. A document none fits has none. |
 | `topic` | A subject area it belongs to, from broad to specific: utilities, electricity; taxes, income tax. | One to three lowercase English words. |
-| `object` | A specific thing it concerns, with what identifies it: an apartment and its address, a car and its plate, a supply point, an account, a policy. | A short English noun phrase and the identifier as written. |
-| `reference` | A number that identifies the document or the matter it belongs to: an invoice, contract, case, customer or order number. | What it is and the number: `invoice FT 2026/926804564`. |
+| `object` | A specific thing it concerns, with what identifies it: an apartment and its address, a car and its plate, a supply point, an account, a policy. Never a fact about a person, such as a birth date or a job title. | A short English noun phrase and the identifier as written: `car AA-12-BB`, `savings account 0012345678`. |
+| `reference` | A number that identifies the document or the matter it belongs to: an invoice, contract, case, customer or order number. Never a year or a period. | What it is and the number: `invoice FT 2026/926804564`. |
 | `date` | When it was issued. At most one. | `YYYY-MM-DD`. |
 | `period` | The period it covers: a billing month, a tax year, a statement period, a policy term. | `YYYY`, `YYYY-MM` or a day, or two of them as `start/end`. |
 | `deadline` | A date by which something must be done, or on which something ends: payment due, expiry, renewal, an appointment. | `YYYY-MM-DD`. |
-| `amount` | A total it asks for or records: the total due or paid, a net salary, a premium. | A number and an ISO 4217 currency: `54.21 EUR`. |
+| `amount` | A total of money it asks for or records: the total due or paid, a net salary, a premium. Never a percentage. | A number and an ISO 4217 currency: `54.21 EUR`. |
 | `jurisdiction` | A country, region or city whose law, authority or administration it falls under: where a tax is due, a contract is governed, an ID was issued. | In English: `Portugal`. |
 | `language` | A language it is written in, the main one first. | An ISO 639-1 code: `pt`. |
 | `tag` | Your own label: the name of the folder in Incoming it was put in ([below](#folders-in-incoming-and-tags)), or one you give it. Never the model's. | As you write it, case and all: `Taxes 2024`. |
@@ -150,10 +165,50 @@ the tags of a personal collection are ([sources](organizing-principles-sources.m
 
 Every label is kept on one line, cut to `labels.maxValueChars` after the last whole word, and kept once however it is
 written. Each kind keeps its first `labels.maxPerKind` labels, the most significant first; a document has at most one
-type and one date. A value that is no label of its kind is dropped rather than sent back: a date or deadline that is no
-calendar day (day-first dates such as `31.07.2026` become ISO), a period of another shape, an amount or a reference
-without a number, a language that is none (one written `pt`, `por` or `Portuguese` becomes `pt`). An amount written
-with its currency code first or after a colon (`EUR 54.21`, `54.21: EUR`) becomes `54.21 EUR`. Topics are lowercase.
+type and one date. The model gives one label per entry: an entry holding a semicolon, as `banking; account statement`
+does, is the labels it separates, so no label of a kind the model gives holds one, yours included; only a tag may. One
+an older version kept joined is the labels it holds once the index is opened, or rebuilt from a record file that holds
+it. A value that is no label of its kind is dropped rather than sent back, and the document's trace says so: a date or
+deadline that is no calendar day (day-first dates such as `31.07.2026` become ISO), a period of another shape, a
+reference without a number, a sender, party, topic, object or jurisdiction without a letter (a tax number given as a
+party), a language that is none (one written `pt`, `por` or `Portuguese` becomes `pt`), and an amount that is not a
+number and its currency: a percentage, a currency left out, or one written by a symbol several currencies share, such as
+`$` or `£`. An amount becomes a number with a dot for decimals, no grouping, and its ISO 4217 code, however it was
+written: `EUR 54.21`, `54.21: EUR` and `54,21 €` are `54.21 EUR`, `1.234,56 €` and `1 234,56 €` are `1234.56 EUR` (of a
+dot and a comma, the last is the decimal point, and either alone, once, is one); a symbol only one currency is written
+with, as `€` or `₽`, is that currency's code. An object or a reference written as a field and its value, `invoice: FT
+1`, becomes what it is and what identifies it, `invoice FT 1`. Topics are lowercase. A sender or a party is a name the
+document itself writes, in its text, its e-mail's sender and subject, or what was seen in it: each of the name's words
+of `labels.groundingLetters` letters or more (all of them, when it has none that long) is a word of the document or
+inside one, as a name declined or written without spaces is, so "EDP Comercial" is not written by "Banco Comercial
+Português". Words are told apart as NaturalLanguage tells them, in any script, and never joined across the spaces
+between them, so "EDP" is not found in "Estimated payment". A name of several words is also written by its initials in
+capitals as a word of their own, `СФР` for "Социальный фонд России" or `HMPO` for "HM Passport Office"; initials
+shorter than `labels.groundingLetters`, as so many words and legal forms in capitals are, only where they begin a line,
+as a letterhead writes `AT` for "Autoridade Tributária", never `SA` after "EDP Comercial" for "Sónia Almeida". A name
+not written so is dropped, unless it is how one of your merges, however old, asks a name the document writes to be
+written ([below](#keeping-labels-one-vocabulary)). The words are compared however they are cased (the Turkish `I`, `İ`
+and `ı` alike), accented or written in width (`ＮＴＴ` is `NTT`), and however the document spaces or breaks them: `E D P  C
+O M E R C I A L`, a soft hyphen or a word broken at the end of a line with a hyphen still write `EDP Comercial`. So a
+note that names no one is not given the archive's most used sender. This is a check of the answer, not of the prompt,
+which is unchanged (`analysis.promptVersion` stays).
+
+The title is made of the document's own words, in its own language, as the prompt asks, and that is checked the same
+way: when the document writes fewer than `analysis.titleGroundedShare` of the title's words of
+`labels.groundingLetters` letters or more (numbers and short words, which say nothing of a language, are not counted),
+as of a Portuguese title, "Fatura serviços cloud", for an English invoice, the answer goes back to the model once,
+naming the words the document does not write. An object is a thing the document identifies by a number, a plate, an
+address or a name, so an object with no word of `labels.objectIdentifierDigits` digits or more, nor a number standing
+alone beside a name as a house number after its street, as a job title ("job title Senior Software Engineer") or a
+product on a receipt ("milk 1L x6"), goes back with it, named, for the model to keep only what one of those identifies.
+So does a date given to a document that writes no date and not its year either, as a note: one in which the extractor
+found no date with its year, the vision model saw none, that is no e-mail, and that writes the year neither in four
+digits nor in two. Only that is checked, never which day, as a date written month first or in another calendar may be
+read as another. And a reading with no sender that names `analysis.partiesWithoutSender` parties or more, as a lease
+naming both its sides as parties, goes back asking who issued it. Each is told once in an exchange, when a repair tells
+the model of it; what the model gives then stands, whatever it is, and the trace says so. So does an answer whose only
+fault is such a guess when no repair is left, or none comes of it: a document is never failed for its title, its
+objects, its date or its sender.
 
 Labels are the document's. They sit in its entry in `_documents.md` and survive a rebuild, and each kind is a field of
 the search: `sender:edp`, `party:"maria silva"`, `type:invoice`, `object:AA-12-BB`, `reference:926804564`,
@@ -173,7 +228,11 @@ when it is read again: `arrumatorcli review retry <document>` for one, `arrumato
 
 Every label can be changed. On a document's card, a label is taken off with its ×, and one is added by choosing its kind
 and writing its value; from a terminal, `arrumatorcli labels <document> --add sender=EDP --remove topic=energy`, or
-`--add tag="Taxes 2024"`. Your labels are kept as the model's are: a date must be a date and a type one of the list. A
+`--add tag="Taxes 2024"`. Your labels are kept as the model's are: a date must be a date, a type one of the list, and
+an amount a number and its currency, so `12,50 €` is kept as `12.50 EUR`. One that is not, such as the type `fatura`
+or the date `2026-13-45`, is refused, saying what its kind takes, and nothing of that correction is made: the card says
+so under the field as you write, and keeps what you wrote to correct. A label an earlier reading gave in a form its kind
+no longer keeps, such as `5.00% GBP`, is still taken off, merged or removed everywhere as it is written. A
 label of a kind the model gives labels a document the model has not labelled, so `labels unlabelled` no longer reads it;
 a tag does not. A document keeps one type and one
 date: a new one replaces the old, on the card and from a terminal alike (`--add type=receipt`). A correction is made to
@@ -189,7 +248,8 @@ topic written two ways splits what belongs together. This is the synonymy proble
 labels one vocabulary in three ways, and learns from you as it goes.
 
 **The model is shown the archive's labels.** Every document is read with a section of the prompt
-(`archive-labels.md`) that lists the labels the archive already uses, the most used first, for the kinds
+(`archive-labels.md`) that lists the labels the archive already uses, each in quotes so a label holding a comma or a
+semicolon reads as one, the most used first, for the kinds
 `labels.vocabulary.kinds` names (`promptLimit` of each), how you asked labels to be written (your merges, the newest
 `labels.vocabulary.promptPreferred`) and the labels you do not want (the newest `labels.vocabulary.promptUnwanted`). The
 lists never decide what the model labels, only how: when the document's sender, a party, a topic or a jurisdiction is
@@ -303,13 +363,20 @@ their card:
 
 - the model gave no valid answer, even after being told what was wrong (the document has no labels but its tags);
 - the file is encrypted or damaged;
+- it is a kind of file Arrumator cannot read, as one of a format no extractor and no Quick Look preview reads, so the
+  model saw only its name: reading it again cannot change that, and its card says to save or export it as a PDF and put
+  that in Incoming, or to confirm it as it is;
 - no text could be read from it, and no image description either, as with a blank scan.
 
-A document that waits keeps its own name: what the model read of it is in doubt. Confirm one as it is
-(**Looks Right**), correct its name or labels, or have it read again. A file that keeps failing to be processed at all
-(`ingest.maxAttempts`) is parked in the archive the same way, with status failed, so Incoming stays clean and nothing
-is lost; one that cannot be moved into the archive either stays in Incoming, failed, saying why, and one that cannot be
-moved there because the archive's folder is not there waits for it to be.
+A document that waits keeps its own name: what the model read of it is in doubt. Its trace says why it waits, in a step
+of its own marked as a warning (`review`), and History says so with its reading: one of which nothing could be read is
+never said to have had nothing worth a label, and one that stays where it is is said to wait there, never to have moved.
+Confirm one as it is (**Looks Right**), correct its name or labels, or have it read again. Confirming a filed document
+that is already confirmed, with nothing read, corrected, renamed or moved since (in the app or in Finder), changes
+nothing and records nothing again. A file that keeps failing to be processed at all (`ingest.maxAttempts`) is parked in
+the archive the same way, with status failed, so Incoming stays clean and nothing is lost; one that cannot be moved into
+the archive either stays in Incoming, failed, saying why, and one that cannot be moved there because the archive's
+folder is not there waits for it to be.
 
 While Ollama cannot be reached a document waits where it stopped, an image whose text is too sparse to tell what it
 is included, which is described when Ollama is back rather than filed without its description; a document whose model
@@ -342,7 +409,8 @@ that document to be read again. This is how you have documents read with another
   it, once the Trash takes it, hands it over as any copy: it becomes no second document.
 - **History records it once, under the document**: `bill.pdf is a copy of 2026-07-05 EDP Comercial - Fatura.pdf, which
   is read again; the copy is in the Trash; tagged “Taxes 2024” by its folder in Incoming`, with where the copy was and
-  went. The trace of the copy's arrival (`hash`, `dedupe` with the document it copies, `tag`) is the event's; the
+  went. The reading that follows is recorded as any: renamed from the name the document has, never the one it arrived
+  under. The trace of the copy's arrival (`hash`, `dedupe` with the document it copies, `tag`) is the event's; the
   reading that follows is the document's own.
 
 A file whose bytes the archive no longer holds, because the document's file was changed or removed since it was filed,
@@ -360,14 +428,15 @@ keeps the identifier, and is a document of its own, as is a file another archive
 at the same time, as the original keeps what tells a file on disk apart, its inode, and a copy has its own. A file you
 put into the archive yourself, at the top or in a folder of yours, is read and labelled where it is, under its own name,
 once it has stopped changing (`watcher.stabilityPollInterval`, `watcher.stabilityRequiredPolls`), as Incoming waits for
-one; it is given an identifier of its own. One that has not stopped changing after `watcher.stabilityMaxWaitSeconds`,
-such as a file copied slowly or a library an app keeps open, is said once in History to be taking long, is looked at
-every `watcher.awayPollSeconds` from then on, and is taken once it stops, also after the app was stopped and started
-again meanwhile; so is one in Incoming, but for a stop, after which it is taken at its next change. A folder you rename,
-or move or copy into the archive, is looked through, and a package, a folder macOS shows as one document (an `.rtfd`, a
-Pages document), is one
-document. A file removed from the archive, or in a folder removed, is marked missing; put back, anywhere in the archive,
-it is as it was, waiting for you or left for later if it was. Nothing you do in Finder is undone by the app.
+one; it is given an identifier of its own. A folder of yours renamed or moved in the archive moves the documents in it,
+and History records each one's move, as it records a document you moved on its own. One that has not stopped changing
+after `watcher.stabilityMaxWaitSeconds`, such as a file copied slowly or a library an app keeps open, is said once in
+History to be taking long, is looked at every `watcher.awayPollSeconds` from then on, and is taken once it stops, also
+after the app was stopped and started again meanwhile; so is one in Incoming, but for a stop, after which it is taken at
+its next change. A folder you rename, or move or copy into the archive, is looked through, and a package, a folder macOS
+shows as one document (an `.rtfd`, a Pages document), is one document. A file removed from the archive, or in a folder
+removed, is marked missing; put back, anywhere in the archive, it is as it was, waiting for you or left for later if it
+was. Nothing you do in Finder is undone by the app.
 
 The app sees these changes as macOS reports them. A change it had not finished taking in when it quit, or crashed, is
 seen again at the next start, and so is one it could not take in, up to `ingest.maxAttempts` starts, after which it is
@@ -382,16 +451,18 @@ taken over it.
 
 Reading a document again (`review retry`, **Read Again**) labels and names it again where it is, from the text read of
 it before (from its file, when the file changed since it was read), keeping its tags; putting an exact copy of it into
-Incoming does the same, reading its text from its file again too ([exact copies](#exact-copies)). You win over a
-reading under way: a label you change while the model reads, of any kind, as a sender corrected or a tag given or taken
-away, stays as you left it, and the reading fills in only the kinds you did not touch. A reading that gives no name
-leaves it the name it has, and one that names it as it is named, but for case or the collision suffix
-(`naming.collisionFormat`) a taken name gave it, moves nothing. A document you undid is back in Incoming, held, and a
-rescan leaves it there while the file is that document; read again, it is filed at the top of the archive. Another file
-put in its place, as a scanner saving under the same name, is taken as a new arrival, and the one undone is missing. This
-is unlike a document left in Incoming as failed, whose file saved again is that document arriving again: a failed one
-is the app's attempt at the file there, which a new save of it takes up again, while one you undid or left for later is
-your decision about the file it was, which a file put in its place does not inherit, with its tags and its History.
+Incoming does the same, reading its text from its file again too ([exact copies](#exact-copies)). You win over a reading
+under way: a label you change while the model reads, of any kind, as a sender corrected or a tag given or taken away,
+stays as you left it, and the reading fills in only the kinds you did not touch. A reading that gives no name leaves it
+the name it has, and one that names it as it is named, but for case or the collision suffix (`naming.collisionFormat`) a
+taken name gave it, moves nothing. Only a document in the archive can be undone: one already undone, or left in
+Incoming, is refused, and its file keeps its name. A document you undid is back in Incoming, held, and a rescan leaves
+it there while the file is that document; read again, it is filed at the top of the archive. History records where its
+file was and went as the disk spells both paths. Another file put in its place, as a scanner saving under the same name,
+is taken as a new arrival, and the one undone is missing. This is unlike a document left in Incoming as failed, whose
+file saved again is that document arriving again: a failed one is the app's attempt at the file there, which a new save
+of it takes up again, while one you undid or left for later is your decision about the file it was, which a file put in
+its place does not inherit, with its tags and its History.
 
 ## Search tasks
 
@@ -402,21 +473,47 @@ task whose request was being read when you quit, or when a command reading it wa
 start, or once the app next looks), by the reading model of the task's profile, with a prompt of the app's own
 (`search-system.md`) and the task's effort ([below](#profile-and-effort)). The model is shown the labels the archive
 already uses of the kinds the effort's `promptLabels` names, the most used first, so it asks for them as the archive
-writes them, and today's date, so "last year" and "this month" mean something. The prompt must fit the model's context
+writes them, today's date, so "last year" and "this month" mean something, and the language your request is written in,
+as Apple's NaturalLanguage tells it when it is sure of one (`extraction.languageMinConfidence`; for a request of
+fewer than `extraction.languageShortTextWords` words, which looks like several languages, as "Seguro auto" does,
+`extraction.languageShortTextMinConfidence`), so the task is named in it; a name it is just as sure is in another
+language goes back to the model once, named, and stands when given again. The prompt must fit the model's context
 (`analysis.numCtx`) beside the answer's length, the effort's `numPredict`, as a longer one is not read whole: its length
 in tokens is estimated at `ollama.charsPerToken` characters a token, an estimate that fits text in Latin script and may
 not others. When it would not fit, the least used labels are left out first, and the trace says how many; it also keeps
-how many tokens Ollama counted the prompt took, and says when the context was full, as when the estimate was wrong. It
+how many tokens Ollama counted the prompt took. When Ollama counts it filling the context, as when the estimate was
+wrong for text in another script, it is fitted again at the characters a token Ollama's count shows it held and asked
+again, as often as `ollama.refitAttempts` says, and the trace says so, with every call; it says too when the context was
+still full. It
 answers in a fixed schema: the labels of each kind to look for, each with the words of the request that ask for it,
-words the text must contain for what no label says, the kinds to arrange what is found by, and a name for the task. The
+words the text must contain for what no label says, the kinds to arrange what is found by, each with the words that ask
+for that, and a name for the task. The
 answer is untrusted input, checked as a document's answer is: each label must be a label of its kind (a date, period or
-deadline may be a year, a month, a day or a span of them), at most `tasks.maxValuesPerKind` of a kind and
+deadline may be a year, a month, a day or a span of them, and an amount a number alone, `54.21`), at most
+`tasks.maxValuesPerKind` of a kind and
 `tasks.maxWords` words. Every kind a task asks for leaves documents out, so a label nobody asked for, such as the
 country all your documents are from, would silently hide what you wanted: a label is kept only when every word the model
-quotes for it is a word of your request, but not when every one of them is already quoted by a label of another kind, as
-"Portugal" in "invoices from Portugal" asks for a country, not for documents written in Portuguese; and a word only when
-it is in your request and no label already asks for it. What is dropped, and why, is in the task's trace. An answer that
-cannot be read, or is left asking for nothing at all, goes back to the model with what was wrong, as often as the
+quotes for it is a word of your request (words as NaturalLanguage tells them apart, so a request in Chinese or Thai,
+written without spaces, is read word by word too), but not when every one of them is already quoted by a label of another
+kind, as "Portugal" in "invoices from Portugal" asks for a country, not for documents written in Portuguese, nor, for a
+label of a kind the documents are arranged by, when they are only the words that ask to arrange them, as "по
+отправителю" ("by sender") arranges them by sender and asks for none, while "invoices" in "invoices by sender" still
+asks for invoices. A label whose words hold what labels of other kinds ask for, two things or more, as a sender quoted
+by "квитанции за электричество" holds the type's "квитанции" and the topic's "электричество", goes back to the model,
+named with what it holds, and is kept only when the model gives it again. A word is kept only when it is in your
+request, no label already asks for it and it is not just the words that ask to arrange the documents; a word inside
+those words that is not all of them, as "Lisbon" when the model quotes all of "contracts mentioning Lisbon by sender"
+as asking to arrange them, goes back to the model, named, and is kept when given as a word again. Each time a prompt
+is fitted again to the context, the model is asked afresh, so what was sent back before goes back again. A document
+needs one label of a kind but every word, so "insurance" in "bills for electricity, water,
+insurance or rent" is one more alternative, not a word every bill must hold: a word your request writes between the
+words two labels of one kind quote, or that carries their list on, within `tasks.alternativesGap` words of one of them
+or of another such word, goes back to the model, named, to be given as a label of that kind; given as a word again, it
+is kept, as the model's answer to being told. Where a label's words stand is told by those your request writes once, so
+"da" in "faturas da EDP e da Galp que falam da multa" places nothing, and "multa" is asked of every document. What is
+dropped, and why, is in the task's trace. An answer that
+cannot be read, gives an alternative as a word, a label whose words hold other labels', a word inside the words that
+arrange the documents, or is left asking for nothing at all, goes back to the model with what was wrong, as often as the
 effort's `repairAttempts` says; no other model is asked in its place. A request the model never answers validly fails
 the task, with the reason, and so does an answer that takes longer than the effort's `timeout`
 ([below](#profile-and-effort)). While Ollama cannot be reached, or does not answer in time and answers no probe either,
@@ -453,7 +550,10 @@ question too.
 **Exporting.** A task's set is copied into a new folder named after the task, in a folder you choose outside the
 archive and Incoming, with a folder for each group of the first kind it is arranged by, a folder inside it for each
 group of the next, and the documents at the bottom under their own names; or into a ZIP archive of that folder, whose
-names are written with composed accents ("João", not "Joa" and an accent), as other systems expect.
+names are written with composed accents ("João", not "Joa" and an accent) and marked as UTF-8 (the ZIP format's language
+encoding flag), so `unzip`, Python and Windows show "João" and "ФКП Росреестра" as Finder does, rather than reading them
+in an old DOS code page. The archive is packed elsewhere and put in your folder only once it is whole, so an export that
+fails, a disk full or a file that cannot be read, leaves nothing there.
 Documents are copied, never moved, and nothing already there is written over: a name that is taken gets the collision
 suffix (`naming.collisionFormat`). A folder is named after its label as a file name is cleaned, so a label can never
 place a file anywhere else, and the documents without a label of the level's kind go into `tasks.withoutLabelFolder`
@@ -492,40 +592,58 @@ read, while the text fits in `conversation.contextChars`; a document whose text 
 yet, is listed by its name, date and labels, at most `conversation.maxListed`. Once that many are listed, a document
 not read yet is passed over, and the first whose text is too long for the room left ends the choice; the answer is told
 how many more there are. The text of no more documents is read than are shown or listed, and one more, however large
-the set: which have a text is told without reading it. A set the context holds is shown whole. The
-answer is also shown the conversation so far, the latest questions and answers up to `conversation.historyChars`, the
-latest cut to fit when it alone is longer, and today's date. It is never shown your tags. A question is at most
+the set: which have a text is told without reading it. A set the context holds is shown whole. The answer is also shown
+how many documents the set holds, every one of them part of the question when it asks about "these" documents, the
+conversation so far, the latest questions and answers up to `conversation.historyChars`, the latest cut to fit when it
+alone is longer, today's date, and the language the question is written in, as a request's is told (above), which it
+answers in whatever language the conversation before was in. It is never shown your tags. A question is at most
 `conversation.maxQuestionChars` long. The whole prompt must fit the model's context (`conversation.numCtx`) beside the
 answer's length, the effort's `numPredict`, estimated as a request's is (above): when it would not, the exchanges
 before the latest are left out, then the last documents shown with their text are listed by name instead, then the
-latest exchange is left out, then the last names, and the trace says what was, with how many tokens the prompt took and
-whether the context was full; a question that would not fit even then fails, saying so. A repair, which sends back the
+latest exchange is left out, then the last names, and the trace says what was, with how many tokens the prompt took; a
+question that would not fit even then fails, saying so. A prompt Ollama counts filling the context is fitted again at
+what it counted and asked again, as a request's is (above), and the trace says so; an answer to one that still filled
+it says, beside it, that the model may not have read all it was shown. A repair, which sends back the
 answer that was not valid, sends back as much of it as fits, and the trace says how much was left out.
 
 **The answer** comes in a fixed schema: the answer, in Markdown, in the language of the question unless it asks for
-another, naming documents by their names, working out a total or a comparison the question asks for, and saying when
-documents disagree; the documents it draws on, by their numbers, which it is shown only for this; and, when you asked
-for more documents, a request for them, which it says it is looking for. It is untrusted input: a document it says it
-draws on is kept only when it is one it was shown, as a citation is checked against its sources, a number it writes in
-the answer for a document it was shown is given as that document's name, in an answer cut off too, unless Markdown makes
-it a link, a reference or code of its own, and an answer without words, or that cannot be read, goes back to the model
-with what was wrong, as often as the effort's `repairAttempts` says. It is shown as it is written: the card shows the
-answer as the model writes it, its paragraphs, headings, lists, quotes and code as such, a table as its rows of plain
-text with the columns aligned, **Thinking…** while a model that thinks has written nothing yet, that it waits for the
-model to begin while the model loads or reads documents first, and how long it has taken once that is more than a
-moment. Nothing in an answer can act: a link shows as its words followed by its address, and an image as its words, so a
-document that asks the model to end its answer with a link that would carry the document's data elsewhere gets nothing
-clickable. An answer cut off at its length limit, the effort's `numPredict`, is kept as far as it came, saying it was
-cut off: ask for less, or ask again at a lower effort, which thinks less and so leaves more of the limit to the answer.
-An answer that takes longer than the effort's `timeout` fails the question, keeping what came of it. While Ollama cannot
-be reached, or does not answer in time and answers no probe either, a question waits in the queue, as a document does,
-saying so and when it is tried again, the last of `ingest.retryDelays` later, rather than being asked again meanwhile,
-its one trace taken up again by each attempt; a server that answers with a failure or answers a probe but not the
-request in time, a reading model that is not installed, or a profile the settings no longer list, fails it with the
-reason. A question being answered when a command answering it was killed is answered again in its place.
+another, naming documents by their names, working out a total or a comparison the question asks for over every document
+of the set it is about, saying when documents disagree, and stating nothing the documents do not, such as that a
+contract complies with a law; the documents it draws on, by their numbers, which it is shown only for this; and, when
+you asked for more documents, a request for them, which it says it is looking for. It is untrusted input: a document it
+says it draws on is kept only when it is one it was shown, as a citation is checked against its sources, a number it
+writes in the answer for a document it was shown is given as that document's name, in an answer cut off too, unless
+Markdown makes it a link, a reference or code of its own, and an answer without words, one that only begins an answer,
+or one that cannot be read, goes back to the model with what was wrong, as often as the effort's `repairAttempts` says.
+Its request for more documents is read as a task's request is, and names a kind of document only when your questions
+do: a kind it names that neither this question nor an earlier one of the conversation writes, in any inflection, as
+attestations for "anything about the dentist", goes back to the model, named, and is kept when given again.
+An answer only begins one when its Markdown says so, in any language: nothing but headings and rules (a paragraph all in
+bold with a rule after it is a heading too), unless a heading carries a figure ("# 340 € in total"), or one paragraph or
+list item, alone or under headings, ending with a colon, announcing what never follows. An answer that gives something
+before a last line ending with a colon, as a document's field ("Assinatura:") or a total ("合计：") can end it, is an
+answer. It is shown as it is written: the card shows the answer as the model writes it, its paragraphs, headings,
+lists, quotes, code and rules as such, a table as its rows of plain text with the columns aligned, emphasis the model
+opened and never closed as its words without the asterisks (two or three that open emphasis and are not closed, never
+those of a masked number, "****1234" or "***1234", or a power, "2**10": a run before a digit always stays),
+**Thinking…** while a model that thinks has written nothing yet, that it waits for the model to begin while the model
+loads or reads documents first, and how long it has taken once
+that is more than a moment. Nothing in an answer can act: a link shows as its words followed by its address, and an
+image as its words, so a document that asks the model to end its answer with a link that would carry the document's data
+elsewhere gets nothing clickable. An answer cut off at its length limit, the effort's `numPredict`, is kept as far as it
+came, saying it was cut off: ask for less, or ask again at a lower effort, which thinks less and so leaves more of the
+limit to the answer. An answer that takes longer than the effort's `timeout` fails the question, keeping what came of
+it. While Ollama cannot be reached, or does not answer in time and answers no probe either, a question waits in the
+queue, as a document does, saying so and when it is tried again, the last of `ingest.retryDelays` later, on its card,
+its task's row and from a terminal, rather than being asked again meanwhile, by the answer or by what it is shown, which
+looks for the documents alike to the question in meaning, its one trace taken up again by each attempt; a server that
+answers with a failure or answers a probe but not the request in time, a reading model that is not installed, or a
+profile the settings no longer list, fails it with the reason. A question being answered when a command answering it was
+killed is answered again in its place.
 
 **Finding more.** Ask for documents beyond the set, such as "find the contract these invoices are billed under", and the
-answer writes a request for them in your words, with what the documents told it: a sender, a reference, a period. That
+answer writes a request for them in your words, with what the documents told it: a sender, a reference, a period, and a
+kind of document only when you named one. It looks only when you ask it to. That
 request is read as a task's request is, at the task's effort, and the documents it finds that are not in the set, nor
 taken out of it, are listed under the answer, the newest by their own date first, at most `conversation.maxSuggested`.
 Nothing joins the set unless you add it, one by one or with **Add All**, as an addition to the set; the next answer then

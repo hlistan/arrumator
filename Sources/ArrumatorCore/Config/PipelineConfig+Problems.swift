@@ -25,6 +25,10 @@ extension PipelineConfig {
             where numPredict >= analysis.numCtx {
             problems.append("analysis.\(key) leaves no room in analysis.numCtx")
         }
+        if analysis.titleGroundedShare <= 0 || analysis.titleGroundedShare > 1 {
+            problems.append("analysis.titleGroundedShare must be more than 0 and at most 1")
+        }
+        problems += Limits.atLeastOne("analysis", ["partiesWithoutSender": analysis.partiesWithoutSender])
         if analysis.excerptTailDivisor >= 2 {
             for (key, chars) in [("analysis.excerptChars", analysis.excerptChars), ("conversation.documentChars", conversation.documentChars)]
                 where !ExtractedContent.excerptHasHead(maxChars: chars, tailDivisor: analysis.excerptTailDivisor) {
@@ -137,9 +141,11 @@ extension EntityConfig {
 }
 
 extension LabelsConfig {
-    /// A label holds a character at least, and a likeness is a share of 0 to 1 that some labels fall below.
+    /// A label holds a character at least, a word grounds a name or title from two letters, and a likeness is a share of
+    /// 0 to 1 that some labels fall below.
     var problems: [String] {
-        var problems = Limits.atLeastOne("labels", ["maxValueChars": maxValueChars])
+        var problems = Limits.atLeastOne("labels", ["maxValueChars": maxValueChars, "objectIdentifierDigits": objectIdentifierDigits])
+        if groundingLetters < 2 { problems.append("labels.groundingLetters must be at least 2: a word of one letter says nothing on its own") }
         problems += Limits.atLeastOne("labels.vocabulary", ["suggestionLimit": vocabulary.suggestionLimit])
         problems += Limits.notNegative("labels.vocabulary", ["promptPreferred": vocabulary.promptPreferred,
                                                              "promptUnwanted": vocabulary.promptUnwanted], zero: "shows none")
@@ -157,11 +163,22 @@ extension LabelsConfig {
 
 extension NamingConfig {
     /// A name holds a character at least, and a name taken is told apart by a number in it, `%d`, and nothing else
-    /// `String(format:)` would read.
+    /// `String(format:)` would read. A reading's name is made of its title and, at most once each, its date and its
+    /// sender, each but the last followed by a separator that cleaning keeps (`FilenameBuilder.sanitize`).
     var problems: [String] {
         var problems = Limits.atLeastOne("naming", ["maxChars": maxChars, "maxBytes": maxBytes])
         if collisionFormat.components(separatedBy: "%").count != 2 || !collisionFormat.contains("%d") || collisionFormat.contains("/") {
             problems.append("naming.collisionFormat must hold %d once, no other %, and no /")
+        }
+        if parts.filter({ $0 == .title }).count != 1 || Set(parts).count != parts.count {
+            problems.append("naming.parts must list the title once, and the date and the sender at most once each")
+        }
+        if separators.count != max(parts.count - 1, 0) {
+            problems.append("naming.separators must give one separator for each part of naming.parts but the last")
+        }
+        let unnamed = ["/"] + forbiddenCharacters
+        if separators.contains(where: { $0.isEmpty || unnamed.contains(where: $0.contains) }) {
+            problems.append("naming.separators must each hold a character, and no / nor any of naming.forbiddenCharacters")
         }
         return problems
     }
@@ -203,12 +220,20 @@ extension StatsConfig {
 }
 
 extension InterfaceConfig {
-    /// A list shows something; a preview may show nothing.
+    /// The longest the interface waits, in seconds: a day, which no wait for macOS comes near, and which keeps a value read
+    /// from JSON within what a `Duration` holds.
+    static let longestWait: Double = 86_400
+
+    /// A list shows something; a preview may show nothing; macOS is given a while to answer, and no more than a day.
     var problems: [String] {
         Limits.atLeastOne("interface", ["recentlyProcessed": recentlyProcessed, "pageSize": pageSize,
                                         "sidebarLabelsPerKind": sidebarLabelsPerKind, "sidebarLabels": sidebarLabels,
                                         "menuBarRecent": menuBarRecent, "notificationEvents": notificationEvents])
             + Limits.notNegative("interface", ["extractPreviewChars": extractPreviewChars], zero: "prints none")
+            + Limits.moreThanZero("interface", ["notificationAskTimeout": notificationAskTimeout])
+            + (menuBarSettleSeconds < 0 ? ["interface.menuBarSettleSeconds cannot be negative: 0 says it at once"] : [])
+            + [("notificationAskTimeout", notificationAskTimeout), ("menuBarSettleSeconds", menuBarSettleSeconds)]
+            .filter { $0.1 > Self.longestWait }.map { "interface.\($0.0) must be at most \(Int(Self.longestWait)) seconds" }
     }
 }
 
@@ -254,6 +279,8 @@ extension TasksConfig {
         }
         if maxValuesPerKind < 1 { problems.append("tasks.maxValuesPerKind must be at least 1") }
         if maxWords < 0 { problems.append("tasks.maxWords cannot be negative") }
+        if alternativesGap < 0 { problems.append("tasks.alternativesGap cannot be negative") }
+        if inflectionLetters < 0 { problems.append("tasks.inflectionLetters cannot be negative") }
         if maxGroupingDepth < 1 { problems.append("tasks.maxGroupingDepth must be at least 1") }
         if defaultGrouping.count > maxGroupingDepth { problems.append("tasks.defaultGrouping is deeper than tasks.maxGroupingDepth") }
         if maxTitleChars < 1 { problems.append("tasks.maxTitleChars must be at least 1") }

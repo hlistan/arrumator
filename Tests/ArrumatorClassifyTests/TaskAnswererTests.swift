@@ -64,7 +64,9 @@ import Testing
 
         /// How many characters the prompt of `question` about `context` holds, system and user together.
         func promptSize(_ question: String = TaskAnswererTests.question, context: TaskContext = TaskAnswererTests.context) throws -> Int {
-            try answerer.library.render("conversation-system", [:]).count + answerer.userPrompt(question, context: context, today: Self.today).count
+            try answerer.library.render("conversation-system", [:]).count
+                + answerer.userPrompt(question, context: context, today: Self.today,
+                                      language: LanguageDetector(config: env.config.extraction).name(of: question)).count
         }
     }
 
@@ -116,8 +118,10 @@ import Testing
         #expect(output["promptTokens"] == .array([.number(10)]) && step.status == .ok && step.error == nil,
                 "how many tokens Ollama counted the prompt took is kept, which retention does not clear")
         var config = w.env.config
-        // Ollama counts 10 tokens of a context that holds 10 beside the answer, though the estimate let the prompt in.
+        // Ollama counts 10 tokens of a context that holds 10 beside the answer, though the estimate let the prompt in; the
+        // prompt is not fitted again here (`ollama.refitAttempts`), which the test after this one looks at.
         config.ollama.charsPerToken = 100_000
+        config.ollama.refitAttempts = 0
         config.conversation.numCtx = try config.conversation.effort(.medium).numPredict + 10
         let full = try await world { _ in try Self.answer() }
         defer { full.env.cleanup() }
@@ -126,6 +130,33 @@ import Testing
         output = try JSON.decoder.decode(JSONValue.self, from: Data(try #require(step.output).utf8))
         #expect(step.status == .warn && step.error?.contains("the model's context was full") == true && output["promptTokens"] == .array([.number(10)]),
                 "a prompt that took all the room says so, as the estimate of characters a token was wrong for it")
+        let answered = try await full.answer(config: config).0
+        #expect(answered.problem == PromptBudget.contextFullProblem, "and so does the answer, which may not have read all it was shown")
+    }
+
+    /// Text in other scripts, or many, holds fewer characters a token than `ollama.charsPerToken` reckons: a prompt Ollama
+    /// counts filling the context is fitted again at what it counted, and asked again, rather than answered from a prompt
+    /// the model did not read whole (QA 2026-10-04, CNV-5).
+    @Test func aPromptOllamaCountsFillingTheContextIsFittedAgainAtWhatItCountedAndAskedAgain() async throws {
+        let w = try await world { _ in try Self.answer() }
+        defer { w.env.cleanup() }
+        // A character a token, a third of what the estimate reckons.
+        await w.mock.countPromptTokens { request in request.messages.reduce(0) { $0 + $1.content.count } }
+        var config = w.env.config
+        config.conversation.numCtx = try config.conversation.effort(.medium).numPredict + w.promptSize() - 1
+        let (answer, _) = try await w.answer(config: config)
+        let requests = await w.mock.chatRequests
+        #expect(requests.count == 2 && requests[0].messages[1].content.contains("Fatura da água")
+                    && !requests[1].messages[1].content.contains("Fatura da água") && requests[1].messages[1].content.contains("Fatura EDP"),
+                "asked again with the last document shown by its text listed by name, as the prompt fits at a character a token")
+        #expect(answer.problem == nil && answer.text == "Somam **72,61 EUR**.", "the answer to the prompt that fit is no less for it")
+        let step = try await w.step()
+        let input = try JSON.decoder.decode(JSONValue.self, from: Data(try #require(step.input).utf8))
+        #expect(input["refitted"] == .array([.number(1)]) && input["trimmed"]?["textsLeftOut"] == .number(1),
+                "the trace keeps the characters a token it was fitted at, and what that left out: \(input)")
+        let calls = try step.exchange()
+        #expect(step.status == .warn && step.error?.contains("fitted again 1 time") == true && calls.count == 2,
+                "and says so, with both calls: \(step.error ?? "")")
     }
 
     @Test func whatIsLeftOutFirstIsTheEarlierConversationThenTextsThenTheLatestExchangeThenNames() throws {
@@ -223,6 +254,48 @@ import Testing
         }
     }
 
+    /// An answer that only begins one, a heading and a rule, or a sentence announcing what follows and nothing after it,
+    /// is no answer: it goes back to the model, told so by its Markdown alone, in any language (QA 2026-10-04, CNV-5).
+    @Test func anAnswerThatOnlyAnnouncesWhatFollowsGoesBack() throws {
+        let validator = ConversationAnswerValidator(shown: [42])
+        let headings = AnswerValidationError.invalid(["answer holds only headings or rules: give the answer itself, in full"])
+        let announces = AnswerValidationError.invalid(["answer announces what follows and ends there: give what it announces, in full"])
+        #expect(throws: headings, "a title in bold and a rule, as the model answered every time") {
+            try validator.validate(Self.answer("**Detailed Breakdown of Each Electricity Bill**\n\n---", sources: ["42"]))
+        }
+        #expect(throws: headings, "headings alone") { try validator.validate(Self.answer("# Resumo\n\n## Faturas\n\n***")) }
+        #expect(try validator.validate(Self.answer("**72,61 EUR**")).text == "**72,61 EUR**", "an answer in bold, with no rule after it, is an answer")
+        #expect(throws: announces, "a sentence ending with a colon") {
+            try validator.validate(Self.answer("Here are the full translations of every document in the provided set into English:"))
+        }
+        #expect(throws: announces, "after a heading, in another script") { try validator.validate(Self.answer("## 翻译\n\n以下是全部译文：")) }
+        let whole = try validator.validate(Self.answer("Os totais:\n\n- EDP: 54,21 EUR\n- Águas: 18,40 EUR\n\nTotal: **72,61 EUR**."))
+        #expect(whole.text.hasSuffix("**72,61 EUR**."), "a colon that introduces what follows it is no announcement")
+        #expect(try validator.validate(Self.answer("Ver o código:\n\n```\nU-2653\n```")).text.hasSuffix("```"),
+                "nor one followed by code")
+    }
+
+    /// An answer that gives something and ends with a colon, as a document's own field or a total does, or a heading that
+    /// carries a figure, is an answer: only one that is nothing but a lead-in, or headings and rules with no figure, goes
+    /// back (review of 2026-10-04, finding 13).
+    @Test func anAnswerThatEndsWithAColonOrIsAFigureInAHeadingIsAnAnswer() throws {
+        let validator = ConversationAnswerValidator(shown: [42])
+        for answer in [
+            "A declaração foi traduzida por inteiro.\n\nNome: Maria Exemplo\n\nAssinatura:",
+            "电费 54,21 EUR，水费 18,40 EUR。\n\n合计：",
+            "# 340 € in total",
+            "**72,61 EUR**\n\n---",
+            "Os totais:\n\n- EDP: 54,21 EUR\n- Águas:",
+        ] {
+            #expect(try validator.validate(Self.answer(answer)).text == answer, "“\(answer)” gives what was asked")
+        }
+        #expect(throws: AnswerValidationError.invalid(["answer announces what follows and ends there: give what it announces, in full"]),
+                "the stub of QA 2026-10-04 as the model wrote it") {
+            try validator.validate(Self.answer("Here are the full translations of every document in the provided set into English, in the order "
+                + "they appear, preserving all names, numbers, and details:"))
+        }
+    }
+
     @Test func theAnswerIsReadAsItStreamsItsEscapesDecoded() {
         let whole = #"{"answer": "Linha 1\nLinha \"2\" é é 😀\\", "sources": []}"#
         #expect(StreamedAnswer.text(in: whole) == "Linha 1\nLinha \"2\" é é 😀\\", "the field as written, escapes decoded, up to its end")
@@ -246,15 +319,17 @@ import Testing
         let user = try #require(request.messages.last?.content)
         #expect(request.model == Self.chat && request.messages.first?.content.hasPrefix("You are Arrumator") == true,
                 "the profile's chat model is asked with the app's prompt")
-        #expect(user.contains("### [42] EDP 2025-03.pdf\nsender: EDP Comercial; type: invoice; date: 2025-03-05\n\nFatura EDP, total 54,21 EUR")
+        #expect(user.contains(#"### [42] EDP 2025-03.pdf"# + "\n" + #"sender: "EDP Comercial"; type: "invoice"; date: "2025-03-05""# + "\n\nFatura EDP, total 54,21 EUR")
                     && user.contains("### [7] Águas 2025-05.pdf\n-\n\nFatura da água"),
                 "each document shown with its text under its number, with its labels: \(user)")
-        #expect(user.contains("- [9] MEO 2025-01.pdf · type: invoice") && user.contains("2 more documents"),
+        #expect(user.contains(#"- [9] MEO 2025-01.pdf · type: "invoice""#) && user.contains("2 more documents"),
                 "the others listed by name, and how many are not shown")
         #expect(!user.contains("Taxes 2024"), "never the user's own tags: the model is shown only the kinds it gives")
         #expect(user.contains("The person asked: Quantas faturas há?\nYou answered: Duas.") && user.contains("## TODAY\n2026-07-05")
-                    && user.hasSuffix("## QUESTION\n\(Self.question)\n\nReturn the JSON object now."),
+                    && user.contains("## QUESTION\n\(Self.question)\n\n") && user.hasSuffix("Return the JSON object now."),
                 "the conversation so far, the day and the question")
+        #expect(user.contains("## DOCUMENTS\nDocuments in the set: 5,"),
+                "and how many documents the set holds, those not shown too, so an answer about them all counts every one")
         let config = w.env.config
         let preset = try config.conversation.effort(.medium)
         #expect(request.format == ConversationSchema.answer && request.timeout == preset.timeout, "in the schema, as long as the effort allows")
@@ -268,6 +343,21 @@ import Testing
         #expect(step.status == .ok && step.input?.contains("\"read\":2") == true && step.input?.contains("\"unlisted\":2") == true
                     && step.output?.contains(TraceStep.exchangeKey) == true,
                 "the answer is traced with what it was shown and the exchange")
+    }
+
+    /// An answer is written in the question's language, which the model is told, as the conversation before it may be in
+    /// another (QA 2026-10-04, CNV-3).
+    @Test func theModelIsToldTheLanguageTheQuestionIsWrittenIn() async throws {
+        let w = try await world { _ in try Self.answer() }
+        defer { w.env.cleanup() }
+        _ = try await w.answer("What does the dentist booking confirmation say?")
+        let user = try #require(await w.mock.chatRequests.first?.messages.last?.content)
+        #expect(user.contains("The question is written in English: answer in English"), "\(user)")
+        let input = try JSON.decoder.decode(JSONValue.self, from: Data(try #require(try await w.step().input).utf8))
+        #expect(input["language"] == .string("English"), "and the trace says what it was told: \(input)")
+        _ = try await w.answer("2025?")
+        let unknown = try #require(await w.mock.chatRequests.last?.messages.last?.content)
+        #expect(!unknown.contains("is written in"), "a question without words says nothing of a language")
     }
 
     @Test func anEmptySetIsSaidToBeEmpty() async throws {

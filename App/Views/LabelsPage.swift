@@ -2,9 +2,9 @@ import ArrumatorCore
 import ArrumatorRuntime
 import SwiftUI
 
-/// The archive's labels as one vocabulary: those that look alike and wait for the user first, then the labels of each
-/// kind kept consistent and the user's own tags, then what the user decided. Opening a label lets the user merge it into
-/// another or remove it everywhere; every decision is a rule each reading follows from then on (`LabelActions`).
+/// The archive's labels as one vocabulary: those that look alike and wait for the user first, then what the user
+/// decided, then the labels of each kind kept consistent and the user's own tags. Opening a label lets the user merge it
+/// into another or remove it everywhere; every decision is a rule each reading follows from then on (`LabelActions`).
 struct LabelsPage: View {
     @Environment(AppModel.self) private var model
     @State private var usage: [LabelKind: [LabelUsage]] = [:]
@@ -12,6 +12,8 @@ struct LabelsPage: View {
     @State private var rules: [LabelRule] = []
     @State private var openSuggestion: String?
     @State private var expanded: Set<LabelKind> = []
+    /// Whether every rule is listed, past `interface.pageSize`.
+    @State private var rulesInFull = false
 
     /// The kinds written freely (`LabelsConfig.isWrittenFreely`): those kept one vocabulary, and tags; the others have
     /// one form each and nothing to merge.
@@ -38,13 +40,19 @@ struct LabelsPage: View {
             if kinds.isEmpty && suggestions.isEmpty {
                 EmptyState(symbol: "tag", text: Wording.noLabelsYet)
             }
-            ForEach(kinds, id: \.self) { kind in
-                section(kind)
-            }
+            // Before the labels, however many there are, so a rule is forgotten without scrolling past them all.
             if !rules.isEmpty {
                 PageSection(Wording.whatYouDecided) {
-                    ForEach(rules) { rule in RuleRow(rule: rule) }
+                    let pageSize = model.runtime?.config.interface.pageSize ?? rules.count
+                    ForEach(rulesInFull ? rules : Array(rules.prefix(pageSize))) { rule in RuleRow(rule: rule) }
+                    if rules.count > pageSize {
+                        Button(rulesInFull ? Wording.showFewer : Wording.showMore) { rulesInFull.toggle() }
+                            .buttonStyle(.link).padding(.top, Style.showMoreGap)
+                    }
                 }
+            }
+            ForEach(kinds, id: \.self) { kind in
+                section(kind)
             }
         }
         .task(id: model.activity) { await load() }
@@ -127,6 +135,8 @@ struct LabelCard: View {
     /// The other labels of its kind, the most used first, to merge into.
     let others: [String]
     @State private var into = ""
+    /// Why the label written to merge into is no label of the kind, as Core says it (`LabelError.refusal(of:)`).
+    @State private var refusal: String?
     @State private var confirmingRemoval = false
     /// The labels offered to merge into, the most alike first (`LabelSimilarity.mostAlike`), worked out when the card
     /// opens or the labels change, never as it is drawn.
@@ -143,24 +153,31 @@ struct LabelCard: View {
                 Button { close() } label: { Image(systemName: "xmark") }.buttonStyle(.borderless).foregroundStyle(.secondary).help(Wording.close)
                     .accessibilityLabel(Wording.closeNamed(Wording.label(label)))
             }
-            HStack(spacing: Style.inlineControlSpacing) {
-                Text(Wording.mergeInto).foregroundStyle(.secondary)
-                TextField(Wording.labelPrompt(label.kind), text: $into)
-                    .accessibilityLabel(Wording.labelPrompt(label.kind))
-                    .textFieldStyle(.roundedBorder).frame(width: Style.mergeFieldWidth)
-                    .onSubmit { merge() }
-                if !candidates.isEmpty {
-                    Menu {
-                        ForEach(candidates, id: \.self) { value in Button(value) { into = value } }
-                    } label: {
-                        Image(systemName: "chevron.down")
+            VStack(alignment: .leading, spacing: Style.fieldRefusalSpacing) {
+                HStack(spacing: Style.inlineControlSpacing) {
+                    Text(Wording.mergeInto).foregroundStyle(.secondary)
+                    // Named for what it is, whatever example of the label's kind it shows.
+                    TextField(Wording.mergeIntoField(Wording.label(label)), text: $into, prompt: Text(Wording.labelPrompt(label.kind)))
+                        .accessibilityLabel(Wording.mergeIntoField(Wording.label(label)))
+                        .textFieldStyle(.roundedBorder).frame(width: Style.mergeFieldWidth)
+                        .onSubmit { merge() }
+                    if !candidates.isEmpty {
+                        Menu {
+                            ForEach(candidates, id: \.self) { value in Button(value) { into = value } }
+                        } label: {
+                            Image(systemName: "chevron.down")
+                        }
+                        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help(Wording.chooseLabelInUse)
+                        .accessibilityLabel(Wording.chooseLabelInUse)
                     }
-                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help(Wording.chooseLabelInUse)
-                    .accessibilityLabel(Wording.chooseLabelInUse)
+                    Button(Wording.merge) { merge() }.disabled(target == nil || refusal != nil)
                 }
-                Button(Wording.merge) { merge() }.disabled(into.trimmingCharacters(in: .whitespaces).isEmpty)
+                .controlSize(.small)
+                if let refusal {
+                    Text(refusal).font(.caption).foregroundStyle(Palette.attention).fixedSize(horizontal: false, vertical: true)
+                }
             }
-            .controlSize(.small)
+            .onChange(of: target, initial: true) { _, typed in refusal = typed.flatMap(LabelError.refusal(of:))?.localizedDescription }
             HStack(spacing: Style.actionSpacing) {
                 Button(Wording.showDocuments) { model.browse(label) }
                 Spacer()
@@ -186,10 +203,17 @@ struct LabelCard: View {
         }
     }
 
+    /// The label written to merge into, of the label's kind; nil while the field is blank.
+    private var target: DocumentLabel? {
+        let value = into.trimmingCharacters(in: .whitespaces)
+        return value.isEmpty ? nil : DocumentLabel(kind: label.kind, value: value)
+    }
+
+    /// Merges into the label written. One that is no label of its kind stays in the field, under why, to be corrected.
     private func merge() {
-        let (label, value) = (label, into.trimmingCharacters(in: .whitespaces))
-        guard !value.isEmpty else { return }
-        Task<Void, Never> { await model.perform(Wording.mergeLabelsAction) { try await $0.labels.merge(label, into: value) } }
+        guard let target, LabelError.refusal(of: target) == nil else { return }
+        let label = label
+        Task<Void, Never> { await model.perform(Wording.mergeLabelsAction) { try await $0.labels.merge(label, into: target.value) } }
         into = ""
     }
 

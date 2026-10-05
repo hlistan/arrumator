@@ -284,7 +284,8 @@ import Testing
         let answering = TaskConversationQueue(services: services, answerer: StubAnswerer(), interpreter: interpreter, search: w.h.search,
                                               processes: w.h.processes)
         let queue = SearchTaskQueue(services: services, interpreter: interpreter, processes: w.h.processes)
-        let next = try await SearchTaskActions(services: services, queue: queue, conversations: answering).create(prompt: "phone bills")
+        let next = try await SearchTaskActions(services: services, queue: queue, conversations: answering, archiver: ListingArchiver())
+            .create(prompt: "phone bills")
         #expect(next.id != gone.id, "a new task is not given the number of the conversation left without its task")
         try await TaskConversationActions(services: services, queue: answering).ask(next.id, question: "Since when?")
         try await records.flush()

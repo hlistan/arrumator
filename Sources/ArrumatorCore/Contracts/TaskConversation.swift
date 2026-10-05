@@ -50,9 +50,11 @@ public struct TaskTurn: Sendable, Codable, Hashable, Identifiable {
     public var lastTrace: Int64?
     public var asked: Date
     public var answered: Date?
+    /// When a question waiting for Ollama, which could not be reached, is tried again; nil when it does not wait for it.
+    public var retryAt: Date?
 
     public init(id: Int64, task: Int64, question: String, state: TurnState, answer: String?, sources: [Int64], finding: TurnFinding?,
-                model: String?, problem: String?, lastTrace: Int64?, asked: Date, answered: Date?) {
+                model: String?, problem: String?, lastTrace: Int64?, asked: Date, answered: Date?, retryAt: Date?) {
         self.id = id
         self.task = task
         self.question = question
@@ -65,6 +67,7 @@ public struct TaskTurn: Sendable, Codable, Hashable, Identifiable {
         self.lastTrace = lastTrace
         self.asked = asked
         self.answered = answered
+        self.retryAt = retryAt
     }
 }
 

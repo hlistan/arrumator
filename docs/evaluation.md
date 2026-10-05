@@ -45,10 +45,23 @@ vocabulary](how-it-works.md#keeping-labels-one-vocabulary)); version 5 did neith
 on the same server, tells the types apart that version 6 confused (a fine or an appointment is a letter, a card with a
 social insurance number an id-document, an identity document's sender the office that issued it) and names the
 identifiers it is shown in words rather than by the app's own names; version 6 measured again that day read exactly as
-on 2026-09-30:
+on 2026-09-30. Version 10, measured on 2026-10-04 on the same server with version 7 measured again first, gives
+examples in each kind's form rather than descriptions the model copied as templates, lists the archive's labels as JSON
+strings, names a document after the labels the user's rules keep, and is validated more closely: a sender or party
+must be written by the document, an amount is a number and its currency, two labels in one are split, and a title the
+document's words do not make is sent back once. Its sender score counts the full name of Russia's tax service, which
+two documents print beside "ФНС России" and the model now gives, as the corpus does since. Version 11, measured on
+2026-10-05 on the same server, asks for a title in sentence case even where a document prints its heading in capitals,
+and sends back once, beside the title, what the document may not bear out: an object with no number in it, a date given
+to a document that writes neither a date nor its year, and a reading that names two parties and no sender; the
+extractor reads a date an identity card prints with spaces (`01 02 2025`):
 
 | prompt | pass | status | type | sender | date | title | language | labels each | expected labels | median |
 |---|---|---|---|---|---|---|---|---|---|---|
+| 11 | 1 | 100% | 96% | 89% | 98% | 97% | 100% | 13.2 | 94% | 28.1 s |
+| 11 | 2 | 100% | 95% | 89% | 98% | 95% | 100% | 13.3 | 93% | 32.2 s |
+| 10 | 1 | 100% | 95% | 88% | 98% | 97% | 100% | 13.5 | 93% | 26.0 s |
+| 10 | 2 | 100% | 93% | 88% | 98% | 97% | 100% | 13.8 | 93% | 28.3 s |
 | 7 | 1 | 100% | 95% | 91% | 98% | 98% | 100% | 14.5 | 92% | 29.0 s |
 | 7 | 2 | 100% | 93% | 91% | 98% | 98% | 100% | 14.5 | 91% | 31.4 s |
 | 6 | 1 | 100% | 89% | 89% | 98% | 93% | 100% | 14.4 | 92% | 28.6 s |
@@ -60,6 +73,10 @@ How consistent the labels are, for the same documents:
 
 | prompt | pass | sender writings | senders | parties | topics | objects | references | jurisdictions |
 |---|---|---|---|---|---|---|---|---|
+| 11 | 1 | 1.12 | 46 | 26 | 40 | 61 | 89 | 30 |
+| 11 | 2 | 1.12 | 46 | 25 | 40 | 68 | 87 | 30 |
+| 10 | 1 | 1.00 | 45 | 25 | 45 | 84 | 83 | 31 |
+| 10 | 2 | 1.12 | 46 | 26 | 42 | 98 | 79 | 30 |
 | 7 | 1 | 1.12 | 48 | 27 | 66 | 109 | 95 | 32 |
 | 7 | 2 | 1.12 | 48 | 28 | 55 | 109 | 84 | 30 |
 | 6 | 1 | 1.25 | 49 | 26 | 63 | 105 | 97 | 26 |
@@ -82,11 +99,38 @@ documents, which were scored the same way:
 | version 4, examples from the corpus | 90% | 100% | 100% | 100% | 86% | 93% | 22.5 s |
 | version 5, generic | 86% | 100% | 100% | 100% | 100% | 92% | 23.5 s |
 
+What version 10 changed, against version 7 measured the same day: type, date and language read the same; the
+expected labels rose from 92% and 91% to 93% in both passes, periods from 75% to 94% and 88%; the vocabulary is
+tidier, with a third fewer topics and a fifth fewer objects, as an object or reference is no longer written as a field
+and its value ("account and its number: 123456780" is now "account 123456780"). Sender fell from 91% to 88%: both
+leases and contracts of the corpus now name their two signatories as parties and no sender, though the prompt says the
+party that issues one is its sender; read alone, outside the evaluation's archive, the lease gets its landlord as
+sender. Title fell from 98% to 97%, on an e-mail written in Portuguese and English, now titled in Portuguese.
+
+What version 11 changed, against version 10: type rose from 95% and 93% to 96% and 95%, as a vehicle registration
+renewal is now a letter; sender from 88% to 89% in both passes, as the lease, sent back for naming its two sides as
+parties and no sender, now names its landlord; date stayed at 98%; the expected labels rose to 94% and 93%. A third
+fewer objects are written (61 and 68, from 84 and 98), as a job title or a receipt's groceries go back and are left out,
+while the objects the corpus expects are found as often or more (91% and 100%, from 91% and 91%). Title fell in pass 2
+from 97% to 95%, one receipt whose heading "FATURA-RECIBO" the model wrote "Fatura-receito" when turning it to sentence
+case. Sending back costs time: the median rose by 2 s in pass 1 and 4 s in pass 2, where the archive's labels make each
+prompt longer. Two earlier runs of version 11 showed what to send back. The first checked a date against the days the
+extractor read, and sent back the issue date of a residence card that prints it with spaces, which the extractor did
+not read: the model then gave none, and date fell to 96%; only whether the document writes a date or its year is
+checked since, and the extractor reads such dates. The second sent back a home policy's address, "Calle del Ejemplo
+7", for its house number of one digit, and the model left it out in both passes; a number standing alone beside a name
+identifies an object since.
+
 What the runs showed about the prompt:
 
-- **An example format anchors the model.** Without an example amount, the model left the currency code off most
-  amounts (37% of the expected amounts found). Describing the pattern (`1234.50 XXX`, the code never left out) brought
-  it to 100%, and amounts written with the code first are normalised to that form.
+- **An example format anchors the model, and a described one is copied.** Without an example amount, the model left
+  the currency code off most amounts (37% of the expected amounts found). Describing the pattern (`1234.50 XXX`)
+  brought it to 100%, but a description is copied as a template too: "an account and its number" became labels written
+  "account and its number: 123456780". Version 10 gives values in each kind's form instead (`54.21 EUR`, `account
+  0012345678`), and `LabelFormTests` keeps every example a label its kind keeps.
+- **A title example in one language is copied in that language.** One Portuguese example made English documents get
+  Portuguese titles; examples in three languages, and sending back a title the document's words do not make, keep each
+  title in its document's language.
 - **File names follow the document's language only when told to use its own words.** Asked for a description "in the
   document's language", the model translated English documents about Portugal into Portuguese. Asked to make the
   description of words that appear in the document, its title first, every English document got an English name.
@@ -95,6 +139,7 @@ What the runs showed about the prompt:
   - Two names on one line are sometimes kept as one party ("Thomas und Anna Beispiel").
   - A period is sometimes written at month precision where the document gives days.
   - A private seller's contract names both parties as senders.
+  - A heading in capitals is sometimes misspelled when written in sentence case ("Fatura-receito").
 
 ### Keeping labels one vocabulary
 

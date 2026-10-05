@@ -130,7 +130,9 @@ public struct PipelineServices: Sendable {
     /// Reads a document with the model, telling it of the archive's labels and the user's decisions about them, and
     /// keeps its labels one vocabulary with the archive's (`LabelConsolidator`), recording what that changed in the
     /// trace. The document's `tags`, the user's own, follow the user's rules alone and come after the model's labels.
-    /// Nothing is saved: dry runs and replays read this way too.
+    /// The file name is made of the labels kept, as the user's rules merged, aligned or dropped them, and the model's
+    /// title (`FilenameBuilder.made`), never of what the model wrote before them. Nothing is saved: dry runs and replays
+    /// read this way too.
     public func read(_ content: ExtractedContent, tags: [DocumentLabel], settings: AppSettings, trace: TraceContext) async throws -> Reading {
         var outcome = try await analyzer.analyse(content, guidance: try await labels.guidance(), settings: settings, config: config,
                                                  trace: trace)
@@ -141,6 +143,10 @@ public struct PipelineServices: Sendable {
             consolidator.consolidate(given)
         }
         outcome.labels = (consolidation.labels + kept).distinct()
+        outcome.analysis.fileName = outcome.title.flatMap {
+            FilenameBuilder(config: config.naming, reserved: SkipRules(watcher: config.watcher))
+                .made(date: consolidation.labels.values(.date).first, sender: consolidation.labels.values(.sender).first, title: $0)
+        }
         return Reading(outcome: outcome, tags: kept, changes: consolidation.changes)
     }
 
@@ -185,19 +191,38 @@ public struct PipelineServices: Sendable {
         var outcome = reading.outcome
         let sources = GivenTag.sources(of: reading.tags, given: given)
         let note = GivenTag.note(sources).map { "; " + $0 } ?? ""
+        let problems = outcome.analysis.problems
+        if !problems.isEmpty {
+            // Why it waits for the user, which the steps before it, each done as it should be, do not say.
+            await trace.record(.review, status: .warn, startedAt: Date(), durationMs: 0, output: ["problems": problems],
+                               error: "Waits for you: " + DocumentAnalysis.said(problems))
+        }
         if let labels = outcome.labels {
             // Where the user changed nothing since the reading began: what the user did meanwhile is kept.
             outcome.labels = try await index.saveReading(labels, before: before, docID: docID)
             let read = labels.filter { !$0.kind.isUsersOwn }
             try await history.record(.analysed, doc: docID, job: jobID, trace: trace.traceID,
-                                     summary: (read.isEmpty ? "Nothing worth a label" : read.map(\.value).joined(separator: " · ")) + note,
+                                     summary: Self.readingSummary(read, problems: problems) + note,
                                      payload: AnalysedPayload(analysis: outcome.analysis, changes: reading.changes,
                                                               tags: sources.isEmpty ? nil : sources))
         } else {
             try await history.record(.error, doc: docID, job: jobID, trace: trace.traceID,
-                                     summary: "Not read: " + outcome.analysis.problems.joined(separator: "; ") + note, payload: outcome.analysis)
+                                     summary: "Not read: " + DocumentAnalysis.said(outcome.analysis.problems) + note, payload: outcome.analysis)
         }
         return outcome
+    }
+}
+
+extension PipelineServices {
+    /// What History says of a reading that gave the model's labels `read`: their values, or that it found nothing worth a
+    /// label; and, when the document waits for the user, why. One that waits with nothing read, as a damaged file, a blank
+    /// scan or a kind of file no extractor reads, is never said to have had nothing worth a label: nothing of it could be
+    /// read.
+    static func readingSummary(_ read: [DocumentLabel], problems: [String]) -> String {
+        let waits = problems.isEmpty ? nil : "waits for you: " + DocumentAnalysis.said(problems)
+        let labels = read.isEmpty ? (waits == nil ? "Nothing worth a label" : "Nothing could be read of it")
+            : read.map(\.value).joined(separator: " · ")
+        return ([labels] + [waits].compactMap { $0 }).joined(separator: "; ")
     }
 }
 

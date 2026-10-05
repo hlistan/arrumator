@@ -26,9 +26,12 @@ public struct TaskTurnRecord: ArrumatorRecord, Identifiable, Hashable {
     public var sources: [Int64] { JSON.decode([Int64].self, from: sourcesJson) ?? [] }
     public var finding: TurnFinding? { JSON.decode(TurnFinding.self, from: findingJson) }
 
-    var turn: TaskTurn? {
-        id.map { TaskTurn(id: $0, task: taskId, question: question, state: state, answer: answer, sources: sources, finding: finding,
-                          model: model, problem: problem, lastTrace: lastTraceId, asked: askedAt, answered: answeredAt) }
+    /// The question as it is read at `now`: one queued that is not due yet waits for Ollama, which is all that puts one
+    /// off (`TaskConversationStore.postpone`), until then.
+    func turn(at now: Date) -> TaskTurn? {
+        let retryAt = state == .queued ? nextRunAt.flatMap { $0 > now ? $0 : nil } : nil
+        return id.map { TaskTurn(id: $0, task: taskId, question: question, state: state, answer: answer, sources: sources, finding: finding,
+                                 model: model, problem: problem, lastTrace: lastTraceId, asked: askedAt, answered: answeredAt, retryAt: retryAt) }
     }
 
     /// Sent back into the queue to be answered from the start, as it was asked.
@@ -76,19 +79,22 @@ public struct TaskConversationStore: Sendable {
     // MARK: Reading
 
     public func turn(id: Int64) async throws -> TaskTurn? {
-        try await database.reader.read { db in try TaskTurnRecord.fetchOne(db, key: id)?.turn }
+        let now = time.now()
+        return try await database.reader.read { db in try TaskTurnRecord.fetchOne(db, key: id)?.turn(at: now) }
     }
 
     /// The task's questions and answers, the first asked first.
     public func turns(task: Int64) async throws -> [TaskTurn] {
-        try await database.reader.read { db in try Self.records(db, task: task).compactMap(\.turn) }
+        let now = time.now()
+        return try await database.reader.read { db in try Self.records(db, task: task).compactMap { $0.turn(at: now) } }
     }
 
     /// The task's conversation as it is read: its questions and answers, and between them, at the time each was made,
     /// every change History recorded to the task's set or to how it is read, from the first question on.
     public func conversation(task: Int64) async throws -> [ConversationItem] {
-        try await database.reader.read { db in
-            let turns = try Self.records(db, task: task).compactMap(\.turn)
+        let now = time.now()
+        return try await database.reader.read { db in
+            let turns = try Self.records(db, task: task).compactMap { $0.turn(at: now) }
             guard let first = turns.first else { return [] }
             let changes = try EventRecord
                 .filter([EventKind.taskEdited.rawValue, EventKind.taskPrepared.rawValue].contains(Column("kind")))
@@ -126,6 +132,13 @@ public struct TaskConversationStore: Sendable {
     /// How many questions wait in the queue, due or not: the one being answered is not among them.
     public func queuedCount() async throws -> Int {
         try await database.reader.read { db in try TaskTurnRecord.filter(Column("state") == TurnState.queued.rawValue).fetchCount(db) }
+    }
+
+    /// The task of each question waiting in the queue, due or not, once for each.
+    func queuedTasks() async throws -> [Int64] {
+        try await database.reader.read { db in
+            try TaskTurnRecord.filter(Column("state") == TurnState.queued.rawValue).select(Column("task_id"), as: Int64.self).fetchAll(db)
+        }
     }
 
     /// When the next queued question is due.

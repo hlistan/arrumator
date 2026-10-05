@@ -19,7 +19,7 @@ struct DocumentList: View {
                             detail: listed.detail, subtitle: listed.labels)
                         .rowAction { withAnimation(.snappy) { model.session.openDocument = listed.id } }
                     if let task = model.session.collecting, let id = listed.id {
-                        CollectToggle(task: task, document: id)
+                        CollectToggle(task: task, document: id, name: listed.record.filename)
                     }
                 }
             }
@@ -51,6 +51,9 @@ struct DocumentCard: View {
     @State private var name = ""
     @State private var newKind = LabelKind.topic
     @State private var newValue = ""
+    /// Why the label being written is no label of its kind, as Core says it (`LabelError.refusal(of:)`), worked out as it
+    /// is typed rather than as the card is drawn.
+    @State private var newLabelRefusal: String?
     @State private var showingTrace = false
     /// Read Again was pressed: the card says the document waits to be read, until it is.
     @State private var readAgainAsked = false
@@ -106,11 +109,14 @@ struct DocumentCard: View {
         }
     }
 
-    /// Where it is, or what happened to it.
+    /// Where it is, or what happened to it, and when the user confirmed it as it is, if they did (`DocumentChoices`).
     private func placement(_ d: DocumentRecord) -> some View {
         HStack(spacing: Style.placementSpacing) {
             Image(systemName: d.status.symbol).foregroundStyle(d.status.tint)
             Text(Wording.outcome(of: d, archive: model.archive, incoming: model.settings?.incomingURL))
+            if let confirmed = choices.confirmed {
+                Text(Wording.labelSeparator + Wording.confirmedByYou(at: confirmed)).foregroundStyle(.secondary)
+            }
         }
         .font(.callout)
     }
@@ -131,21 +137,36 @@ struct DocumentCard: View {
             }
             GridRow(alignment: .firstTextBaseline) {
                 label(labels.isEmpty ? Wording.labelsHeading : "")
-                HStack(spacing: Style.inlineControlSpacing) {
-                    Picker(Wording.labelKindPicker, selection: $newKind) {
-                        ForEach(LabelKind.allCases, id: \.self) { Text(Wording.labelKind($0)).tag($0) }
+                VStack(alignment: .leading, spacing: Style.fieldRefusalSpacing) {
+                    HStack(spacing: Style.inlineControlSpacing) {
+                        Picker(Wording.labelKindPicker, selection: $newKind) {
+                            ForEach(LabelKind.allCases, id: \.self) { Text(Wording.labelKind($0)).tag($0) }
+                        }
+                        .labelsHidden().frame(width: Style.labelKindPickerWidth)
+                        // Named for what it is, whatever example of its kind it shows.
+                        TextField(Wording.newLabelField(newKind), text: $newValue, prompt: Text(Wording.labelPrompt(newKind)))
+                            .accessibilityLabel(Wording.newLabelField(newKind))
+                            .textFieldStyle(.roundedBorder)
+                            .onSubmit { add() }
+                        Button(Wording.add) { add() }
+                            .disabled(typedLabel == nil || newLabelRefusal != nil)
                     }
-                    .labelsHidden().frame(width: Style.labelKindPickerWidth)
-                    TextField(Wording.labelPrompt(newKind), text: $newValue)
-                        .accessibilityLabel(Wording.labelPrompt(newKind))
-                        .textFieldStyle(.roundedBorder)
-                        .onSubmit { add() }
-                    Button(Wording.add) { add() }
-                        .disabled(newValue.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .controlSize(.small)
+                    if let newLabelRefusal {
+                        Text(newLabelRefusal).font(.caption).foregroundStyle(Palette.attention).fixedSize(horizontal: false, vertical: true)
+                    }
                 }
-                .controlSize(.small)
+                .onChange(of: typedLabel, initial: true) { _, typed in
+                    newLabelRefusal = typed.flatMap(LabelError.refusal(of:))?.localizedDescription
+                }
             }
         }
+    }
+
+    /// The label being written, its kind and its value; nil while the field is blank.
+    private var typedLabel: DocumentLabel? {
+        let value = newValue.trimmingCharacters(in: .whitespaces)
+        return value.isEmpty ? nil : DocumentLabel(kind: newKind, value: value)
     }
 
     /// Who read the document, and anything that keeps it waiting for the user.
@@ -157,7 +178,7 @@ struct DocumentCard: View {
                     VStack(alignment: .leading, spacing: Style.readingLineSpacing) {
                         Text(Wording.reader(analysis))
                         ForEach(analysis.problems, id: \.self) { problem in
-                            Text(problem).foregroundStyle(Palette.attention).fixedSize(horizontal: false, vertical: true)
+                            Text(DocumentAnalysis.said([problem])).foregroundStyle(Palette.attention).fixedSize(horizontal: false, vertical: true)
                         }
                         if [.needsReview, .failed, .held].contains(d.status), let advice = Wording.advice(analysis) {
                             Text(advice).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -203,8 +224,11 @@ struct DocumentCard: View {
             Text(Wording.readAgainQueued).foregroundStyle(.secondary)
         } else {
             Button(Wording.readAgain) {
+                let name = Wording.documentName(document, id: documentID)
                 Task<Void, Never> {
                     readAgainAsked = await model.perform(Wording.readAgainAction) { try await $0.review.retry(documentID) } != nil
+                    // Also said by a page the document leaves, with this card, as Needs You (`ArchiveSession.readAgain`).
+                    if readAgainAsked { model.session.readAgain = (documentID, name) }
                 }
             }
         }
@@ -216,11 +240,11 @@ struct DocumentCard: View {
 
     // MARK: Changes
 
-    /// Adds the label being typed; Core decides what it does to the labels the document has then (`LabelEdit`).
+    /// Adds the label being typed; Core decides what it does to the labels the document has then (`LabelEdit`). One that
+    /// is no label of its kind stays in the field, under why, to be corrected.
     private func add() {
-        let value = newValue.trimmingCharacters(in: .whitespaces)
-        guard !value.isEmpty else { return }
-        save(LabelEdit(adding: [DocumentLabel(kind: newKind, value: value)]))
+        guard let typed = typedLabel, LabelError.refusal(of: typed) == nil else { return }
+        save(LabelEdit(adding: [typed]))
         newValue = ""
     }
 
@@ -254,7 +278,7 @@ struct DocumentCard: View {
         let readBefore = document?.updatedAt
         guard let read = await model.load(Wording.loadDocumentAction, { try await $0.services.documents.document(id: documentID) }) else { return }
         document = read
-        if let document, let offered = await model.load(Wording.loadDocumentAction, { await $0.review.choices(for: document) }) {
+        if let document, let offered = await model.load(Wording.loadDocumentAction, { try await $0.review.choices(for: document) }) {
             choices = offered
         }
         // Read again since, or no longer waiting: Read Again is offered again where it applies.

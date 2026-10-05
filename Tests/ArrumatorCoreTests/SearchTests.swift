@@ -8,7 +8,7 @@ import Testing
 @Suite struct SearchTests {
     struct HashEmbedder: Embedder {
         let modelId = "hash"
-        func embed(_ texts: [String]) async throws -> [[Float]] { texts.map { MockOllama.hashEmbedding($0, dimension: 256) } }
+        func embed(_ texts: [String], retrying: Bool) async throws -> [[Float]] { texts.map { MockOllama.hashEmbedding($0, dimension: 256) } }
     }
 
     func insert(_ db: AppDatabase, title: String, body: String, sender: String) async throws -> Int64 {
@@ -64,7 +64,7 @@ import Testing
         static let model = "fixed"
         var modelId = FixedEmbedder.model
         let vector: [Float]
-        func embed(_ texts: [String]) async throws -> [[Float]] { texts.map { _ in vector } }
+        func embed(_ texts: [String], retrying: Bool) async throws -> [[Float]] { texts.map { _ in vector } }
     }
 
     /// The fixed embedder's vectors for documents whose similarity to its query, `[1, 0]`, is each `cosine`.
@@ -113,11 +113,20 @@ import Testing
                 "when nothing contains the words and nothing is alike enough, search finds nothing")
     }
 
-    /// Fails as it is told to, as an embedding model that is missing or a server that is away.
+    /// Fails as it is told to, as an embedding model that is missing or a server that is away, keeping whether each call
+    /// asked for a server that is away to be asked again.
     struct FailingEmbedder: Embedder {
         let modelId = "failing"
         let error: any Error & Sendable
-        func embed(_ texts: [String]) async throws -> [[Float]] { throw error }
+        let retried = Retried()
+        func embed(_ texts: [String], retrying: Bool) async throws -> [[Float]] {
+            retried.calls.withLock { $0.append(retrying) }
+            throw error
+        }
+    }
+
+    final class Retried: Sendable {
+        let calls = Mutex<[Bool]>([])
     }
 
     @Test func aQuestionOrdersTheDocumentsOfASetByAnyOfItsWordsAndByMeaningAndLeavesTheRestOut() async throws {
@@ -152,10 +161,17 @@ import Testing
         #expect(missing.documents == [meter] && !missing.semanticUsed
                 && missing.semanticUnavailableReason == OllamaError.modelNotFound("bge-m3").localizedDescription,
                 "an embedding model that is missing leaves the words to order them, and says why")
-        let away = service(FailingEmbedder(error: OllamaError.unreachable("down")))
+        let unreachable = FailingEmbedder(error: OllamaError.unreachable("down"))
+        let away = service(unreachable)
         await #expect(throws: OllamaError.unreachable("down"), "Ollama away is thrown, as the answer must wait for it all the same") {
             try await away.relevance(of: "the meter", among: set)
         }
+        // QA 2026-10-04, CNV-6: asked again meanwhile, the question showed as being answered while nothing answered it.
+        #expect(unreachable.retried.calls.withLock { $0 } == [false],
+                "and at once, not asked again meanwhile: the question's queue says it waits for Ollama, and when it tries again")
+        let searched = FailingEmbedder(error: OllamaError.unreachable("down"))
+        _ = try await service(searched).search(SearchQuery(text: "meter reading"))
+        #expect(searched.retried.calls.withLock { $0 } == [true], "a search, which waits for nothing else, asks it again")
     }
 
     @Test func aQueryTheIndexCannotCompareIsSearchedByItsWordsAndSaysWhy() async throws {
@@ -181,7 +197,7 @@ import Testing
     struct StalledEmbedder: Embedder {
         let modelId = FixedEmbedder.model
         let asked = Signal()
-        func embed(_ texts: [String]) async throws -> [[Float]] {
+        func embed(_ texts: [String], retrying: Bool) async throws -> [[Float]] {
             asked.fire()
             let (stream, continuation) = AsyncStream<Never>.makeStream()
             defer { continuation.finish() }
@@ -211,7 +227,7 @@ import Testing
         private var holding = true
         private var held: [CheckedContinuation<Void, Never>] = []
 
-        func embed(_ texts: [String]) async throws -> [[Float]] {
+        func embed(_ texts: [String], retrying: Bool) async throws -> [[Float]] {
             asked += 1
             if holding { await withCheckedContinuation { held.append($0) } }
             return texts.map { _ in [1, 0] }

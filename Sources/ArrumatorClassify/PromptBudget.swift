@@ -6,7 +6,8 @@ import Foundation
 /// and may not others. A prompt longer than its context is not read whole by the model, so a search task's request and a
 /// question are cut to fit before they are sent, leaving out what they are shown, and say so in their trace, which also
 /// keeps how many tokens Ollama counted each prompt took and says when the context was full, as when the estimate was
-/// wrong (`full`). A document's reading is not: its prompt is bounded by `analysis.excerptChars`.
+/// wrong (`full`); one Ollama counted filling it is fitted again at what it counted (`measured`, `ollama.refitAttempts`).
+/// A document's reading is not: its prompt is bounded by `analysis.excerptChars`.
 struct PromptBudget {
     let numCtx: Int
     let numPredict: Int
@@ -28,6 +29,29 @@ struct PromptBudget {
         let limit = numCtx - numPredict
         guard let most = Self.promptTokens(calls).max(), most >= limit else { return nil }
         return "the model's context was full: a prompt took \(most) tokens of the \(limit) beside the answer (ollama.charsPerToken)"
+    }
+
+    /// The characters a token of the first prompt of `calls` held, by Ollama's count, when that prompt filled the context
+    /// beside the answer: what it is fitted at when it is asked again (`ollama.refitAttempts`), as text in another script,
+    /// or many, holds fewer than `charsPerToken`. Nil when it did not fill it, or the count shows no fewer characters a
+    /// token than this budget reckons, so fitting it again would leave it as it was. A prompt Ollama cut to its context
+    /// counts fewer tokens than it had, so what is measured may still be too many, and is measured again the next time.
+    func measured(_ calls: [ModelCall]) -> Double? {
+        guard let first = calls.first(where: { $0.reason == .primary }), let tokens = first.metrics?.promptTokens,
+              tokens > 0, tokens >= numCtx - numPredict else { return nil }
+        let held = Double(first.system.count + first.user.count) / Double(tokens)
+        return held < charsPerToken ? held : nil
+    }
+
+    /// What an answer whose prompt still filled the context when it was given says of itself, beside it.
+    static let contextFullProblem = "the model's context was full, so it may not have read all it was shown: ask about fewer documents"
+
+    /// What the trace says of a prompt fitted again as often as `refits` has the characters a token it was fitted at, which
+    /// the step's input keeps (`refitted`); nil when it was not.
+    static func refitted(_ refits: [Double]) -> String? {
+        guard !refits.isEmpty else { return nil }
+        return "the model's context was full, so the prompt was fitted again \(Format.count(refits.count, "time")), "
+            + "at the characters a token Ollama counted it holding"
     }
 }
 

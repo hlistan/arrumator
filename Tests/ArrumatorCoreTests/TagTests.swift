@@ -149,7 +149,7 @@ import Testing
     }
 
     @Test func aDocumentTheModelCannotReadKeepsItsTagWaitsAndIsStillReadAsNotLabelled() async throws {
-        let h = try await Harness.make(analyzer: StubAnalyzer(labels: nil, fileName: nil))
+        let h = try await Harness.make(analyzer: StubAnalyzer(labels: nil))
         defer { h.env.cleanup() }
         let doc = try await h.ingest("Taxes 2024/bill.txt", text: "EDP electricity July")
         let id = try #require(doc.id)
@@ -203,7 +203,7 @@ import Testing
     }
 
     @Test func aTagGivenByHandLeavesADocumentNotYetLabelledAsItWas() async throws {
-        let h = try await Harness.make(analyzer: StubAnalyzer(labels: nil, fileName: nil))
+        let h = try await Harness.make(analyzer: StubAnalyzer(labels: nil))
         defer { h.env.cleanup() }
         let id = try #require(try await h.ingest("bill.txt", text: "EDP electricity July").id)
         try await h.review.edit(id, fileName: nil, labels: LabelEdit(adding: [Self.mine]))
@@ -269,7 +269,7 @@ import Testing
     }
 
     @Test func aRuleAboutATagLeavesADocumentNotLabelledSo() async throws {
-        let h = try await Harness.make(analyzer: StubAnalyzer(labels: nil, fileName: nil))
+        let h = try await Harness.make(analyzer: StubAnalyzer(labels: nil))
         defer { h.env.cleanup() }
         let id = try #require(try await h.ingest("Taxes 2024/bill.txt", text: "EDP electricity July").id)
         try await h.labels.merge(Self.tag, into: "Taxes")

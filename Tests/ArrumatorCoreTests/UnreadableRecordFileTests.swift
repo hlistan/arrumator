@@ -32,6 +32,33 @@ import Testing
         #expect(await w.records.unreadableFiles().isEmpty, "and it is no longer reported")
     }
 
+    @Test func historySaysOnceThatARecordFileCannotBeReadAndOnceThatItCanAgain() async throws {
+        let w = try await RecordsWorld.make()
+        defer { w.h.env.cleanup() }
+        let url = w.topListing
+        try TestRecordFiles.broken(try String(contentsOf: url, encoding: .utf8)).write(to: url, atomically: true, encoding: .utf8)
+        try await w.records.reconcile()
+        try await w.h.ingest("edp_september.txt", text: "EDP electricity September")
+        try await w.records.flush()
+        // Another process, as `arrumatorcli` beside the app, finds the same file broken.
+        let other = w.h.env.records()
+        try await other.reconcile()
+        try await other.flush()
+        let said = try await w.h.services.history.events(limit: 10, kinds: [.recordFileUnreadable, .recordFileReadable])
+        #expect(said.map(\.kind) == [.recordFileUnreadable] && said.first?.summary.contains(url.path) == true,
+                "History says once which record file cannot be read, however often and by whom it is found so: \(said.map(\.summary))")
+        #expect(try await w.records.unreadableRecorded().map(\.path) == [url.path], "and the app is told, to show it")
+
+        try TestRecordFiles.mended(String(contentsOf: url, encoding: .utf8)).write(to: url, atomically: true, encoding: .utf8)
+        try await w.records.reconcile()
+        try await other.reconcile()
+        let after = try await w.h.services.history.events(limit: 10, kinds: [.recordFileUnreadable, .recordFileReadable])
+        #expect(after.map(\.kind) == [.recordFileReadable, .recordFileUnreadable],
+                "mended, History says once that it can be read again: \(after.map(\.summary))")
+        #expect(try await w.records.unreadableRecorded().isEmpty, "and the app no longer shows it")
+        #expect(try w.listing(in: w.h.env.archive).contains("file: edp_september.txt"), "what was filed meanwhile is in it")
+    }
+
     /// Ways a record file can be there and still not be read.
     enum Unreadable: String, CaseIterable, Sendable {
         /// Saved again as UTF-16, as some editors do.
@@ -128,7 +155,10 @@ import Testing
             guard case let RecordsError.unreadableFiles(files) = error else { return false }
             return files.map(\.path) == [folder.path]
         }
-        #expect(try await w.h.services.history.events(limit: 100).map(\.id) == events, "so the index keeps its history")
+        let after = try await w.h.services.history.events(limit: 100)
+        #expect(after.filter { $0.kind != .recordFileUnreadable }.map(\.id) == events, "so the index keeps its history")
+        #expect(after.filter { $0.kind == .recordFileUnreadable }.map { $0.summary.contains(folder.path) } == [true],
+                "and says, once, which folder cannot be read")
         try await w.records.reconcile()
         #expect(await w.records.unreadableFiles().map(\.path) == [folder.path], "and the folder is reported, its files not taken for gone")
         #expect(try await RecordsWorld.marks(w.h.env.database).isEmpty, "none of which is written again as though it had been deleted")

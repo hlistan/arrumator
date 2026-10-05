@@ -157,6 +157,62 @@ import Testing
                 "so supervision never gives up on restarts it did not make: \(seen)")
     }
 
+    @Test func aReadyServerIsAwayOnlyOnceProbesInARowFindItSoNotAtOneSlowProbe() async throws {
+        let late = OllamaError.timeout("api/version")
+        let script: [Result<String, OllamaError>] = [.success(ScriptedServer.version), .failure(late), .success(ScriptedServer.version),
+                                                     .failure(late), .failure(late), .failure(late)]
+        var config = try PipelineConfig.bundledDefaults().ollama
+        config.failedProbesBeforeAway = 3
+        let lan = try #require(URL(string: "http://192.168.1.239:11434"))
+        let lifecycle = OllamaLifecycle(api: ScriptedServer { script[$0] }, config: config, management: .external, binaryOverride: nil,
+                                        address: lan, time: TestTime(.advances))
+        var states: [OllamaState] = []
+        for _ in script.indices { states.append(await lifecycle.check()) }
+        let ready = OllamaState.ready(version: ScriptedServer.version)
+        #expect(states == [ready, ready, ready, ready, ready, .unreachable("192.168.1.239")],
+                "a server busy reading that answers one probe late stays ready; three probes in a row it does not answer make it away: \(states)")
+        let first = OllamaLifecycle(api: ScriptedServer { _ in .failure(late) }, config: config, management: .external, binaryOverride: nil,
+                                    address: lan, time: TestTime(.advances))
+        #expect(await first.check() == .unreachable("192.168.1.239"), "one never seen ready is away at its first failed probe")
+    }
+
+    /// Only a probe answered late, as by a server busy reading, waits for more: a connection refused, as to a managed
+    /// server that crashed, finds it away at once, so supervision starts it again without waiting out probes that could
+    /// only say the same (second review of 2026-10-04, finding 5).
+    @Test func aReadyServerThatRefusesTheConnectionIsAwayAtOnce() async throws {
+        var config = try PipelineConfig.bundledDefaults().ollama
+        config.failedProbesBeforeAway = 3
+        let script: [Result<String, OllamaError>] = [.success(ScriptedServer.version), ScriptedServer.away]
+        let lifecycle = OllamaLifecycle(api: ScriptedServer { script[$0] }, config: config, management: .external, binaryOverride: nil,
+                                        address: MockOllama.server, time: TestTime(.advances))
+        #expect(await lifecycle.check() == .ready(version: ScriptedServer.version), "ready first")
+        let refused = await lifecycle.check()
+        #expect(!refused.isReady && refused != .unknown, "one refused connection finds a ready server on this Mac away: \(refused)")
+        let lan = try #require(URL(string: "http://192.168.1.239:11434"))
+        let remote = OllamaLifecycle(api: ScriptedServer { script[$0] }, config: config, management: .external, binaryOverride: nil,
+                                     address: lan, time: TestTime(.advances))
+        _ = await remote.check()
+        #expect(await remote.check() == .unreachable("192.168.1.239"), "and one on the network unreachable")
+    }
+
+    @Test func aServerStartedAgainIsAwayOnlyOnceProbesInARowFindItSoAgain() async throws {
+        let folder = try folder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let server = try StandInServer(in: folder)
+        // Away when first checked, ready once started, then one probe answered late.
+        let script: [Result<String, OllamaError>] = [ScriptedServer.away, .success(ScriptedServer.version), .failure(.timeout("api/version"))]
+        let lifecycle = try lifecycle(ScriptedServer { script[min($0, script.count - 1)] }, spawning: server, time: TestTime(.advances)) {
+            $0.failedProbesBeforeAway = 2
+        }
+        let ready = OllamaState.ready(version: ScriptedServer.version)
+        let started = await lifecycle.ensureRunning()
+        #expect(started == ready, "the server away is started, and answers: \(started)")
+        #expect(await Patience.until { server.started.count == 1 }, "once")
+        #expect(await lifecycle.check() == ready,
+                "one slow probe of the server started again is no server gone: the probe that found it away counts no more")
+        await lifecycle.shutdown()
+    }
+
     @Test func aServerThatAnswersWithAFailureIsUnhealthyAndNeverStartedBesideItself() async throws {
         let folder = try folder()
         defer { try? FileManager.default.removeItem(at: folder) }

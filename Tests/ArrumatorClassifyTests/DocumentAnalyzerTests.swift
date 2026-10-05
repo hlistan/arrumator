@@ -7,16 +7,16 @@ import Testing
 /// The model reads every document once, with the app's own prompt, picks out its signals, which become its labels
 /// and all it is described by, and names its file.
 @Suite struct DocumentAnalyzerTests {
-    /// By default, few and short labels, so the limits show.
-    static func validator(maxPerKind: Int = 3, maxValueChars: Int = 40) throws -> AnswerValidator {
+    /// By default, few and short labels, so the limits show, of the EDP bill.
+    static func validator(maxPerKind: Int = 3, maxValueChars: Int = 40, text: String = Fixtures.edpText) throws -> AnswerValidator {
         var labels = try PipelineConfig.bundledDefaults().labels
         labels.maxPerKind = maxPerKind
         labels.maxValueChars = maxValueChars
-        return AnswerValidator(labels: labels)
+        return try Fixtures.validator(labels, grounds: Fixtures.grounds(text))
     }
 
-    static func defaultValidator() throws -> AnswerValidator {
-        AnswerValidator(labels: try PipelineConfig.bundledDefaults().labels)
+    static func defaultValidator(text: String = Fixtures.edpText) throws -> AnswerValidator {
+        try Fixtures.validator(PipelineConfig.bundledDefaults().labels, grounds: Fixtures.grounds(text))
     }
 
     // MARK: Validation
@@ -24,8 +24,8 @@ import Testing
     @Test func everyKindOfLabelIsReadAndNormalised() throws {
         let v = try Self.defaultValidator().validate("<think>hmm</think>" + Fixtures.answer())
         #expect(v.labels == Fixtures.edpLabels, "a day-first date becomes ISO, and kinds come in their order")
-        #expect(v.fileName == "2026-07-05 EDP Comercial - Fatura eletricidade julho" && v.notes.isEmpty,
-                "the file name is kept as the model gave it, and nothing is noted against a clean answer")
+        #expect(v.title == "Fatura eletricidade julho" && v.notes.isEmpty,
+                "the title is kept for the name, and nothing is noted against a clean answer")
     }
 
     @Test func eachKindIsTidiedToOneLineWithoutRepeatsAndCappedMostSignificantFirst() throws {
@@ -34,7 +34,7 @@ import Testing
             .object: ["apartment Rua das Flores 12, Porto, with garage and storage room",
                       "PT0002000012345678PT0002000012345678PT0002000012345678"],
         ])
-        let validated = try Self.validator().validate(answer)
+        let validated = try Self.validator(text: Fixtures.edpText + "\nJoão Silva, Ana Costa, Rui Sá").validate(answer)
         #expect(validated.labels.values(.party) == ["Maria Exemplo", "João Silva", "Ana Costa"],
                 "the same name however written is one label, and a kind keeps only the first maxPerKind")
         #expect(validated.notes.contains("parties: more than 3, the rest dropped"), "what was dropped is noted for the trace")
@@ -45,7 +45,7 @@ import Testing
     @Test func eachKindKeepsOnlyWhatIsALabelOfThatKind() throws {
         let answer = try Fixtures.answer([
             .type: ["invoice", "receipt"], .date: ["yesterday"], .deadline: ["31.07.2026", "soon"],
-            .period: ["2025", "2026-06/2026-07", "2026-13", "Q3"], .amount: ["54.21 EUR", "free", "EUR 12.00", "25000.00: cny", "1.5 ABC"],
+            .period: ["2025", "2026-06/2026-07", "2026-13", "Q3"], .amount: ["54.21 EUR", "free", "EUR 12.00", "25000.00: cny"],
             .reference: ["invoice 2026/17", "tax assessment for 2025", "the customer's"],
             .topic: ["Electricity", "electricity"], .language: ["Portuguese", "POR", "ru", "Klingonese", "english"],
         ])
@@ -53,8 +53,8 @@ import Testing
         #expect(v.labels.values(.type) == ["invoice"], "a document has one type")
         #expect(v.labels.values(.date).isEmpty && v.labels.values(.deadline) == ["2026-07-31"], "dates are ISO or nothing")
         #expect(v.labels.values(.period) == ["2025", "2026-06/2026-07"], "a period is a year, a month, a day or a span of them")
-        #expect(v.labels.values(.amount) == ["54.21 EUR", "12.00 EUR", "25000.00 CNY", "1.5 ABC"],
-                "an amount has a number, written before its currency code when it has one")
+        #expect(v.labels.values(.amount) == ["54.21 EUR", "12.00 EUR", "25000.00 CNY"],
+                "an amount is a number, written before its currency code")
         #expect(v.labels.values(.reference) == ["invoice 2026/17", "tax assessment for 2025"], "a reference has a number")
         #expect(v.labels.values(.topic) == ["electricity"], "topics are lowercase, once")
         #expect(v.labels.values(.language) == ["pt", "ru", "en"], "a language named in English or by any ISO 639 code is its code, once")
@@ -85,9 +85,9 @@ import Testing
         let config = try PipelineConfig.bundledDefaults()
         let schema = ClassificationSchema.analysis(maxPerKind: config.labels.maxPerKind)
         let body = OllamaChatRequest.sample(format: schema, think: nil).body.serialized()
-        let keys = ClassificationSchema.answerOrder.map(ClassificationSchema.labelsKey) + [ClassificationSchema.fileNameKey]
+        let keys = ClassificationSchema.answerOrder.map(ClassificationSchema.labelsKey) + [ClassificationSchema.titleKey]
         let positions = try keys.map { key in try #require(body.range(of: "\"\(key)\"")?.lowerBound, "\(key) is asked for") }
-        #expect(positions == positions.sorted(), "the model writes the sender, type and date before the rest, and the name last")
+        #expect(positions == positions.sorted(), "the model writes the sender, type and date before the rest, and the title last")
         #expect(Set(ClassificationSchema.answerOrder) == Set(LabelKind.modelKinds)
                     && ClassificationSchema.answerOrder.count == LabelKind.modelKinds.count,
                 "the schema asks for every kind the model gives, once")
@@ -126,7 +126,7 @@ import Testing
         _ = try await h.analyse(Fixtures.content("fatura.pdf", text: Fixtures.edpText), guidance: guidance)
         let request = try #require(await h.mock.chatRequests.first)
         let prompt = request.messages.map(\.content).joined(separator: "\n")
-        #expect(prompt.contains("- senders: EDP Comercial") && !prompt.contains("tags:") && !prompt.contains("Taxes") && !prompt.contains("Receipts"),
+        #expect(prompt.contains(#"- senders: "EDP Comercial""#) && !prompt.contains("tags:") && !prompt.contains("Taxes") && !prompt.contains("Receipts"),
                 "the model is shown the archive's other labels, and nothing of its tags nor of the decisions about them: \(prompt)")
         #expect(request.format?.serialized().contains("\"tags\"") == false, "and is asked for none")
     }
@@ -138,8 +138,8 @@ import Testing
         defer { h.env.cleanup() }
         let outcome = try await h.analyse(Fixtures.content("fatura.pdf", text: Fixtures.edpText))
         #expect(outcome.labels == Fixtures.edpLabels, "the document is described by the labels the model gave")
-        #expect(outcome.analysis == DocumentAnalysis(fileName: "2026-07-05 EDP Comercial - Fatura eletricidade julho", model: ClassifyHarness.chatModel),
-                "and named as the model named it, by the model that read it")
+        #expect(outcome.analysis == DocumentAnalysis(model: ClassifyHarness.chatModel) && outcome.title == "Fatura eletricidade julho",
+                "with the title the model gave, which names it once the user's rules have kept its labels, and the model that read it")
         let embedded = try #require(await h.mock.embedRequests.first?.input.first)
         #expect(outcome.embedding == VectorCodec.normalized(MockOllama.hashEmbedding(embedded, dimension: 256)),
                 "and its embedding, of the text sent to the embedding model, is made for search by meaning")
@@ -147,7 +147,7 @@ import Testing
         let request = try #require(await h.mock.chatRequests.first)
         #expect(await h.mock.chatCount == 1, "one model call per document")
         let system = request.messages[0].content
-        for key in ClassificationSchema.answerOrder.map(ClassificationSchema.labelsKey) + ["file_name"] {
+        for key in ClassificationSchema.answerOrder.map(ClassificationSchema.labelsKey) + [ClassificationSchema.titleKey] {
             #expect(system.contains("- \(key):"), "the prompt explains \(key)")
         }
         #expect(system.contains("no folders") && !system.contains("{{"), "written for labelling, every placeholder filled")
@@ -198,9 +198,10 @@ import Testing
         let request = try #require(await h.mock.chatRequests.first)
         let user = request.messages[1].content
         #expect(user.hasPrefix("## THIS ARCHIVE"), "before the document")
-        #expect(user.contains("- senders: EDP; MEO\n- topics: electricity"), "the labels in use, by the answer's name for their kind")
-        #expect(user.contains("- senders: EDP Comercial → EDP"), "how the user wants a label written")
-        #expect(user.contains("- topics: document"), "a label the user does not want")
+        #expect(user.contains(#"- senders: "EDP", "MEO""# + "\n" + #"- topics: "electricity""#),
+                "the labels in use, by the answer's name for their kind, each as one")
+        #expect(user.contains(#"- senders: "EDP Comercial" → "EDP""#), "how the user wants a label written")
+        #expect(user.contains(#"- topics: "document""#), "a label the user does not want")
         #expect(user.contains("## DOCUMENT") && !user.contains("{{"), "every placeholder filled")
         #expect(request.messages[0].content.contains("THIS ARCHIVE"), "the system prompt says how to use it")
 
@@ -269,8 +270,20 @@ import Testing
         let h = try await ClassifyHarness.make { _ in try Fixtures.answer() }
         defer { h.env.cleanup() }
         let outcome = try await h.analyse(Fixtures.content("blank.pdf", text: "  \n"))
-        #expect(outcome.analysis.problems == ["no text could be read"] && outcome.analysis.fileName == nil,
-                "a document that waits for the user keeps its own name")
+        #expect(outcome.analysis.problems == ["no text could be read"] && outcome.analysis.fileName == nil && outcome.title == nil,
+                "a document that waits for the user is given no title, and keeps its own name")
+    }
+
+    @Test func aKindOfFileNoExtractorReadsWaitsAsSuchNotAsABlankScan() async throws {
+        let h = try await ClassifyHarness.make { _ in try Fixtures.answer() }
+        defer { h.env.cleanup() }
+        var content = Fixtures.content("mystery.xyz", text: "")
+        content.textOrigin = .metadataOnly
+        content.warnings = [ExtractionWarning(.unsupportedFormat, "no Quick Look preview")]
+        let outcome = try await h.analyse(content)
+        #expect(outcome.analysis.problems == [DocumentAnalysis.Problem.unreadableFormat] && outcome.analysis.isUnreadableFormat
+                    && !outcome.analysis.hadNoText,
+                "the reason is that Arrumator cannot read this kind of file, which reading again cannot change, not that it is blank")
     }
 
     @Test func aModelThatCannotBeReachedIsNoAnswerTheDocumentWaitsForIt() async throws {

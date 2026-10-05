@@ -66,8 +66,11 @@ import Testing
         })
         let removed = try await tasks.create(prompt: Self.phones).id
         await queue.drain()
-        #expect(await queue.status == SearchTaskQueueStatus(reading: nil, queued: 1, waitingForOllama: true),
-                "a server that is down is said to be waited for, with the task waiting for it, and nothing is being read")
+        let retry = w.h.env.time.now().addingTimeInterval(w.h.env.config.ingest.retryDelays.last)
+        #expect(await queue.status == SearchTaskQueueStatus(reading: nil, queued: 1, waitingForOllama: true, retryAt: retry),
+                "a server that is down is said to be waited for, with the task waiting for it until when, and nothing is being read")
+        #expect(await queue.status.progress(of: try await suite.task(tasks, removed)) == .waitingForOllama(until: retry),
+                "the task's card says when it is tried again")
         #expect(try await suite.task(tasks, removed).state == .queued, "the task waits in the queue")
         try await tasks.delete(removed)
         #expect(await queue.status == .idle, "with nothing left to read the queue waits for nothing, Ollama included")
@@ -122,16 +125,16 @@ import Testing
         #expect(readingFirst.progress(of: first) == .reading(reading), "the task the status names is being read, by its model, since then")
         #expect(readingFirst.progress(of: second) == .waitingForTurn, "and another waits while it is read first")
         let ollamaAway = SearchTaskQueueStatus(reading: nil, queued: 2, waitingForOllama: true)
-        #expect(ollamaAway.progress(of: second) == .waitingForOllama, "while Ollama cannot be reached a waiting task waits for it")
+        #expect(ollamaAway.progress(of: second) == .waitingForOllama(until: nil), "while Ollama cannot be reached a waiting task waits for it")
         let retrying = SearchTaskQueueStatus(reading: reading, queued: 1, waitingForOllama: true)
-        #expect(retrying.progress(of: first) == .reading(reading) && retrying.progress(of: second) == .waitingForOllama,
+        #expect(retrying.progress(of: first) == .reading(reading) && retrying.progress(of: second) == .waitingForOllama(until: nil),
                 "trying a task again reads it, and the others still wait for Ollama")
         var elsewhere = second
         elsewhere.state = .interpreting
         #expect(readingFirst.progress(of: elsewhere) == .reading(nil),
                 "a task stored as being read that this queue does not name is read elsewhere, as by the command line, by a model it does not know")
         #expect([SearchTaskProgress.reading(reading), .reading(nil)].allSatisfy(\.isReading)
-                    && ![SearchTaskProgress.waitingForOllama, .waitingForTurn, .waiting].contains(where: \.isReading),
+                    && ![SearchTaskProgress.waitingForOllama(until: nil), .waitingForTurn, .waiting].contains(where: \.isReading),
                 "only a request being read, here or elsewhere, is said to be read")
         var done = first
         done.state = .ready

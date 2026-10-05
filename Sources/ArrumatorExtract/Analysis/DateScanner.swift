@@ -14,7 +14,8 @@ public struct DateCandidate: Sendable, Hashable, Encodable {
 /// (`15 мая 2024 г.`, `20 de maio de 2026`, `May 20, 2026`, `3. März 2025`), year-month-day with CJK markers
 /// (`2025年3月5日`, `2025년 3월 5일`), ISO `YYYY-MM-DD`, and numeric dates, day first (`15.05.2024`, `15/05/24`,
 /// `24. 9. 2026`, each end of `01/03/2024-31/03/2024`) or year first with dots and spaces (`2026. 9. 7.`), in the decimal
-/// digits of any script (`٢٠/٠٥/٢٠٢٦`). Every day is Gregorian.
+/// digits of any script (`٢٠/٠٥/٢٠٢٦`), and day first with spaces as an identity card prints it (`01 02 2025`). Every
+/// day is Gregorian.
 /// Month-first numeric dates are accepted only when day-first is impossible. `NSDataDetector` adds any remaining date
 /// expressions that carry both a day number and a four-digit year.
 struct DateScanner: Sendable {
@@ -94,6 +95,11 @@ struct DateScanner: Sendable {
         },
         // 24. 9. 2026 (day first, as Czech, Slovak or German write it)
         Pattern(regex: regex(#"(?<![\d.,/-])(\d{1,2})\.\h(\d{1,2})\.\h(\d{4})(?!\d)"#)) { g, _ in
+            guard let day = number(g[0]), let month = number(g[1]), let year = number(g[2]) else { return nil }
+            return CalendarDay(year: year, month: month, day: day)
+        },
+        // 01 02 2025 (day first, spaced, as identity cards and permits print it: two digits each, and a four-digit year)
+        Pattern(regex: regex(#"(?<![\d.,/-]|\d\h)(\d{2})\h(\d{2})\h(\d{4})(?!\d|\h\d)"#)) { g, _ in
             guard let day = number(g[0]), let month = number(g[1]), let year = number(g[2]) else { return nil }
             return CalendarDay(year: year, month: month, day: day)
         },

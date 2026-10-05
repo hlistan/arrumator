@@ -1,4 +1,5 @@
 import Foundation
+import NaturalLanguage
 
 /// What the user decided about a label, for every document and for every one the model reads from then on.
 public enum LabelRuleAction: String, Sendable, Codable, CaseIterable {
@@ -54,6 +55,16 @@ extension LabelUsage {
     public static func searchKey(_ text: String) -> String {
         text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
             .split { !($0.isLetter || $0.isNumber) }.joined(separator: " ")
+    }
+
+    /// The words of `text` in their order, each folded as `searchKey` folds it, as NaturalLanguage tells them apart in
+    /// every script: those written without spaces between words (Chinese, Japanese, Thai) too, in which a split at
+    /// spaces would find a whole sentence one word (AGENTS.md §4.5). A word that holds punctuation ("1.4.2025",
+    /// "e-mail") is split at it, as `searchKey` splits it, so a word of a text is a word of its key.
+    public static func searchWords(_ text: String) -> [String] {
+        let tokenizer = NLTokenizer(unit: .word)
+        tokenizer.string = text
+        return tokenizer.tokens(for: text.startIndex..<text.endIndex).flatMap { searchKey(String(text[$0])).split(separator: " ").map(String.init) }
     }
 }
 
@@ -139,9 +150,11 @@ public struct LabelPreference: Sendable, Codable, Hashable {
 public struct LabelGuidance: Sendable, Codable, Hashable {
     /// The labels in use, by kind, the most used first.
     public var used: [LabelKind: [String]]
-    /// Labels the user merged into others, newest first.
+    /// Every label the user merged into another, newest first: a name the document writes may be written as any of them
+    /// (`ReadingGrounds`), and the prompt shows the newest `labels.vocabulary.promptPreferred`.
     public var preferred: [LabelPreference]
-    /// Labels the user does not want, newest first.
+    /// Every label the user does not want, newest first, of which the prompt shows the newest
+    /// `labels.vocabulary.promptUnwanted`.
     public var unwanted: [DocumentLabel]
 
     public init(used: [LabelKind: [String]] = [:], preferred: [LabelPreference] = [], unwanted: [DocumentLabel] = []) {

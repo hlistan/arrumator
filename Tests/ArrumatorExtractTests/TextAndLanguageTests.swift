@@ -47,6 +47,19 @@ struct TextAndLanguageTests {
         #expect(LanguageDetector(config: config).detect(english).primary == "other", "a guess below languageMinConfidence is not trusted")
     }
 
+    /// A text of a few words is named a language only when NaturalLanguage is surer of it than of a longer one, as a name
+    /// or two words of a request ("Seguro auto", "EDP Comercial") look like many languages; the model is then told none
+    /// rather than a wrong one (review of 2026-10-04, finding 14).
+    @Test("A short text is named a language only when the guess is sure")
+    func shortTexts() throws {
+        let detector = LanguageDetector(config: try TestConfig.pipeline().extraction)
+        #expect(detector.name(of: "Seguro auto") == nil && detector.name(of: "EDP Comercial") == nil && detector.name(of: "invoices by sender") == nil,
+                "two or three words that look like several languages are named none")
+        #expect(detector.name(of: "faturas da EDP") == "Portuguese" && detector.name(of: "по отправителю") == "Russian"
+                    && detector.name(of: "2025年的电费发票") == "Chinese", "a few words NaturalLanguage is sure of are named")
+        #expect(detector.name(of: "What does the dentist booking confirmation say?") == "English", "a sentence is named as before")
+    }
+
     @Test("KOI8-R and CP1251 are told apart by Russian bigrams")
     func cyrillicEncodings() async throws {
         let scratch = try Scratch()

@@ -240,7 +240,8 @@ import Testing
         let queue = TaskConversationQueue(services: services, answerer: answerer, interpreter: StubInterpreter(plans: [:]), search: w.h.search,
                                           processes: w.h.processes)
         let tasks = SearchTaskActions(services: services, queue: SearchTaskQueue(services: services, interpreter: StubInterpreter(plans: [:]),
-                                                                                 processes: w.h.processes), conversations: queue)
+                                                                                 processes: w.h.processes), conversations: queue,
+                                      archiver: ListingArchiver())
         let talk = TaskConversationActions(services: services, queue: queue)
         let asked = try await talk.ask(try await tasks.create(prompt: SearchTaskTests.prompt).id, question: ConversationTests.question)
 

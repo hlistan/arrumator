@@ -25,10 +25,27 @@ enum Fixtures {
     """
 
     /// A model answer reading the document as an EDP electricity bill to Maria Exemplo; the kind `omitting` names is left
-    /// out of the answer, and `overrides` replaces the signals of a kind.
+    /// out of the answer, `overrides` replaces the signals of a kind, and `title` is what it is.
+    /// What `text` grounds a reading in, as the bundled settings tell words apart.
+    static func grounds(_ text: String, preferred: [LabelPreference] = []) throws -> ReadingGrounds {
+        ReadingGrounds(text: text, letters: try PipelineConfig.bundledDefaults().labels.groundingLetters, preferred: preferred)
+    }
+
+    /// What `content` grounds a reading in, as the bundled settings tell words apart.
+    static func grounds(_ content: ExtractedContent, guidance: LabelGuidance = .none) throws -> ReadingGrounds {
+        ReadingGrounds(content: content, guidance: guidance, letters: try PipelineConfig.bundledDefaults().labels.groundingLetters)
+    }
+
+    /// A validator of `labels`, checking a reading against `grounds` as the bundled settings check its title.
+    static func validator(_ labels: LabelsConfig, grounds: ReadingGrounds) throws -> AnswerValidator {
+        let analysis = try PipelineConfig.bundledDefaults().analysis
+        return AnswerValidator(labels: labels, titleGroundedShare: analysis.titleGroundedShare, partiesWithoutSender: analysis.partiesWithoutSender,
+                               grounds: grounds)
+    }
+
     static func answer(omitting omitted: LabelKind? = nil, _ overrides: [LabelKind: [String]] = [:],
-                       fileName: String = "2026-07-05 EDP Comercial - Fatura eletricidade julho") throws -> String {
-        var fields: [String: JSONValue] = ["file_name": .string(fileName)]
+                       title: String = "Fatura eletricidade julho") throws -> String {
+        var fields: [String: JSONValue] = [ClassificationSchema.titleKey: .string(title)]
         for kind in ClassificationSchema.answerOrder where kind != omitted {
             let values = overrides[kind] ?? edpSignals[kind] ?? []
             fields[ClassificationSchema.labelsKey(kind)] = .array(values.map(JSONValue.string))

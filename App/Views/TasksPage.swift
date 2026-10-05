@@ -40,11 +40,13 @@ struct TasksPage: View {
             if tasks.isEmpty {
                 EmptyState(symbol: Destination.tasks.symbol, text: Wording.noTasksYet)
             }
+            // Built whole: the tasks are few, and an open task's card, with its documents and its conversation, can be
+            // taller than the window, which a lazy stack's estimates of the rows it has not built cannot follow.
             if !active.isEmpty {
-                PageSection(Wording.inProgress) { ForEach(active) { row($0) } }
+                PageSection(Wording.inProgress, lazily: false) { ForEach(active) { row($0) } }
             }
             if !earlier.isEmpty {
-                PageSection(Wording.earlierTasks) { ForEach(earlier) { row($0) } }
+                PageSection(Wording.earlierTasks, lazily: false) { ForEach(earlier) { row($0) } }
             }
         }
         // Reloaded when the queue takes a task to read, too, which History does not record.
@@ -57,10 +59,11 @@ struct TasksPage: View {
             TaskCard(taskID: task.id, profiles: profiles) { if model.session.openTask == task.id { model.session.openTask = nil } }
         } else {
             let progress = model.session.taskQueue.progress(of: task)
-            let answering = progress == nil && model.session.conversation.answering?.task == task.id
+            // While its request is not read, what the conversation's queue does with its questions (`progress(ofTask:)`).
+            let question = progress == nil ? model.session.conversation.progress(ofTask: task.id) : nil
             ListRow(symbol: task.state.symbol, tint: task.state.tint, title: task.name,
-                    detail: answering ? Wording.answeringRow : Wording.taskOutcome(task, progress: progress),
-                    subtitle: task.name == task.prompt ? nil : task.prompt, busy: progress?.isReading == true || answering)
+                    detail: question.map(Wording.questionRow) ?? Wording.taskOutcome(task, progress: progress),
+                    subtitle: task.name == task.prompt ? nil : task.prompt, busy: progress?.isReading == true || question?.isAnswering == true)
                 .rowAction { withAnimation(.snappy) { model.session.openTask = task.id } }
         }
     }
@@ -150,7 +153,6 @@ struct TaskCard: View {
     @State private var name = ""
     @State private var prompt = ""
     @State private var confirmingRemoval = false
-    @State private var section = Section.documents
     @FocusState private var editingName: Bool
     @FocusState private var editingPrompt: Bool
 
@@ -160,12 +162,12 @@ struct TaskCard: View {
                 header(detail.task)
                 if let progress = model.session.taskQueue.progress(of: detail.task) { TaskProgressLine(progress: progress) }
                 request(detail.task)
-                Picker(Wording.documentsSection, selection: $section) {
+                Picker(Wording.documentsSection, selection: section) {
                     Text(Wording.documentsSection).tag(Section.documents)
                     Text(Wording.conversationSection).tag(Section.conversation)
                 }
                 .pickerStyle(.segmented).labelsHidden().fixedSize()
-                switch section {
+                switch section.wrappedValue {
                 case .documents:
                     if detail.task.state == .ready && detail.tree.count == 0 {
                         Text(Wording.nothingFound).foregroundStyle(.secondary)
@@ -200,6 +202,13 @@ struct TaskCard: View {
     /// What the card shows below what the task asks for.
     enum Section: Hashable {
         case documents, conversation
+    }
+
+    /// What the card shows, its documents until the user chooses otherwise, kept by the session
+    /// (`ArchiveSession.taskCardSections`) so the choice outlasts the card.
+    private var section: Binding<Section> {
+        let (session, id) = (model.session, taskID)
+        return Binding(get: { session.taskCardSections[id] ?? .documents }, set: { session.taskCardSections[id] = $0 })
     }
 
     private func header(_ task: SearchTask) -> some View {
@@ -398,7 +407,7 @@ private struct TaskProgressLine: View {
     let progress: SearchTaskProgress
 
     var body: some View {
-        if progress == .waitingForOllama {
+        if case .waitingForOllama = progress {
             Notice(text: Wording.taskProgressLine(progress))
         } else {
             HStack(spacing: Style.noticeSpacing) {
@@ -521,6 +530,8 @@ struct CollectToggle: View {
     @Environment(AppModel.self) private var model
     let task: SearchTask
     let document: Int64
+    /// The document's file name, which the button names to VoiceOver, as every row on the page has a button alike.
+    let name: String
 
     var body: some View {
         let inSet = task.documents.contains(document)
@@ -539,6 +550,6 @@ struct CollectToggle: View {
         }
         .buttonStyle(.plain)
         .help(inSet ? Wording.inTaskHelp : Wording.addToTaskHelp)
-        .accessibilityLabel(inSet ? Wording.inTaskHelp : Wording.addToTaskHelp)
+        .accessibilityLabel(inSet ? Wording.takeOutNamed(name) : Wording.addToTaskNamed(name))
     }
 }

@@ -7,24 +7,33 @@ documents are read and filed; [the command line](cli.md) does everything the app
 
 The window is deliberately quiet, after [Things](https://culturedcode.com/things/). It has a sidebar with five lists,
 below them the archive's labels, and a bar at its foot. Each list is one page under a large title, with no dashboards.
-Every document row shows at its end what happened to it: nothing when it is filed at the top of the archive, or
-where else it is, or waiting for you and why ("Waiting for you: the model gave no valid answer"), a copy an earlier
-version filed of another document, or undone and back in Incoming. Rows are reached with the keyboard too (Tab, with
-keyboard navigation on in System Settings), and Return or Space opens one. Its date, sender, type and tags, and a few
-more of its labels, show beneath it. Clicking a row opens the document in place as a card with its name and its labels,
-one row for each kind it has ([labels](how-it-works.md#labels)), and which model read it, or that no text could be taken
-from it and the model saw only its name, and any problem it had, with what would help when **Read Again** alone cannot:
-a copy saved without its password, or a good copy, put in Incoming. The name can be changed there (a blank one, one
-cleaning leaves nothing of and one of the app's own files are refused, saying so), any label taken off with its × or
-its menu's **Remove from This Document**, and a label added by choosing its kind and writing its value; each change is
-recorded in History, in words: "Renamed to …; added sender “EDP”; removed type “invoice”". A label's menu opens it on
-the Labels page, shows the documents that have it, or removes it from every document. The card's actions follow the
-document's state: **Looks Right** confirms it as it is, **Read Again** has the model read it again, saying it waits
-to be read after the files already in Incoming, **Leave for Later** holds it, and **Undo Filing** moves it back to
-Incoming.
+Every document row shows at its end what happened to it: nothing when it is filed at the top of the archive, or where
+else it is, or waiting for you and why ("Waiting for you: the model gave no valid answer"), a copy an earlier version
+filed of another document, or undone and back in Incoming. Rows are reached with the keyboard too (Tab, with keyboard
+navigation on in System Settings), and Return or Space opens one. Its date, sender, type and tags, and a few more of its
+labels, show beneath it. Clicking a row opens the document in place as a card with its name and its labels, one row for
+each kind it has ([labels](how-it-works.md#labels)), and which model read it, or that no text could be taken from it and
+the model saw only its name, and any problem it had, with what would help when **Read Again** alone cannot: a copy saved
+without its password, or a good copy, put in Incoming. The name can be changed there (a blank one, one cleaning leaves
+nothing of and one of the app's own files are refused, saying so), any label taken off with its × or its menu's **Remove
+from This Document**, and a label added by choosing its kind and writing its value. A value that is no label of its
+kind, such as the type `fatura`, the date `2026-13-45` or the language `klingon`, is said under the field as you write
+it, with what the kind takes, and **Add** waits until it is one; Return keeps what you wrote, to correct it. Each change
+is recorded in History, in words: "Renamed to …; added sender “EDP”; removed type “invoice”". Dates, deadlines and
+periods show as dates, in your Mac's style, a period by its first and last day or month (**1 Jul 2026 – 31 Jul 2026**),
+on the card and in the sidebar alike. A label's menu opens it on the Labels page, shows the documents that have it, or
+removes it from every document. The card's actions follow the document's state: **Looks Right** confirms it as it is,
+after which the card says **Confirmed by you** and when, beside where it is, and no longer offers it until the document
+is read again, corrected, or renamed or moved in Finder; **Read Again** has the model read it again, saying it waits to
+be read after the files already in Incoming (on Needs You, which the document then leaves for Incoming's queue, the page
+says so above the rest, with **Show Incoming**, until you go to another page), **Leave for Later** holds it, and **Undo
+Filing** moves it back to Incoming. A kind of file Arrumator cannot read says so, that the model saw only its name, and
+what would help.
 
 - **Incoming**: under **In Progress**, the file being worked on now, with a spinner and what is being done to it
-  (**Reading its text**, **Being read by the model**, …); under **Queued**, every other file, in the order they arrived,
+  (**Reading its text**, **Being read by qwen3.5:9b**, naming the model of the profile in use, …), and, once that has
+  taken more than a few seconds, for how long so far, as the first file after a start does while the model loads:
+  **Being read by qwen3.5:9b… 1 min, 30 sec so far**; under **Queued**, every other file, in the order they arrived,
   which is the order they are filed in, each saying when it arrived, or, for a file stopped part way (as when you quit
   Arrumator), **Carries on where it stopped**, which it does first at the next start, or the error it had and when it is
   tried again ([how](how-it-works.md#how-a-file-is-handled)). Beneath a file's name, after a grey tag symbol, are the
@@ -35,14 +44,19 @@ Incoming.
   that document joins the queue to be read again, under its own name ([exact copies](how-it-works.md#exact-copies)).
   Then comes what was just processed, grouped by day as on Processed, each with its labels, its tags among them, with
   **Show More in Processed** for the rest.
-- **Needs You**: documents the model could not read, or that are encrypted, damaged or blank, each with the reason.
+- **Needs You**: documents waiting for you, each with the reason: those the model could not read, or that are
+  encrypted, damaged, blank or of a kind of file Arrumator cannot read, and those that could not be filed. The sidebar
+  and the menu bar count them. Below them, under **Set Aside by You**, come the documents you left for later or undid
+  back into Incoming: they wait for nothing, so nothing counts them; read one again when you want it filed.
 - **Processed**: everything finished, newest first and grouped by day, like Things' Logbook.
 - **Labels**: the archive's labels as one vocabulary ([how](how-it-works.md#keeping-labels-one-vocabulary)). **Look
   Alike** lists pairs of labels written so alike they may be one; open one to merge it either way or keep the two apart.
-  The sidebar counts them, as they wait for you. Below come the labels of each kind the vocabulary keeps, the most used
-  first, each with how many documents have it, and your tags under **Tags**, which are never merged or offered to merge
-  without you; open one to merge it into another or remove it everywhere, or to show the documents that have it. **What
-  You Decided** lists your rules, each with **Forget**.
+  The sidebar counts them, as they wait for you. **What You Decided** comes next, before the labels however many there
+  are: your rules, the latest first, each with **Forget**, `interface.pageSize` of them until **Show More** (and **Show
+  Fewer** back). Below come the labels of each kind the vocabulary keeps, the most used first, each with how many
+  documents have it, and your tags under **Tags**, which are never merged or offered to merge without you; open one to
+  merge it into another, written in its field (a value that is no label of its kind is said under it, and **Merge**
+  waits), or remove it everywhere, or to show the documents that have it.
 - **Tasks**: ask for documents in your own words ([search tasks](how-it-works.md#search-tasks)). Write what you need in
   the field at the top and press **Find**. Below the field, **Read with** sets how the request is read
   ([profile and effort](how-it-works.md#profile-and-effort)): its effort, **Low**, **Medium** or **High**, how much the
@@ -62,11 +76,13 @@ Incoming.
   effort and profile it is **Read with**, either of which you can change, which reads it again (a profile the settings
   no longer list says so), and which model read it last; what the model looked for; and
   what its documents are **Arranged by**, a kind per level, each with a × to take it away and a + to add one, or to go
-  back to what the request asked. Below that, **Documents** and **Conversation** choose what the card shows. Under
+  back to what the request asked. Below that, **Documents** and **Conversation** choose what the card shows, and the
+  card keeps showing the one you chose, also when **Find Again** moves it from **Earlier** to **In Progress**. Under
   **Documents** come the documents, a heading per group that folds away, and in each group the
   newest by their own date first, those without a date last, each document with a × under the pointer to take it out
   of the set (a double-click opens it). **Add Documents…** shows every processed document as Processed does, under
-  the day it was processed, with a + at the end of its row; choose labels in the sidebar to narrow them down, as
+  the day it was processed, with a + at the end of its row, which VoiceOver names with the document ("Add “…” to this
+  task"); choose labels in the sidebar to narrow them down, as
   anywhere else, which lists them by their own date; add the documents you want one by one or **Add All With These
   Labels** (as a task finds them: the newest by their own date, at most `tasks.maxDocuments`), and press **Done** to go
   back to the task. **Export** copies the set **To a Folder…** or **As a ZIP Archive…** in a folder you choose, and
@@ -82,14 +98,18 @@ Incoming.
   the documents as they are now, and **Stop**, while it is answered, ends it keeping what came of it. Between questions,
   the changes made to the task's documents since show where they were made. **Clear Conversation…** removes every
   question and answer; the documents stay. While a question about a task is answered, its row says **Answering a
-  question**, with a spinner. An event about a task in History opens the task.
+  question**, with a spinner; while one waits, it says **A question waits to be answered**, or, while Ollama cannot be
+  reached, **A question waits for Ollama, tried again at 14:05**, and the menu bar's window says when too. VoiceOver
+  reads the row as a button, with what it says. An event about a task in History opens the task.
 
 Below the lists, the sidebar lists the labels documents have, each with how many of the documents in view have it, the
 most used first. They come in one list under **Most Used**, `interface.sidebarLabels` of them, or, with **Group Labels
 by Kind** in the bar's menu (`groupLabelsByKind`, `arrumatorcli settings --group-labels-by-kind`), kind by kind
 (Senders, Types, Topics and so on, and your Tags last), `interface.sidebarLabelsPerKind` of each, each kind folding
-away; **Show More** lists the rest. Each kind has its colour, on its name heading its group and on its labels' tags, so
-a label shows its kind in the one list too, your own tags in grey; a label's help names its kind as well. These counts
+away when its name is clicked, as its help says (**Hide Senders**, **Show Senders**); **Show More** lists the rest, and
+**Show Fewer** goes back. Each kind has its colour, on its name heading its
+group and on its labels' tags, so a label shows its kind in the one list too, your own tags in grey; a label's help
+names its kind as well. These counts
 are the only ones on the sidebar besides those of what waits for you. Click a label and the window shows the documents
 that have it under the label as its title, by their own date (the day each was issued, not when it was filed), the
 newest first: under a heading for each month, such as **March 2023**, those of one day by name, and those without a date
@@ -103,10 +123,17 @@ alone. From a terminal, `arrumatorcli labels browse` does the same, listing the 
 **Filter Labels**, between the lists and the labels, finds labels: as you type, the sidebar lists only the labels
 written with your text in them, every one it finds, whatever their case, accents or punctuation (`tax return` finds the
 type `tax-return`), and a language by its English name too. **Clear Filter** below them, or the × in the field, clears
-it. It filters the labels the sidebar offers, so with labels chosen, only those of the documents in view. Edit ›
-**Filter Labels** (Option-Command-F) brings the window forward with the cursor in it, and Escape clears it, then
-leaves it.
+it. It filters the labels the sidebar offers, so with labels chosen, only those of the documents in view. Tab reaches
+it between the lists and the labels, and Edit › **Filter Labels** (Option-Command-F) brings the window forward with the
+cursor in it; Escape clears it, then leaves it.
 `arrumatorcli labels browse --matching` does the same.
+
+Tab goes on from **Filter Labels** to the labels, with keyboard navigation off as on: the arrow keys move through them,
+their kinds' names and **Show More**, Return or Space chooses what is highlighted as a click does, Left and Right fold
+and unfold a kind, and Escape goes back to **Filter Labels**. With keyboard navigation on, Tab also reaches each label,
+each kind's name, **Show More** and **Clear Filter**, which then shows a focus ring, and the arrow keys move that ring.
+VoiceOver names the labels **Labels** and follows the arrow keys; it reads a label as a button with its name and its
+count, selected while it is chosen, and each kind's name as a heading, collapsed or expanded.
 
 Only the labels scroll. The lists and **Filter Labels** stay at the top of the sidebar however far the labels are
 scrolled, and the bar stays at its foot; the labels scroll between them, and a hairline under the filter shows while
@@ -115,6 +142,13 @@ they are scrolled. On the bar's left is the model profile in use, such as **Stan
 pauses or resumes filing, and the **…** menu has **Statistics**, **History**, **Group Labels by Kind**, **Open Incoming
 Folder**, **Open Archive Folder**, **Switch Archive…** and **Settings…**. While the app is not filing, a line above
 them says why, such as **Paused**.
+
+Until Arrumator is set up, nothing in Incoming is taken, and no window says otherwise: the Dock icon, Window ›
+Arrumator (Command-0) and **Open Arrumator** in the menu bar's window open the window that sets it up in place of the
+main window, the menu bar's window says **Not filing: Arrumator is not set up yet**, and so does Incoming, with **Set Up
+Arrumator…**. The menu bar's icon opens a small window of what the app is doing. A full menu bar hides the icon, and
+the Dock icon, shown by default, is then the way in; the icon pressed all the same, as through accessibility, brings the
+main window forward instead of a window that could not be seen.
 
 Documents are searched from a terminal, with `arrumatorcli search`. It lists the documents that contain your words
 first, then those alike in meaning, such as the same kind of document in another language, most similar first. Words are
@@ -144,11 +178,22 @@ The funnel is drawn as bars sharing one baseline rather than a tapered funnel, b
 width of a trapezoid: early losses look larger than late ones and the filled areas mean nothing. Data marks use fixed
 colours rather than the system accent, which macOS greys out whenever the window is not focused.
 
+## Folders and notifications
+
+Settings › General, also onboarding's second step, shows Incoming and the archive both as the app uses them: the full
+path, with `~` written out. Under **Notifications**, **When a document is filed** and **When a document needs review**
+ask macOS to show one; Arrumator asks macOS when you turn one on, or else when the first is due. While a switch is on
+and macOS does not let Arrumator notify, because notifications are turned off for it in System Settings ›
+Notifications, or because macOS would not let it ask, the switches say so, with **Open Notification Settings**, and
+the log says why, rather than nothing being shown without a word.
+
 ## Models and profiles
 
 Settings › Models says where the models run and which models read your documents; onboarding shows its first two
-sections. **Ollama** is the server: its status, its address under **Server**, and, on this Mac, whether the app starts
-it (**Management**). The server must be this Mac, a private or link-local address, or a `.local` name, such as
+sections, a step each (**Connect Ollama**, then **Choose the models**). **Ollama** is the server: its status, its
+address under **Server**, and, on this Mac, whether the app starts it (**Management**), with **Start / check Ollama**,
+or **Check Ollama** when the app never starts it: a server on another machine, or Management's **Never start it**. The
+server must be this Mac, a private or link-local address, or a `.local` name, such as
 `http://192.168.1.20:11434`; anything else is refused (`arrumatorcli settings --ollama-url`), as is an address with a
 user name or password, a query or a fragment. A `.local` name is looked up when you choose it, waiting at most
 `ollama.timeouts.resolve` seconds: one that stands for any address beyond the local network is refused, also beside
@@ -177,40 +222,46 @@ meaning**, each with a mark when it is installed, or **Download** when it is not
 window's sidebar chooses the profile in use too.
 
 **Profiles** lists every profile, Fast, Standard and Smart first, each with the model that reads with it, and says which
-is in use and which predefined one you changed. Click one to open it in place: change its name, or any of its three
-models, typed as Ollama names it or chosen from the installed models that can do the job, each marked installed or with
-**Download**. A predefined profile you changed has **Reset**, which gives it back the name and models Arrumator comes
-with. A profile of your own has **Remove Profile…**, which removes it unless search tasks of the archive that is open
-read with it, and which the profile in use has dimmed, saying to choose another first; documents already read with it
-stay as they are. To read documents again with the profile in use, put them into Incoming again, as they are ([exact
-copies](how-it-works.md#exact-copies)). Profiles are yours, tasks each archive's: a task of another archive whose
-profile you removed fails saying so until you give it another. **New Profile…** adds a profile under the name you give
-it, a copy of the one in use, and opens it to give it other models. As a profile says under **Finds by meaning**,
-documents embedded by another model are found by meaning only once they are read again. From a terminal,
+is in use and which predefined one you changed; the note under them names those three as Arrumator calls them, however
+you renamed them. Click one to open it in place: change its name, or any of its three models, typed as Ollama names it
+or chosen from the installed models that can do the job, each marked installed or with **Download**. A predefined
+profile you changed has **Reset**, which gives it back the name and models Arrumator comes with. A profile of your own
+has **Remove Profile…**, dimmed, saying why under the pointer, while it cannot be removed: while it is the profile in
+use (choose another first) and while search tasks of the archive that is open read with it (give them another first);
+documents already read with it stay as they are. To read documents again with the profile in use, put them into
+Incoming again, as they are ([exact copies](how-it-works.md#exact-copies)). Profiles are yours, tasks each archive's: a
+task of another archive whose profile you removed fails saying so until you give it another. **New Profile…** adds a
+profile under the name you give it, a copy of the one in use, and opens it to give it other models; a name another
+profile has, whatever its case, or one with no letter or digit, is said under the field as you write it, naming that
+profile, and **Add** waits. Refusals name a profile by its name, as the app lists it. As a profile says under **Finds
+by meaning**, documents embedded by another model are found by meaning only once they are read again. From a terminal,
 `arrumatorcli profiles` does all of this, `arrumatorcli settings --profile` chooses the profile in use, and
 `arrumatorcli models list` shows what each installed model can do.
 
 ## Audit, logs and tuning
 
 - **History**: every arrival (with the tag its folder in Incoming gives it), file in Incoming that cannot be opened,
-  exact copy (under the document it has read again, with where the copy went and the tags it gave), extraction,
-  reading (with the labels it gave, which of the
-  model's labels were tidied and why, and what gave its tags), filing, correction of a name or
-  labels, decision about labels (a merge, a label removed everywhere, two kept apart, a rule forgotten), confirmation,
-  undo, move or rename in Finder, search task (asked, with the effort and profile it is read with, what it found or why
-  it could not be read, changed, its effort or profile among it, its set edited, exported, removed), settings change and
-  Ollama availability change (`events` table; History view; `arrumatorcli history`). A settings change made in the app
-  and one made with `arrumatorcli settings` are recorded alike, once, in words made of what changed (`Changed logLevel
-  to debug, renameFiles to false`, with the settings and their new values), and each change to the profiles in its own
-  words: `Added the profile “Mine”, reading with qwen3.5:9b`, `The profile “Smart” reads with gpt-oss:20b instead of
+  exact copy (under the document it has read again, with where the copy went and the tags it gave), extraction, reading
+  (with the labels it gave, which of the model's labels were tidied and why, and what gave its tags, or that nothing
+  could be read of it and why it waits for you), filing (from the name it had to the one it was given, or that it kept
+  its name or waits where it is), correction of a name or labels, decision about labels (a merge, a label removed
+  everywhere, two kept apart, a rule forgotten), confirmation, undo, move or rename in Finder, the move of each document
+  in a folder of yours you rename or move in the archive, a record file that cannot be read and the same file readable
+  again, search task (asked, with the effort and profile it is read with, what it found or why it could not be read,
+  changed, its effort or profile among it, its set edited, exported, removed), settings change and Ollama availability
+  change (`events` table; History view; `arrumatorcli history`). A settings change made in the app and one made with
+  `arrumatorcli settings` are recorded alike, once, in words made of what changed (`Changed logLevel to debug,
+  renameFiles to false`, with the settings and their new values), and each change to the profiles in its own words:
+  `Added the profile “Mine”, reading with qwen3.5:9b`, `The profile “Smart” reads with gpt-oss:20b instead of
   qwen3.5:9b`, `Reset the profile “Smart”`, `Removed the profile “Mine”`, `Reading with the profile “Smart”`, which
   comes first when other settings change with it (`Reading with the profile “Smart”; changed renameFiles to false`).
-  Pausing, the Ollama server and switching archives have their own (`Processing paused`, `Ollama at …`, `Switched to
-  the archive at …`).
+  Pausing, the Ollama server and switching archives have their own (`Processing paused`, `Ollama at …`, `Switched to the
+  archive at …`).
 - **Traces**: for every document, each stage's inputs, outputs and timing, including the tags it was given and the
   folder in Incoming or command that gave each (the `tag` step), the exact prompts (with what the model was shown of the
   archive's labels), raw model responses and the labels the `consolidate` step changed ("How was
-  this read?"; `arrumatorcli trace <doc> --full`). The prompts and raw answers of a reading, and the raw answer of an
+  this read?"; `arrumatorcli trace <doc> --full`), and, for a document that waits for you, why, in a step of its own
+  marked as a warning (`review`). The prompts and raw answers of a reading, and the raw answer of an
   image description, are kept for Settings › Advanced › "Keep full model prompts" days (`traceRawRetentionDays`,
   from 1 to 3650, 180 by default, or `arrumatorcli settings --trace-retention-days`); after that they are cleared once
   an hour (`maintenance.interval`) and what the reading concluded stays. Every trace is stamped with the models of the profile
@@ -228,7 +279,8 @@ documents embedded by another model are found by meaning only once they are read
 - **Statistics**: documents by status, labelled and not yet labelled, labels by kind, corrections and confirmations,
   rules about labels and labels tidied,
   latency per stage, OCR quality and extraction warnings (`arrumatorcli stats`).
-- **Diagnostics**: one zip with logs, recent traces, doctor report and settings, for a bug report. Unless you ask for
+- **Diagnostics**: one zip with logs, recent traces, doctor report and settings, for a bug report (Settings › Advanced ›
+  **Export diagnostics…**, whose panel opens beside the archive, as a task's export first does). Unless you ask for
   document text, it holds nothing derived from a document or its file: no text or preview, metadata, file name or path,
   identifier, label or question. Each step of a trace keeps its stage, status, start and duration, and each line of a
   log its time, level, category and message, and of its fields only those that never come from a document, such as the
@@ -260,84 +312,106 @@ No tunable lives in code. Defaults are bundled in `Sources/ArrumatorCore/Resourc
   model stays loaded after its last request, `ollama.keepAlive.chat` for the one that reads and describes images and
   `ollama.keepAlive.embed` for the one that finds by meaning; each of `ollama.timeouts` bounds how long a request may
   wait for more of its answer and, but for a download, how long the whole of it may take, and 0 is no timeout, but
-  `ollama.timeouts.resolve`, how long a `.local` name of the server may take to be looked up, more than 0; the
-  most bytes one answer may hold, a reply or all the lines of an answer streamed, and one line of a download's
-  progress, `ollama.maxResponseBytes`; how long what the server said of where a model runs is trusted,
-  `ollama.modelLocationMaxAge`, 0 to ask before every request; how many characters of a prompt a token of the model's
-  context is reckoned to hold, `ollama.charsPerToken`, by which a search task's request and a question, with what they
-  are shown, are fit to the context they are read in before they are sent), `watcher` (when a file in Incoming or the
-  archive has stopped changing, what is never taken in, how long a file that has not stopped changing is waited for
-  before History says it is taking long, as it is waited for still, looked at every `watcher.awayPollSeconds`,
-  `watcher.stabilityMaxWaitSeconds`, how long one that has stopped changing but cannot be opened is waited for before it
-  is let go and, in Incoming, History says so, `watcher.unopenableWaitSeconds`, 0 or more, the most items a package may
-  hold to be one document, in Incoming, in the archive or named to `arrumatorcli ingest`, `watcher.maxPackageItems`, at
-  least 1, and how often the archive's folder is looked for while it is away, and a file taking long looked at,
-  `watcher.awayPollSeconds`), `records` (the names of the archive's record files and of its system and history folders,
-  such as `records.labelRulesFileName`, `records.searchTasksFileName` and `records.conversationsFolderName`, and how
-  many minutes after it was last written a record file's staged text is taken for one a crash left and removed,
-  `records.stagedLeftoverMinutes`, more than 0), `ingest`
-  (attempts and retry delays, also how many starts a change in the archive that cannot be taken in is tried at, how
-  often a document whose model is not installed looks again whether it is, `ingest.modelRecheckSeconds`, more than 0,
-  how long a document waits for a reading given up on that does not stop to end before it fails rather than being
-  read again beside it, `ingest.abandonedWorkSeconds`, more than 0, how long an idle worker, of Incoming or of tasks
-  and questions, waits at most while another process, as `arrumatorcli` beside the app, holds items of its queue,
-  before it looks again whether that process still runs, `ingest.heldElsewhereRecheckSeconds`, more than 0, and how
-  long quitting waits for the file in hand, the request being read and the question being answered to stop,
-  `ingest.quitTimeout`, after which the `ollama serve` the app started is stopped all the same), `extraction` (OCR and
-  extraction limits, among them how much of an e-mail is read, `extraction.emailReadCapBytes`, and of its body,
-  `extraction.emailBodyCapBytes`, how many messages deep one with no text of its own is read through the messages it
-  forwards, `extraction.emailForwardsRead`, how many pixels an image may declare, `extraction.image.maxPixels`, beyond
-  which it is read for its metadata alone, how many pages of a scanned PDF or a TIFF OCR reads: all when there are at
-  most `extraction.pdf.ocrAllIfAtMost`, else the first `extraction.pdf.ocrHeadPages` and the last (a scanned page's text
-  is what OCR reads of it, as its text layer may be glyphs named wrong, and its text layer only where OCR does not read
-  it, fails or reads nothing), of how many pages of a PDF the text layer is read, the first
-  `extraction.pdf.textLayerHeadPages` and the last `extraction.pdf.textLayerTailPages` (the pages either leaves out are
-  named in a warning), and what a ZIP file, an archive or an Office document, may hold: at most
-  `extraction.zipMaxEntries` entries, each read up to `extraction.zipEntryCapBytes`; an archive, workbook or
-  presentation that holds more, whose directory does not match the file or whose entries share bytes of it, is read for
-  its metadata alone, and a Word document is still converted by `textutil`, without its title and author), `entities`
-  (dates and identifiers: the words that label a document's date, its due date and a date of birth, and those after
-  which a number is an account or customer number, `entities.accountLabels`, or a policy or contract number,
-  `entities.policyLabels`, with a number sign between as `entities.numberSigns` writes it; each is a phrase matched
-  whatever its case, in which a space matches any white space, and none at all beside a dot or a sign (`n. º. de
-  cliente` matches `nºcliente`), a dot may be left out, and `*` is any one word, at most three of them (`договор * №`);
-  a phrase of `*` alone, or a number sign that holds one, is refused by name), `analysis` (what the model is shown and
-  how it is asked, such as `analysis.excerptChars`, of which the end of the document gets `1 /
-  analysis.excerptTailDivisor`, `analysis.repairAttempts`, the context a document, a search request and an image are
-  read with, `analysis.numCtx`, one so that a model that reads and describes images stays loaded once, what a model that
-  can think is told before it reads a document or describes an image, `analysis.think`, `false`, and the identifiers a
-  document's embedding lists, `analysis.embeddingIdentifiersLimit`), `labels` (`labels.maxPerKind`,
-  `labels.maxValueChars`, and `labels.vocabulary`: for each kind kept one vocabulary, never your tags, how alike labels
-  must be written to be merged without asking or offered to merge and how many in use the model is shown, and how many
-  of your merges and unwanted labels it is shown), `naming`, `search`, `tasks` (search tasks: how much the model thinks
-  at each effort, with the budget thinking needs, `tasks.efforts.low`, `tasks.efforts.medium` and `tasks.efforts.high`,
-  each giving what a model that can think is told, `think` (`false`, `true` or the name of a level, sent as the model
-  allows), how often an invalid answer goes back to it, `repairAttempts`, how long an answer may be and take,
-  `numPredict` and `timeout` (an answer that takes longer fails the task), and which labels in use the model is shown of
-  each kind, `promptLabels`; how much a request may ask for, `tasks.maxValuesPerKind` and `tasks.maxWords`, how deep a
-  set is arranged, `tasks.maxGroupingDepth`, and by what when the request does not say, `tasks.defaultGrouping`, how
-  long a task's name from the model may be, `tasks.maxTitleChars`, how many documents a task finds at most, the newest
-  by their own date, `tasks.maxDocuments`, and the folder an export puts documents without a label of a level's kind
-  into, `tasks.withoutLabelFolder`), `conversation` (the questions about a task's documents: the context an answer is
-  asked in, `conversation.numCtx`; how much of the set's text it is shown, `conversation.contextChars`, of one
-  document's, `conversation.documentChars`, how many documents it is shown by name alone, `conversation.maxListed`, and
-  how much of the conversation so far, `conversation.historyChars`; how long a question may be,
-  `conversation.maxQuestionChars`; how many documents found outside the task an answer lists at most,
+  `ollama.timeouts.resolve`, how long a `.local` name of the server may take to be looked up, more than 0; the most
+  bytes one answer may hold, a reply or all the lines of an answer streamed, and one line of a download's progress,
+  `ollama.maxResponseBytes`; how long what the server said of where a model runs is trusted,
+  `ollama.modelLocationMaxAge`, 0 to ask before every request; how many probes for the server's version in a row must
+  come later than `ollama.timeouts.version` before a server that was ready is said to be away,
+  `ollama.failedProbesBeforeAway`, at least 1, so a server busy reading that answers one probe late is not, while one
+  that refuses the connection, as a server that crashed does, is away at once and started again; how many
+  characters of a prompt a token of the model's context is reckoned to hold, `ollama.charsPerToken`, by which a search
+  task's request and a question, with what they are shown, are fit to the context they are read in before they are sent,
+  and how often one Ollama counts filling that context is fitted again at what it counted and asked again,
+  `ollama.refitAttempts`, 0 never), `watcher` (when a file in Incoming or the archive has stopped changing, what is
+  never taken in, how long a file that has not stopped changing is waited for before History says it is taking long, as
+  it is waited for still, looked at every `watcher.awayPollSeconds`, `watcher.stabilityMaxWaitSeconds`, how long one
+  that has stopped changing but cannot be opened is waited for before it is let go and, in Incoming, History says so,
+  `watcher.unopenableWaitSeconds`, 0 or more, the most items a package may hold to be one document, in Incoming, in the
+  archive or named to `arrumatorcli ingest`, `watcher.maxPackageItems`, at least 1, and how often the archive's folder
+  is looked for while it is away, and a file taking long looked at, `watcher.awayPollSeconds`), `records` (the names of
+  the archive's record files and of its system and history folders, such as `records.labelRulesFileName`,
+  `records.searchTasksFileName` and `records.conversationsFolderName`, and how many minutes after it was last written a
+  record file's staged text is taken for one a crash left and removed, `records.stagedLeftoverMinutes`, more than 0),
+  `ingest` (attempts and retry delays, also how many starts a change in the archive that cannot be taken in is tried at,
+  how often a document whose model is not installed looks again whether it is, `ingest.modelRecheckSeconds`, more than
+  0, how long a document waits for a reading given up on that does not stop to end before it fails rather than being
+  read again beside it, `ingest.abandonedWorkSeconds`, more than 0, how long an idle worker, of Incoming or of tasks and
+  questions, waits at most while another process, as `arrumatorcli` beside the app, holds items of its queue, before it
+  looks again whether that process still runs, `ingest.heldElsewhereRecheckSeconds`, more than 0, and how long quitting
+  waits for the file in hand, the request being read and the question being answered to stop, `ingest.quitTimeout`,
+  after which the `ollama serve` the app started is stopped all the same), `extraction` (OCR and extraction limits, how
+  sure the language a text is written in must be guessed, `extraction.languageMinConfidence`, and, for a search request
+  or a question of fewer than `extraction.languageShortTextWords` words, which the model is told the language of,
+  `extraction.languageShortTextMinConfidence`, among them how much of an e-mail is read, `extraction.emailReadCapBytes`,
+  and of its body, `extraction.emailBodyCapBytes`, how many messages deep one with no text of its own is read through
+  the messages it forwards, `extraction.emailForwardsRead`, how many pixels an image may declare,
+  `extraction.image.maxPixels`, beyond which it is read for its metadata alone, how many pages of a scanned PDF or a
+  TIFF OCR reads: all when there are at most `extraction.pdf.ocrAllIfAtMost`, else the first
+  `extraction.pdf.ocrHeadPages` and the last (a scanned page's text is what OCR reads of it, as its text layer may be
+  glyphs named wrong, and its text layer only where OCR does not read it, fails or reads nothing), of how many pages of
+  a PDF the text layer is read, the first `extraction.pdf.textLayerHeadPages` and the last
+  `extraction.pdf.textLayerTailPages` (the pages either leaves out are named in a warning), and what a ZIP file, an
+  archive or an Office document, may hold: at most `extraction.zipMaxEntries` entries, each read up to
+  `extraction.zipEntryCapBytes`; an archive, workbook or presentation that holds more, whose directory does not match
+  the file or whose entries share bytes of it, is read for its metadata alone, and a Word document is still converted by
+  `textutil`, without its title and author), `entities` (dates and identifiers: the words that label a document's date,
+  its due date and a date of birth, and those after which a number is an account or customer number,
+  `entities.accountLabels`, or a policy or contract number, `entities.policyLabels`, with a number sign between as
+  `entities.numberSigns` writes it; each is a phrase matched whatever its case, in which a space matches any white
+  space, and none at all beside a dot or a sign (`n. º. de cliente` matches `nºcliente`), a dot may be left out, and `*`
+  is any one word, at most three of them (`договор * №`); a phrase of `*` alone, or a number sign that holds one, is
+  refused by name), `analysis` (what the model is shown and how it is asked, such as `analysis.excerptChars`, of which
+  the end of the document gets `1 / analysis.excerptTailDivisor`, `analysis.repairAttempts`, the share of a title's
+  words the document must write before it goes back to the model once, `analysis.titleGroundedShare`, the parties a
+  reading without a sender names before it goes back asking who issued the document, `analysis.partiesWithoutSender`,
+  the context a
+  document, a search request and an image are read with, `analysis.numCtx`, one so that a model that reads and
+  describes images stays loaded once, what a model that can think is told before it reads a document or describes an image,
+  `analysis.think`, `false`, and the identifiers a document's embedding lists, `analysis.embeddingIdentifiersLimit`),
+  `labels` (`labels.maxPerKind`, `labels.maxValueChars`, the letters a word needs to say on its own whether the
+  document writes a name or a title, `labels.groundingLetters`, the digits a word of an object needs to identify a
+  thing, `labels.objectIdentifierDigits`, and `labels.vocabulary`: for each kind kept one
+  vocabulary, never your tags, how alike labels must be written to be merged without asking or offered to merge and
+  how many in use the model is shown, and how many of your merges and unwanted labels it is shown), `naming` (how long
+  a file name may be, `naming.maxChars` and `naming.maxBytes`, what it may not hold, `naming.forbiddenCharacters`, the
+  suffix of a name already taken, `naming.collisionFormat`, and what a reading's name is made of, in order,
+  `naming.parts`, of the title and, at most once each, the date and the sender, each but the last followed by its
+  separator in `naming.separators`),
+  `search`, `tasks` (search tasks: how much the model thinks at each effort, with the budget thinking needs,
+  `tasks.efforts.low`, `tasks.efforts.medium` and `tasks.efforts.high`, each giving what a model that can think is told,
+  `think` (`false`, `true` or the name of a level, sent as the model allows), how often an invalid answer goes back to
+  it, `repairAttempts`, how long an answer may be and take, `numPredict` and `timeout` (an answer that takes longer
+  fails the task), and which labels in use the model is shown of each kind, `promptLabels`; how much a request may ask
+  for, `tasks.maxValuesPerKind` and `tasks.maxWords`, how many words of a request may stand between a list of
+  alternatives a kind's labels quote and a word the model gives, for the word to carry the list on as one more
+  alternative rather than a word every document must hold, `tasks.alternativesGap` (0: right next to it; a word between
+  two of them is one however far), the letters at the end of a word that may differ while it is the same word
+  inflected, which a conversation's request for more documents is told against your question by,
+  `tasks.inflectionLetters`, how deep a set is arranged, `tasks.maxGroupingDepth`, and by what when the request
+  does not say, `tasks.defaultGrouping`, how long a task's name from the model may be, `tasks.maxTitleChars`, how many
+  documents a task finds at most, the newest by their own date, `tasks.maxDocuments`, and the folder an export puts
+  documents without a label of a level's kind into, `tasks.withoutLabelFolder`), `conversation` (the questions about a
+  task's documents: the context an answer is asked in, `conversation.numCtx`; how much of the set's text it is shown,
+  `conversation.contextChars`, of one document's, `conversation.documentChars`, how many documents it is shown by name
+  alone, `conversation.maxListed`, and how much of the conversation so far, `conversation.historyChars`; how long a
+  question may be, `conversation.maxQuestionChars`; how many documents found outside the task an answer lists at most,
   `conversation.maxSuggested`; how an answer is sampled, `conversation.sampling`; and at each effort,
   `conversation.efforts.low`, `conversation.efforts.medium` and `conversation.efforts.high`, `think`, `repairAttempts`,
   `numPredict` and `timeout`, as a task's efforts have them), `logging` (with `logging.followInterval`, how often
   `arrumatorcli logs --follow` looks), `power`, `stats` (the periods Statistics offers, and `stats.defaultWindowDays`,
-  the one it and `arrumatorcli
-  funnel` show first), `interface` (how many rows a page loads, `interface.pageSize`, how many labels the sidebar lists
-  in one list, `interface.sidebarLabels`, and of each kind when grouped, `interface.sidebarLabelsPerKind`, how many
-  recent events notifications are drawn from, `interface.notificationEvents`, and how much text `arrumatorcli extract`
-  prints, `interface.extractPreviewChars`), `maintenance` (how often the app prunes logs, trims traces and looks for
-  files, tasks and questions `arrumatorcli` queued or left in hand when it was killed, `maintenance.interval`) and
-  `database` (how long a write waits for another process using the index, `database.busyTimeout`, and how long the app
-  waits before it watches the index again after watching it failed, `database.observationRetry`, more than 0) and
-  `settings` (how long a change of `settings.json` waits for another process changing it, `settingsLock.timeout`, after
-  which it fails saying so, asking again every `settingsLock.pollInterval`). Override any subset in
-  `~/Library/Application Support/Arrumator/pipeline.json`.
+  the one it and `arrumatorcli funnel` show first), `interface` (how many rows a page loads, `interface.pageSize`, how
+  many labels the sidebar lists in one list, `interface.sidebarLabels`, and of each kind when grouped,
+  `interface.sidebarLabelsPerKind`, how many recent events notifications are drawn from, `interface.notificationEvents`,
+  how long the app waits for macOS to answer its asking to show notifications, `interface.notificationAskTimeout`,
+  how long after starting it says whether its menu bar icon can be seen, `interface.menuBarSettleSeconds`,
+  and how much text `arrumatorcli extract` prints, `interface.extractPreviewChars`), `maintenance` (how often the app
+  prunes logs, trims traces and looks for files, tasks and questions `arrumatorcli` left in hand when it was killed,
+  `maintenance.interval`; what a command queues or changes while the app runs, the app takes up and shows as soon as the
+  command commits it) and `database` (how long a write waits for another process using the index,
+  `database.busyTimeout`, and how long the app waits before it watches the index again after watching it failed,
+  `database.observationRetry`, more than 0) and `settings` (how long a change of `settings.json` waits for another
+  process changing it, `settingsLock.timeout`, after which it fails saying so, asking again every
+  `settingsLock.pollInterval`). Override any subset in `~/Library/Application Support/Arrumator/pipeline.json`.
 
 A configuration the app cannot run with stops it with the key and the reason: an empty `ingest.retryDelays`, a negative
 `analysis.repairAttempts` or an effort that is not low, medium or high in `pipeline.json`, and any value the code that
@@ -393,14 +467,18 @@ migrated, the app rebuilds it from the archive and reads each document's text ag
 locked by another process or on a full disk is left as it is, and the app says why it cannot start. Switching away
 from an archive that cannot be written to, as when its disk is gone, still switches; the app says that archive's record
 files wait, and they are written when you open it again. You can edit the files by hand; the app reads the change back
-and never overwrites it, not even one it cannot read, which `arrumatorcli doctor` names with the reason. An index cannot
+and never overwrites it, not even one it cannot read, which `arrumatorcli doctor` names with the reason, History says
+once, and the foot of the window says while filing goes on, until it is mended, when what was filed meanwhile is
+written into it. An index cannot
 be rebuilt without such a file: the app then files nothing, says **Not filing: reading the archive failed** above the
 sidebar's bar, shows at the foot of the window that reading the archive failed, with the file and why, and refuses
 any change to labels, rules, tasks or questions with the same reason, until the file is corrected or moved out of the
 archive and the index rebuilt in Settings › Advanced, which starts the filing again and clears the foot of the
 window, or the app opened again. An archive whose folder is not there, renamed, moved or on a disk that is not
 connected, is away, at launch or while the app runs: the app says **Not filing: the archive's folder is not there**
-above the bar and names the folder at the foot of the window, makes no folder in its place, files nothing and writes no
+above the bar, names the folder at the foot of the window and, above every page, says that the archive is not there,
+with the folder's path under it, shortened in the middle when it is long; it makes no folder in its place, files
+nothing and writes no
 record file, and Incoming waits: nothing in it is read or sent to the model, and a file the app had in hand stops before
 its next step. An Incoming folder that is not there is made only in a folder that is, never on a disk not connected or
 in the archive's folder while it is away. It looks for the folder every `watcher.awayPollSeconds`, and once the same

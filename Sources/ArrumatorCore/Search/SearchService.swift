@@ -248,14 +248,15 @@ public actor SearchService {
 
     /// The documents alike in meaning to `text`, the most alike first, at most `k`, among those `allowed` gives (all when
     /// it gives nil); or, when they cannot be compared by meaning, as when their vectors cannot be read, none, and why.
-    /// Stopping is thrown, and so is Ollama being away when `waitingForOllama`, for what asks to wait for it all the same.
+    /// Stopping is thrown, and so is Ollama being away when `waitingForOllama`, for what asks to wait for it all the same:
+    /// at once, without asking it again meanwhile, as what asks says it waits for Ollama, and when it tries again.
     private func alike(to text: String, k: Int, waitingForOllama: Bool,
                        among allowed: () async throws -> Set<Int64>?) async throws -> (found: [(docID: Int64, score: Float)], unavailable: String?) {
         guard text.count >= config.minSemanticQueryChars else { return ([], Self.tooShort) }
         guard let embedder else { return ([], Self.noEmbedder) }
         do {
             try await loadVectors(of: embedder.modelId)
-            let vector = try await queryVector(text, embedder: embedder)
+            let vector = try await queryVector(text, embedder: embedder, retrying: !waitingForOllama)
             return (try await vectors.topK(vector, model: embedder.modelId, k: k, allowed: try await allowed()), nil)
         } catch let error as OllamaError where waitingForOllama && error.isTransient {
             throw error
@@ -267,11 +268,11 @@ public actor SearchService {
     }
 
     /// `text`'s vector by `embedder`, kept for the next `search.queryCacheSize` texts asked for. A text two searches ask
-    /// for at once is embedded by both and kept once.
-    private func queryVector(_ text: String, embedder: any Embedder) async throws -> [Float] {
+    /// for at once is embedded by both and kept once. Ollama away is asked again only when `retrying`.
+    private func queryVector(_ text: String, embedder: any Embedder, retrying: Bool) async throws -> [Float] {
         let key = embedder.modelId + "\u{1}" + text
         if let hit = cache[key] { return hit }
-        guard let vector = try await embedder.embed([text]).first else { throw OllamaError.emptyResponse }
+        guard let vector = try await embedder.embed([text], retrying: retrying).first else { throw OllamaError.emptyResponse }
         if cache.updateValue(vector, forKey: key) == nil {
             cacheOrder.append(key)
             if cacheOrder.count > config.queryCacheSize { cache[cacheOrder.removeFirst()] = nil }

@@ -33,23 +33,38 @@ public struct ModelProfileActions: Sendable {
     }
 
     /// Adds a profile called `name`: a copy of the profile `copying` names, else of the one Settings reads with, with what
-    /// `change` gives, after every other profile. Its id is made of its name (`id(for:taken:)`). A blank name, a name
-    /// another profile has, whatever its case, a name with no letter or digit and a blank model are refused.
+    /// `change` gives, after every other profile. Its id is made of its name (`id(for:taken:)`). A name
+    /// `refusal(ofNewName:in:)` refuses and a blank model are refused.
     @discardableResult
     public func add(name: String, copying source: String? = nil, change: ModelProfileChange = ModelProfileChange()) async throws
         -> ModelProfileListing {
         let (saved, added) = try await settings.change(checking: { settings in
             var profile = try settings.modelProfile(source.map(DocumentLabel.oneLine))
             profile.name = DocumentLabel.oneLine(name)
-            guard !profile.name.isEmpty else { throw ModelProfileError.blankName(nil) }
-            profile = try Self.applying(change, to: profile, id: nil)
-            try Self.refuseTakenName(of: profile, id: nil, in: settings)
+            profile = try Self.applying(change, to: profile, named: nil)
+            if let refusal = Self.refusal(ofNewName: profile.name, in: settings) { throw refusal }
             let id = try Self.id(for: profile.name, taken: Set(settings.modelProfiles.keys))
             profile.position = (settings.modelProfiles.values.map(\.position).max() ?? 0) + 1
             settings.modelProfiles[id] = profile
             return (summary: "Added the profile “\(profile.name)”, reading with \(profile.chatModel)", outcome: (id: id, profile: profile))
         })
         return listing(added.id, added.profile, in: saved)
+    }
+
+    /// Why a new profile cannot be called `name` among the profiles `settings` lists, or nil when it can: a blank name, a
+    /// name another profile has, whatever its case, named by that profile's name, and a name with no letter or digit to
+    /// make its id of. `add(name:)` refuses what this says, and the app says it as the name is typed.
+    public static func refusal(ofNewName name: String, in settings: AppSettings) -> ModelProfileError? {
+        let name = DocumentLabel.oneLine(name)
+        guard !name.isEmpty else { return .blankName(nil) }
+        if let other = holder(of: name, other: nil, in: settings) { return .nameTaken(name: name, by: other) }
+        guard idWords(of: name) != nil else { return .nameWithoutLetterOrDigit(name) }
+        return nil
+    }
+
+    /// The names the predefined profiles come with, in their order: what Arrumator ships, however the user renamed them.
+    public var predefinedNames: [String] {
+        bundled.values.sorted { ($0.position, $0.nameKey) < ($1.position, $1.nameKey) }.map(\.name)
     }
 
     /// Changes the profile's name or models, as `change` gives them. An unknown profile, a blank value and a name another
@@ -59,7 +74,7 @@ public struct ModelProfileActions: Sendable {
         let id = DocumentLabel.oneLine(id)
         let (saved, new) = try await settings.change(checking: { settings in
             let old = try settings.modelProfile(id)
-            let new = try Self.applying(change, to: old, id: id)
+            let new = try Self.applying(change, to: old, named: old.name)
             try Self.refuseTakenName(of: new, id: id, in: settings)
             settings.modelProfiles[id] = new
             return (summary: "The profile “\(old.name)” " + Format.and(Self.differences(from: old, to: new)), outcome: new)
@@ -75,7 +90,7 @@ public struct ModelProfileActions: Sendable {
         let bundled = bundled[id]
         let (saved, original) = try await settings.change(checking: { settings in
             let old = try settings.modelProfile(id)
-            guard let original = bundled else { throw ModelProfileError.notPredefined(id) }
+            guard let original = bundled else { throw ModelProfileError.notPredefined(old.name) }
             try Self.refuseTakenName(of: original, id: id, in: settings)
             settings.modelProfiles[id] = original
             return (summary: "Reset the profile “\(old.name)”", outcome: original)
@@ -83,25 +98,29 @@ public struct ModelProfileActions: Sendable {
         return listing(id, original, in: saved)
     }
 
-    /// Removes a profile of the user's own. A predefined one is refused, as the bundled settings would bring it back,
-    /// and so are the one Settings reads with and one search tasks of the archive that is open read with, which are given
-    /// another first. Profiles are the user's, tasks each archive's: a task of another archive whose profile is gone
-    /// fails saying so until it is given another.
+    /// Removes a profile of the user's own. What `ModelProfileListing.removalRefusal(searchTasks:)` says of it is refused:
+    /// a predefined one, as the bundled settings would bring it back, the one Settings reads with and one search tasks of
+    /// the archive that is open read with, which are given another first. Profiles are the user's, tasks each archive's:
+    /// a task of another archive whose profile is gone fails saying so until it is given another.
     @discardableResult
     public func remove(_ id: String) async throws -> ModelProfileListing {
         let id = DocumentLabel.oneLine(id)
-        let predefined = bundled[id] != nil
         // Counted in the index before the settings are changed, as a change of the settings waits on nothing else.
-        let tasks = try await database.reader.read { db in try SearchTaskStore.count(db, profile: id) }
+        let tasks = try await searchTasks(readingWith: id)
         let (saved, removed) = try await settings.change(checking: { settings in
             let removed = try settings.modelProfile(id)
-            guard !predefined else { throw ModelProfileError.predefined(id) }
-            guard id != settings.profile else { throw ModelProfileError.inUse(id) }
-            guard tasks == 0 else { throw ModelProfileError.namedByTasks(id, count: tasks) }
+            if let refusal = listing(id, removed, in: settings).removalRefusal(searchTasks: tasks) { throw refusal }
             settings.modelProfiles[id] = nil
             return (summary: "Removed the profile “\(removed.name)”", outcome: removed)
         })
         return listing(id, removed, in: saved)
+    }
+
+    /// How many search tasks of the archive that is open read with the profile `id` names, rather than with the one
+    /// Settings uses; those of another archive are not known while it is closed.
+    public func searchTasks(readingWith id: String) async throws -> Int {
+        let id = DocumentLabel.oneLine(id)
+        return try await database.reader.read { db in try SearchTaskStore.count(db, profile: id) }
     }
 
     /// Settings reads documents and requests with the profile from now on. An unknown profile is refused.
@@ -118,9 +137,7 @@ public struct ModelProfileActions: Sendable {
     /// The id a profile called `name` gets: the lowercase letters and digits of its name, its words joined by `-`, with
     /// `-2`, `-3`… after them while another profile has that id. A name with no letter or digit is refused.
     static func id(for name: String, taken: Set<String>) throws -> String {
-        let words = name.lowercased().split { !($0.isLetter || $0.isNumber) }
-        guard !words.isEmpty else { throw ModelProfileError.nameWithoutLetterOrDigit(name) }
-        let base = words.joined(separator: "-")
+        guard let base = idWords(of: name) else { throw ModelProfileError.nameWithoutLetterOrDigit(name) }
         var id = base
         var suffix = firstSuffix
         while taken.contains(id) {
@@ -130,18 +147,24 @@ public struct ModelProfileActions: Sendable {
         return id
     }
 
+    /// The lowercase words of letters and digits of `name`, joined by `-`; nil when it has no letter or digit.
+    private static func idWords(of name: String) -> String? {
+        let words = name.lowercased().split { !($0.isLetter || $0.isNumber) }
+        return words.isEmpty ? nil : words.joined(separator: "-")
+    }
+
     private func listing(_ id: String, _ profile: ModelProfile, in settings: AppSettings) -> ModelProfileListing {
         let original = bundled[id]
         return ModelProfileListing(id: id, profile: profile, predefined: original != nil, changed: original.map { $0 != profile } ?? false,
                                    inUse: id == settings.profile)
     }
 
-    /// `profile` with what `change` gives, each value on one line; a blank one is refused, naming the profile `id` or,
-    /// for a new one, its name.
-    private static func applying(_ change: ModelProfileChange, to profile: ModelProfile, id: String?) throws -> ModelProfile {
+    /// `profile` with what `change` gives, each value on one line; a blank one is refused, naming the profile by the name
+    /// it had, `named`, nil for a new one.
+    private static func applying(_ change: ModelProfileChange, to profile: ModelProfile, named: String?) throws -> ModelProfile {
         var changed = profile
         if let name = change.name.map(DocumentLabel.oneLine) {
-            guard !name.isEmpty else { throw ModelProfileError.blankName(id) }
+            guard !name.isEmpty else { throw ModelProfileError.blankName(named) }
             changed.name = name
         }
         for role in ModelProfile.roles {
@@ -155,8 +178,13 @@ public struct ModelProfileActions: Sendable {
 
     /// Refuses `profile` when another profile than `id` has its name, whatever its case.
     private static func refuseTakenName(of profile: ModelProfile, id: String?, in settings: AppSettings) throws {
-        let other = settings.modelProfiles.filter { $0.key != id && $0.value.nameKey == profile.nameKey }.keys.min()
-        if let other { throw ModelProfileError.nameTaken(name: profile.name, by: other) }
+        if let other = holder(of: profile.name, other: id, in: settings) { throw ModelProfileError.nameTaken(name: profile.name, by: other) }
+    }
+
+    /// The name of a profile other than `id` that has `name`, whatever its case, or nil when none has.
+    private static func holder(of name: String, other id: String?, in settings: AppSettings) -> String? {
+        let key = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return settings.modelProfiles.filter { $0.key != id && $0.value.nameKey == key }.min { $0.key < $1.key }?.value.name
     }
 
     /// What differs between two values of a profile, as History says it: “reads with x instead of y”.

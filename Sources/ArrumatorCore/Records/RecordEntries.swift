@@ -85,9 +85,10 @@ public struct DocumentEntry: Codable, Sendable, Hashable {
     /// The index row for this entry in `directory`. What the index caches about the file (its text, inode, times of
     /// extraction) starts empty and is filled in again when the document is read. Labels are kept as the index keeps
     /// them (`DocumentLabel.stored`), so an entry edited by hand to give a document a label of another kind than a tag
-    /// labels it, as a correction in the app does.
+    /// labels it, as a correction in the app does. A label an older reading joined with another is the labels it holds
+    /// (`DocumentLabel.split`), as the index keeps them since.
     public func record(directory: URL, now: Date) throws -> DocumentRecord {
-        let stored = labels.map { DocumentLabel.stored($0, labelled: tagsOnly != true) } ?? (labels: nil, tagsOnly: false)
+        let stored = labels.map { DocumentLabel.stored(DocumentLabel.split($0), labelled: tagsOnly != true) } ?? (labels: nil, tagsOnly: false)
         return DocumentRecord(id: id, uid: uid, path: directory.appendingPathComponent(file).path, originalFilename: originalName,
                               sha256: sha256, size: size, uttype: contentType, inode: nil, pageCount: pages, status: status,
                               analysisJson: try analysis.map { try JSON.string($0) }, contentJson: nil,

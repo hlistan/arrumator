@@ -57,6 +57,78 @@ import Testing
         #expect(try await h.services.history.events(limit: 5, kinds: [.corrected], docID: id).isEmpty, "and nothing is recorded")
     }
 
+    @Test func anAmountTheUserTypesIsKeptInTheFormTheModelsAre() async throws {
+        let h = try await Harness.make()
+        defer { h.env.cleanup() }
+        let id = try #require(try await h.ingest("bill.txt", text: "EDP electricity July").id)
+        try await h.review.edit(id, fileName: nil, labels: LabelEdit(adding: [DocumentLabel(kind: .amount, value: "12,50 €"),
+                                                                              DocumentLabel(kind: .amount, value: "1.234,56 EUR")]))
+        let edited = try #require(try await h.services.documents.document(id: id))
+        #expect(edited.labels(.amount) == ["54.21 EUR", "12.50 EUR", "1234.56 EUR"],
+                "a decimal comma, grouping and a currency symbol only one currency has become the amount's form")
+        #expect(LabelError.refusal(of: DocumentLabel(kind: .amount, value: "5 %")) != nil, "and a percentage is no amount: it is refused")
+    }
+
+    /// Labels a reading gave before their kind was held to its form (the QA run of 4 October 2026).
+    static let earlierLabels = StubAnalyzer.edpBill + [DocumentLabel(kind: .party, value: "999999990"), DocumentLabel(kind: .amount, value: "5.00% GBP")]
+
+    @Test func aLabelAnEarlierReadingGaveInAFormItsKindNoLongerKeepsCanStillBeTakenOff() async throws {
+        let h = try await Harness.make(analyzer: PerFileAnalyzer(labels: ["a.txt": Self.earlierLabels, "b.txt": Self.earlierLabels]))
+        defer { h.env.cleanup() }
+        let a = try #require(try await h.ingest("a.txt", text: "EDP electricity July").id)
+        let b = try #require(try await h.ingest("b.txt", text: "EDP electricity August").id)
+        try await h.review.edit(a, fileName: nil, labels: LabelEdit(removing: [DocumentLabel(kind: .amount, value: "5.00% GBP")]))
+        #expect(try await h.services.documents.document(id: a)?.labels(.amount) == ["54.21 EUR"], "taken off its card as it is written")
+
+        let ignored = try await h.labels.ignore(DocumentLabel(kind: .party, value: "999999990"))
+        #expect(ignored.documents == [a, b] && ignored.rule.value == "999999990", "and removed everywhere, as written")
+        #expect(try await h.services.documents.document(id: b)?.labels(.party) == ["Maria Exemplo"], "from every document that has it")
+        await #expect(throws: LabelError.notALabel(.party, "123456789"), "a label no document has must still be one of its kind") {
+            try await h.labels.ignore(DocumentLabel(kind: .party, value: "123456789"))
+        }
+        await #expect(throws: LabelError.notALabel(.party, "123456789"), "and so must what a label is merged into") {
+            try await h.labels.merge(DocumentLabel(kind: .party, value: "Maria Exemplo"), into: "123456789")
+        }
+    }
+
+    @Test func aLabelAddedThatIsNoLabelOfItsKindIsRefusedSayingWhatTheKindTakesAndNothingChanges() async throws {
+        let h = try await Harness.make()
+        defer { h.env.cleanup() }
+        let id = try #require(try await h.ingest("bill.txt", text: "EDP electricity July").id)
+        let refused: [(DocumentLabel, String)] = [
+            (DocumentLabel(kind: .type, value: "fatura"), "invoice"),
+            (DocumentLabel(kind: .date, value: "2026-13-45"), "YYYY-MM-DD"),
+            (DocumentLabel(kind: .language, value: "klingon"), "ISO 639"),
+            (DocumentLabel(kind: .topic, value: " \n"), "letter"),
+        ]
+        for (label, says) in refused {
+            let refusal = try #require(LabelError.refusal(of: label), "\(label.kind) “\(label.value)” is no label of its kind")
+            #expect(refusal == .notALabel(label.kind, DocumentLabel.oneLine(label.value)), "the value is named as one line")
+            #expect(refusal.localizedDescription.contains(says), "the reason says what the kind takes: \(refusal.localizedDescription)")
+            await #expect(throws: refusal, "the correction is refused for that reason, not dropped without a word") {
+                try await h.review.edit(id, fileName: nil, labels: LabelEdit(adding: [Self.receipt, label]))
+            }
+        }
+        let edited = try #require(try await h.services.documents.document(id: id))
+        #expect(edited.labels == StubAnalyzer.edpBill, "nothing of a refused correction is made, not even the label beside it")
+        #expect(try await h.services.history.events(limit: 5, kinds: [.corrected], docID: id).isEmpty, "and nothing is recorded")
+        #expect(LabelError.refusal(of: DocumentLabel(kind: .date, value: "31/12/2026")) == nil, "a day written day first is a date")
+        #expect(LabelError.refusal(of: Self.receipt) == nil, "and a type Arrumator knows is a type")
+    }
+
+    @Test func aRefusalNamesNoKindTheAppCallsOtherwise() throws {
+        for kind in LabelKind.modelKinds {
+            let refusal = try #require(LabelError.refusal(of: DocumentLabel(kind: kind, value: "§")), "“§” is no \(kind.rawValue)")
+            #expect(!refusal.localizedDescription.contains(kind.rawValue),
+                    "the app calls a party “About” and an object “Concerns”, the command line party= and object=: \(refusal.localizedDescription)")
+        }
+        let party = try #require(LabelError.refusal(of: DocumentLabel(kind: .party, value: "123456789")))
+        #expect(party.localizedDescription == "“123456789” is no label of its kind: it has a letter in it, and no ;",
+                "what a party takes, in words both the card and the command line can show")
+        let joined = try #require(LabelError.refusal(of: DocumentLabel(kind: .object, value: "car AA-12-BB; car CC-34-DD")))
+        #expect(joined.localizedDescription.hasSuffix("and no ;"), "and why two in one are none: \(joined.localizedDescription)")
+    }
+
     @Test func aChangeToADocumentThatIsGoneIsRefusedNamingIt() async throws {
         let h = try await Harness.make()
         defer { h.env.cleanup() }

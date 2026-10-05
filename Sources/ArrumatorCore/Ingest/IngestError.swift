@@ -7,8 +7,9 @@ public enum IngestError: Error, LocalizedError, Equatable {
     case contentUnavailable(Int64)
     /// A job came to filing the document without what the model read of it.
     case analysisMissing(Int64)
-    /// Only a document in the archive can be confirmed as filed: one left in Incoming is in none.
-    case notInArchive(Int64)
+    /// Only a document in the archive can be confirmed as filed or undone: one left in Incoming, or undone back into it, is in
+    /// none.
+    case notInArchive(Int64, DocumentAction)
     /// The Trash would not take the file at the path, for the reason given.
     case notTrashed(String, reason: String)
     /// A document was given a name it cannot have: one that leaves nothing a file name may hold once cleaned, as one of
@@ -32,7 +33,8 @@ public enum IngestError: Error, LocalizedError, Equatable {
         case let .sourceMissing(p): "File is gone: \(p)"
         case let .contentUnavailable(id): "Extracted content for document \(id) is unavailable"
         case let .analysisMissing(id): "What the model read of document \(id) is missing"
-        case let .notInArchive(id): "Document \(id) is not in the archive; only a document in the archive can be confirmed"
+        case let .notInArchive(id, action):
+            "Document \(id) is not in the archive; only a document in the archive can be \(action == .undo ? "undone" : "confirmed")"
         case let .notTrashed(path, reason): "Could not move \(path) to the Trash: \(reason)"
         case let .notTaken(path, reason): "\(path) is not taken in: \(reason)"
         case let .claimLost(id): "Job \(id) is no longer this worker's: it was cancelled or taken over"

@@ -262,6 +262,35 @@ import Testing
                 "Statistics counts the rules and every label they and the vocabulary tidied, the earlier writing included")
     }
 
+    @Test func theModelIsToldOfEveryMergeAndUnwantedLabelAndItsPromptShowsTheNewest() async throws {
+        let h = try await Harness.make()
+        defer { h.env.cleanup() }
+        let vocabulary = h.env.config.labels.vocabulary
+        for n in 0...vocabulary.promptPreferred { _ = try await h.labels.merge(Self.label(.sender, "Sender \(n)"), into: "Merged \(n)") }
+        for n in 0...vocabulary.promptUnwanted { _ = try await h.labels.ignore(Self.label(.topic, "unwanted \(n)")) }
+        let guidance = try await h.services.labels.guidance()
+        #expect(guidance.preferred.count == vocabulary.promptPreferred + 1 && guidance.preferred.last?.to == "Merged 0",
+                "every merge, however old, so a name the document writes may be written as any (ReadingGrounds)")
+        #expect(guidance.unwanted.count == vocabulary.promptUnwanted + 1, "and every label the user does not want")
+    }
+
+    @Test func theFileIsNamedByTheSenderTheUsersRulesKeepNeverByTheOneTheModelWrote() async throws {
+        let merged = try await Harness.make()
+        defer { merged.env.cleanup() }
+        _ = try await merged.labels.merge(Self.label(.sender, "EDP Comercial"), into: "EDP")
+        let bill = try await merged.ingest("edp_september.txt", text: "EDP electricity September")
+        #expect(bill.labels?.values(.sender) == ["EDP"] && bill.filename == "2026-07-05 EDP - \(StubAnalyzer.edpTitle).txt",
+                "after “merge EDP Comercial into EDP” the name is made of EDP, the sender kept: \(bill.filename)")
+        #expect(bill.analysis?.fileName == "2026-07-05 EDP - \(StubAnalyzer.edpTitle)", "and so is the name kept with the document")
+
+        let ignored = try await Harness.make()
+        defer { ignored.env.cleanup() }
+        _ = try await ignored.labels.ignore(Self.label(.sender, "EDP Comercial"))
+        let unsent = try await ignored.ingest("edp_september.txt", text: "EDP electricity September")
+        #expect(unsent.labels?.values(.sender) == [] && unsent.filename == "2026-07-05 \(StubAnalyzer.edpTitle).txt",
+                "a sender the user does not want names nothing, and leaves no separator: \(unsent.filename)")
+    }
+
     /// The labels in use as the documents' own labels count them, each once per document that has it.
     private func counted(_ h: Harness) async throws -> [LabelKind: [LabelUsage]] {
         let documents = try await h.services.documents.list(DocumentFilter(), limit: 50)

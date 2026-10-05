@@ -26,12 +26,17 @@ public struct AppDatabase: Sendable {
     let observationRetry: Double
     /// The clock that wait is slept on.
     let time: any TimeSource
+    /// What tells the other processes with this index open that this one committed to it, and this one that they did
+    /// (`othersCommits()`); none for an index in memory, which no other process opens.
+    let signal: IndexChangeSignal?
 
-    public init(_ writer: any DatabaseWriter, observationRetry: Double, time: any TimeSource) throws {
+    init(_ writer: any DatabaseWriter, observationRetry: Double, time: any TimeSource, signal: IndexChangeSignal?) throws {
         self.writer = writer
         self.observationRetry = observationRetry
         self.time = time
+        self.signal = signal
         try Self.migrator(time: time).migrate(writer)
+        if let signal { writer.add(transactionObserver: CommitAnnouncer(signal: signal), extent: .databaseLifetime) }
     }
 
     /// How the database was found when the app opened it.
@@ -202,7 +207,7 @@ public struct AppDatabase: Sendable {
             try db.execute(sql: "PRAGMA synchronous = NORMAL")
         }
         let pool = try DatabasePool(path: url.path, configuration: config)
-        return try AppDatabase(pool, observationRetry: database.observationRetry, time: time)
+        return try AppDatabase(pool, observationRetry: database.observationRetry, time: time, signal: IndexChangeSignal(index: url))
     }
 
     /// In-memory database for tests, configured as the bundled defaults say, and complete: it is not to be rebuilt from
@@ -212,7 +217,8 @@ public struct AppDatabase: Sendable {
         var config = Configuration()
         config.foreignKeysEnabled = true
         let database = try AppDatabase(DatabaseQueue(configuration: config),
-                                       observationRetry: try PipelineConfig.bundledDefaults().database.observationRetry, time: time)
+                                       observationRetry: try PipelineConfig.bundledDefaults().database.observationRetry, time: time,
+                                       signal: nil)
         try database.writer.write { db in try setPendingRebuild(db, nil) }
         return database
     }
@@ -254,6 +260,56 @@ extension AppDatabase {
         values(of: ValueObservation.tracking { db in
             try Int64.fetchOne(db, sql: "SELECT COALESCE(MAX(id), 0) FROM events") ?? 0
         }.removeDuplicates(), named: "activity")
+    }
+
+    /// Each time another process, or another connection of this one, has committed a change to the index, for as long
+    /// as the stream is read: what this one's observations do not see (`IndexChangeSignal`). Told by the other's
+    /// notification, and checked by SQLite's count of commits other connections made (`PRAGMA data_version`, asked of the
+    /// writer, which this process's own commits leave as it was), so this process's own posts are no change. Each
+    /// change tells every observation of this index to look again (`Database.notifyChanges(in:)`), as History growing
+    /// does (`activity()`), before it is yielded, for whoever follows it to make the queues look again. It yields once
+    /// as it begins to listen, after the count is first read: a commit made between the listening and that read is in
+    /// the count, so its notification finds nothing new, and only that first look tells of it. An index in memory has
+    /// no other process: its stream yields nothing until it is cancelled.
+    public func othersCommits() -> AsyncStream<Void> {
+        guard let signal else { return AsyncStream { _ in } }
+        let writer = writer
+        return AsyncStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
+            let posts = signal.posts()
+            let task = Task {
+                // Read once the posts are listened for, so a commit after it is not missed; and looked at once, as one
+                // made before it is in it.
+                var seen = try? await writer.write { db in
+                    try db.notifyChanges(in: .fullDatabase)
+                    return try Self.dataVersion(db)
+                }
+                continuation.yield()
+                for await _ in posts {
+                    do {
+                        let before = seen
+                        let now = try await writer.write { db in
+                            let version = try Self.dataVersion(db)
+                            if version != before { try db.notifyChanges(in: .fullDatabase) }
+                            return version
+                        }
+                        guard now != seen else { continue }
+                        seen = now
+                        continuation.yield()
+                    } catch {
+                        guard !(error is CancellationError || Task.isCancelled) else { break }
+                        Log.error(.db, "Could not look at what another process changed in the index", ["error": error.localizedDescription])
+                    }
+                }
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    /// SQLite's count of the commits other connections have made to the database, as the connection of `db` sees it
+    /// (https://sqlite.org/pragma.html#pragma_data_version).
+    private static func dataVersion(_ db: Database) throws -> Int? {
+        try Int.fetchOne(db, sql: "PRAGMA data_version")
     }
 
     /// The values of `observation` for as long as the stream is consumed, the current one first. GRDB ends an

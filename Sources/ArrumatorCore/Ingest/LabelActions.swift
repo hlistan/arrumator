@@ -8,9 +8,32 @@ public enum LabelError: Error, LocalizedError, Equatable {
 
     public var errorDescription: String? {
         switch self {
-        case let .notALabel(kind, value): "“\(value)” is no \(kind.rawValue) label"
-        case let .sameLabel(kind, value): "“\(value)” is the same \(kind.rawValue) label either way"
+        case let .notALabel(kind, value): "“\(value)” is no label of its kind: \(Self.form(of: kind))"
+        case let .sameLabel(_, value): "“\(value)” is the same label either way"
         case let .ruleNotFound(id): "There is no rule \(id) about labels"
+        }
+    }
+
+    /// Why `label` is no label of its kind, as `DocumentLabel.normalized` keeps one, or nil when it is one: what the app
+    /// says as a label is typed, and what a correction of a document's labels and a decision about labels refuse.
+    public static func refusal(of label: DocumentLabel) -> LabelError? {
+        DocumentLabel.normalized(label.value, kind: label.kind) == nil ? .notALabel(label.kind, DocumentLabel.oneLine(label.value)) : nil
+    }
+
+    /// What a label of `kind` is, as `DocumentLabel.normalized` takes one, in words that name no kind: the app and the
+    /// command line call kinds by names of their own ("About" on a card is `party=` on a command), and a refusal is
+    /// shown beside where the kind was chosen.
+    private static func form(of kind: LabelKind) -> String {
+        let separator = kind.isUsersOwn ? "" : ", and no \(DocumentLabel.entrySeparator)"
+        return switch kind {
+        case .type: "it is one of " + DocumentType.allCases.filter { $0 != .other }.map(\.rawValue).joined(separator: ", ")
+        case .date, .deadline: "it is a day of the calendar, as YYYY-MM-DD or DD.MM.YYYY"
+        case .period: "it is a year, a month or a day, as YYYY, YYYY-MM or YYYY-MM-DD, or two of them as start/end"
+        case .language: "it is an ISO 639 code or its English name, such as pt or Portuguese"
+        case .amount: "it is a number and its currency, such as 54.21 EUR or 12,50 €, never a percentage"
+        case .reference: "it has a number in it" + separator
+        case .sender, .party, .topic, .object, .jurisdiction: "it has a letter in it" + separator
+        case .tag: "it is not blank"
         }
     }
 }
@@ -36,11 +59,11 @@ public struct LabelActions: Sendable {
     /// Writes `label` as `value` on every document that has it, written however, and in every reading from now on.
     @discardableResult
     public func merge(_ label: DocumentLabel, into value: String) async throws -> LabelActionOutcome {
-        let from = try Self.normalized(label)
         let into = try Self.normalized(DocumentLabel(kind: label.kind, value: value))
-        guard from.value != into.value else { throw LabelError.sameLabel(from.kind, from.value) }
         let now = time.now()
         return try await database.writer.write { db in
+            let from = try Self.named(db, label)
+            guard from.value != into.value else { throw LabelError.sameLabel(from.kind, from.value) }
             let rules = try LabelRule.fetchAll(db)
             let over = rules.filter { rule in
                 // The new merge is the label's rule now.
@@ -71,9 +94,9 @@ public struct LabelActions: Sendable {
     /// Takes `label`, written however, off every document, and out of every reading from now on.
     @discardableResult
     public func ignore(_ label: DocumentLabel) async throws -> LabelActionOutcome {
-        let unwanted = try Self.normalized(label)
         let now = time.now()
         return try await database.writer.write { db in
+            let unwanted = try Self.named(db, label)
             for rule in try LabelRule.fetchAll(db) where rule.action != .keepApart && rule.concerns(unwanted) {
                 _ = try rule.delete(db)
             }
@@ -90,11 +113,10 @@ public struct LabelActions: Sendable {
     /// Keeps `label` and `other` apart: they mean different things, however alike they are written.
     @discardableResult
     public func keepApart(_ label: DocumentLabel, from other: String) async throws -> LabelActionOutcome {
-        let a = try Self.normalized(label)
-        let b = try Self.normalized(DocumentLabel(kind: label.kind, value: other))
-        guard !LabelSimilarity.sameWriting(a.value, b.value) else { throw LabelError.sameLabel(a.kind, a.value) }
         let now = time.now()
         return try await database.writer.write { db in
+            let (a, b) = (try Self.named(db, label), try Self.named(db, DocumentLabel(kind: label.kind, value: other)))
+            guard !LabelSimilarity.sameWriting(a.value, b.value) else { throw LabelError.sameLabel(a.kind, a.value) }
             for rule in try LabelRule.fetchAll(db) where rule.action == .merge
                 && ((rule.concerns(a) && rule.target.map { LabelSimilarity.sameWriting($0, b.value) } == true)
                     || (rule.concerns(b) && rule.target.map { LabelSimilarity.sameWriting($0, a.value) } == true)) {
@@ -123,12 +145,26 @@ public struct LabelActions: Sendable {
         }
     }
 
-    /// The label as a label of its kind keeps it (`DocumentLabel.normalized`).
+    /// The label as a label of its kind keeps it (`DocumentLabel.normalized`): what a label is merged into.
     static func normalized(_ label: DocumentLabel) throws -> DocumentLabel {
         guard let normalized = DocumentLabel.normalized(label.value, kind: label.kind) else {
             throw LabelError.notALabel(label.kind, DocumentLabel.oneLine(label.value))
         }
         return normalized
+    }
+
+    /// The label a decision is about: as a label of its kind keeps it, or else as documents have it, written so: one an
+    /// earlier reading gave in a form its kind no longer keeps can still be merged away, removed everywhere or kept
+    /// apart. Read in the transaction the decision is made in.
+    private static func named(_ db: Database, _ label: DocumentLabel) throws -> DocumentLabel {
+        if let normalized = DocumentLabel.normalized(label.value, kind: label.kind) { return normalized }
+        let written = DocumentLabel.oneLine(label.value)
+        let given = try Bool.fetchOne(db, sql: """
+            SELECT EXISTS (SELECT 1 FROM documents d, json_each(d.labels_json) l
+            WHERE d.labels_json IS NOT NULL AND json_extract(l.value, '$.kind') = ? AND json_extract(l.value, '$.value') = ?)
+            """, arguments: [label.kind.rawValue, written]) ?? false
+        guard given else { throw LabelError.notALabel(label.kind, written) }
+        return DocumentLabel(kind: label.kind, value: written)
     }
 
     /// Writes `label`, written however, as `value` on every document that has it, or takes it off when `value` is nil.

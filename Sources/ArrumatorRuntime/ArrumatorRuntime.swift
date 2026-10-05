@@ -294,7 +294,7 @@ public final class ArrumatorRuntime: Sendable {
         answerer = TaskAnswerer(gate: gate, models: models, library: prompts.library)
         conversationQueue = TaskConversationQueue(services: services, answerer: answerer, interpreter: interpreter, search: search,
                                                   processes: processes)
-        searchTasks = SearchTaskActions(services: services, queue: taskQueue, conversations: conversationQueue)
+        searchTasks = SearchTaskActions(services: services, queue: taskQueue, conversations: conversationQueue, archiver: ZipFolderArchiver())
         conversations = TaskConversationActions(services: services, queue: conversationQueue)
         reconciler = ArchiveReconciler(services: services, coordinator: coordinator)
         incomingWatcher = IncomingWatcher(config: config.watcher, skip: skip, time: time)
@@ -328,6 +328,7 @@ public final class ArrumatorRuntime: Sendable {
         guard let step = await tasks.starting(reading: true, { [self] in
             // Counted from the index alone, so also while the archive is away and its start waits for it.
             await countLookAlikes()
+            await followOtherProcesses()
             try await waitForArchive()
             var unread: (any Error)?
             do { try await opening() } catch { unread = error }
@@ -357,6 +358,7 @@ public final class ArrumatorRuntime: Sendable {
     public func start() async -> Bool {
         guard let step = await tasks.starting(reading: false, { [self] in
             await countLookAlikes()
+            await followOtherProcesses()
             try await beginOnRebuiltIndex()
         }) else { return false }
         archiveLook.ring()

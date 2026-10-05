@@ -2,6 +2,9 @@ import Foundation
 
 public enum TraceStage: String, Sendable, Codable, CaseIterable {
     case hash, dedupe, extract, ocr, vlm, entities, analyse, consolidate, embed, name, place, index
+    /// The document waits for the user, and why (`DocumentAnalysis.problems`): a damaged or encrypted file, nothing read
+    /// of it, no valid answer.
+    case review
     /// A new document was given the tags its file was queued with (`GivenTag`), as the user's rules write them: which
     /// folder in Incoming or command gave each.
     case tag

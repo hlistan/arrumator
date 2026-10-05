@@ -105,6 +105,7 @@ extension ArchiveRecords {
                 // So a change the index then refuses can name them, in any process (`AppDatabase.explained`).
                 try await database.writer.write { db in try AppDatabase.setRebuildRefused(db, unreadable) }
                 guard archiveIsThere else { throw RecordsError.archiveNotThere(archive.path) }
+                try await recordUnreadable()
                 throw RecordsError.unreadableFiles(unreadable)
             }
             guard try await replaceIndex(with: parsed, expecting: before) else {
@@ -166,7 +167,7 @@ extension ArchiveRecords {
             try db.execute(sql: "PRAGMA defer_foreign_keys = ON")
             let links = try parsed.eventLinks(db, everyMonth: true)
             for table in Self.rebuiltTables { try db.execute(sql: "DELETE FROM \(table)") }
-            let applied = try parsed.apply(to: db, replacing: false, at: now, links: links, everyDirectory: true)
+            let applied = try parsed.apply(to: db, replacing: false, at: now, links: links, everyDirectory: true, recordingMoves: false)
             try db.execute(sql: "DELETE FROM record_files")
             for (path, hash) in parsed.hashes where !applied.notTakenIn.contains(path) { try Self.remember(db, path: path, hash: hash) }
             try db.execute(sql: "DELETE FROM record_dirty")

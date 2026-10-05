@@ -26,6 +26,7 @@
     ],
     "healthPollStarting": 0.5,
     "healthPollSteady": 30,
+    "failedProbesBeforeAway": 3,
     "startTimeout": 30,
     "restartBackoff": [
       5,
@@ -41,7 +42,8 @@
     },
     "maxResponseBytes": 67108864,
     "modelLocationMaxAge": 60,
-    "charsPerToken": 3
+    "charsPerToken": 3,
+    "refitAttempts": 2
   },
   "watcher": {
     "fsEventsLatency": 1.0,
@@ -109,6 +111,8 @@
     ],
     "languageSampleChars": 4000,
     "languageMinConfidence": 0.5,
+    "languageShortTextWords": 4,
+    "languageShortTextMinConfidence": 0.9,
     "maxIndexChars": 200000,
     "largeFileBytes": 524288000,
     "perFileTimeout": 180,
@@ -418,7 +422,7 @@
     "minTextDateScore": 1
   },
   "analysis": {
-    "promptVersion": 7,
+    "promptVersion": 11,
     "excerptChars": 12000,
     "excerptTailDivisor": 6,
     "embeddingSummaryChars": 2000,
@@ -436,11 +440,15 @@
     "vlmNumPredict": 300,
     "promptDatesLimit": 5,
     "promptIdentifiersLimit": 8,
-    "repairAttempts": 1
+    "repairAttempts": 1,
+    "titleGroundedShare": 0.5,
+    "partiesWithoutSender": 2
   },
   "labels": {
     "maxPerKind": 5,
     "maxValueChars": 80,
+    "groundingLetters": 3,
+    "objectIdentifierDigits": 2,
     "vocabulary": {
       "kinds": {
         "sender": {
@@ -487,7 +495,16 @@
       ":",
       "\\"
     ],
-    "collisionFormat": " (%d)"
+    "collisionFormat": " (%d)",
+    "parts": [
+      "date",
+      "sender",
+      "title"
+    ],
+    "separators": [
+      " ",
+      " - "
+    ]
   },
   "search": {
     "rrfK": 60,
@@ -517,7 +534,7 @@
     "vectorSnippetChars": 200
   },
   "tasks": {
-    "promptVersion": 2,
+    "promptVersion": 3,
     "efforts": {
       "low": {
         "think": false,
@@ -559,8 +576,10 @@
         }
       }
     },
-    "maxValuesPerKind": 5,
+    "maxValuesPerKind": 10,
     "maxWords": 4,
+    "alternativesGap": 0,
+    "inflectionLetters": 2,
     "maxGroupingDepth": 3,
     "maxTitleChars": 60,
     "defaultGrouping": [
@@ -571,7 +590,7 @@
     "withoutLabelFolder": "No {{kind}}"
   },
   "conversation": {
-    "promptVersion": 2,
+    "promptVersion": 3,
     "numCtx": 16384,
     "contextChars": 20000,
     "documentChars": 8000,
@@ -694,7 +713,8 @@
           "detail": "The local model read it and gave it its labels and its name, kept one vocabulary with the archive's.",
           "stages": [
             "analyse",
-            "consolidate"
+            "consolidate",
+            "review"
           ],
           "logCategories": [
             "ollama",
@@ -732,6 +752,8 @@
     "sidebarLabels": 20,
     "menuBarRecent": 5,
     "notificationEvents": 12,
+    "notificationAskTimeout": 10,
+    "menuBarSettleSeconds": 2,
     "extractPreviewChars": 2000
   },
   "maintenance": {

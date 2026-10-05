@@ -71,14 +71,14 @@ struct RefusingUntil: Trashing {
         let base = try await Harness.make()
         defer { base.env.cleanup() }
         let filed = try await base.ingest("bill.txt", text: Self.bill)
-        #expect(await base.review.choices(for: filed) == DocumentChoices(actions: [.undo, .confirm], notFiled: false),
+        #expect(try await base.review.choices(for: filed) == DocumentChoices(actions: [.undo, .confirm], notFiled: false),
                 "a filed document can be undone or confirmed")
         let h = pipeline(base, crossing: true, trash: RefusingTrash())
         let scan = try h.env.drop("scan.txt", text: "A scan of the boiler service")
         await h.coordinator.enqueue(scan)
         await drain(h)
         let left = try #require(try await documents(h).first { $0.id != filed.id })
-        #expect(await h.review.choices(for: left) == DocumentChoices(actions: [.hold, .readAgain], notFiled: true),
+        #expect(try await h.review.choices(for: left) == DocumentChoices(actions: [.hold, .readAgain], notFiled: true),
                 "one left in Incoming can be read again or left for later, and its card says it was not filed; never Looks Right")
     }
 
@@ -197,6 +197,6 @@ struct RefusingUntil: Trashing {
         left.analysisJson = try JSON.string(DocumentAnalysis(problems: ["Worded otherwise"]))
         _ = try await h.services.documents.save(left)
         #expect(await h.coordinator.enqueue(bill) == nil, "however its problem is worded, a rescan leaves the file it is alone")
-        #expect(await h.review.choices(for: left).notFiled, "and its card still says it was not filed")
+        #expect(try await h.review.choices(for: left).notFiled, "and its card still says it was not filed")
     }
 }

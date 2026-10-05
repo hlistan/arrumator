@@ -27,6 +27,8 @@ struct ModelProfilesView: View {
                 } else {
                     ProfileRow(listing: listing)
                         .rowAction { withAnimation(.snappy) { open = listing.id } }
+                        // On the row as one, after its parts are combined: on each part, VoiceOver reads it once a part.
+                        .help(Wording.openProfileHelp)
                 }
             }
             if adding {
@@ -37,12 +39,12 @@ struct ModelProfilesView: View {
         } header: {
             Text(Wording.profiles)
         } footer: {
-            Text(Wording.profilesNote(predefined: profiles.filter(\.predefined).map(\.profile.name)))
+            Text(Wording.profilesNote(predefined: model.runtime?.profiles.predefinedNames ?? []))
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
     }
 
-    /// Where a new profile is named, with what it starts as.
+    /// Where a new profile is named, with what it starts as, or why the name typed cannot be its, as it is typed.
     private var newProfile: some View {
         VStack(alignment: .leading, spacing: Style.cardLabelRowSpacing) {
             HStack(spacing: Style.inlineControlSpacing) {
@@ -51,19 +53,32 @@ struct ModelProfilesView: View {
                     .focused($namingNew)
                     .onSubmit(add)
                     .onAppear { namingNew = true }
-                Button(Wording.add, action: add).disabled(newName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Button(Wording.add, action: add).disabled(isBlank(newName) || newNameRefusal != nil)
                 Button(Wording.cancel, action: stopAdding)
             }
-            Text(Wording.copiesProfile(profiles.first(where: \.inUse)?.profile.name))
-                .font(.caption).foregroundStyle(.secondary)
+            if let newNameRefusal {
+                Text(newNameRefusal).font(.caption).foregroundStyle(Palette.attention).fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text(Wording.copiesProfile(profiles.first(where: \.inUse)?.profile.name))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
         }
         .onExitCommand(perform: stopAdding)
     }
 
+    /// Why the name typed cannot be a new profile's, as Core says when it is added
+    /// (`ModelProfileActions.refusal(ofNewName:in:)`); nothing while it is blank, which only keeps Add dimmed.
+    private var newNameRefusal: String? {
+        guard !isBlank(newName), let settings = model.settings else { return nil }
+        return ModelProfileActions.refusal(ofNewName: newName, in: settings)?.localizedDescription
+    }
+
+    private func isBlank(_ text: String) -> Bool { text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
     /// Adds a copy of the profile in use under the name typed, and opens it to give it other models.
     private func add() {
         let name = newName
-        guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        guard !isBlank(name), newNameRefusal == nil else { return }
         Task<Void, Never> {
             guard let added = await model.changeSettings(Wording.addProfileAction, { try await $0.profiles.add(name: name) }) else { return }
             stopAdding()
@@ -93,14 +108,13 @@ private struct ProfileRow: View {
             Text(listing.profile.chatModel).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
         }
         .contentShape(.rect)
-        .help(Wording.openProfileHelp)
     }
 }
 
 /// A profile opened in place: its name, and the model of each role, typed or chosen from the installed models that can
-/// play it, with whether it is installed; Reset for a predefined profile that was changed, Remove for one of the user's
-/// other than the one in use. What the user is typing is never replaced by what the profile says, and is saved when the
-/// field is left or the card goes away.
+/// play it, with whether it is installed; Reset for a predefined profile that was changed, Remove for one of the user's,
+/// dimmed with why while it cannot be removed. What the user is typing is never replaced by what the profile says, and is
+/// saved when the field is left or the card goes away.
 private struct ProfileCard: View {
     @Environment(AppModel.self) private var model
     let listing: ModelProfileListing
@@ -114,6 +128,8 @@ private struct ProfileCard: View {
     /// Whether the profile's models are installed; empty until Ollama has said.
     @State private var status: [ModelStatus] = []
     @State private var confirmingRemoval = false
+    /// How many search tasks of the archive read with the profile, which keep it from being removed; nil until counted.
+    @State private var searchTasks: Int?
     @FocusState private var editing: Field?
 
     /// What the user may be typing in.
@@ -152,6 +168,8 @@ private struct ProfileCard: View {
         .onDisappear { save(typed) }
         // Asked again when the profile's models change, once Ollama answers, and when a download ends.
         .task(id: [listing.profile, model.session.ollama.isReady, downloads.finished] as [AnyHashable]) { await loadStatus() }
+        // Counted again when the archive changes, as when a task is given another profile.
+        .task(id: [listing, model.activity] as [AnyHashable]) { await countSearchTasks() }
         .onChange(of: editing) { left, _ in
             if let left { save(left) }
         }
@@ -169,6 +187,10 @@ private struct ProfileCard: View {
     private var canReset: Bool { listing.predefined && listing.changed }
     /// A profile of the user's own; the predefined ones the bundled settings would bring back.
     private var canRemove: Bool { !listing.predefined }
+    /// Why the profile cannot be removed, as Core refuses it (`ModelProfileListing.removalRefusal(searchTasks:)`): said
+    /// before Remove is pressed, rather than once it is confirmed. Nil until the search tasks reading with it are
+    /// counted, while Remove waits for the count.
+    private var removalRefusal: ModelProfileError? { searchTasks.flatMap { listing.removalRefusal(searchTasks: $0) } }
 
     private var header: some View {
         HStack(alignment: .firstTextBaseline, spacing: Style.profileNameSpacing) {
@@ -225,10 +247,10 @@ private struct ProfileCard: View {
             }
             Spacer()
             if canRemove {
-                // The profile in use cannot be removed, so it is not offered, rather than refused once confirmed.
+                // A profile that cannot be removed is not offered, saying why, rather than refused once confirmed.
                 Button(Wording.removeProfile) { confirmingRemoval = true }
-                    .disabled(listing.inUse)
-                    .help(listing.inUse ? Wording.removeProfileInUseHelp : Wording.removeProfileHelp)
+                    .disabled(searchTasks == nil || removalRefusal != nil)
+                    .help(removalRefusal?.localizedDescription ?? Wording.removeProfileHelp)
             }
         }
         .buttonStyle(.borderless)
@@ -272,6 +294,12 @@ private struct ProfileCard: View {
             let saved = await model.changeSettings(Wording.changeProfileAction) { try await $0.profiles.update(id, change) }
             show(saved ?? before)
         }
+    }
+
+    private func countSearchTasks() async {
+        guard canRemove else { return }
+        let id = listing.id
+        if let counted = await model.load(Wording.loadTasksAction, { try await $0.profiles.searchTasks(readingWith: id) }) { searchTasks = counted }
     }
 
     private func loadStatus() async {

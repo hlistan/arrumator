@@ -1,5 +1,6 @@
 import AppKit
 import ArrumatorCore
+import ArrumatorRuntime
 import SwiftUI
 
 /// The settings, shown once they are loaded: every value on these pages is the one in force, never one of the view's.
@@ -12,7 +13,7 @@ struct SettingsView: View {
                 TabView {
                     GeneralSettings(loaded: settings).tabItem { Label(Wording.generalTab, systemImage: "gearshape") }
                     FilingSettings(loaded: settings).tabItem { Label(Wording.filingTab, systemImage: "folder") }
-                    ModelSettingsView(loaded: settings, editsProfiles: true).tabItem { Label(Wording.modelsTab, systemImage: "cpu") }
+                    ModelSettingsView(loaded: settings).tabItem { Label(Wording.modelsTab, systemImage: "cpu") }
                     AdvancedSettings(loaded: settings).tabItem { Label(Wording.advancedTab, systemImage: "wrench.and.screwdriver") }
                     ProcessingLogView().tabItem { Label(Wording.processingLogTab, systemImage: "text.alignleft") }
                 }
@@ -42,8 +43,10 @@ struct GeneralSettings: View {
     var body: some View {
         Form {
             Section {
-                pathRow(Wording.incomingFolder, path: model.settings?.incomingPath) { path in await model.update { $0.incomingPath = path } }
-                pathRow(Wording.archiveFolder, path: model.archive?.path, busy: model.switchingArchive) { path in
+                // Both as the app uses them, standardized alike, `~` written out and `/private` taken off
+                // (`AppSettings.incomingURL`, the runtime's archive), never one as saved and the other as used.
+                pathRow(Wording.incomingFolder, folder: model.settings?.incomingURL) { path in await model.update { $0.incomingPath = path } }
+                pathRow(Wording.archiveFolder, folder: model.archive, busy: model.switchingArchive) { path in
                     await model.switchArchive(to: path)
                 }
             } header: {
@@ -72,13 +75,49 @@ struct GeneralSettings: View {
             Section(Wording.notifications) {
                 NamedToggle(Wording.notifyWhenFiled, isOn: setting(model, loaded, \.notifyOnFiled))
                 NamedToggle(Wording.notifyWhenReview, isOn: setting(model, loaded, \.notifyOnReview))
+                if notifying, let why = notNotifying {
+                    Text(why).font(.caption).foregroundStyle(Palette.attention).fixedSize(horizontal: false, vertical: true)
+                    if let settings = Self.notificationSettings {
+                        Button(Wording.openNotificationSettings) { NSWorkspace.shared.open(settings) }
+                    }
+                }
             }
         }
         .formStyle(.grouped)
+        .task { await model.notifications.readPermission() }
+        // Asked when a switch is turned on, so the answer is seen here rather than at the next filing.
+        .onChange(of: notifying) { _, on in
+            if on, let timeout = model.runtime?.config.interface.notificationAskTimeout {
+                Task { await model.notifications.requestAuthorization(timeout: timeout) }
+            }
+        }
+        // Read again when the user comes back, as from System Settings.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            Task { await model.notifications.readPermission() }
+        }
     }
 
-    private func pathRow(_ title: String, path: String?, busy: Bool = false, save: @escaping (String) async -> Void) -> some View {
-        LabeledContent(title) {
+    /// Whether either switch asks for notifications.
+    private var notifying: Bool {
+        let current = model.settings ?? loaded
+        return current.notifyOnFiled || current.notifyOnReview
+    }
+
+    /// Why no notification is shown although a switch is on: macOS does not let the app, or would not let it ask.
+    private var notNotifying: String? {
+        switch model.notifications.permission {
+        case .refused: Wording.notificationsRefused
+        case .unavailable: Wording.notificationsUnavailable
+        case .allowed, .notAsked: nil
+        }
+    }
+
+    /// System Settings › Notifications, by the scheme and identifier System Settings opens its panes by.
+    private static let notificationSettings = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension")
+
+    private func pathRow(_ title: String, folder: URL?, busy: Bool = false, save: @escaping (String) async -> Void) -> some View {
+        let path = folder?.path
+        return LabeledContent(title) {
             HStack {
                 if busy { ProgressView().controlSize(.small) }
                 Text(path ?? Wording.noValue).lineLimit(1).truncationMode(.middle).foregroundStyle(.secondary).help(path ?? "")
@@ -116,13 +155,23 @@ struct FilingSettings: View {
 }
 
 /// Settings › Models: the Ollama server, then the profile documents and requests are read with and its three models, each
-/// installed or to download. Onboarding shows this much; Settings also lists every profile to edit under it
-/// (`ModelProfilesView`).
+/// installed or to download, then every profile to edit (`ModelProfilesView`). Onboarding shows the server and the
+/// models, a step each, so neither is out of sight below the other.
 struct ModelSettingsView: View {
+    /// What of Settings › Models a view shows.
+    enum Part {
+        /// The Ollama server: its state, its address and whether the app starts it.
+        case server
+        /// The profile in use and its models, installed or to download.
+        case models
+        /// Every profile, to edit.
+        case profiles
+    }
+
     @Environment(AppModel.self) private var model
     let loaded: AppSettings
-    /// Whether every profile is listed to edit under the one in use, as Settings does and onboarding does not.
-    var editsProfiles = false
+    /// What it shows: Settings shows it all.
+    var parts: Set<Part> = [.server, .models, .profiles]
     /// Every profile, as `ModelProfileActions.list()` orders them.
     @State private var profiles: [ModelProfileListing] = []
     /// Whether the models of the profile in use are installed; empty until Ollama has said.
@@ -142,50 +191,9 @@ struct ModelSettingsView: View {
 
     var body: some View {
         Form {
-            Section(Wording.ollama) {
-                LabeledContent(Wording.status, value: model.session.ollama.summary)
-                HStack {
-                    TextField(Wording.server, text: $server).onSubmit { connect() }
-                    Button(Wording.useServer) { connect() }.disabled(server == model.runtime?.ollama.baseURL.absoluteString)
-                }
-                .disabled(serverFromEnvironment)
-                if let serverError { Text(serverError).font(.caption).foregroundStyle(Palette.attention) }
-                Text(serverFromEnvironment ? Wording.serverFromEnvironment(RuntimeEnvironment.ollamaURLVariable) : Wording.ollamaServerNote)
-                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                // What the user is told of the server in use: plain HTTP across the network, a name trusted as local.
-                ForEach(model.runtime.map { OllamaEndpoint.cautions(for: $0.ollama.baseURL) } ?? [], id: \.self) { caution in
-                    Text(caution.summary).font(.caption).foregroundStyle(Palette.attention).fixedSize(horizontal: false, vertical: true)
-                }
-                Picker(Wording.management, selection: setting(model, loaded, \.ollamaManagement)) {
-                    Text(Wording.launchOllamaApp).tag(OllamaManagement.launchApp)
-                    Text(Wording.spawnServe).tag(OllamaManagement.spawnServe)
-                    Text(Wording.neverStart).tag(OllamaManagement.external)
-                }
-                .disabled(!onThisMac)
-                .help(Wording.managementOnThisMacOnly)
-                if !onThisMac { Text(Wording.managementOnThisMacOnly).font(.caption).foregroundStyle(.secondary) }
-                Button(Wording.startOllama) { Task { _ = await model.runtime?.lifecycle.ensureRunning(); await loadStatus() } }
-            }
-            Section(Wording.modelsRun(at: model.runtime?.ollama.baseURL)) {
-                if !profiles.isEmpty {
-                    ProfileInUsePicker(inUse: current.profile, profiles: profiles)
-                }
-                if let inUse {
-                    ForEach(ModelProfile.roles, id: \.self) { role in
-                        let name = inUse.model(for: role)
-                        LabeledContent(Wording.role(role)) {
-                            HStack(spacing: Style.inlineControlSpacing) {
-                                Text(name).textSelection(.enabled)
-                                ModelAvailability(name: name, status: status.first { $0.name == name }, downloads: downloads)
-                            }
-                        }
-                    }
-                    DownloadProgress(downloads: downloads, of: ModelProfile.roles.map(inUse.model(for:)))
-                }
-                Text(Wording.downloadNote)
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            if editsProfiles { ModelProfilesView(profiles: profiles, installed: installed, downloads: downloads) }
+            if parts.contains(.server) { serverSection }
+            if parts.contains(.models) { modelsSection }
+            if parts.contains(.profiles) { ModelProfilesView(profiles: profiles, installed: installed, downloads: downloads) }
         }
         .formStyle(.grouped)
         .task(id: model.settings) { await loadProfiles() }
@@ -193,6 +201,64 @@ struct ModelSettingsView: View {
         .task(id: [inUse, model.session.ollama.isReady, downloads.finished] as [AnyHashable]) { await loadStatus() }
         .task(id: [model.session.ollama.isReady, downloads.finished] as [AnyHashable]) { await loadInstalled() }
         .onAppear { server = model.runtime?.ollama.baseURL.absoluteString ?? "" }
+    }
+
+    /// Whether the app starts the server when it is not running (`ArrumatorRuntime.management(for:at:)`): never one on
+    /// another machine, nor one Management says never to start. The button then only checks it.
+    private var startsOllama: Bool {
+        model.runtime.map { ArrumatorRuntime.management(for: current, at: $0.ollama.baseURL) != .external } ?? false
+    }
+
+    private var serverSection: some View {
+        Section(Wording.ollama) {
+            LabeledContent(Wording.status, value: model.session.ollama.summary)
+            HStack {
+                TextField(Wording.server, text: $server).onSubmit { connect() }
+                    .accessibilityLabel(Wording.server)
+                Button(Wording.useServer) { connect() }.disabled(server == model.runtime?.ollama.baseURL.absoluteString)
+            }
+            .disabled(serverFromEnvironment)
+            if let serverError { Text(serverError).font(.caption).foregroundStyle(Palette.attention) }
+            Text(serverFromEnvironment ? Wording.serverFromEnvironment(RuntimeEnvironment.ollamaURLVariable) : Wording.ollamaServerNote)
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            // What the user is told of the server in use: plain HTTP across the network, a name trusted as local.
+            ForEach(model.runtime.map { OllamaEndpoint.cautions(for: $0.ollama.baseURL) } ?? [], id: \.self) { caution in
+                Text(caution.summary).font(.caption).foregroundStyle(Palette.attention).fixedSize(horizontal: false, vertical: true)
+            }
+            Picker(Wording.management, selection: setting(model, loaded, \.ollamaManagement)) {
+                Text(Wording.launchOllamaApp).tag(OllamaManagement.launchApp)
+                Text(Wording.spawnServe).tag(OllamaManagement.spawnServe)
+                Text(Wording.neverStart).tag(OllamaManagement.external)
+            }
+            .disabled(!onThisMac)
+            .help(Wording.managementOnThisMacOnly)
+            if !onThisMac { Text(Wording.managementOnThisMacOnly).font(.caption).foregroundStyle(.secondary) }
+            Button(startsOllama ? Wording.startOllama : Wording.checkOllama) {
+                Task { _ = await model.runtime?.lifecycle.ensureRunning(); await loadStatus() }
+            }
+        }
+    }
+
+    private var modelsSection: some View {
+        Section(Wording.modelsRun(at: model.runtime?.ollama.baseURL)) {
+            if !profiles.isEmpty {
+                ProfileInUsePicker(inUse: current.profile, profiles: profiles)
+            }
+            if let inUse {
+                ForEach(ModelProfile.roles, id: \.self) { role in
+                    let name = inUse.model(for: role)
+                    LabeledContent(Wording.role(role)) {
+                        HStack(spacing: Style.inlineControlSpacing) {
+                            Text(name).textSelection(.enabled)
+                            ModelAvailability(name: name, status: status.first { $0.name == name }, downloads: downloads)
+                        }
+                    }
+                }
+                DownloadProgress(downloads: downloads, of: ModelProfile.roles.map(inUse.model(for:)))
+            }
+            Text(Wording.downloadNote)
+                .font(.caption).foregroundStyle(.secondary)
+        }
     }
 
     /// Points the app at the server typed in, or says why it cannot.
@@ -224,7 +290,7 @@ struct ModelSettingsView: View {
     }
 
     private func loadInstalled() async {
-        guard editsProfiles, model.session.ollama.isReady else { return }
+        guard parts.contains(.profiles), model.session.ollama.isReady else { return }
         if let listed = await model.load(Wording.checkModelsAction, { try await $0.models.installed() }) { installed = listed }
     }
 }
@@ -276,9 +342,12 @@ struct AdvancedSettings: View {
         rebuildMessage = summary.map { Wording.rebuilt($0.summary, queued: $0.queued) }
     }
 
+    /// Asks where to save the diagnostics and saves them there. The panel opens beside the archive, where a task's export
+    /// first opens, never wherever a panel was last left.
     private func export() async {
         let panel = NSSavePanel()
         panel.nameFieldStringValue = Wording.diagnosticsFileName
+        panel.directoryURL = model.archive?.deletingLastPathComponent()
         guard panel.runModal() == .OK, let url = panel.url else { return }
         let includeText = includeText
         let contents = await model.load(Wording.exportDiagnosticsAction) { try await $0.exportDiagnostics(to: url, includeDocumentText: includeText) }

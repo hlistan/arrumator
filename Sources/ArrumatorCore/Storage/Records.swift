@@ -29,7 +29,13 @@ public enum DocumentStatus: String, Sendable, Codable, CaseIterable {
     case duplicate
     case undone, held, missing
 
-    public var isReviewable: Bool { [.needsReview, .failed, .held, .undone].contains(self) }
+    /// The document waits for the user: it could not be read or filed as it should, and waits to be confirmed, corrected
+    /// or read again. What Needs You counts (AGENTS.md §4.7: a count only where something waits for the user).
+    public var waitsForUser: Bool { [.needsReview, .failed].contains(self) }
+
+    /// The user set the document aside: left it for later, or undid its filing back into Incoming. It waits for nothing
+    /// the app could do: Needs You lists it apart from what waits for the user, and counts it not.
+    public var isSetAside: Bool { [.held, .undone].contains(self) }
 
     /// Statuses of documents the pipeline has finished with, whatever the outcome.
     public static let processed: Set<DocumentStatus> = [.filed, .needsReview, .failed, .duplicate, .undone, .held]
@@ -157,6 +163,11 @@ public enum EventKind: String, Sendable, Codable, CaseIterable {
     case taskExported
     /// The user removed a task; what it exported stays where it was put.
     case taskRemoved
+    /// A record file of the archive cannot be read, as one broken by hand: it is not written over, and what is filed or
+    /// changed meanwhile is kept in the index until it can be read (`ArchiveRecords.recordUnreadable`).
+    case recordFileUnreadable
+    /// A record file that could not be read can be read again, and what was kept meanwhile is written into it.
+    case recordFileReadable
 }
 
 public enum EventActor: String, Sendable, Codable {

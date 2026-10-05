@@ -81,7 +81,7 @@ import Testing
     }
 
     @Test func whatTheUserDoesWithADocumentWritesOnlyWhatItChangesOfItsRow() async throws {
-        let h = try await Harness.make(analyzer: StubAnalyzer(labels: nil, fileName: nil))
+        let h = try await Harness.make(analyzer: StubAnalyzer(labels: nil))
         defer { h.env.cleanup() }
         let id = try #require(try await h.ingest("bill.txt", text: Self.bill).id)
         // The labels are another's to change meanwhile, as the worker's reading or a correction in another window: a
