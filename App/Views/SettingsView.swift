@@ -153,7 +153,8 @@ struct FilingSettings: View {
                     .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 Button(Wording.readAllAgain) { confirmingReadAll = true }
                     .confirmationDialog(Wording.readAllAgainQuestion, isPresented: $confirmingReadAll) {
-                        Button(Wording.readAgain) { Task { await readAll() } }
+                        // It replaces the labels the user corrected too.
+                        Button(Wording.readAgain, role: .destructive) { Task { await readAll() } }
                     } message: {
                         Text(Wording.readAllAgainNote(profile: profileName))
                     }

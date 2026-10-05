@@ -162,13 +162,12 @@ public actor IngestCoordinator {
 
     /// Processes due jobs until none are left that this worker may take, or the task that drains them is cancelled, as
     /// Ctrl-C cancels a command (CLI and tests): a job another process has in hand, as the app beside `arrumatorcli`,
-    /// is left to it, and the job in hand when the task is cancelled carries on at the next start. `whileOllamaAnswers`
-    /// stops it, too, at the first job that waits for Ollama, as reading the whole archive again from a command does,
-    /// rather than take every job in turn while it is away, each waiting its `ollama.retryDelays`, and again once due.
-    public func drain(whileOllamaAnswers: Bool = false) async {
-        while !Task.isCancelled, case let .taken(job) = await nextDue() {
+    /// is left to it, and the job in hand when the task is cancelled carries on at the next start. Which jobs it takes,
+    /// `draining` says: by default only those that come in their turn.
+    public func drain(_ draining: Draining = .inTurn) async {
+        while !Task.isCancelled, case let .taken(job) = await nextDue(givingWay: draining == .everything) {
             await process(job)
-            if whileOllamaAnswers, status.waitingForOllama { break }
+            if draining == .everything, status.waitingForOllama { break }
         }
         await refreshQueueCount()
     }
@@ -197,9 +196,12 @@ public actor IngestCoordinator {
         case unreadable
     }
 
-    /// The next job due now, taken for this worker (`JobStore.nextDue`).
-    private func nextDue() async -> Look {
-        do { return try await services.jobs.nextDue(claiming: services.claims, excluding: stillRunning()).map(Look.taken) ?? .none } catch {
+    /// The next job due now, taken for this worker (`JobStore.nextDue`), one that gives way only with `givingWay`.
+    private func nextDue(givingWay: Bool = true) async -> Look {
+        do {
+            return try await services.jobs.nextDue(claiming: services.claims, excluding: stillRunning(), givingWay: givingWay)
+                .map(Look.taken) ?? .none
+        } catch {
             Log.error(.ingest, "Could not read the job queue", ["error": error.localizedDescription])
             return .unreadable
         }

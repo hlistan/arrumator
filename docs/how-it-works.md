@@ -442,18 +442,19 @@ an earlier version filed, cannot be read again, which is said at once.
   it had kept. Nothing of the earlier reading is left beside the new one, and a stop or a failure before that step
   leaves the document as it was, to be recorded whole at the next attempt. Its trace's `index` step says so, naming the
   embedding model, or that the earlier embeddings were kept.
-- **You win over a reading under way.** A label you change while it is read stays as you left it, and so does a name
-  you give it ([your own changes](#your-own-changes)); leave it for later or undo it meanwhile, and the reading is
-  dropped, changing nothing of it.
-- **A reading that gives no labels**, as when the model gives no valid answer, leaves it none of the model's, as a file
-  read the first time would have none: it keeps its tags and its name, and waits for you in Needs You, saying why. One
-  that keeps failing (`ingest.maxAttempts`) leaves its labels, text and meaning as they were, and it waits for you in
-  Needs You as failed, saying why.
+- **What you do after asking wins.** A label you change once it is asked for, while it waits or is read, stays as you
+  left it, and so does a name you give it ([your own changes](#your-own-changes)); leave it for later or undo it
+  meanwhile, and the reading is dropped, changing nothing of it.
+- **A reading that gives no labels**, as when the model gives no valid answer, made none to put in their place: the
+  document keeps the labels it had and its name, and waits for you in Needs You, saying why. One that keeps failing
+  (`ingest.maxAttempts`) leaves its labels, text and meaning as they were, and it waits for you in Needs You as failed,
+  saying why.
 - **Read All Documents Again**, under Settings › Filing, asks first, naming the profile, then queues every document in
   the archive that is filed, waiting for you or set aside after failing; those you left for later stay as they are.
   They give way to every file that arrives, so new files are filed first, and Incoming counts them in a line of their
-  own rather than listing each. One already waiting to be read is read once, and asked for again, as with **Read Again**
-  on its card or a copy of it in Incoming, it is read in its turn. History records the request once, naming the profile
+  own rather than listing each; the app, or `arrumatorcli run`, reads them, and no other command does. One already
+  waiting to be read is read once, and asked for again, as with **Read Again** on its card or a copy of it in Incoming,
+  it is read in its turn. History records the request once, naming the profile
   and the documents, and asked again while every one of them waits, nothing; each reading is recorded under its
   document, before its filing.
 
@@ -490,9 +491,10 @@ taken over it.
 
 Reading a document again (`review retry`, **Read Again**, **Read All Documents Again**, an exact copy of it put into
 Incoming) labels and names it again where it is, from its file, keeping its tags ([reading documents
-again](#reading-documents-again)). You win over a reading under way: a label you change from when the model begins to
-read it until it is filed, of any kind, as a sender corrected or a tag given or taken away, stays as you left it, and
-the reading fills in only the kinds you did not touch. A reading that gives no name leaves it
+again](#reading-documents-again)). You win over a reading under way: a label you change until it is filed, from when
+the model begins to read a file, or from when you asked for a document to be read again, of any kind, as a sender
+corrected or a tag given or taken away, stays as you left it, and the reading fills in only the kinds you did not
+touch. A reading that gives no name leaves it
 the name it has, and one that names it as it is named, but for case or the collision suffix (`naming.collisionFormat`) a
 taken name gave it, moves nothing. Only a document in the archive can be undone: one already undone, or left in
 Incoming, is refused, and its file keeps its name. A document you undid is back in Incoming, held, and a rescan leaves

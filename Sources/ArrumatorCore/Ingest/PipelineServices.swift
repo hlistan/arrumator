@@ -175,7 +175,7 @@ public struct PipelineServices: Sendable {
         }
         let tags = Self.keptTags(doc.labels) + (inArchive ? [] : self.tags(for: doc.url, given: [], settings: settings))
         return try await jobs.enqueue(path: doc.path, kind: inArchive ? .reanalyse : .ingest, docID: docID,
-                                      payload: Self.readingAgain(tags: tags)).id
+                                      payload: Self.readingAgain(tags: tags, asked: inArchive ? doc : nil)).id
     }
 
     /// Queues every document of the archive that waits for nothing the user decided to be read again from the start, as
@@ -195,9 +195,11 @@ public struct PipelineServices: Sendable {
                 .select(Column("id"), Column("path"), Column("labels_json")).order(Column("id")))
                 .filter { archive.holds($0["path"]) }
             let ids = try documents.compactMap { row -> Int64? in
-                let (id, labels): (Int64, [DocumentLabel]?) = (row["id"], JSON.decode([DocumentLabel].self, from: row["labels_json"] as String?))
-                return try JobStore.enqueue(db, path: row["path"], kind: .reanalyse, docID: id, payload: Self.readingAgain(tags: Self.keptTags(labels)),
-                                            givesWay: true, at: now).isNew ? id : nil
+                let (id, path): (Int64, String) = (row["id"], row["path"])
+                let labels = JSON.decode([DocumentLabel].self, from: row["labels_json"] as String?)
+                var payload = Self.readingAgain(tags: Self.keptTags(labels), asked: nil)
+                payload.rereading = Rereading(before: labels ?? [], path: path, changes: [], tags: nil)
+                return try JobStore.enqueue(db, path: path, kind: .reanalyse, docID: id, payload: payload, givesWay: true, at: now).isNew ? id : nil
             }
             guard !ids.isEmpty else { return [] }
             try HistoryStore.insert(db, .retry, at: now, actor: .user,
@@ -212,10 +214,12 @@ public struct PipelineServices: Sendable {
         (labels ?? []).filter(\.kind.isUsersOwn).map { GivenTag(label: $0, source: .document) }
     }
 
-    /// What a job reading a document again is queued with: only the tags it keeps or is given, as it starts at hashing.
-    private static func readingAgain(tags: [GivenTag]) -> JobPayload {
+    /// What a job reading a document again is queued with, as it starts at hashing: the tags it keeps or is given, and,
+    /// for one of the archive, `asked`, its labels and place as they are when it is asked for (`Rereading`).
+    private static func readingAgain(tags: [GivenTag], asked: DocumentRecord?) -> JobPayload {
         var payload = JobPayload()
         payload.tags = tags.isEmpty ? nil : tags
+        payload.rereading = asked.map { Rereading(before: $0.labels ?? [], path: $0.path, changes: [], tags: nil) }
         return payload
     }
 
@@ -237,11 +241,12 @@ public struct PipelineServices: Sendable {
     }
 
     /// Reads a document already read once again with the model, as `analyse` does, and saves nothing: what it reads takes
-    /// the place of everything the document has once it is filed (`replaceReading`), and the job keeps what that needs
-    /// until then (`Rereading`).
-    public func reread(docID: Int64, content: ExtractedContent, given: [GivenTag], settings: AppSettings,
+    /// the place of everything the document has once it is filed (`replaceReading`), but what the user changed since it
+    /// was asked for, as `asked` says it was then; the job keeps what that needs until then (`Rereading`).
+    public func reread(docID: Int64, content: ExtractedContent, given: [GivenTag], asked: Rereading, settings: AppSettings,
                        trace: TraceContext) async throws -> (outcome: AnalysisOutcome, rereading: Rereading) {
-        try await reading(docID: docID, content: content, given: given, settings: settings, trace: trace)
+        let read = try await reading(docID: docID, content: content, given: given, settings: settings, trace: trace)
+        return (read.outcome, Rereading(before: asked.before, path: asked.path, changes: read.rereading.changes, tags: read.rereading.tags))
     }
 
     /// Reads a document with the model (`read`), with the tags it has as the reading begins, and says in its trace why it

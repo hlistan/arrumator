@@ -70,7 +70,7 @@ struct Review: AsyncParsableCommand {
             if !queueOnly { _ = await runtime.lifecycle.ensureRunning() }
             guard let document else {
                 let ids = try await runtime.review.retryAll()
-                if !queueOnly { await runtime.coordinator.drain(whileOllamaAnswers: true) }
+                if !queueOnly { await runtime.coordinator.drain(.everything) }
                 let documents = try await runtime.services.documents.documents(ids: ids)
                 let left = try await runtime.services.jobs.counts().readingAgain
                 try options.emit(documents) { Self.said(documents, left: left) }

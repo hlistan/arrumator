@@ -183,7 +183,7 @@ import Testing
         let atItsTime = try await Self.next(in: jobs)
         #expect(atItsTime == a,
                 "once its time has come, the file that waited takes its place by when it arrived: before the file that came after it")
-        await h.coordinator.drain()
+        await h.coordinator.drain(.everything)
         let read = await analyzer.calls.files
         #expect(read == ["a.txt", "b.txt", "a.txt", "c.txt"], "it is read again, then the file that arrived after it")
         let reread = try await jobs.job(id: reindex)?.state

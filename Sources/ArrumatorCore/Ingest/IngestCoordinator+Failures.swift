@@ -203,6 +203,8 @@ extension IngestCoordinator {
     private func readFromTheStart(_ job: inout JobRecord, payload: JobPayload, trace: TraceContext) async {
         var fresh = JobPayload()
         fresh.tags = payload.tags
+        // What a document read again had when it was asked for stays what the user's changes are told by.
+        fresh.rereading = payload.rereading
         do { try job.setPayload(fresh) } catch {
             Log.error(.ingest, "Could not keep what a failed job had done", ["job": String(job.id ?? 0), "error": error.localizedDescription])
         }

@@ -19,6 +19,14 @@ extension CommandLineTests {
         #expect(queued.status == 0 && queued.text.contains("#\(ids[0]) filed") && queued.text.contains("#\(ids[1]) filed")
                     && queued.text.contains("2 documents queued to be read again") && queued.text.contains("2 still to be read"),
                 "every document of the archive is queued, as it is until it is read, and none is read without Ollama: \(queued.text) \(queued.stderr)")
+        // A command that files a file takes none of them.
+        let incoming = home.root.appendingPathComponent("Incoming", isDirectory: true)
+        try FileManager.default.createDirectory(at: incoming, withIntermediateDirectories: true)
+        try Data("A new arrival".utf8).write(to: incoming.appendingPathComponent("new.txt"))
+        _ = try run(home, ["ingest", incoming.appendingPathComponent("new.txt").path])
+        let read = try JSON.decoder.decode([EventRecord].self, from: try run(home, ["history", "--json", "--limit", "100"]).stdout)
+            .filter { $0.kind == .extracted && $0.docId == ids[1] }
+        #expect(read.isEmpty, "ingest left the archive's documents waiting to be read again to the app: \(read.map(\.summary))")
         let again = try run(home, ["review", "retry", "--all", "--queue-only", "--json"])
         let left = try JSON.decoder.decode([DocumentRecord].self, from: again.stdout)
         #expect(again.status == 0 && left.isEmpty,

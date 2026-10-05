@@ -311,7 +311,7 @@ A document of the archive read again (`reanalyse`: an exact copy's original, **R
 Again**) goes through the same stages from the start, its file where the document is when its turn comes, but its job
 keeps what they find (`JobPayload.content`, `outcome`, `rereading`) and writes nothing of it to the document until it is
 filed: then, in the transaction that records the filing, before its event, `IndexStore.replaceReading` puts its labels
-(those the user changed since the reading began, and the tags, as they are then), its text, its row of the full-text
+(those the user changed since it was asked for, and the tags, as they are then), its text, its row of the full-text
 index and its embeddings, every model's, in the place of the earlier reading's, and its reading is recorded in History
 ([reading documents again](how-it-works.md#reading-documents-again)).
 
@@ -330,10 +330,13 @@ afresh.
 The queue has one order, the order jobs were queued in (`JobStore.nextDue`); when a job is due only gates it. A job
 that gives way (`JobRecord.givesWay`: reading documents again after a rebuild, and the whole archive read again at once)
 comes after every job that does not, and gives its place to a request that does not, as the user's **Read Again** of
-its document (`JobStore.enqueue`). A job reading a document of the archive again is at its document's path as the
-document moves (the trigger `jobs_follow_document`), reads it where it is when its turn comes and only while it is still
-to be read (`IngestCoordinator.stillToReadAgain`, and again before filing it), and is cancelled by the write that leaves
-the document for later or undoes it (`JobStore.cancelReadingAgain`). A worker takes a job in the write that claims it
+its document (`JobStore.enqueue`). The app's worker and `arrumatorcli run` take every job; another command takes only
+those that come in their turn, as reading the whole archive again may take hours (`IngestCoordinator.Draining`). A job
+reading a document of the archive again is at its document's path as the document moves (the trigger
+`jobs_follow_document`), or else found by its document, keeps what the document had when it was asked for
+(`JobPayload.rereading`), reads it where it is when its turn comes and only while it is still to be read
+(`IngestCoordinator.stillToReadAgain`, and again before filing it), and is cancelled by the write that leaves the
+document for later or undoes it (`JobStore.cancelReadingAgain`). A worker takes a job in the write that claims it
 (`JobClaims`: a claim of its own and its `ProcessTag`, as the task queues keep theirs), and saves each stage only
 while the claim holds, so `arrumatorcli` beside the app never works on the job the app has in hand. A job is let go
 when its worker stops; one a process that has since ended held is taken again. A job whose stage a deadline gave up

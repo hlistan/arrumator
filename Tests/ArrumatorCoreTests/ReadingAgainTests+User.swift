@@ -93,14 +93,77 @@ extension ReadingAgainTests {
         for name in ["a.txt", "b.txt"] { ids.append(try #require(try await h.ingest(name, text: "\(Self.bill) \(name)").id)) }
         let (services, coordinator, review) = Self.pipeline(h, StubAnalyzer(error: OllamaError.unreachable("connection refused")))
         try await review.retryAll()
-        await coordinator.drain(whileOllamaAnswers: true)
+        await coordinator.drain(.everything)
         #expect(try await h.jobs().suffix(2).map(\.state) == [.analysing, .pending],
                 "the first waits for Ollama where it stopped, and the command stops there rather than take the next")
         h.env.time.advance(by: h.env.config.ingest.retryDelays.last)
-        await coordinator.drain(whileOllamaAnswers: true)
+        await coordinator.drain(.everything)
         let waits = try await services.history.events(limit: 20, kinds: [.retry], docID: ids[0]).map(\.summary)
         #expect(waits.count == 1 && waits.first?.hasPrefix("Waiting for Ollama") == true,
                 "History says once that it waits for Ollama, however often it is tried meanwhile: \(waits)")
+    }
+
+    @Test func aLabelOrANameTheUserChangesWhileItWaitsToBeReadAgainStays() async throws {
+        let h = try await Harness.make()
+        defer { h.env.cleanup() }
+        let earlier = try await Self.filedEarlier(h)
+        let id = try #require(earlier.id)
+        let (services, coordinator, review) = Self.pipeline(h, StubAnalyzer(labels: LabelingTests.meoContract, title: Harness.otherTitle))
+        try await review.retryAll()
+        // While it waits its turn, before the model begins.
+        let mine = DocumentLabel(kind: .sender, value: "Mine Lda")
+        try await review.edit(id, fileName: "Mine", labels: LabelEdit(adding: [mine], removing: earlier.labels?.filter { $0.kind == .sender } ?? []))
+        await coordinator.drain(.everything)
+        let after = try #require(try await services.documents.document(id: id))
+        #expect(after.filename == "Mine.txt" && after.labels(.sender) == ["Mine Lda"],
+                "what the user changed after asking for it to be read again stays: \(after.filename) \(after.labels ?? [])")
+        #expect(after.labels(.party) == LabelingTests.meoContract.values(.party), "and the reading fills in the rest")
+    }
+
+    @Test func aCommandTakesNoDocumentThatWaitsWithTheRestOfTheArchive() async throws {
+        let analyzer = StubAnalyzer(title: nil)
+        let h = try await Harness.make(analyzer: analyzer)
+        defer { h.env.cleanup() }
+        for name in ["a.txt", "b.txt"] { try await h.ingest(name, text: "\(Self.bill) \(name)") }
+        try await h.review.retryAll()
+        await h.coordinator.enqueue(try h.env.drop("new.txt", text: "A new arrival"))
+        await h.coordinator.drain()
+        let read = await analyzer.calls.files
+        #expect(read == ["a.txt", "b.txt", "new.txt"],
+                "a command files the file it was given, and none of the archive waiting to be read again: \(read)")
+        #expect(try await h.services.jobs.counts() == JobCounts(queued: 0, reindexing: 0, readingAgain: 2),
+                "those are left to the app, or run")
+    }
+
+    @Test func aJobReadingADocumentAgainIsFoundByItsDocumentWhereverItWasLeft() async throws {
+        let h = try await Harness.make()
+        defer { h.env.cleanup() }
+        let doc = try await h.ingest("bill.txt", text: Self.bill)
+        let id = try #require(doc.id)
+        // A job an earlier version queued where the document was before it moved, and one where it is now.
+        try await h.env.database.writer.write { db in
+            try db.execute(sql: """
+                INSERT INTO jobs (kind, doc_id, source_path, state, payload_json, created_at, updated_at, gives_way)
+                VALUES ('\(JobKind.reindex.rawValue)', ?, '/Archive/where it was.txt', 'pending', '{}', 0, 0, 1)
+                """, arguments: [id])
+        }
+        let queued = try await h.services.jobs.enqueue(path: doc.path, kind: .reanalyse, docID: id)
+        let jobs = try await h.jobs()
+        #expect(queued.isNew && jobs.filter { $0.state.isActive }.map(\.id) == [queued.id],
+                "a request to read it again finds the job left where it was, which does less, and takes its place")
+        // Two jobs of one document, one left behind: a move of the document moves the one where it was.
+        try await h.env.database.writer.write { db in
+            try db.execute(sql: """
+                INSERT INTO jobs (kind, doc_id, source_path, state, payload_json, created_at, updated_at, gives_way)
+                VALUES ('\(JobKind.reindex.rawValue)', ?, '/Archive/left behind.txt', 'pending', '{}', 0, 0, 1)
+                """, arguments: [id])
+        }
+        let moved = h.env.archive.appendingPathComponent("moved.txt").path
+        try await h.services.documents.update(id) { $0.path = moved }
+        let paths = try await h.env.database.reader.read { db in
+            try String.fetchAll(db, sql: "SELECT source_path FROM jobs WHERE doc_id = ? AND state = 'pending' ORDER BY id", arguments: [id])
+        }
+        #expect(paths == [moved, "/Archive/left behind.txt"], "the document's job follows it; the one left behind stays, and nothing fails: \(paths)")
     }
 }
 

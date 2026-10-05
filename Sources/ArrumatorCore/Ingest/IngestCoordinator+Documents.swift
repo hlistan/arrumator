@@ -43,13 +43,17 @@ extension IngestCoordinator {
                                                          trace: trace)
             return
         }
-        let read = try await services.reread(docID: docID, content: content, given: given, settings: settings, trace: trace)
+        // Every reading again is queued with what it was asked for at (`PipelineServices.queueReadingAgain`).
+        guard let asked = payload.rereading else {
+            throw IngestError.unreadablePayload(job.id ?? 0, reason: "it does not say what document \(docID) had when it was asked to be read again")
+        }
+        let read = try await services.reread(docID: docID, content: content, given: given, asked: asked, settings: settings, trace: trace)
         (payload.outcome, payload.rereading) = (read.outcome, read.rereading)
     }
 
     /// What filing `document`, read again, as it is now, does with what its reading named it, `analysis`: nil when it is
     /// no longer to be read again, as one the user left for later or undid meanwhile, which keeps everything it had; and
-    /// whether it keeps the name it has, given it by the user since the reading began (`Rereading.path`), as a label the
+    /// whether it keeps the name it has, given it by the user since it was asked for (`Rereading.path`), as a label the
     /// user changes meanwhile stays (`IndexStore.kept`), its analysis then naming it so.
     func filing(_ document: DocumentRecord, rereading: Rereading,
                 analysis: DocumentAnalysis) -> (analysis: DocumentAnalysis, keepsItsName: Bool)? {

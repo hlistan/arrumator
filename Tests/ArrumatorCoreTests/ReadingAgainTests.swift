@@ -89,7 +89,7 @@ import Testing
                 "History says the copy, then its text read, then the reading recorded once with its filing, before it: \(events)")
     }
 
-    @Test func aReadingAgainWithoutAValidAnswerLeavesNoneOfTheModelsLabelsAndTheDocumentWaitsForYou() async throws {
+    @Test func aReadingAgainWithoutAValidAnswerKeepsTheLabelsTheDocumentHadAndItWaitsForYou() async throws {
         let h = try await Harness.make()
         defer { h.env.cleanup() }
         let earlier = try await Self.filedEarlier(h)
@@ -99,12 +99,11 @@ import Testing
         await coordinator.drain()
 
         let read = try #require(try await services.documents.document(id: id))
-        #expect(read.labels == [Self.tag] && !read.isLabelled && read.status == .needsReview,
-                "a reading that gives no labels leaves it its tag alone, not labelled, waiting for you, as a file read the first time would")
+        #expect(read.labels == earlier.labels && read.isLabelled && read.status == .needsReview,
+                "a reading that gives no labels made none to put in their place: it keeps those it had, and waits for you: \(read.labels ?? [])")
         #expect(read.filename == earlier.filename && read.analysis?.problems == [DocumentAnalysis.Problem.noAnswer],
                 "it keeps its name, as a reading that gives none leaves it, and its card says why it waits")
-        #expect(try await services.documents.unlabelled() == [id], "so what reads documents without labels reads it")
-        #expect(try await Self.found(h)["sender:edp"] == [], "nothing finds it by the labels it had")
+        #expect(try await Self.found(h)["sender:edp"] == [id], "it is found by the labels it had still")
         let said = try await services.history.events(limit: 5, kinds: [.error], docID: id).map(\.summary)
         #expect(said == ["Not read: " + DocumentAnalysis.said([DocumentAnalysis.Problem.noAnswer]) + "; keeps its tag “\(Self.tag.value)”"],
                 "History says why, and that it keeps its tag: \(said)")
@@ -177,7 +176,7 @@ import Testing
 
         await h.coordinator.enqueue(try h.env.drop("new.txt", text: "A new arrival"))
         #expect(try await h.services.jobs.listed(inHand: nil).map { URL(fileURLWithPath: $0.sourcePath).lastPathComponent } == ["new.txt"], "Incoming lists the file that arrived alone")
-        await h.coordinator.drain()
+        await h.coordinator.drain(.everything)
         let read = await analyzer.calls.files
         #expect(Array(read.suffix(3)) == ["new.txt", "a.txt", "b.txt"], "the file that arrived meanwhile is filed first: \(read)")
         let statuses = try await h.services.documents.documents(ids: ids).map(\.status)
@@ -196,7 +195,7 @@ import Testing
         await h.coordinator.enqueue(try h.env.drop("b copy.txt", text: "\(Self.bill) b.txt"))
         #expect(try await h.services.jobs.counts() == JobCounts(queued: 2, reindexing: 0, readingAgain: 2),
                 "Read Again on one takes it out of those that give way, and the copy waits in Incoming")
-        await h.coordinator.drain()
+        await h.coordinator.drain(.everything)
         let read = await analyzer.calls.files
         #expect(Array(read.dropFirst(3)) == ["c.txt", "b.txt", "a.txt"],
                 "the one asked for, then the one whose copy came, each in its turn, then the rest, each read once: \(read)")
@@ -225,7 +224,7 @@ import Testing
         try await reconciler.apply([.found(path: newcomer.path)])
         #expect(try await h.services.jobs.counts() == JobCounts(queued: 2, reindexing: 0, readingAgain: 1),
                 "Read Again on a renamed document finds its job where it is, the new file is queued, the one left for later is not")
-        await h.coordinator.drain()
+        await h.coordinator.drain(.everything)
 
         let read = await analyzer.calls.files
         #expect(Array(read.dropFirst(3)) == ["c renamed.txt", "a.txt", "a renamed.txt"],

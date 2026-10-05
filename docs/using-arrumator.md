@@ -198,9 +198,9 @@ file, with the profile in use, as you would after choosing another profile: file
 those set aside after failing, but not those you left for later. It asks first, naming the profile, and says that each
 document is renamed and given only the labels this reading finds, also in place of those you corrected, keeping its
 tags; then it says how many it queued. Each document is found as it was until it is read, and then its name, labels,
-text and meaning are replaced at once ([reading documents again](how-it-works.md#reading-documents-again)). New files
-still come first. Asked again while they wait, it queues none of them twice. `arrumatorcli review retry --all` does the
-same.
+text and meaning are replaced at once, but what you change of it after asking ([reading documents
+again](how-it-works.md#reading-documents-again)). New files still come first. Asked again while they wait, it queues
+none of them twice. `arrumatorcli review retry --all` does the same.
 
 ## Models and profiles
 

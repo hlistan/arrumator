@@ -62,8 +62,9 @@ public struct IndexStore: Sendable {
     /// Puts what reading a document again gave it in the place of everything an earlier reading had, in the transaction
     /// of `db` that records its filing (`IngestCoordinator`), so the index holds one reading of it or the other, never
     /// parts of both, and a document read again is found as it was until then. Its labels are those the reading gave,
-    /// `read`, but of the kinds the user changed since it began and of the user's own (`kept`); without them, as when the
-    /// model gave no valid answer, it keeps none of the model's, as a file read the first time would have none. Its text
+    /// `read`, but of the kinds the user changed since it was asked for and of the user's own (`kept`); a reading that
+    /// gave none, as when the model gave no valid answer, made none to put in their place, and the document keeps those
+    /// it had, as it keeps its embeddings when none was made. Its text
     /// and what it was read from are `content`; its row of the full-text index is deleted and written again, under
     /// `filename`; and every embedding it had, of whatever model, is deleted, `embedding` taking their place. A reading
     /// that made no embedding, as when the embedding model failed, leaves it those it had: search by meaning finds it as
@@ -71,11 +72,12 @@ public struct IndexStore: Sendable {
     static func replaceReading(_ db: Database, docID: Int64, filename: String, content: ExtractedContent, read: [DocumentLabel]?,
                                before: [DocumentLabel], embedding: TextEmbedding?, at now: Date) throws -> [DocumentLabel] {
         guard let document = try DocumentRecord.fetchOne(db, key: docID) else { throw IngestError.documentNotFound(docID) }
-        let labels = kept(read ?? [], before: before, current: document.labels ?? [])
+        let current = document.labels ?? []
+        let labels = read.map { kept($0, before: before, current: current) } ?? current
         try db.execute(sql: "DELETE FROM document_text WHERE doc_id = ?", arguments: [docID])
         try writeText(db, docID: docID, filename: filename, body: content.text, summary: content.visual?.description,
                       metadata: content.metadata, extractorVersion: content.extractedBy, labels: labels)
-        try saveLabels(db, labels, docID: docID, labelled: read != nil, at: now)
+        try saveLabels(db, labels, docID: docID, labelled: read != nil || document.isLabelled, at: now)
         try db.execute(sql: "UPDATE documents SET content_json = ?, page_count = ?, extracted_at = ? WHERE id = ?",
                        arguments: [try DocumentStore.storedContentJSON(content), content.pageCount, now.unixSeconds, docID])
         if let embedding {

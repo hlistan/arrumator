@@ -22,8 +22,9 @@ public struct JobPayload: Sendable, Codable, Hashable {
     /// The model the job waits to be installed, which it looks for among the server's before it is taken up again
     /// (`IngestCoordinator`); nil for a job that waits for none, and in every job queued before jobs waited for one.
     public var waitingForModel: String?
-    /// What a reading of a document already read once keeps until it is filed, with `outcome`, when it takes the place of
-    /// everything the document had (`IndexStore.replaceReading`); nil until it is read, and for a file read the first time.
+    /// What reading a document of the archive again keeps, from when it is asked for, as its labels and its place were
+    /// then, and, once it is read, with `outcome`, until it is filed, when it takes the place of everything the document
+    /// had (`IndexStore.replaceReading`); nil for a file read the first time.
     public var rereading: Rereading?
 
     public init() {}
@@ -35,10 +36,10 @@ public struct JobPayload: Sendable, Codable, Hashable {
     }
 }
 
-/// What a reading of a document already read once keeps, beside its outcome, until it is filed: the document's labels
-/// and where it was when the reading began, so a kind of label the user changes, or a name the user gives it, before it
-/// is filed stays as the user left it; what the user's rules changed of the model's labels; and what gave each of its
-/// tags, as History says them once it is filed.
+/// What reading a document of the archive again keeps, beside its outcome, until it is filed: the document's labels and
+/// where it was when it was asked for, so a kind of label the user changes, or a name the user gives it, after that
+/// stays as the user left it; and, once it is read, what the user's rules changed of the model's labels and what gave
+/// each of its tags, as History says them once it is filed.
 public struct Rereading: Sendable, Codable, Hashable {
     public var before: [DocumentLabel]
     public var path: String
@@ -107,8 +108,8 @@ public struct JobStore: Sendable {
     }
 
     /// Enqueues a job, not begun (`pending`), unless one is already active for the path that does all this one asks: a
-    /// queue drops no request. A job for a document in the archive is at the document's path, which follows it as it
-    /// moves (`jobs_follow_document`). One that does as much but for the tags `payload` gives is given those it lacks, in the
+    /// queue drops no request. A job reading a document of the archive again is at the document's path, which follows it
+    /// as it moves (`jobs_follow_document`), or else found by its document. One that does as much but for the tags `payload` gives is given those it lacks, in the
     /// write that finds it, which its worker, if one has it in hand, takes up at its next save (`update`). One that does
     /// less gives way, cancelled, its worker losing its claim (`IngestError.claimLost`): a `reindex` job, which only reads
     /// the text and computes the embedding, to one that reads the file with the model too; one that gives way to every
@@ -131,7 +132,7 @@ public struct JobStore: Sendable {
                         at now: Date) throws -> Queued {
         // Reading a document again for search, after a rebuild, never holds up filing, whoever queues it.
         let givesWay = givesWay || kind == .reindex
-        if var active = try Self.active(db, path: path), let id = active.id {
+        if var active = try Self.active(db, path: path, docID: docID, kind: kind), let id = active.id {
             let readable = Self.tags(ofPayload: active.payloadJson, in: db)
             if let had = readable, active.kind != .reindex || kind == .reindex, !active.givesWay || givesWay {
                 let added = Self.lacking(payload.tags ?? [], in: had)
@@ -179,6 +180,17 @@ public struct JobStore: Sendable {
         try JobRecord.filter(Column("source_path") == path).filter(activeStates.contains(Column("state"))).fetchOne(db)
     }
 
+    /// The job the pipeline is still working on for the file at `path`, or, for a request to read document `docID` of
+    /// the archive again, its active job doing that wherever it was left, as one an earlier version queued where the
+    /// document was before it moved (`jobs_follow_document` keeps the others at the document's path).
+    private static func active(_ db: Database, path: String, docID: Int64?, kind: JobKind) throws -> JobRecord? {
+        if let job = try active(db, path: path) { return job }
+        let rereading = [JobKind.reanalyse, .reindex]
+        guard let docID, rereading.contains(kind) else { return nil }
+        return try JobRecord.filter(Column("doc_id") == docID).filter(rereading.map(\.rawValue).contains(Column("kind")))
+            .filter(activeStates.contains(Column("state"))).fetchOne(db)
+    }
+
     /// Cancels the active job reading document `docID` again (`reanalyse`), in a transaction of the caller's that sets
     /// the document aside, as leaving it for later or undoing it: its worker loses its claim, and its reading changes
     /// nothing of the document (`IngestError.claimLost`).
@@ -199,23 +211,24 @@ public struct JobStore: Sendable {
     /// stopped part way, as when the app quit or crashed, keeps its stage and its place, so it carries on first at the
     /// next start, before anything queued after it. A job that gives way (`JobRecord.givesWay`: reading documents again
     /// after a rebuild, or the whole archive at once) waits until no other is due, so neither ever holds up filing.
-    private static func due(at now: Date) -> QueryInterfaceRequest<JobRecord> {
-        JobRecord.filter(activeStates.contains(Column("state")))
+    private static func due(at now: Date, givingWay: Bool) -> QueryInterfaceRequest<JobRecord> {
+        let due = JobRecord.filter(activeStates.contains(Column("state")))
             .filter(Column("next_run_at") == nil || Column("next_run_at") <= now.unixSeconds)
             .order(Column("gives_way"), Column("id"))
+        return givingWay ? due : due.filter(Column("gives_way") == false)
     }
 
     /// Takes the job to work on next for a worker of `claims`' process: of the jobs due (`due`), the first that no
     /// worker holds (`JobClaims.holds`), marked with a claim of its own in the write that finds it, so that no other
     /// worker, of this process or of another, as `arrumatorcli` beside the app, takes it until it ends or is let go
     /// (`release`). A job a process that has ended held is taken again. `excluding` are jobs this process may not start
-    /// yet (`IngestCoordinator`).
-    public func nextDue(claiming claims: JobClaims, excluding: Set<Int64> = []) async throws -> JobRecord? {
+    /// yet (`IngestCoordinator`); without `givingWay`, none that gives way is taken (`IngestCoordinator.Draining`).
+    public func nextDue(claiming claims: JobClaims, excluding: Set<Int64> = [], givingWay: Bool = true) async throws -> JobRecord? {
         let now = time.now()
         let claim = claims.make()
         do {
             let taken: JobRecord? = try await database.writer.write { db in
-                let candidates = try Row.fetchAll(db, Self.due(at: now).select(Column("id"), Column("claim"), Column("claimed_by")))
+                let candidates = try Row.fetchAll(db, Self.due(at: now, givingWay: givingWay).select(Column("id"), Column("claim"), Column("claimed_by")))
                 let free = candidates.first { row in
                     let id: Int64 = row["id"]
                     return !excluding.contains(id) && !claims.holds(row["claim"], by: row["claimed_by"])
