@@ -171,12 +171,14 @@ extension LabelFormTests {
     @Test(arguments: [
         ("IMI AT", "NOTA DE COBRANÇA\nO IMI é cobrado pela AT em maio", "pt", "abbreviations among small letters"),
         ("IMI AT", "O imposto é cobrado pela AT em maio. IMI", "pt", "a word before a dot no number follows"),
-        ("IMI AT", "AT cobrou. IMI anual", "pt", "a word before a dot and a series' letters no number follows"),
-        ("IMI AT", "O IMI é anual\nAT cobrou. Em 2025", "pt", "a word before a dot and a number begun by a word not in capitals"),
+        ("IMI AT", "O imposto foi cobrado pela AT em maio. IMI 2025", "pt", "a word before a dot, an abbreviation and its year"),
+        ("IMI AT", "IMI liquidado. A 15 de maio pago à AT", "pt", "a word before a dot and a sentence begun with a day"),
         ("IMI AT", "Cobrado pela AT em maio\nIMI pago (2025)", "pt", "a word a bracket parts from a number"),
-        // What is read as words, as a colon parts any label from its value and a space an abbreviation from its year
-        // ("Relatório: Q3 2025", "Relatório IRS 2025"), though a number's name and its number stand there too.
+        // What is read as words, as a colon parts any label from its value and a dot or a space ends a sentence before
+        // an abbreviation and its year ("Relatório: Q3 2025", "maio. IMI 2025"), though a number's name and its number
+        // stand there too.
         ("INVOICE ACME", "ACME Ltd\nINVOICE No: ABC123", "en", "a number's name a colon parts from a number of as many letters"),
+        ("INVOICE ACME", "ACME Ltd\nINVOICE No. FT 2026/1", "en", "a number's name a dot parts from its series' letters"),
         ("FATURA EDP", "EDP Comercial\nFATURA No FT 2026/1", "pt", "a number's name a space parts from its series' letters"),
     ])
     func aTitleOfWordsTheDocumentWritesInCapitalsBesideASentenceIsAsAsked(_ title: String, text: String, language: String, why: String) throws {
@@ -216,7 +218,6 @@ extension LabelFormTests {
             ("FATURA TTNET", "TTNET Anonim\nFATURA No:1", "tr", "a heading beside a number's name and a colon with no space"),
             ("INVOICE ACME", "ACME Ltd\nINVOICE No. INV-2026-118", "en", "a heading beside a number's name, its number begun with letters"),
             ("INVOICE ACME", "ACME Ltd\nINVOICE No. ABC123", "en", "a heading beside a number's name, its number of as many letters"),
-            ("INVOICE ACME", "ACME Ltd\nINVOICE No. FT 2026/1", "en", "a heading beside a number's name, its number begun by a series' letters"),
             ("FATURA EDP", "EDP Comercial\nFATURA Nº FT 2026/1", "pt", "a heading beside a number sign in capitals"),
             ("INVOICE ACME", "ACME Ltd\nINVOICE nr 1A", "en", "a heading beside a number's name, its number begun with a digit"),
             ("FAKTURA PGE", "PGE Obrót\nFAKTURA nr FV_2025_123", "pl", "a heading beside a number an address's form holds"),

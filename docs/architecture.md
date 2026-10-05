@@ -411,8 +411,9 @@ removing it or clearing its conversation stops the answer to its question, and s
 Ollama away, as ingest decides it (`PipelineServices.ollamaIsAway`: not reached, or not in time and not answering a
 probe), makes the item wait, spending nothing, under one trace each attempt takes up
 (`TraceRecorder.start(_:resuming:)`), and no other item is taken until it is tried again (`ModelQueue.ollamaRetryAt`),
-as the ingest worker waits (`IngestCoordinator.ollamaRetryAt`); any other failure, a server that answers with one among
-them, fails it with the reason.
+as each needs the model; the ingest worker meanwhile takes only a file that came and is not hashed yet, which may be a
+copy to hand over or a file gone, and holds it before its text is read (`IngestCoordinator.ollamaRetryAt`,
+`JobStore.beforeTheModel`); any other failure, a server that answers with one among them, fails it with the reason.
 
 - **Search task.** `SearchTaskActions.create` inserts the task and its History event in one write. `SearchTaskQueue`
   takes the oldest, has `SearchPromptInterpreting` read the request into a `SearchPlan`, finds the documents with

@@ -1,6 +1,7 @@
 @testable import ArrumatorCore
 import ArrumatorTesting
 import Foundation
+import GRDB
 import Testing
 
 /// How a command ends: what it started stops with it, Ctrl-C included, and its exit code says whether every file it was
@@ -228,23 +229,34 @@ extension CommandLineTests {
                 "which the exit code says, and standard error, naming the file: \(ingested.stderr)")
     }
 
-    /// With Ollama away, the first file is read for its text and waits, and the rest are not begun: each is shown, as
-    /// queued in the list, and with `--json`, which lists documents alone, named on standard error, as no failure
-    /// (QA 2026-10-05, RA-1; the review of its fix).
-    @Test func ingestWhileOllamaIsAwayShowsEveryFileNotBegunAsQueued() throws {
+    /// With Ollama away, the first file is read for its text and waits, and the rest are looked at, but not read: each
+    /// is shown as the document it became, waiting, as no failure (QA 2026-10-05, RA-1; the reviews of its fix). A file
+    /// another process has in hand before it is looked at, as the app may, is not begun: with `--json`, which lists
+    /// documents alone, it is named on standard error as queued, as no failure.
+    @Test func ingestWhileOllamaIsAwayShowsEveryFileAsItWaitsAndOneNotBegunAsQueued() throws {
         let home = try Home.make()
         defer { home.cleanup() }
-        let notes = ["a.txt", "b.txt", "c.txt", "d.txt"].map { home.root.appendingPathComponent($0) }
+        let notes = ["a.txt", "b.txt", "c.txt"].map { home.root.appendingPathComponent($0) }
         for (index, note) in notes.enumerated() { try Data("Fatura número \(index + 1) de Maria Exemplo".utf8).write(to: note) }
         let ingested = try run(home, ["ingest", "--json", notes[0].path, notes[1].path])
-        #expect(try JSON.decoder.decode([DocumentRecord].self, from: ingested.stdout).map(\.originalFilename) == ["a.txt"],
-                "the JSON lists the document the first file became: \(ingested.text)")
-        #expect(ingested.status == 0 && ingested.stderr.contains("\(notes[1].path): queued, not read yet") && !ingested.stderr.contains(notes[0].path),
-                "and names the file not begun on standard error, failing nothing: \(ingested.stderr)")
-        let listed = try run(home, ["ingest", notes[2].path, notes[3].path])
-        let queued = listed.text.split(separator: "\n").filter { $0.hasPrefix("queued ") }.map { URL(fileURLWithPath: String($0.dropFirst(11))).lastPathComponent }
-        #expect(listed.status == 0 && queued == ["c.txt", "d.txt"],
-                "the list shows each as queued, while the file before them waits for Ollama: \(listed.text) \(listed.stderr)")
+        #expect(try JSON.decoder.decode([DocumentRecord].self, from: ingested.stdout).map(\.originalFilename) == ["a.txt", "b.txt"],
+                "the JSON lists the documents both files became, the second looked at but not read while the first waits for Ollama: \(ingested.text)")
+        #expect(ingested.status == 0 && ingested.stderr.isEmpty, "and fails nothing: \(ingested.stderr)")
+        // The app has the third file in hand, as this test's own process stands in for it, before it is looked at.
+        let index = try #require(try FileManager.default.contentsOfDirectory(at: home.support.appendingPathComponent("Indexes"),
+                                                                           includingPropertiesForKeys: nil).first { $0.pathExtension == "sqlite" })
+        let queue = try DatabaseQueue(path: index.path)
+        let now = Date().timeIntervalSince1970
+        try queue.write { db in
+            try db.execute(sql: """
+                INSERT INTO jobs (kind, source_path, state, next_run_at, created_at, updated_at, claim, claimed_by)
+                VALUES ('ingest', ?, 'pending', ?, ?, ?, 'in hand', ?)
+                """, arguments: [notes[2].spelledOnDisk.path, now, now, now, try SystemProcesses().current.description])
+        }
+        try queue.close()
+        let listed = try run(home, ["ingest", "--json", notes[2].path])
+        #expect(listed.status == 0 && listed.stderr.contains("\(notes[2].path): queued, not read yet"),
+                "a file not begun is named on standard error as queued, failing nothing: \(listed.text) \(listed.stderr)")
     }
 
     @Test func aDryRunOfSeveralFilesPrintsOneListNamingEachAndIngestShowsWhatCameOfTheRest() async throws {

@@ -50,6 +50,27 @@ extension IngestCoordinator {
                                 recheck: services.config.ingest.heldElsewhereRecheckSeconds, now: services.time.now())
     }
 
+    /// How far a job's stages went: to its end, or to the text it would read while Ollama is away.
+    enum Reached {
+        case end
+        case waitingForOllama
+    }
+
+    /// Whether `job`, about to be read for its text, waits instead, as it would only wait for Ollama too (QA 2026-10-05,
+    /// RA-1): while Ollama is away, it waits in its place until the job that found Ollama away is tried again, and
+    /// History says nothing of it. Only a job taken while Ollama is away comes here then (`JobStore.beforeTheModel`).
+    func waitsForOllama(_ job: inout JobRecord, payload: inout JobPayload, trace: TraceContext) async throws -> Bool {
+        guard let until = ollamaRetryAt else { return false }
+        job.nextRunAt = until
+        try await save(&job, &payload, state: job.state, trace: trace)
+        return true
+    }
+
+    /// Ends `trace` saying how its job ended, or what it waits for.
+    func finish(_ trace: TraceContext, _ outcome: JobOutcome, docID: Int64?) async {
+        await services.traces.finish(trace, outcome: outcome.rawValue, docID: docID)
+    }
+
     /// Whether another process holds jobs; a queue that cannot be read says nothing of it.
     private func heldElsewhere() async -> Bool {
         do { return try await services.jobs.heldElsewhere(claiming: services.claims) } catch {

@@ -226,21 +226,21 @@ written as the document writes it in a sentence, letter for letter: where the do
 row, within one cell, beginning with a capital, as a sentence or a name does, with a small letter among them and each
 word in capitals beside a word of the sentence, of small letters or a capital and small letters, as an abbreviation
 stands, never beside only an abbreviation's letters, a unit or a word a number follows (after a dot or a degree sign,
-what runs up to the next space with a digit in it, or a series' letters in capitals before it, as "No. ABC123" and "No.
-FT 2026/1"; after a space or a colon, what begins with a digit or holds more digits than letters, as "INV-2026-118" does
-and "COVID-19" does not, so that "No: ABC123" and "No FT 2026/1" are read as words, as "Relatório: Q3 2025" and
-"Relatório IRS 2025" are), as a number's name or a month before its year, as a heading's words stand ("Título de
-residência temporário", "Fatura da EDP"; not "FATURA n.º", "INVOICE No. 4711" nor "CONSUMO kWh"), and the title is those
-words in capitals, as the document's language writes its capitals or as any does ("DOĞALGAZ FATURASI" of "Doğalgaz
-faturası"), or, in a title that bears no accents, as capitals in some scripts leave them out, but for its accents ("TAXE
-FONCIERE A PAYER" of "Taxe foncière à payer"). A title of no more than `naming.maxChars` characters is looked for, as no
-file name holds a longer one. A title whose every word the document writes in capitals beside a word of a sentence, as
-abbreviations are ("IMI AT"), is as asked. A reference whose words for what it is, those before its first word that
-holds a digit, is in capitals, as "NIF", "FT" or a series' letter are, or is of another script, are not English, and
-which the document prints as the name of the field the reference is the value of, beside it or above it, is its number
-("Fatura n.º FT EDPC2026/926804564" is "FT EDPC2026/926804564"). Words are not English that are of another script than
-the Latin one ("お客さま番号 03-3542-5545-25"), or, when one of them is no English word the Mac knows, more likely of the
-document's language than of English, or of another language as surely as a short text's language is told
+what runs up to the next space with a digit in it, as "No. ABC123" does; after a space or a colon, what begins with a
+digit or holds more digits than letters, as "INV-2026-118" does and "COVID-19" does not; so "No: ABC123", "No. FT
+2026/1" and "No FT 2026/1" are read as words, as "Relatório: Q3 2025", "maio. IMI 2025" and "Relatório IRS 2025" are),
+as a number's name or a month before its year, as a heading's words stand ("Título de residência temporário", "Fatura da
+EDP"; not "FATURA n.º", "INVOICE No. 4711" nor "CONSUMO kWh"), and the title is those words in capitals, as the
+document's language writes its capitals or as any does ("DOĞALGAZ FATURASI" of "Doğalgaz faturası"), or, in a title that
+bears no accents, as capitals in some scripts leave them out, but for its accents ("TAXE FONCIERE A PAYER" of "Taxe
+foncière à payer"). A title of no more than `naming.maxChars` characters is looked for, as no file name holds a longer
+one. A title whose every word the document writes in capitals beside a word of a sentence, as abbreviations are ("IMI
+AT"), is as asked. A reference whose words for what it is, those before its first word that holds a digit, is in
+capitals, as "NIF", "FT" or a series' letter are, or is of another script, are not English, and which the document
+prints as the name of the field the reference is the value of, beside it or above it, is its number ("Fatura n.º FT
+EDPC2026/926804564" is "FT EDPC2026/926804564"). Words are not English that are of another script than the Latin one
+("お客さま番号 03-3542-5545-25"), or, when one of them is no English word the Mac knows, more likely of the document's
+language than of English, or of another language as surely as a short text's language is told
 (`extraction.languageShortTextMinConfidence`: "Zählernummer 1ESY 1160 4478 21"); words English shares with the
 document's language ("Client", "Contract") and a number's own letters, in any script ("Plate ΙΚΤ 1234", "Licence plate
 品川 300 あ 12-34"), are as asked. Where the document does not tell, it goes back once, as the guesses above do: a title
@@ -417,17 +417,18 @@ the archive the same way, with status failed, so Incoming stays clean and nothin
 the archive either stays in Incoming, failed, saying why, and one that cannot be moved there because the archive's
 folder is not there waits for it to be.
 
-While Ollama cannot be reached a document waits where it stopped, an image whose text is too sparse to tell what it
-is included, which is described when Ollama is back rather than filed without its description, and no other file is
-taken until it is tried again, as each would only be read for its text to wait for Ollama too; a document whose model
-is not installed waits in the Incoming queue, saying which model to download and how, and looks every
-`ingest.modelRecheckSeconds` whether Ollama lists it, until the model is downloaded, History saying it once; neither
-costs it an attempt. A server that answers, but with a failure (an error of its own or an empty reply) each time it is
-asked, as a model may for one image, costs an attempt each time,
-and so does a request that times out while the server still answers when asked for its version; a timeout while it
-answers nothing is Ollama away. Such a document is parked as failed after `ingest.maxAttempts`, with the reason, for
-you to read again, rather than tried again for ever. A description the vision model fails to give, an answer that is
-not one or an image the server refuses, is noted with the document, which is read without it.
+While Ollama cannot be reached a document waits where it stopped, an image whose text is too sparse to tell what it is
+included, which is described when Ollama is back rather than filed without its description, and no other file is read
+for its text until it is tried again, as each would only wait for Ollama too: a file that comes meanwhile is still
+looked at, so an exact copy goes to its original and a file gone is recorded, and then waits unread, and a document read
+again waits as it is; a document whose model is not installed waits in the Incoming queue, saying which model to
+download and how, and looks every `ingest.modelRecheckSeconds` whether Ollama lists it, until the model is downloaded,
+History saying it once; neither costs it an attempt. A server that answers, but with a failure (an error of its own or
+an empty reply) each time it is asked, as a model may for one image, costs an attempt each time, and so does a request
+that times out while the server still answers when asked for its version; a timeout while it answers nothing is Ollama
+away. Such a document is parked as failed after `ingest.maxAttempts`, with the reason, for you to read again, rather
+than tried again for ever. A description the vision model fails to give, an answer that is not one or an image the
+server refuses, is noted with the document, which is read without it.
 
 ## Exact copies
 

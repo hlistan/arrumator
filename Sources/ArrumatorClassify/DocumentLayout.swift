@@ -61,12 +61,12 @@ struct DocumentLayout: Sendable {
 
     /// The words of a cell, each noted as joined to the word before or after it by a dot with no space ("n.º", "S.A."),
     /// and as followed by a number: by what follows the spaces and signs after it, up to the next space, when that
-    /// holds a digit, or is a series' letters in capitals before what does, after a dot or a degree sign, as end a
-    /// number's name ("No. 4711", "No. ABC123", "n° AB12", "No. FT 2026/1"), or, after spaces or a colon, begins with a
-    /// digit or holds more digits than letters ("julho 2026", "Nr: 12", "No:1", "nr 1A", "nr INV-2026-118"); not by a
-    /// name with a digit in it after spaces or a colon, as parts any label from its value ("vacinação COVID-19",
-    /// "automóvel: AA-12-BB", "Relatório: Q3"), nor by a series' letters there, as an abbreviation before a year is
-    /// written ("Relatório IRS 2025"). One pass: each run is counted once, from the cell's end.
+    /// holds a digit, after a dot or a degree sign, as end a number's name ("No. 4711", "No. ABC123", "n° AB12"), or,
+    /// after spaces or a colon, begins with a digit or holds more digits than letters ("julho 2026", "Nr: 12", "No:1",
+    /// "nr 1A", "nr INV-2026-118"); not by a name with a digit in it after spaces or a colon, as parts any label from its
+    /// value ("vacinação COVID-19", "automóvel: AA-12-BB", "Relatório: Q3"), nor by letters before the number, as a
+    /// sentence's end before an abbreviation and its year is written ("maio. IMI 2025", "Relatório IRS 2025"), which a
+    /// series' letters are too ("No. FT 2026/1"). One pass: each run is counted once, from the cell's end.
     private static func words(of cell: String) -> [Word] {
         let runs = runs(of: Substring(cell))
         func gap(_ index: Int) -> Substring { cell[runs[index].endIndex..<runs[index + 1].startIndex] }
@@ -82,10 +82,7 @@ struct DocumentLayout: Sendable {
         func numbered(_ index: Int) -> Bool {
             guard index + 1 < runs.count, gap(index).allSatisfy({ $0.isWhitespace || numberSigns.contains($0) }) else { return false }
             let next = index + 1, (digits, letters) = rest[next]
-            if gap(index).contains(where: namesEnd.contains) {
-                // A series' letters before it: "FT 2026/1".
-                return digits > 0 || runs[next].allSatisfy(\.isCapitalLetter) && next + 1 < runs.count && rest[next + 1].digits > 0
-            }
+            if gap(index).contains(where: namesEnd.contains) { return digits > 0 }
             return runs[next].first?.isNumber == true || digits > letters
         }
         return runs.indices.map { index in

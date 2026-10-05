@@ -57,7 +57,7 @@ struct Ingest: AsyncParsableCommand {
                 docs.append(document)
                 if job?.state == .failed { failed.append((url, job?.lastError ?? "it could not be filed")) }
             } else if job?.state.isActive == true {
-                // Not begun, as while Ollama is away, which no file is read for meanwhile: no failure.
+                // Not begun, as one another process, such as the app, has in hand before it is looked at: no failure.
                 waiting.append(url)
             } else {
                 failed.append((url, job?.lastError ?? "it became no document"))
@@ -74,7 +74,7 @@ struct Ingest: AsyncParsableCommand {
         return failed
     }
 
-    /// What `--json` says of a file queued and not begun, as while Ollama is away.
+    /// What `--json` says of a file queued and not begun, as one the app has in hand.
     static let notBegun = "queued, not read yet: the app or `run` files it"
 
     /// Reads and labels each file without moving it or recording anything, and shows what came of them in one list; the

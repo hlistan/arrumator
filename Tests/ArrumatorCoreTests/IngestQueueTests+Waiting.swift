@@ -121,16 +121,17 @@ extension IngestQueueTests {
                 "it is never read again beside the reading that has not ended, and the file stays in Incoming, in Needs You")
     }
 
-    @Test func whileOllamaIsAwayNoOtherFileIsTakenUntilTheOneThatFoundItIsTriedAgain() async throws {
+    @Test func whileOllamaIsAwayNoOtherFileIsReadForItsTextUntilTheOneThatFoundItIsTriedAgain() async throws {
         let h = try await Harness.make(analyzer: StubAnalyzer(error: OllamaError.unreachable("connection refused")))
         defer { h.env.cleanup() }
         for name in ["a.txt", "b.txt", "c.txt"] { await h.coordinator.enqueue(try h.env.drop(name, text: "\(IngestTests.bill) \(name)")) }
         await h.coordinator.drain()
-        #expect(try await h.jobs().map(\.state) == [.analysing, .pending, .pending],
-                "the first waits for Ollama where it stopped, and the others are not read for their text only to wait too")
+        let retry = h.env.time.now().addingTimeInterval(h.env.config.ingest.retryDelays.last)
+        #expect(try await h.jobs().map(\.state) == [.analysing, .extracting, .extracting],
+                "the first waits for Ollama where it stopped, and the others, looked at, are not read for their text only to wait too")
+        #expect(try await h.jobs().dropFirst().map(\.nextRunAt) == [retry, retry], "they wait until the first is tried again")
         let wait = await h.coordinator.idleWait(paused: false, power: false, archiveThere: true, queueUnread: false)
         #expect(wait == h.env.config.ingest.retryDelays.last, "the worker waits until it is tried again, rather than take the others")
-        let retry = h.env.time.now().addingTimeInterval(h.env.config.ingest.retryDelays.last)
         let status = await h.coordinator.status
         let progress = try await h.jobs().dropFirst().map { status.progress(of: $0) }
         #expect(status.waitingForOllama && status.retryAt == retry && progress == [.waitingForOllama(until: retry), .waitingForOllama(until: retry)],
@@ -138,15 +139,82 @@ extension IngestQueueTests {
 
         h.env.time.advance(by: h.env.config.ingest.retryDelays.last)
         await h.coordinator.drain()
-        #expect(try await h.jobs().map(\.state) == [.analysing, .pending, .pending], "tried again while Ollama is still away, it waits again alone")
+        #expect(try await h.jobs().map(\.state) == [.analysing, .extracting, .extracting],
+                "tried again while Ollama is still away, it waits again alone")
         let said = try await h.services.history.events(limit: 20, kinds: [.extracted, .retry]).map(\.summary)
         #expect(said.count == 2 && said.first?.hasPrefix("Waiting for Ollama") == true,
                 "History says once that its text was read and once that it waits, however often it is tried: \(said)")
     }
 
-    /// The file that found Ollama away is left for later meanwhile, and nothing else is queued: nothing waits for Ollama
-    /// any more, which the status says, rather than wait for it until another file comes (the review of the fix of
-    /// QA 2026-10-05, RA-1).
+    /// While Ollama is away a file that comes is still looked at, which needs no model: an exact copy of a document is
+    /// handed over to it and goes to the Trash, and a file gone before it is read is recorded as gone; only a document
+    /// read again, or another file's text, waits for Ollama (the review of #17 found a copy left in Incoming meanwhile).
+    @Test func whileOllamaIsAwayAFileThatComesIsStillHandedOverToItsOriginalOrRecordedGone() async throws {
+        let h = try await Harness.make(analyzer: StubAnalyzer { name in
+            if name != "bill.txt" { throw OllamaError.unreachable("connection refused") }
+        })
+        defer { h.env.cleanup() }
+        let original = try await h.ingest("bill.txt", text: IngestTests.bill)
+        await h.coordinator.enqueue(try h.env.drop("away.txt", text: "\(IngestTests.bill) away"))
+        await h.coordinator.drain()
+        let copy = try h.env.drop("bill copy.txt", text: IngestTests.bill)
+        let gone = try h.env.drop("gone.txt", text: "\(IngestTests.bill) gone")
+        let other = try h.env.drop("other.txt", text: "\(IngestTests.bill) other")
+        for url in [copy, gone, other] { await h.coordinator.enqueue(url) }
+        try FileManager.default.removeItem(at: gone)
+        await h.coordinator.drain()
+        #expect(h.env.trashed().map(\.lastPathComponent) == ["bill copy.txt"] && !FileManager.default.fileExists(atPath: copy.path),
+                "the copy is handed over to its original and leaves Incoming for the Trash")
+        let states = Dictionary(uniqueKeysWithValues: try await h.jobs().filter { $0.kind != .reanalyse }
+            .map { (URL(fileURLWithPath: $0.sourcePath).lastPathComponent, $0.state) })
+        #expect(states["gone.txt"] == .cancelled && states["other.txt"] == .extracting && states["away.txt"] == .analysing,
+                "a file gone is done with, and another waits, unread, beside the one that found Ollama away: \(states)")
+        let again = try await h.jobs().filter { $0.kind == .reanalyse }.map { ($0.docId, $0.state) }
+        #expect(again.count == 1 && again.first?.0 == original.id && again.first?.1 == .pending,
+                "the original is to be read again for its copy, once Ollama is back: \(again)")
+        let said = try await h.services.history.events(limit: 20, kinds: [.duplicate, .missing, .extracted]).map(\.kind)
+        #expect(said.filter { $0 == .duplicate }.count == 1 && said.filter { $0 == .missing }.count == 1,
+                "History records the copy and the file gone: \(said)")
+        #expect(try await h.services.history.events(limit: 20, kinds: [.extracted]).count == 2,
+                "and reads no text but the original's and that of the file that found Ollama away")
+    }
+
+    /// While Ollama is away only a job whose next stage needs no model is taken (`JobStore.beforeTheModel`): a file that
+    /// came, in Incoming or put into the archive, not hashed yet; not one at a later stage, nor a document read again or
+    /// indexed again, whose next stage reads its text for the model.
+    @Test func whileOllamaIsAwayOnlyAFileThatCameAndIsNotHashedYetIsTaken() async throws {
+        let h = try await Harness.make()
+        defer { h.env.cleanup() }
+        let jobs = h.services.jobs
+        func queued(_ name: String, _ kind: JobKind, at state: JobState = .pending) async throws -> Int64 {
+            let id = try await jobs.enqueue(path: h.env.incoming.appendingPathComponent(name).path, kind: kind).id
+            if state != .pending, var job = try await jobs.job(id: id) {
+                job.state = state
+                try await jobs.update(job)
+            }
+            return id
+        }
+        func taken() async throws -> Int64? {
+            let job = try await jobs.nextDue(claiming: Harness.claims, beforeTheModel: true)
+            if let job { try await jobs.release(job, claims: Harness.claims) }
+            return job?.id
+        }
+        let extracting = try await queued("a.pdf", .ingest, at: .extracting)
+        let reading = try await queued("b.pdf", .reanalyse)
+        let indexing = try await queued("c.pdf", .reindex)
+        #expect(try await taken() == nil, "a file at a later stage, a document read again or indexed again waits for Ollama")
+        let came = try await queued("d.pdf", .ingest)
+        #expect(try await taken() == came, "a file that came, not hashed yet, is looked at")
+        let hashing = try await queued("e.pdf", .adopt, at: .hashing)
+        if var done = try await jobs.job(id: came) {
+            done.state = .done
+            try await jobs.update(done)
+        }
+        #expect(try await taken() == hashing, "and so is one put into the archive, part way through its hashing")
+        #expect(try await jobs.nextDue(claiming: Harness.claims)?.id == extracting && reading > extracting && indexing > reading,
+                "once Ollama is back the first in the queue is taken, whatever it needs")
+    }
+
     @Test func noWaitForOllamaIsSaidOnceNothingIsLeftThatWaits() async throws {
         let h = try await Harness.make(analyzer: StubAnalyzer(error: OllamaError.unreachable("connection refused")))
         defer { h.env.cleanup() }

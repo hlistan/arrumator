@@ -37,7 +37,8 @@ what would help.
   which is the order they are filed in, each saying when it arrived, or, for a file stopped part way (as when you quit
   Arrumator), **Carries on where it stopped**, which it does first at the next start, or the error it had and when it is
   tried again ([how](how-it-works.md#how-a-file-is-handled)); while a file waits for Ollama, which it found away, every
-  other says it waits for Ollama too, and when it is tried again, as none is taken meanwhile. Beneath a file's name,
+  other says it waits for Ollama too, and when it is tried again, as none is read meanwhile; one that comes is still
+  looked at, so an exact copy goes to its original at once. Beneath a file's name,
   after a grey tag symbol, are the tags it will be given, as a document's labels are beneath its own: the name of the
   folder in Incoming it is in, such as **Taxes 2024** for `Incoming/Taxes 2024/scan.pdf` ([folders in
   Incoming](how-it-works.md#folders-in-incoming-and-tags)), and for a document read again the tags it keeps; nothing for

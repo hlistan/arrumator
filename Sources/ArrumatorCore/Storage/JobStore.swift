@@ -211,24 +211,37 @@ public struct JobStore: Sendable {
     /// stopped part way, as when the app quit or crashed, keeps its stage and its place, so it carries on first at the
     /// next start, before anything queued after it. A job that gives way (`JobRecord.givesWay`: reading documents again
     /// after a rebuild, or the whole archive at once) waits until no other is due, so neither ever holds up filing.
-    private static func due(at now: Date, givingWay: Bool) -> QueryInterfaceRequest<JobRecord> {
-        let due = JobRecord.filter(activeStates.contains(Column("state")))
+    /// `beforeTheModel` keeps only the jobs whose next stage needs no model (`beforeTheModel`).
+    private static func due(at now: Date, givingWay: Bool, beforeTheModel: Bool = false) -> QueryInterfaceRequest<JobRecord> {
+        var due = JobRecord.filter(activeStates.contains(Column("state")))
             .filter(Column("next_run_at") == nil || Column("next_run_at") <= now.unixSeconds)
             .order(Column("gives_way"), Column("id"))
+        if beforeTheModel {
+            due = due.filter(Self.beforeTheModel.kinds.map(\.rawValue).contains(Column("kind")))
+                .filter(Self.beforeTheModel.states.map(\.rawValue).contains(Column("state")))
+        }
         return givingWay ? due : due.filter(Column("gives_way") == false)
     }
+
+    /// The jobs whose next stage needs no model, taken while Ollama is away (`IngestCoordinator.ollamaRetryAt`): a file
+    /// that came, in Incoming or put into the archive, and is not hashed yet, which may be a copy to hand over to its
+    /// original or a file gone to record as such; a document read again or indexed again needs the model next.
+    static let beforeTheModel: (kinds: [JobKind], states: [JobState]) = ([.ingest, .adopt], [.pending, .hashing])
 
     /// Takes the job to work on next for a worker of `claims`' process: of the jobs due (`due`), the first that no
     /// worker holds (`JobClaims.holds`), marked with a claim of its own in the write that finds it, so that no other
     /// worker, of this process or of another, as `arrumatorcli` beside the app, takes it until it ends or is let go
     /// (`release`). A job a process that has ended held is taken again. `excluding` are jobs this process may not start
-    /// yet (`IngestCoordinator`); without `givingWay`, none that gives way is taken (`IngestCoordinator.Draining`).
-    public func nextDue(claiming claims: JobClaims, excluding: Set<Int64> = [], givingWay: Bool = true) async throws -> JobRecord? {
+    /// yet (`IngestCoordinator`); without `givingWay`, none that gives way is taken (`IngestCoordinator.Draining`); with
+    /// `beforeTheModel`, only one whose next stage needs no model (`beforeTheModel`).
+    public func nextDue(claiming claims: JobClaims, excluding: Set<Int64> = [], givingWay: Bool = true,
+                        beforeTheModel: Bool = false) async throws -> JobRecord? {
         let now = time.now()
         let claim = claims.make()
         do {
             let taken: JobRecord? = try await database.writer.write { db in
-                let candidates = try Row.fetchAll(db, Self.due(at: now, givingWay: givingWay).select(Column("id"), Column("claim"), Column("claimed_by")))
+                let candidates = try Row.fetchAll(db, Self.due(at: now, givingWay: givingWay, beforeTheModel: beforeTheModel)
+                    .select(Column("id"), Column("claim"), Column("claimed_by")))
                 let free = candidates.first { row in
                     let id: Int64 = row["id"]
                     return !excluding.contains(id) && !claims.holds(row["claim"], by: row["claimed_by"])
