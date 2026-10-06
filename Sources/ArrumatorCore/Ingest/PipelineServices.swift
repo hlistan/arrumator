@@ -178,6 +178,38 @@ public struct PipelineServices: Sendable {
                                       payload: Self.readingAgain(tags: tags, asked: inArchive ? doc : nil)).id
     }
 
+    /// Whether document `docID` is still the original an exact copy is handed over to (`takesCopy`).
+    public func takesCopy(of docID: Int64) async throws -> Bool {
+        try await database.reader.read { db in try DocumentRecord.fetchOne(db, key: docID) }.map(takesCopy) ?? false
+    }
+
+    /// Whether `document` is the original an exact copy is handed over to: in the archive as itself, read again or not,
+    /// its file there, as `queueReadingAgain` reads one in the archive; not one undone, or gone from the archive.
+    func takesCopy(_ document: DocumentRecord) -> Bool {
+        [.filed, .needsReview, .failed, .held, .processing].contains(document.status) && isInArchive(document)
+            && FileManager.default.fileExists(atPath: document.path)
+    }
+
+    /// Queues document `docID`, the original an exact copy came of, to be read again in its place, as `queueReadingAgain`
+    /// queues a document in the archive, in the write that finds it there still as itself, its file in the archive: one
+    /// undone, or gone from the archive, meanwhile is not read again for the copy, which is then a document of its own
+    /// (`IngestCoordinator`). Whether it was queued.
+    public func queueReadingAgain(forCopyOf docID: Int64) async throws -> Bool {
+        let now = time.now()
+        return try await database.writer.write { [self] db in
+            guard let read = try DocumentRecord.fetchOne(db, key: docID), takesCopy(read) else { return false }
+            var doc = read
+            if doc.status == .held {
+                doc.status = .processing
+                doc.updatedAt = now
+                try doc.updateChanges(db, from: read)
+            }
+            _ = try JobStore.enqueue(db, path: doc.path, kind: .reanalyse, docID: docID,
+                                     payload: Self.readingAgain(tags: Self.keptTags(doc.labels), asked: doc), givesWay: false, at: now)
+            return true
+        }
+    }
+
     /// Queues every document of the archive that waits for nothing the user decided to be read again from the start, as
     /// `queueReadingAgain` reads one in the archive: filed, waiting for the user or set aside after failing, but not
     /// one left for later, nor one undone, missing or a copy. Each gives way to every file that arrives

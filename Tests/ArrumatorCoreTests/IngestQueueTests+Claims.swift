@@ -303,7 +303,9 @@ extension IngestQueueTests {
         var worker = Task { await h.coordinator.drain() }
         #expect(await Patience.until { await holding.held == "bill.txt" }, "the file is being read in")
         let docID = try #require(try await h.services.jobs.job(id: jobID)?.docId)
-        await #expect(throws: IngestError.beingReadIn(docID), "it is refused while it is read in") { try await h.review.hold(docID) }
+        await #expect(throws: IngestError.beingReadIn(docID, name: "bill.txt"), "it is refused, by its name, while it is read in") {
+            try await h.review.hold(docID)
+        }
         try await h.review.hold(read)
         #expect(try await h.services.documents.document(id: read)?.status == .held, "another document, read, is left for later meanwhile")
         await holding.letGo()
@@ -319,14 +321,17 @@ extension IngestQueueTests {
         worker = Task { await h.coordinator.drain() }
         #expect(await Patience.until { await holding.held == "adopted.txt" }, "the file put into the archive is being read in")
         let adoptedID = try #require(try await h.services.jobs.job(id: adopting)?.docId)
-        await #expect(throws: IngestError.beingReadIn(adoptedID), "it is refused while it is read in") { try await h.review.hold(adoptedID) }
+        await #expect(throws: IngestError.beingReadIn(adoptedID, name: "adopted.txt"), "it is refused while it is read in") {
+            try await h.review.hold(adoptedID)
+        }
         await holding.letGo()
         _ = await worker.value
     }
 
-    /// A document whose first reading has not ended, as in the instant between its filing and its job's end, is not
-    /// undone: that reading would file it again (the review of the fix of the final review of #17).
-    @Test func aDocumentWhoseFirstReadingHasNotEndedIsNotUndone() async throws {
+    /// A document whose reading in has not ended, as in the instant between its filing and its job's end, is not undone
+    /// nor left for later, nor offered to be: that reading would file it again (the reviews of the fix of the final
+    /// review of #17).
+    @Test func aDocumentWhoseReadingInHasNotEndedIsNotUndoneNorLeftForLater() async throws {
         let h = try await Harness.make()
         defer { h.env.cleanup() }
         let document = try await h.ingest("bill.txt", text: IngestTests.bill)
@@ -335,9 +340,107 @@ extension IngestQueueTests {
         try await h.env.database.writer.write { db in
             try db.execute(sql: "UPDATE jobs SET state = 'filing' WHERE doc_id = ? AND kind = 'ingest'", arguments: [docID])
         }
-        await #expect(throws: IngestError.beingReadIn(docID), "it is refused while its reading has not ended") { try await h.review.undo(docID) }
+        #expect(try await h.review.choices(for: document).actions == [.confirm], "the card offers no undo meanwhile")
+        await #expect(throws: IngestError.beingReadIn(docID, name: document.filename), "it is refused while its reading has not ended") {
+            try await h.review.undo(docID)
+        }
         let kept = try await h.services.documents.document(id: docID)
         #expect(kept?.status == .filed && FileManager.default.fileExists(atPath: document.path), "and it stays filed where it is")
+        // Waiting for the user, its reading in not ended either: not left for later, nor offered to be.
+        try await h.env.database.writer.write { db in
+            try db.execute(sql: "UPDATE documents SET status = 'needsReview' WHERE id = ?", arguments: [docID])
+        }
+        let waiting = try #require(try await h.services.documents.document(id: docID))
+        #expect(try await h.review.choices(for: waiting).actions == [.readAgain, .confirm], "the card offers no leaving it for later meanwhile")
+        // And once its job has ended, both are offered again.
+        try await h.env.database.writer.write { db in
+            try db.execute(sql: "UPDATE jobs SET state = 'done' WHERE doc_id = ? AND kind = 'ingest'", arguments: [docID])
+        }
+        #expect(try await h.review.choices(for: waiting).actions == [.hold, .readAgain, .confirm], "once its reading has ended")
+    }
+
+    /// An exact copy of a document the user undoes while the copy is compared with it is no copy of it any more: it is
+    /// read in as a document of its own, the original left as the user left it (the review of the fix of the final
+    /// review of #17).
+    /// How the original stops being in the archive as itself while its copy is compared with it: undone, back in
+    /// Incoming; found missing; or recorded elsewhere than the archive.
+    enum Gone: String, CaseIterable, Sendable { case undone, missing, elsewhere }
+
+    @Test(arguments: Gone.allCases)
+    func aCopyOfADocumentUndoneMeanwhileIsADocumentOfItsOwn(_ gone: Gone) async throws {
+        let base = try await Harness.make()
+        defer { base.env.cleanup() }
+        let original = try await base.ingest("bill.txt", text: IngestTests.bill)
+        // A Trash that would refuse it: the copy, a document of its own, is filed, never sent there.
+        var services = base.services
+        services.trash = RefusingTrash()
+        let h = Harness(env: base.env, services: services)
+        let originalID = try #require(original.id)
+        // Undone as the copy is found to be one, its bytes compared: as the user's undo in that instant leaves it.
+        let incoming = h.env.incoming.appendingPathComponent("bill.txt").path.replacingOccurrences(of: "'", with: "''")
+        // Recorded elsewhere, its file there too: only that it is not in the archive tells it from an original.
+        if gone == .elsewhere { _ = try base.env.drop("bill.txt", text: IngestTests.bill) }
+        let change = switch gone {
+        case .undone: "status = 'undone', path = '\(incoming)'"
+        case .missing: "status = 'missing'"
+        case .elsewhere: "path = '\(incoming)'"
+        }
+        try await h.env.database.writer.write { db in
+            try db.execute(sql: """
+                CREATE TEMP TRIGGER undone_as_compared AFTER INSERT ON trace_steps WHEN NEW.stage = 'dedupe' BEGIN
+                  UPDATE documents SET \(change) WHERE id = \(originalID);
+                END
+                """)
+        }
+        let copy = try #require(await h.coordinator.enqueue(try h.env.drop("copy.txt", text: IngestTests.bill)))
+        await h.coordinator.drain()
+        let job = try #require(try await h.services.jobs.job(id: copy))
+        #expect(job.state == .done && job.docId != nil && job.docId != originalID, "\(gone): the copy is read in as a document of its own")
+        #expect(job.lastError == nil, "\(gone): and nothing is sent to the Trash, which would refuse it")
+        let again = try await h.jobs().filter { $0.kind == .reanalyse }
+        #expect(again.isEmpty, "and is not read again for it: \(again)")
+    }
+
+    /// An exact copy whose original the user undoes as the copy goes to the Trash comes back where it was and is read in
+    /// as a document of its own, the original left undone and not read again (the review of the fix of the final review
+    /// of #17).
+    @Test(arguments: [true, false])
+    func aCopyWhoseOriginalIsUndoneAsItGoesToTheTrashComesBackADocumentOfItsOwn(_ undone: Bool) async throws {
+        let base = try await Harness.make()
+        defer { base.env.cleanup() }
+        let original = try await base.ingest("bill.txt", text: IngestTests.bill)
+        let originalID = try #require(original.id)
+        let incoming = base.env.incoming.appendingPathComponent("bill.txt").path
+        var services = base.services
+        // Undone, or its file removed from the archive, as the copy goes to the Trash.
+        services.trash = UndoingTrash(trash: base.env.trash) {
+            guard undone else { return try FileManager.default.removeItem(at: original.url) }
+            try base.env.database.writer.write { db in
+                try db.execute(sql: "UPDATE documents SET status = 'undone', path = ? WHERE id = ?", arguments: [incoming, originalID])
+            }
+        }
+        let coordinator = IngestCoordinator(services: services)
+        let copy = try base.env.drop("copy.txt", text: IngestTests.bill)
+        let id = try #require(await coordinator.enqueue(copy))
+        await coordinator.drain()
+        let job = try #require(try await base.services.jobs.job(id: id))
+        #expect(job.state == .done && job.docId != nil && job.docId != originalID, "the copy is read in as a document of its own")
+        #expect(try job.payload.copyOf == nil, "no copy of the original any more")
+        #expect(base.env.trashed().isEmpty, "taken back from the Trash")
+        let again = try await base.jobs().filter { $0.kind == .reanalyse }
+        #expect(again.isEmpty, "the original is not read again for it: \(again)")
+    }
+
+    /// A document's own file in the archive, queued as though it came, is that document, never a second one of it (the
+    /// review of the fix of the final review of #17).
+    @Test func aDocumentsOwnFileInTheArchiveIsNotQueuedAsANewOne() async throws {
+        let h = try await Harness.make()
+        defer { h.env.cleanup() }
+        let document = try await h.ingest("bill.txt", text: IngestTests.bill)
+        #expect(await h.coordinator.enqueue(document.url) == nil, "it is not queued")
+        await h.coordinator.drain()
+        let documents = try await h.services.documents.list(DocumentFilter(), limit: 5)
+        #expect(documents.map(\.id) == [document.id], "and it stays the one document it is: \(documents.map(\.path))")
     }
 
     /// A document read again whose last attempt fails, still the worker's, is marked failed with why, and History says
@@ -362,7 +465,7 @@ extension IngestQueueTests {
     }
 
     /// A document read again for search after a rebuild (`reindex`) whose reading fails is marked failed and waits for
-    /// the user, to be read again, as one whose reading fails does; one the user left for later stays so. History says
+    /// the user, to be read again, as one whose reading fails does; one the user left for later or undid stays so. History says
     /// its reading for search failed (the reviews of the fix of the final review of #17).
     @Test(arguments: [DocumentStatus.filed, .held, .undone])
     func aDocumentWhoseReadingForSearchFailsWaitsForTheUserUnlessSetAside(_ left: DocumentStatus) async throws {
@@ -492,5 +595,16 @@ extension IngestQueueTests {
 private struct Unreadable: ContentExtracting {
     func extract(_ url: URL, sha256: String, context: ExtractionContext, trace: TraceContext) async throws -> ExtractedContent {
         throw TestFailure("boom")
+    }
+}
+
+/// A Trash that has the user undo the original of a copy as the copy goes into it, then takes the copy as `trash` does.
+private struct UndoingTrash: Trashing {
+    let trash: any Trashing
+    let undo: @Sendable () throws -> Void
+
+    func trash(_ url: URL) throws -> URL? {
+        try undo()
+        return try trash.trash(url)
     }
 }

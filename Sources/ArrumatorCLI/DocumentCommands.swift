@@ -42,7 +42,7 @@ struct Ingest: AsyncParsableCommand {
             if let job = await runtime.coordinator.enqueue(url, tags: tag) {
                 jobs.append((url, job))
             } else {
-                failed.append((url, "not queued: it is held or undone in the archive, or the queue could not be written (see the log)"))
+                failed.append((url, "not queued: it is a document of the archive already, or held or undone, or the queue could not be written (see the log)"))
             }
         }
         // The jobs this command recorded a failure of; one another process fails meanwhile, and tries again, is queued.

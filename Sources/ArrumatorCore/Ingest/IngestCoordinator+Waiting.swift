@@ -66,6 +66,14 @@ extension IngestCoordinator {
         await services.traces.finish(trace, outcome: outcome.rawValue, docID: docID)
     }
 
+    /// When the next job no worker has is due; a queue that cannot be read waits for the doorbell to ring.
+    private func earliestDue() async -> Date? {
+        do { return try await services.jobs.earliestDue(claiming: services.claims, excluding: stillRunning()) } catch {
+            Log.error(.ingest, "Could not read the job queue", ["error": error.localizedDescription])
+            return nil
+        }
+    }
+
     /// Whether another process holds jobs; a queue that cannot be read says nothing of it.
     private func heldElsewhere() async -> Bool {
         do { return try await services.jobs.heldElsewhere(claiming: services.claims) } catch {
