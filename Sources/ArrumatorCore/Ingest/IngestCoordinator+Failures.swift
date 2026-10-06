@@ -372,9 +372,12 @@ extension IngestCoordinator {
                 return .parked
             }
             let analysis = DocumentAnalysis(problems: ["Processing failed: \(message)"])
-            // A file that came into Incoming is moved into the archive, unless its filing is recorded (`targetPath`):
-            // then it is filed, where the user may have moved it since, and is marked failed where it is, as below.
-            if FileManager.default.fileExists(atPath: document.path), job.kind == .ingest, (try? job.payload)?.targetPath == nil {
+            // A file that came into Incoming is moved into the archive, unless its filing is recorded (`targetPath`), as
+            // the job is stored, which keeps it though the worker's copy, saved by a failure after it, has not it
+            // (`JobStore.save`): then it is filed, where the user may have moved it since, and is marked failed there.
+            var recorded = false
+            if let id = job.id, let stored = try await services.jobs.job(id: id) { recorded = (try? stored.payload)?.targetPath != nil }
+            if FileManager.default.fileExists(atPath: document.path), job.kind == .ingest, !recorded {
                 let jobs = services.jobs
                 // The file is moved only while the job's claim holds, checked in a write just before the move.
                 let checked = FilingKeeper(planning: { _ in try await jobs.update(job) }, recording: { _, _ in .filed })

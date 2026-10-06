@@ -60,19 +60,21 @@ import Testing
                 "while what it did is kept with it")
     }
 
-    @Test func aJobWhosePayloadCannotBeReadFailsSayingWhyAndTheFileIsQueuedAfreshByARescan() async throws {
+    /// A payload that cannot be read: JSON that is no payload, or no JSON at all.
+    @Test(arguments: ["{\"tags\":7}", "not JSON"])
+    func aJobWhosePayloadCannotBeReadFailsSayingWhyAndTheFileIsQueuedAfreshByARescan(_ garbled: String) async throws {
         let h = try await Harness.make()
         defer { h.env.cleanup() }
         let url = try h.env.drop("bill.txt", text: Self.bill)
         let id = try #require(await h.coordinator.enqueue(url, tags: ["Taxes"]))
         try await h.env.database.writer.write { db in
-            try db.execute(sql: "UPDATE jobs SET payload_json = '{\"tags\":7}' WHERE id = ?", arguments: [id])
+            try db.execute(sql: "UPDATE jobs SET payload_json = ? WHERE id = ?", arguments: [garbled, id])
         }
         await h.coordinator.drain()
         let failed = try #require(try await h.services.jobs.job(id: id))
         #expect(failed.state == .failed && failed.lastError?.hasPrefix("What job \(id) was queued with cannot be read") == true,
                 "the job fails, saying why, rather than going on as if it had been queued with nothing: \(failed.lastError ?? "")")
-        #expect(failed.payloadJson == "{\"tags\":7}" && FileManager.default.fileExists(atPath: url.path),
+        #expect(failed.payloadJson == garbled && FileManager.default.fileExists(atPath: url.path),
                 "its payload is kept as it is, and nothing is filed")
         let said = try await h.services.history.events(limit: 5, kinds: [.failed]).map(\.summary)
         #expect(said == [failed.lastError], "History says why: \(said)")

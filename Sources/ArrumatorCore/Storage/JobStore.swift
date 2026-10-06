@@ -416,8 +416,7 @@ public struct JobStore: Sendable {
         if let storedPayload: String = stored?["payload_json"] {
             try db.execute(sql: """
                 UPDATE jobs SET payload_json = json_set(payload_json, '$.targetPath', json_extract(?, '$.targetPath'))
-                WHERE id = ? AND json_valid(payload_json) AND json_extract(payload_json, '$.targetPath') IS NULL
-                  AND json_valid(?) AND json_extract(?, '$.targetPath') IS NOT NULL
+                WHERE id = ? AND json_valid(?) AND json_extract(?, '$.targetPath') IS NOT NULL
                 """, arguments: [storedPayload, id, storedPayload, storedPayload])
         }
         if !saved.state.isActive { try db.execute(sql: "UPDATE jobs SET payload_json = \(Self.withoutText) WHERE id = ?", arguments: [id]) }

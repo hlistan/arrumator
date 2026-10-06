@@ -336,6 +336,24 @@ extension IngestTests {
         #expect(filings.count == 1, "filed once: \(filings.map(\.summary))")
     }
 
+    /// A filing recorded whose job then spends its last attempt failing after it, as the searchable name written after it,
+    /// is marked failed where it was filed, as the job is stored: never filed again, nor said to stay in Incoming.
+    @Test func aFilingRecordedWhoseLastAttemptFailsAfterItIsMarkedFailedWhereItIs() async throws {
+        let base = try await Harness.make()
+        defer { base.env.cleanup() }
+        let h = base.with { $0.ingest.maxAttempts = 1 }
+        try await h.env.database.writer.write { db in
+            try db.execute(sql: "CREATE TEMP TRIGGER naming_fails BEFORE UPDATE OF filename ON document_text BEGIN SELECT RAISE(ABORT, 'the index is unavailable'); END")
+        }
+        await h.coordinator.enqueue(try h.env.drop("bill.txt", text: Self.bill))
+        await h.coordinator.drain()
+        let id = try #require(try await h.jobs().first?.docId)
+        let document = try #require(try await h.services.documents.document(id: id))
+        #expect(document.status == .failed && h.services.isInArchive(document), "marked failed where it was filed: \(document.path)")
+        let said = try await h.services.history.events(limit: 10, kinds: [.failed]).map(\.summary)
+        #expect(!said.contains { $0.contains("stays in Incoming") }, "never said to stay in Incoming: \(said)")
+    }
+
     /// Read Again asked twice while the first waits queues one reading and is recorded in History once: asking again
     /// changes nothing, and records nothing.
     @Test func readAgainAskedTwiceIsQueuedAndRecordedOnce() async throws {

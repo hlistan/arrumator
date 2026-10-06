@@ -44,10 +44,10 @@ extension IngestCoordinator {
     /// file would have been, so a copy put into Incoming reads its document again with the profile in use
     /// (`PipelineServices.queueReadingAgain(forCopyOf:)`); one undone, or gone from the archive, meanwhile is not read
     /// again, and nothing comes back from the Trash, and one whose reading in is at its file is left to it. Then the
-    /// original is given the tags the file was queued with (`PipelineServices.giveTags`). History records this once, under the original. A stop part way finishes the rest
-    /// at the next start, the copy in the Trash already or not, and another file put at its path meanwhile, as its
-    /// original undone back into Incoming, is never taken for it (`isStill`); a copy the Trash refuses fails the job
-    /// before its original is read, and stays where it is.
+    /// original is given the tags the file was queued with (`PipelineServices.giveTags`). History records this once,
+    /// under the original. A stop part way finishes the rest at the next start, the copy in the Trash already or not,
+    /// and another file put at its path meanwhile, as its original undone back into Incoming, is never taken for it
+    /// (`isStill`); a copy the Trash refuses fails the job before its original is read, and stays where it is.
     func finishHandingOver(_ copy: URL, to original: DocumentRecord, job: inout JobRecord, payload: inout JobPayload,
                            trace: TraceContext) async throws {
         guard let originalID = original.id else { throw IngestError.documentNotPersisted }
