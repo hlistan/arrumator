@@ -158,6 +158,20 @@ extension IngestTests {
         }
     }
 
+    /// Read Again on a document left in Incoming whose file, saved again, is being read in, not filed yet, is read with
+    /// that reading: it is not refused, and nothing more is queued or recorded.
+    @Test func readAgainOnADocumentBeingReadInBeforeItIsFiledIsReadWithThatReading() async throws {
+        let h = try await Harness.make()
+        defer { h.env.cleanup() }
+        let file = try h.env.drop("scan.txt", text: Self.bill)
+        let id = try await record(h, at: file.spelledOnDisk.path, status: .failed, sha256: "an earlier version")
+        let reading = try #require(await h.coordinator.enqueue(file), "its file saved again is read in as it")
+        try await h.review.retry(id)
+        let jobs = try await h.jobs()
+        #expect(jobs.compactMap(\.id) == [reading], "read with that reading: \(jobs.map(\.kind))")
+        #expect(try await h.services.history.events(limit: 10, kinds: [.retry]).isEmpty, "and nothing more is recorded")
+    }
+
     /// Read Again asked twice while the first waits queues one reading and is recorded in History once: asking again
     /// changes nothing, and records nothing.
     @Test func readAgainAskedTwiceIsQueuedAndRecordedOnce() async throws {

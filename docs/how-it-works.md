@@ -505,9 +505,10 @@ an earlier version filed, cannot be read again, which is said at once.
   and the documents, and asked again while every one of them waits, nothing; each reading is recorded under its
   document, before its filing. **Read Again** on one document is recorded so too, under it, as `Read again: <name>`,
   when it queues the reading, as it does in place of its turn in reading every document again, or of reading its text
-  again after a rebuild of the index; asked while another reading of it waits or is under way, an earlier Read Again's,
-  an exact copy's, or its first reading, from Incoming or as a file you put into the archive yourself, until that has
-  filed it, it is read with that one, and nothing more is recorded.
+  again after a rebuild of the index. Asked while another reading of it waits or is under way, an earlier Read Again's,
+  an exact copy's, or its reading in (as it came into Incoming, as its file was saved again there, or as a file you put
+  into the archive yourself), it is read with that one, and nothing more is recorded; once that reading in has filed it,
+  and until it ends, Read Again is refused, as leaving it for later and undoing it are.
 
 ## Your own changes
 

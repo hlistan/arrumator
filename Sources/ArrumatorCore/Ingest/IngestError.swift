@@ -44,7 +44,7 @@ public enum IngestError: Error, LocalizedError, Equatable {
             "Document \(id) is not in the archive; only a document in the archive can be \(action == .undo ? "undone" : "confirmed")"
         case let .cannotReadAgain(id):
             "Document \(id) cannot be read again: its file is not where the archive records it, or it is a copy of another document"
-        case let .beingReadIn(_, name): "\(name) is still being read in; it can be left for later or undone once it is read"
+        case let .beingReadIn(_, name): "\(name) is still being read in; it can be left for later, undone or read again once it is read"
         case let .notTrashed(path, reason): "Could not move \(path) to the Trash: \(reason)"
         case let .notTaken(path, reason): "\(path) is not taken in: \(reason)"
         case let .claimLost(id): "Job \(id) is no longer this worker's: it was cancelled or taken over"

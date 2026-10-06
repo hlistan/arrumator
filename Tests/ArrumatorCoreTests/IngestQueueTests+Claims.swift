@@ -328,10 +328,10 @@ extension IngestQueueTests {
         _ = await worker.value
     }
 
-    /// A document whose reading in has not ended, as in the instant between its filing and its job's end, is not undone
-    /// nor left for later, nor offered to be: that reading would file it again (the reviews of the fix of the final
-    /// review of #17).
-    @Test func aDocumentWhoseReadingInHasNotEndedIsNotUndoneNorLeftForLater() async throws {
+    /// A document whose reading in has not ended, as in the instant between its filing and its job's end, is not undone,
+    /// left for later nor read again, nor offered to be: that reading would file it again, or take the request and read
+    /// nothing more (the reviews of the fix of the final review of #17).
+    @Test func aDocumentWhoseReadingInHasNotEndedIsNotUndoneLeftForLaterNorReadAgain() async throws {
         let h = try await Harness.make()
         defer { h.env.cleanup() }
         let document = try await h.ingest("bill.txt", text: IngestTests.bill)
@@ -351,12 +351,19 @@ extension IngestQueueTests {
             try db.execute(sql: "UPDATE documents SET status = 'needsReview' WHERE id = ?", arguments: [docID])
         }
         let waiting = try #require(try await h.services.documents.document(id: docID))
-        #expect(try await h.review.choices(for: waiting).actions == [.readAgain, .confirm], "the card offers no leaving it for later meanwhile")
-        // And once its job has ended, both are offered again.
+        #expect(try await h.review.choices(for: waiting).actions == [.confirm], "the card offers no leaving it for later, nor reading it again, meanwhile")
+        // Nor read again: that reading's job would take the request, and read nothing more.
+        await #expect(throws: IngestError.beingReadIn(docID, name: document.filename), "reading it again is refused while its reading has not ended") {
+            try await h.review.retry(docID)
+        }
+        #expect(try await h.services.history.events(limit: 10, kinds: [.retry]).isEmpty, "and nothing is said of it")
+        // And once its job has ended, each is offered again, and reading it again is queued and recorded.
         try await h.env.database.writer.write { db in
             try db.execute(sql: "UPDATE jobs SET state = 'done' WHERE doc_id = ? AND kind = 'ingest'", arguments: [docID])
         }
         #expect(try await h.review.choices(for: waiting).actions == [.hold, .readAgain, .confirm], "once its reading has ended")
+        try await h.review.retry(docID)
+        #expect(try await h.services.history.events(limit: 10, kinds: [.retry]).count == 1, "and Read Again then reads it again")
     }
 
     /// A document read again whose last attempt fails, still the worker's, is marked failed with why, and History says

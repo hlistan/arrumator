@@ -176,6 +176,10 @@ public struct PipelineServices: Sendable {
             guard readable.contains(read.status), FileManager.default.fileExists(atPath: read.path) else {
                 throw IngestError.cannotReadAgain(docID)
             }
+            // Filed by its reading in, whose job has not ended, as a file put into the archive filed where it is: that job
+            // would take the request and read nothing more, so it waits for it to end, as leaving it for later does. One
+            // not filed yet is read by that reading, which the request is found to be.
+            if read.status != .processing, try JobStore.isReadIn(db, docID: docID) { throw IngestError.beingReadIn(docID, name: read.filename) }
             var doc = read
             if !inArchive || [.undone, .held].contains(read.status) {
                 doc.status = .processing

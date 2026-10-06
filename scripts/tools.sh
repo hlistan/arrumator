@@ -56,7 +56,9 @@ install() { # install <tool> <version> <download> <checksum>
   rm -rf "$folder"
   mkdir -p "$folder" "$root/bin"
   archive=$folder/$(basename "$3")
-  curl --fail --silent --show-error --location --retry 3 --output "$archive" "$3"
+  # A server's passing failure, as an error 500 from a release's download, is tried again whatever curl calls it: the
+  # checksum below, not the transfer, decides what is installed.
+  curl --fail --silent --show-error --location --retry 3 --retry-all-errors --output "$archive" "$3"
   actual=$(checksum "$archive" "$4")
   if [ "$actual" != "$4" ]; then
     echo "tools: $1 $2 from $3 has checksum $actual, not the pinned $4; nothing was installed" >&2

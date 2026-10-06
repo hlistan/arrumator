@@ -27,9 +27,9 @@ after which the card says **Confirmed by you** and when, beside where it is, and
 is read again, corrected, or renamed or moved in Finder; **Read Again** has the model read it again, saying it waits to
 be read after the files already in Incoming (on Needs You, which the document then leaves for Incoming's queue, the page
 says so above the rest, with **Show Incoming**, until you go to another page), **Leave for Later** holds it, and **Undo
-Filing** moves it back to Incoming; neither is offered while the document is still being read in, and both are once
-that ends, on the card as it is. A kind of file Arrumator cannot read says so, that the model saw only its name, and
-what would help.
+Filing** moves it back to Incoming; none of **Read Again**, **Leave for Later** and **Undo Filing** is offered while
+the document is still being read in, and each is once that ends, on the card as it is. A kind of file Arrumator
+cannot read says so, that the model saw only its name, and what would help.
 
 - **Incoming**: under **In Progress**, the file being worked on now, with a spinner and what is being done to it
   (**Reading its text**, **Being read by qwen3.5:9b**, naming the model of the profile in use, …), and, once that has
@@ -263,7 +263,7 @@ by meaning**, documents embedded by another model are found by meaning only once
   exact copy (under the document it has read again, with where the copy went and the tags it gave), a document you ask
   to read again (under it, `Read again: <name>`, when your request queues its reading, as it does in place of its
   turn in reading every document again, or of reading its text again after a rebuild of the index: not while an earlier
-  Read Again's, an exact copy's, or its first reading, until that has filed it, waits or is under way),
+  Read Again's, an exact copy's or its reading in waits or is under way),
   every document read again at once (under none, with the profile and the documents, `Read every document again with
   the profile “Standard”: 120 documents`), extraction, reading
   (with the labels it gave, which of the model's labels were tidied and why, and what gave its tags, or that nothing

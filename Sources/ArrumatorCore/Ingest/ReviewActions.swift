@@ -93,11 +93,13 @@ public struct ReviewActions: Sendable {
         case .held, .undone: [.readAgain]
         case .arrived, .processing, .duplicate, .missing: []
         }
-        // Its reading in not ended, as in the instant between its filing and its job's end, it is neither undone nor left
-        // for later (`undo`, `hold`), so neither is offered; the card asks again as the worker moves on.
-        if let id = document.id, actions.contains(where: { [.undo, .hold].contains($0) }),
+        // Its reading in not ended, as in the instant between its filing and its job's end, it is neither undone, left
+        // for later nor read again (`undo`, `hold`, `PipelineServices.queueReadingAgain`), so none is offered; the card
+        // asks again as the worker moves on.
+        let withheld: [DocumentAction] = [.undo, .hold, .readAgain]
+        if let id = document.id, actions.contains(where: withheld.contains),
            try await services.database.reader.read({ db in try JobStore.isReadIn(db, docID: id) }) {
-            actions.removeAll { [.undo, .hold].contains($0) }
+            actions.removeAll(where: withheld.contains)
         }
         return DocumentChoices(actions: actions, notFiled: !inArchive && document.status == .failed, confirmed: confirmed)
     }
@@ -147,8 +149,8 @@ public struct ReviewActions: Sendable {
     /// folder's too (`PipelineServices.queueReadingAgain`), and History records it when it queues the reading, as in
     /// place of its turn in reading every document again, or of reading its text again after a rebuild (both give way,
     /// `JobRecord.givesWay`): not while another reading of it waits or is under way, an earlier Read Again's, an exact
-    /// copy's, or its first reading, from Incoming or as a file the user put into the archive, until that has filed it,
-    /// which it is read with.
+    /// copy's, or its reading in, which it is read with. One its reading in has filed, whose job has not ended, is
+    /// refused (`IngestError.beingReadIn`), as `hold` and `undo` refuse it.
     public func retry(_ docID: Int64) async throws {
         try await services.queueReadingAgain(docID, settings: await services.settings.current)
         await coordinator.wake()
