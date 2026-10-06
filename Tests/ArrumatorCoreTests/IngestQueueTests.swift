@@ -211,7 +211,7 @@ import Testing
         let tag = DocumentLabel(kind: .tag, value: "Taxes")
         #expect(try await h.jobs().map(\.tags) == [[tag], [tag]], "each job, the one in hand too, does all the requests asked")
         await holding.letGo()
-        await app.value
+        _ = await app.value
         await h.coordinator.drain()
         let filed = try await h.services.documents.list(DocumentFilter(statuses: [.filed]), limit: 5)
         #expect(filed.count == 2 && filed.allSatisfy { $0.labels?.contains(tag) == true },

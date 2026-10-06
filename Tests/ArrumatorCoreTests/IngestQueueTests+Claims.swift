@@ -28,7 +28,7 @@ extension IngestQueueTests {
                 "and the job stays the app's, where the app has it")
 
         app.cancel()
-        await app.value
+        _ = await app.value
         let letGo = try #require(try await h.services.jobs.job(id: id))
         #expect(letGo.claim == nil && letGo.state == .analysing, "the app, stopped, lets go of the job where it stopped")
         await command.drain()
@@ -49,8 +49,7 @@ extension IngestQueueTests {
         await other.drain()
         #expect(await analyzer.calls.files == ["bill.txt"], "the other worker of the same process leaves it to it")
         await holding.letGo()
-        await first.value
-
+        _ = await first.value
         // A claim of this process that no worker has in hand, as one whose letting go could not be written.
         let left = try #require(await h.coordinator.enqueue(try h.env.drop("left.txt", text: IngestTests.bill + " left")))
         try await h.env.database.writer.write { db in
@@ -73,7 +72,7 @@ extension IngestQueueTests {
         try await h.services.jobs.cancelActive(kinds: [.ingest])
         let cancelled = try #require(try await h.services.jobs.job(id: id))
         await holding.letGo()
-        await worker.value
+        _ = await worker.value
         let after = try #require(try await h.services.jobs.job(id: id))
         #expect(after.state == .cancelled && after.payloadJson == cancelled.payloadJson && after.claim == nil,
                 "the worker, its claim lost, saves nothing more of the job: \(after.state)")

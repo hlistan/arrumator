@@ -249,32 +249,68 @@ extension CommandLineTests {
     }
 
     /// A file this command spends no attempt on is no failure: one that waits, as for the archive's folder when it was
-    /// taken, and one that failed before and waits now, each queued with why and when it is tried again, as Incoming
-    /// says it (the reviews of the fix of the final review of #17).
+    /// taken, one that failed before and waits now, each queued with why and when it is tried again, as Incoming says
+    /// them, and one another process has in hand, whose time has come, with why it last stopped (the reviews of the fix
+    /// of the final review of #17).
     @Test func ingestNamesAFileThatWaitsWithWhyAsNoFailure() throws {
         let home = try Home.make()
         defer { home.cleanup() }
-        let files = ["waiting.txt", "earlier.txt"].map { home.root.appendingPathComponent($0) }
+        let files = ["waiting.txt", "earlier.txt", "held.txt"].map { home.root.appendingPathComponent($0) }
         for file in files { try Data("Fatura de Maria Exemplo \(file.lastPathComponent)".utf8).write(to: file) }
         #expect(try run(home, ["history", "--json"]).status == 0, "the archive's index is made")
         let queue = try DatabaseQueue(path: try index(home).path)
-        let now = Date().timeIntervalSince1970
+        let now = Date().timeIntervalSince1970.rounded()
+        let app = try SystemProcesses().current.description
         try queue.write { db in
-            for (file, attempt) in zip(files, [0, 1]) {
+            for (file, attempt, due, claimedBy) in [(files[0], 0, now + 3_600, nil), (files[1], 1, now + 3_600, nil), (files[2], 1, now - 60, app)] {
                 try db.execute(sql: """
-                    INSERT INTO jobs (kind, source_path, state, attempt, last_error, next_run_at, created_at, updated_at)
-                    VALUES ('ingest', ?, 'hashing', ?, 'The archive is not there', ?, ?, ?)
-                    """, arguments: [file.spelledOnDisk.path, attempt, now + 3_600, now, now])
+                    INSERT INTO jobs (kind, source_path, state, attempt, last_error, next_run_at, created_at, updated_at, claim, claimed_by)
+                    VALUES ('ingest', ?, 'hashing', ?, 'The archive is not there', ?, ?, ?, ?, ?)
+                    """, arguments: [file.spelledOnDisk.path, attempt, due, now, now, claimedBy.map { _ in "in hand" }, claimedBy])
             }
         }
         try queue.close()
         let waited = try run(home, ["ingest", "--json"] + files.map(\.path))
-        let said = files.map { "\($0.spelledOnDisk.path): queued, not read yet: The archive is not there; tried again at " }
+        let later = Format.date(Date(timeIntervalSince1970: now + 3_600))
+        let said = files.prefix(2).map { "\($0.spelledOnDisk.path): queued, not read yet: The archive is not there; tried again at \(later)\n" }
+            + ["\(files[2].spelledOnDisk.path): queued, not read yet: The archive is not there; the app or `run` files it\n"]
         #expect(waited.status == 0 && said.allSatisfy(waited.stderr.contains),
-                "a file that waits is no failure, though it failed before, and says why and until when: \(waited.stderr)")
+                "a file that waits is no failure, though it failed before, and says why and until when, or who files it: \(waited.stderr)")
         let listed = try run(home, ["ingest", files[0].path])
-        #expect(listed.status == 0 && listed.text.contains("queued      \(files[0].spelledOnDisk.path)\n            The archive is not there; tried again at "),
+        #expect(listed.status == 0 && listed.text.contains("queued      \(files[0].spelledOnDisk.path)\n            The archive is not there; tried again at \(later)\n"),
                 "and so does the list: \(listed.text)")
+    }
+
+    /// A file another process, as the app, fails while this command runs is that process's failure, not the command's:
+    /// it is queued, saying why (the review of the fix of the final review of #17).
+    @Test func ingestLeavesAFileAnotherProcessFailsMeanwhileQueued() throws {
+        let home = try Home.make()
+        defer { home.cleanup() }
+        let (mine, held) = (home.root.appendingPathComponent("mine.txt"), home.root.appendingPathComponent("held.txt"))
+        for file in [mine, held] { try Data("Fatura de Maria Exemplo \(file.lastPathComponent)".utf8).write(to: file) }
+        #expect(try run(home, ["history", "--json"]).status == 0, "the archive's index is made")
+        let queue = try DatabaseQueue(path: try index(home).path)
+        let now = Date().timeIntervalSince1970.rounded()
+        try queue.write { db in
+            try db.execute(sql: """
+                INSERT INTO jobs (kind, source_path, state, next_run_at, created_at, updated_at, claim, claimed_by)
+                VALUES ('ingest', ?, 'hashing', ?, ?, ?, 'in hand', ?)
+                """, arguments: [held.spelledOnDisk.path, now, now, now, try SystemProcesses().current.description])
+            // The app fails its file while the command works on its own: what the app's worker writes of a failed attempt.
+            // A trigger takes no arguments, so its values are written into it, quoted.
+            let quoted = { (text: String) in "'" + text.replacingOccurrences(of: "'", with: "''") + "'" }
+            try db.execute(sql: """
+                CREATE TRIGGER app_fails AFTER UPDATE ON jobs WHEN NEW.source_path = \(quoted(mine.spelledOnDisk.path)) BEGIN
+                  UPDATE jobs SET attempt = attempt + 1, last_error = 'The app could not read it', next_run_at = \(now + 3_600)
+                  WHERE source_path = \(quoted(held.spelledOnDisk.path));
+                END
+                """)
+        }
+        try queue.close()
+        let ingested = try run(home, ["ingest", "--json", mine.path, held.path])
+        let later = Format.date(Date(timeIntervalSince1970: now + 3_600))
+        #expect(ingested.status == 0 && ingested.stderr.contains("\(held.spelledOnDisk.path): queued, not read yet: The app could not read it; tried again at \(later)\n"),
+                "the app's failure is no failure of the command: \(ingested.stderr)")
     }
 
     /// The index of `home`'s archive, once a command has made it.

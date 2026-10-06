@@ -29,8 +29,7 @@ extension ReadingAgainTests {
         #expect(await Patience.until { await holding.held == earlier.filename }, "the model reads the document again")
         if action == .hold { try await review.hold(id) } else { try await review.undo(id) }
         await holding.letGo()
-        await worker.value
-
+        _ = await worker.value
         let after = try #require(try await services.documents.document(id: id))
         #expect(after.status == (action == .hold ? .held : .undone) && after.labels == earlier.labels,
                 "\(action): it stays as the user left it, with the labels it had: \(after.status) \(after.labels ?? [])")
@@ -87,8 +86,7 @@ extension ReadingAgainTests {
         #expect(await Patience.until { await holding.held == earlier.filename }, "the model reads the document again")
         try await review.edit(id, fileName: "Mine", labels: nil)
         await holding.letGo()
-        await worker.value
-
+        _ = await worker.value
         let after = try #require(try await services.documents.document(id: id))
         #expect(after.filename == "Mine.txt" && after.analysis?.fileName == "Mine" && FileManager.default.fileExists(atPath: after.path),
                 "the name the user gave while it was read stays: \(after.filename)")

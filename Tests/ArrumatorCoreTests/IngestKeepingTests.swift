@@ -114,7 +114,7 @@ import Testing
         let mine = DocumentLabel(kind: .sender, value: "Mine Lda")
         try await h.review.edit(id, fileName: nil, labels: LabelEdit(adding: [mine], removing: had))
         await holding.letGo()
-        await worker.value
+        _ = await worker.value
         let after = try #require(try await h.services.documents.document(id: id))
         #expect(after.labels(.sender) == ["Mine Lda"], "the sender corrected while the model read stays as the user left it: \(after.labels ?? [])")
         #expect(after.labels(.type) == doc.labels(.type) && !after.labels(.type).isEmpty, "and the reading fills in what the user did not touch")
@@ -135,7 +135,7 @@ import Testing
         #expect(await Patience.until { await holding.held == doc.filename }, "the model reads the document again")
         try await h.review.edit(id, fileName: nil, labels: LabelEdit(adding: [tag], removing: [old]))
         await holding.letGo()
-        await worker.value
+        _ = await worker.value
         let after = try #require(try await h.services.documents.document(id: id))
         #expect(after.labels?.contains(tag) == true && after.labels?.contains(old) == false
                     && after.labels?.contains(where: { $0.kind == .sender }) == true,

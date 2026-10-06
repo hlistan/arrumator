@@ -69,8 +69,7 @@ import Testing
                 "and is found by its labels and its text as they were, and by nothing it is being read as")
         #expect(try await Self.embeddingModels(h, id) == [Self.earlierModel, StubAnalyzer.embeddingModel], "and by its meaning as it was")
         await holding.letGo()
-        await worker.value
-
+        _ = await worker.value
         let read = try #require(try await services.documents.document(id: id))
         #expect(read.labels == LabelingTests.meoContract + [Self.tag],
                 "once filed, it has the labels read now and its tag, and none the model gave it before: \(read.labels ?? [])")

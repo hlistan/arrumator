@@ -174,12 +174,16 @@ public actor IngestCoordinator {
     /// is left to it, and the job in hand when the task is cancelled carries on at the next start. Which jobs it takes,
     /// `draining` says: by default only those that come in their turn. Once a job finds Ollama away, it takes only the
     /// files that came and are not hashed yet, each then waiting before its text, and ends: no other is taken until that
-    /// one is tried again (`ollamaRetryAt`), which a command does not wait for.
-    public func drain(_ draining: Draining = .inTurn) async {
+    /// one is tried again (`ollamaRetryAt`), which a command does not wait for. Says which jobs it spent an attempt on,
+    /// as a failure does: those that failed here, whatever another process did meanwhile.
+    @discardableResult
+    public func drain(_ draining: Draining = .inTurn) async -> Set<Int64> {
+        var failed: Set<Int64> = []
         while !Task.isCancelled, case let .taken(job) = await nextDue(givingWay: draining == .everything) {
-            await process(job)
+            if await process(job), let id = job.id { failed.insert(id) }
         }
         await refreshQueueCount()
+        return failed
     }
 
     /// The jobs work given up on still runs for, which are not started again until it has ended.
@@ -281,7 +285,9 @@ public actor IngestCoordinator {
     // MARK: Job processing
 
     /// Works on `initial`, a job taken for this worker (`nextDue`), as far as it goes now, then lets it go.
-    private func process(_ initial: JobRecord) async {
+    /// Works on `initial` from where it stopped, and says whether it spent an attempt on it, as a failure does.
+    @discardableResult
+    private func process(_ initial: JobRecord) async -> Bool {
         var job = initial
         let takenWhileAway = ollamaRetryAt != nil
         // A job that waits for its model looks for it first, and waits on, with no trace and no attempt, while it is
@@ -292,7 +298,7 @@ public actor IngestCoordinator {
                 Log.error(.ingest, "Could not put a job back to wait for its model", ["job": String(job.id ?? 0), "error": error.localizedDescription])
             }
             await Task { [services] in await Self.letGo(initial, services: services) }.value
-            return
+            return false
         }
         let settings = await services.settings.current
         // The model that reads the file: the one `DocumentAnalyzer` reads with, from these settings. A profile that is
@@ -345,6 +351,7 @@ public actor IngestCoordinator {
         await Task { [services] in await Self.letGo(initial, services: services) }.value
         // A stopped worker reads nothing more: the database cancels a stopped task's reads, which is no error to log.
         if !Task.isCancelled { await refreshQueueCount() }
+        return job.attempt > initial.attempt
     }
 
     /// Lets go of the claim `job` was taken with (`JobStore.release`), whatever stopped the worker. A job that has not

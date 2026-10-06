@@ -206,6 +206,20 @@ extension IngestQueueTests {
         #expect(try await h.services.history.events(limit: 20, kinds: [.extracted]).count == 2, "no other text is read")
     }
 
+    /// A drain says which jobs it spent an attempt on, as a failure does: the command that drains them fails those, and
+    /// leaves the rest queued, whatever another process did meanwhile (the review of the fix of the final review of #17).
+    @Test func aDrainSaysWhichJobsItFailed() async throws {
+        let h = try await Harness.make(analyzer: StubAnalyzer { name in
+            if name == "bad.txt" { throw TestFailure("boom") }
+        })
+        defer { h.env.cleanup() }
+        let good = try #require(await h.coordinator.enqueue(try h.env.drop("good.txt", text: IngestTests.bill)))
+        let bad = try #require(await h.coordinator.enqueue(try h.env.drop("bad.txt", text: "\(IngestTests.bill) bad")))
+        let failed = await h.coordinator.drain()
+        #expect(failed == [bad] && !failed.contains(good), "the file it read fails, an attempt spent; the one it filed does not")
+        #expect(await h.coordinator.drain().isEmpty, "and a drain that takes nothing failed nothing")
+    }
+
     /// While Ollama is away only a job whose next stage needs no model is taken (`JobStore.beforeTheModel`): a file that
     /// came, in Incoming or put into the archive, not hashed yet; not one at a later stage, nor a document read again or
     /// indexed again, whose next stage reads its text for the model.
