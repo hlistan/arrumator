@@ -381,11 +381,11 @@ extension IngestCoordinator {
                 }
             } else {
                 // The document is marked failed, to be read again from Needs You, and History says so, in the write that
-                // checks the job's claim still holds, as a file is filed (`DocumentFiler`): one the user left for later
-                // before it stays as the user left it, as leaving it for later cancels the job in its own write
-                // (`ReviewActions.hold`); and so does one set aside that is read again for search after a rebuild
-                // (`reindex`), which leaving it for later does not cancel, whose reading for search alone failed: a
-                // document the user set aside is never marked failed here.
+                // checks the job's claim still holds, as a file is filed (`DocumentFiler`). A document the user set aside
+                // is never marked failed here: leaving it for later or undoing it cancels its reading again in the same
+                // write, so that job finds its claim lost, and refuses it while it is first read in
+                // (`ReviewActions.hold`, `undo`); what is left is a reading for search after a rebuild (`reindex`), which
+                // neither cancels, whose failure leaves the document as the user left it.
                 let now = services.time.now()
                 let analysisJSON = try JSON.string(analysis)
                 let summary = job.kind == .reindex ? "\(document.originalFilename) could not be read again for search: \(message)"

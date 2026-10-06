@@ -324,6 +324,22 @@ extension IngestQueueTests {
         _ = await worker.value
     }
 
+    /// A document whose first reading has not ended, as in the instant between its filing and its job's end, is not
+    /// undone: that reading would file it again (the review of the fix of the final review of #17).
+    @Test func aDocumentWhoseFirstReadingHasNotEndedIsNotUndone() async throws {
+        let h = try await Harness.make()
+        defer { h.env.cleanup() }
+        let document = try await h.ingest("bill.txt", text: IngestTests.bill)
+        let docID = try #require(document.id)
+        // Filed, and its job not yet saved as done: as when the app stops in that instant.
+        try await h.env.database.writer.write { db in
+            try db.execute(sql: "UPDATE jobs SET state = 'filing' WHERE doc_id = ? AND kind = 'ingest'", arguments: [docID])
+        }
+        await #expect(throws: IngestError.beingReadIn(docID), "it is refused while its reading has not ended") { try await h.review.undo(docID) }
+        let kept = try await h.services.documents.document(id: docID)
+        #expect(kept?.status == .filed && FileManager.default.fileExists(atPath: document.path), "and it stays filed where it is")
+    }
+
     /// A document read again whose last attempt fails, still the worker's, is marked failed with why, and History says
     /// so: it waits for the user (the review of the fix of the final review of #17).
     @Test func aDocumentWhoseReadingAgainFailsItsLastAttemptIsMarkedFailedSayingWhy() async throws {
@@ -348,21 +364,23 @@ extension IngestQueueTests {
     /// A document read again for search after a rebuild (`reindex`) whose reading fails is marked failed and waits for
     /// the user, to be read again, as one whose reading fails does; one the user left for later stays so. History says
     /// its reading for search failed (the reviews of the fix of the final review of #17).
-    @Test(arguments: [false, true])
-    func aDocumentWhoseReadingForSearchFailsWaitsForTheUserUnlessSetAside(_ leftForLater: Bool) async throws {
+    @Test(arguments: [DocumentStatus.filed, .held, .undone])
+    func aDocumentWhoseReadingForSearchFailsWaitsForTheUserUnlessSetAside(_ left: DocumentStatus) async throws {
         let env = try await TestEnvironment.make()
         defer { env.cleanup() }
         let filed = Harness(env: env, services: Harness.services(env, analyzer: StubAnalyzer(), config: env.config))
         let document = try await filed.ingest("bill.txt", text: IngestTests.bill)
         let docID = try #require(document.id)
-        if leftForLater { try await filed.review.hold(docID) }
+        try await filed.services.jobs.enqueue(path: document.path, kind: .reindex, docID: docID, givesWay: true)
+        // Set aside once its reading for search is queued: undoing it, its job follows its file into Incoming.
+        if left == .held { try await filed.review.hold(docID) }
+        if left == .undone { try await filed.review.undo(docID) }
         var config = env.config
         config.ingest.maxAttempts = 1
         let h = Harness(env: env, services: Harness.services(env, analyzer: StubAnalyzer(), extractor: Unreadable(), config: config))
-        try await h.services.jobs.enqueue(path: document.path, kind: .reindex, docID: docID, givesWay: true)
         _ = await h.coordinator.drain(.everything)
         let after = try #require(try await h.services.documents.document(id: docID))
-        #expect(after.status == (leftForLater ? .held : .failed), "it waits for the user, unless set aside: \(after.status)")
+        #expect(after.status == (left == .filed ? .failed : left), "it waits for the user, unless set aside: \(after.status)")
         let said = try await h.services.history.events(limit: 10, kinds: [.failed]).map(\.summary)
         #expect(said == ["bill.txt could not be read again for search: boom"], "and History says its reading for search failed: \(said)")
     }

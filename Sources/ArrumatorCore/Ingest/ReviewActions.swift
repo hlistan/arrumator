@@ -180,10 +180,16 @@ public struct ReviewActions: Sendable {
     /// volume than the archive; the move is then a copy checked against the document's hash before the archive's file
     /// goes to the Trash (`FileOperations`), never a delete, and a file the Trash will not take stays where it is, undone
     /// in nothing. History records where the file was and went as the disk spells both (`URL.spelledOnDisk`), the one
-    /// form a path in Incoming is recorded in.
+    /// form a path in Incoming is recorded in. A document whose first reading has not ended, as in the instant between
+    /// its filing and its job's end, is refused (`IngestError.beingReadIn`), as leaving it for later is: that reading
+    /// would file it again. No such reading begins for a document already in the archive, so the look before the move
+    /// holds.
     public func undo(_ docID: Int64) async throws {
         var doc = try await document(docID)
         guard DocumentStatus.inArchive.contains(doc.status), services.isInArchive(doc) else { throw IngestError.notInArchive(docID, .undo) }
+        guard try await !services.database.reader.read({ db in try JobStore.isReadIn(db, docID: docID) }) else {
+            throw IngestError.beingReadIn(docID)
+        }
         let settings = await services.settings.current
         guard FileManager.default.fileExists(atPath: doc.path) else { throw IngestError.sourceMissing(doc.path) }
         let from = doc.url.spelledOnDisk.path
