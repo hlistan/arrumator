@@ -27,8 +27,9 @@ after which the card says **Confirmed by you** and when, beside where it is, and
 is read again, corrected, or renamed or moved in Finder; **Read Again** has the model read it again, saying it waits to
 be read after the files already in Incoming (on Needs You, which the document then leaves for Incoming's queue, the page
 says so above the rest, with **Show Incoming**, until you go to another page), **Leave for Later** holds it, and **Undo
-Filing** moves it back to Incoming; none of **Read Again**, **Leave for Later** and **Undo Filing** is offered while
-the document is still being read in, and each is once that ends, on the card as it is. A kind of file Arrumator
+Filing** moves it back to Incoming; neither **Leave for Later** nor **Undo Filing** is offered while the document is
+still being read in, nor **Read Again** while a file you put into the archive is, and each is once that ends, on the
+card as it is. A kind of file Arrumator
 cannot read says so, that the model saw only its name, and what would help.
 
 - **Incoming**: under **In Progress**, the file being worked on now, with a spinner and what is being done to it

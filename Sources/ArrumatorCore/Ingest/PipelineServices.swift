@@ -159,7 +159,8 @@ public struct PipelineServices: Sendable {
     /// It keeps its tags, which its row in the queue shows, and one in a folder in Incoming is given that folder's too.
     /// One outside the archive, as one left in Incoming, is read as an arrival, so an exact copy is handed over to its
     /// original (`IngestCoordinator`). One with no file to read where it is recorded, as one missing, or a copy an earlier
-    /// version filed, is refused before anything changes (`IngestError.cannotReadAgain`). All of it is decided on the
+    /// version filed, is refused before anything changes (`IngestError.cannotReadAgain`), and so is one filed by its
+    /// reading in where it is, until that reading ends (`IngestError.beingReadIn`). All of it is decided on the
     /// document as the write that queues it finds it, and recorded in History in that write, once: a request that queues
     /// nothing new, as one asked again while the first waits, records nothing. The job, or the one already queued for its
     /// file, which reads it as well.
@@ -176,10 +177,13 @@ public struct PipelineServices: Sendable {
             guard readable.contains(read.status), FileManager.default.fileExists(atPath: read.path) else {
                 throw IngestError.cannotReadAgain(docID)
             }
-            // Filed by its reading in, whose job has not ended, as a file put into the archive filed where it is: that job
-            // would take the request and read nothing more, so it waits for it to end, as leaving it for later does. One
-            // not filed yet is read by that reading, which the request is found to be.
-            if read.status != .processing, try JobStore.isReadIn(db, docID: docID) { throw IngestError.beingReadIn(docID, name: read.filename) }
+            // Filed by its reading in, whose job has not ended and is at its path, as a file put into the archive filed
+            // where it is: that job would take the request and read nothing more, so it waits for it to end. One not
+            // filed yet is read by that reading, which the request is found to be; one filed from Incoming, its reading
+            // in's job left at the path it came at, is queued beside it.
+            if read.status != .processing, try JobStore.isReadIn(db, docID: docID, at: read.path) {
+                throw IngestError.beingReadIn(docID, name: read.filename)
+            }
             var doc = read
             if !inArchive || [.undone, .held].contains(read.status) {
                 doc.status = .processing

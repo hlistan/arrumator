@@ -172,6 +172,25 @@ extension IngestTests {
         #expect(try await h.services.history.events(limit: 10, kinds: [.retry]).isEmpty, "and nothing more is recorded")
     }
 
+    /// A document filed where it is by its reading in, whose job has not ended, is left to that reading by every reading
+    /// again in bulk, Read All Documents Again and `arrumatorcli labels unlabelled` alike, which go on with the rest.
+    @Test func aDocumentStillBeingReadInWhereItIsIsLeftToThatReadingByEveryBulkReadingAgain() async throws {
+        let h = try await Harness.make(analyzer: StubAnalyzer(labels: nil))
+        defer { h.env.cleanup() }
+        var ids: [Int64] = []
+        for name in ["a.txt", "b.txt"] { ids.append(try #require(try await h.ingest(name, text: "\(Self.bill) \(name)").id)) }
+        let reading = ids[1]
+        let path = try #require(try await h.services.documents.document(id: reading)).path
+        // As a file put into the archive, filed where it is, its job not yet ended.
+        try await h.env.database.writer.write { db in
+            try db.execute(sql: "UPDATE jobs SET state = 'filing', kind = 'adopt', source_path = ? WHERE doc_id = ?", arguments: [path, reading])
+        }
+        #expect(try await h.review.retryAll() == [ids[0]], "reading every document again leaves it to its reading")
+        #expect(try await h.review.retryUnlabelled() == [ids[0]], "and so does reading those not labelled yet, without failing")
+        let jobs = try await h.jobs().filter { $0.docId == reading && $0.state.isActive }
+        #expect(jobs.map(\.kind) == [.adopt], "its reading in is its one job: \(jobs.map(\.kind))")
+    }
+
     /// Read Again asked twice while the first waits queues one reading and is recorded in History once: asking again
     /// changes nothing, and records nothing.
     @Test func readAgainAskedTwiceIsQueuedAndRecordedOnce() async throws {

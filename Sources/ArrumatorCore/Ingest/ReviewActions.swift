@@ -93,13 +93,15 @@ public struct ReviewActions: Sendable {
         case .held, .undone: [.readAgain]
         case .arrived, .processing, .duplicate, .missing: []
         }
-        // Its reading in not ended, as in the instant between its filing and its job's end, it is neither undone, left
-        // for later nor read again (`undo`, `hold`, `PipelineServices.queueReadingAgain`), so none is offered; the card
-        // asks again as the worker moves on.
-        let withheld: [DocumentAction] = [.undo, .hold, .readAgain]
-        if let id = document.id, actions.contains(where: withheld.contains),
-           try await services.database.reader.read({ db in try JobStore.isReadIn(db, docID: id) }) {
-            actions.removeAll(where: withheld.contains)
+        // Its reading in not ended, as in the instant between its filing and its job's end, it is neither undone nor left
+        // for later (`undo`, `hold`), nor read again where that reading's job is (`PipelineServices.queueReadingAgain`),
+        // so none of those is offered; the card asks again as the worker moves on.
+        if let id = document.id, !actions.isEmpty {
+            let (readIn, here) = try await services.database.reader.read { db in
+                (try JobStore.isReadIn(db, docID: id), try JobStore.isReadIn(db, docID: id, at: document.path))
+            }
+            if readIn { actions.removeAll { [.undo, .hold].contains($0) } }
+            if here { actions.removeAll { $0 == .readAgain } }
         }
         return DocumentChoices(actions: actions, notFiled: !inArchive && document.status == .failed, confirmed: confirmed)
     }
@@ -149,11 +151,23 @@ public struct ReviewActions: Sendable {
     /// folder's too (`PipelineServices.queueReadingAgain`), and History records it when it queues the reading, as in
     /// place of its turn in reading every document again, or of reading its text again after a rebuild (both give way,
     /// `JobRecord.givesWay`): not while another reading of it waits or is under way, an earlier Read Again's, an exact
-    /// copy's, or its reading in, which it is read with. One its reading in has filed, whose job has not ended, is
-    /// refused (`IngestError.beingReadIn`), as `hold` and `undo` refuse it.
+    /// copy's, or its reading in, which it is read with. One its reading in has filed where it is, whose job has not
+    /// ended, is refused (`IngestError.beingReadIn`).
     public func retry(_ docID: Int64) async throws {
         try await services.queueReadingAgain(docID, settings: await services.settings.current)
         await coordinator.wake()
+    }
+
+    /// Reads every document the model has not labelled yet again (`retry`), as `arrumatorcli labels unlabelled` asks:
+    /// one with no file to read, as one missing, is left out, as there is nothing to read again, and so is one whose
+    /// reading in has not ended where it is, which is left to it (`IngestError.beingReadIn`). The documents queued.
+    public func retryUnlabelled() async throws -> [Int64] {
+        var ids: [Int64] = []
+        for id in try await services.documents.unlabelled() {
+            do { try await retry(id) } catch IngestError.cannotReadAgain, IngestError.beingReadIn { continue }
+            ids.append(id)
+        }
+        return ids
     }
 
     /// Reads every document of the archive again, as `retry` reads one, with the profile in use, after every file that

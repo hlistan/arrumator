@@ -194,8 +194,19 @@ public struct JobStore: Sendable {
     /// Whether document `docID` is still being read in, as its file has just come: an active job takes it in (`ingest`),
     /// or one put into the archive (`adopt`), in a transaction of the caller's.
     static func isReadIn(_ db: Database, docID: Int64) throws -> Bool {
-        try JobRecord.filter(Column("doc_id") == docID).filter([JobKind.ingest, .adopt].map(\.rawValue).contains(Column("kind")))
-            .filter(activeStates.contains(Column("state"))).fetchCount(db) > 0
+        try readingIn(docID).fetchCount(db) > 0
+    }
+
+    /// Whether document `docID`'s reading in is under way at `path`, so a request for that path is taken by its job
+    /// (`enqueue`), as for a file put into the archive, filed where it is, in a transaction of the caller's.
+    static func isReadIn(_ db: Database, docID: Int64, at path: String) throws -> Bool {
+        try readingIn(docID).filter(Column("source_path") == path).fetchCount(db) > 0
+    }
+
+    /// The active jobs reading document `docID` in (`isReadIn`).
+    private static func readingIn(_ docID: Int64) -> QueryInterfaceRequest<JobRecord> {
+        JobRecord.filter(Column("doc_id") == docID).filter([JobKind.ingest, .adopt].map(\.rawValue).contains(Column("kind")))
+            .filter(activeStates.contains(Column("state")))
     }
 
     /// Cancels the active job reading document `docID` again (`reanalyse`), in a transaction of the caller's that sets

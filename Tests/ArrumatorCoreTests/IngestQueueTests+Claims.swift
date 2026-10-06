@@ -328,42 +328,57 @@ extension IngestQueueTests {
         _ = await worker.value
     }
 
-    /// A document whose reading in has not ended, as in the instant between its filing and its job's end, is not undone,
-    /// left for later nor read again, nor offered to be: that reading would file it again, or take the request and read
-    /// nothing more (the reviews of the fix of the final review of #17).
-    @Test func aDocumentWhoseReadingInHasNotEndedIsNotUndoneLeftForLaterNorReadAgain() async throws {
+    /// A document whose reading in has not ended, as in the instant between its filing and its job's end, is not undone
+    /// nor left for later, nor offered to be: that reading would file it again. Read Again is refused, and not offered,
+    /// only where that reading's job is at the document's path, as for a file put into the archive filed where it is,
+    /// whose job would take the request and read nothing more; one filed from Incoming is read again beside its reading
+    /// in (the reviews of the fix of the final review of #17).
+    @Test(arguments: [JobKind.ingest, .adopt])
+    func aDocumentWhoseReadingInHasNotEndedIsNotUndoneNorLeftForLater(_ kind: JobKind) async throws {
         let h = try await Harness.make()
         defer { h.env.cleanup() }
         let document = try await h.ingest("bill.txt", text: IngestTests.bill)
         let docID = try #require(document.id)
-        // Filed, and its job not yet saved as done: as when the app stops in that instant.
+        // Filed, and its job not yet saved as done: as when the app stops in that instant. A file put into the archive
+        // is read in at the document's path, where it is filed.
         try await h.env.database.writer.write { db in
-            try db.execute(sql: "UPDATE jobs SET state = 'filing' WHERE doc_id = ? AND kind = 'ingest'", arguments: [docID])
+            try db.execute(sql: "UPDATE jobs SET state = 'filing', kind = ? WHERE doc_id = ? AND kind = 'ingest'", arguments: [kind.rawValue, docID])
+            if kind == .adopt {
+                try db.execute(sql: "UPDATE jobs SET source_path = ? WHERE doc_id = ?", arguments: [document.path, docID])
+            }
         }
-        #expect(try await h.review.choices(for: document).actions == [.confirm], "the card offers no undo meanwhile")
-        await #expect(throws: IngestError.beingReadIn(docID, name: document.filename), "it is refused while its reading has not ended") {
+        #expect(try await h.review.choices(for: document).actions == [.confirm], "\(kind): the card offers no undo meanwhile")
+        await #expect(throws: IngestError.beingReadIn(docID, name: document.filename), "\(kind): it is refused while its reading has not ended") {
             try await h.review.undo(docID)
         }
         let kept = try await h.services.documents.document(id: docID)
-        #expect(kept?.status == .filed && FileManager.default.fileExists(atPath: document.path), "and it stays filed where it is")
+        #expect(kept?.status == .filed && FileManager.default.fileExists(atPath: document.path), "\(kind): and it stays filed where it is")
         // Waiting for the user, its reading in not ended either: not left for later, nor offered to be.
         try await h.env.database.writer.write { db in
             try db.execute(sql: "UPDATE documents SET status = 'needsReview' WHERE id = ?", arguments: [docID])
         }
         let waiting = try #require(try await h.services.documents.document(id: docID))
-        #expect(try await h.review.choices(for: waiting).actions == [.confirm], "the card offers no leaving it for later, nor reading it again, meanwhile")
-        // Nor read again: that reading's job would take the request, and read nothing more.
-        await #expect(throws: IngestError.beingReadIn(docID, name: document.filename), "reading it again is refused while its reading has not ended") {
+        let retried = { try await h.services.history.events(limit: 10, kinds: [.retry]).count }
+        if kind == .adopt {
+            #expect(try await h.review.choices(for: waiting).actions == [.confirm], "nor reading it again, where its reading in's job is")
+            await #expect(throws: IngestError.beingReadIn(docID, name: document.filename), "reading it again is refused meanwhile") {
+                try await h.review.retry(docID)
+            }
+            #expect(try await retried() == 0, "and nothing is said of it")
+        } else {
+            #expect(try await h.review.choices(for: waiting).actions == [.readAgain, .confirm], "it is offered to be read again")
             try await h.review.retry(docID)
+            #expect(try await retried() == 1, "and is read again beside its reading in, which is at the path it came at")
         }
-        #expect(try await h.services.history.events(limit: 10, kinds: [.retry]).isEmpty, "and nothing is said of it")
         // And once its job has ended, each is offered again, and reading it again is queued and recorded.
         try await h.env.database.writer.write { db in
-            try db.execute(sql: "UPDATE jobs SET state = 'done' WHERE doc_id = ? AND kind = 'ingest'", arguments: [docID])
+            try db.execute(sql: "UPDATE jobs SET state = 'done' WHERE doc_id = ? AND kind = ?", arguments: [docID, kind.rawValue])
         }
-        #expect(try await h.review.choices(for: waiting).actions == [.hold, .readAgain, .confirm], "once its reading has ended")
-        try await h.review.retry(docID)
-        #expect(try await h.services.history.events(limit: 10, kinds: [.retry]).count == 1, "and Read Again then reads it again")
+        if kind == .adopt {
+            #expect(try await h.review.choices(for: waiting).actions == [.hold, .readAgain, .confirm], "once its reading has ended")
+            try await h.review.retry(docID)
+            #expect(try await retried() == 1, "and Read Again then reads it again")
+        }
     }
 
     /// A document read again whose last attempt fails, still the worker's, is marked failed with why, and History says

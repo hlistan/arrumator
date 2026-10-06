@@ -497,7 +497,8 @@ an earlier version filed, cannot be read again, which is said at once.
   (`ingest.maxAttempts`) leaves its labels, text and meaning as they were, and it waits for you in Needs You as failed,
   saying why.
 - **Read All Documents Again**, under Settings › Filing, asks first, naming the profile, then queues every document in
-  the archive that is filed, waiting for you or set aside after failing; those you left for later stay as they are.
+  the archive that is filed, waiting for you or set aside after failing; those you left for later stay as they are, and
+  one a reading in has filed where it is, as a file you put into the archive, whose reading has not ended, is left to it.
   They give way to every file that arrives, so new files are filed first, and Incoming counts them in a line of their
   own rather than listing each; the app, or `arrumatorcli run`, reads them, and no other command does. One already
   waiting to be read is read once, and asked for again, as with **Read Again** on its card or a copy of it in Incoming,
@@ -507,8 +508,8 @@ an earlier version filed, cannot be read again, which is said at once.
   when it queues the reading, as it does in place of its turn in reading every document again, or of reading its text
   again after a rebuild of the index. Asked while another reading of it waits or is under way, an earlier Read Again's,
   an exact copy's, or its reading in (as it came into Incoming, as its file was saved again there, or as a file you put
-  into the archive yourself), it is read with that one, and nothing more is recorded; once that reading in has filed it,
-  and until it ends, Read Again is refused, as leaving it for later and undoing it are.
+  into the archive yourself), it is read with that one, and nothing more is recorded; once the reading in of a file you
+  put into the archive has filed it where it is, and until that reading ends, Read Again is refused.
 
 ## Your own changes
 
