@@ -146,27 +146,18 @@ public actor IngestCoordinator {
             return nil
         }
         do {
-            let known = try await services.documents.document(path: path)
-            // Whose file this is is asked of every document recorded here whose file it may be: one set aside, or left in
-            // Incoming. One whose file it is stays as it is, and the file with it; once all are asked, every one set aside
-            // whose file it is not is ended (`replaced`), another file having come in its place, so none is left recorded
-            // where its file is not (`isStill`).
-            var stayed = false
-            var gone: [DocumentRecord] = []
-            for document in try await services.documents.documents(path: path) where document.status.isSetAside || isLeftInIncoming(document) {
-                if try await stays(document, at: url) { stayed = true } else { gone.append(document) }
-            }
-            for document in gone { try await replaced(document) }
-            if stayed {
-                Log.debug(.ingest, "Ignoring a document's own file, left where it is", ["path": path])
-                return nil
-            }
-            // A file put where a document was left in Incoming, as an editor saving it, is that document arriving again.
-            let again = known.flatMap { isLeftInIncoming($0) ? $0.id : nil }
             var payload = JobPayload()
             let given = services.tags(for: url, given: tags, settings: await services.settings.current)
             payload.tags = given.isEmpty ? nil : given
-            let queued = try await queue(path, again: again, payload: payload)
+            // Decided once more when a document found left in Incoming changed before the write that would queue the file,
+            // as the user leaving it for later or reading it again then: as a pass after it would decide it.
+            var arrival = try await arrive(url, payload: payload)
+            if case .changed = arrival { arrival = try await arrive(url, payload: payload) }
+            guard case .queued(let queued) = arrival else {
+                Log.debug(.ingest, arrival == .stays ? "Ignoring a document's own file, left where it is"
+                                                     : "Not queued: the documents recorded there changed as it arrived", ["path": path])
+                return nil
+            }
             // A file already queued arrives once: a rescan, or a request that asks no more, records nothing again.
             if queued.isNew {
                 let summary = ([url.lastPathComponent] + [GivenTag.note(given)].compactMap { $0 }).joined(separator: " · ")

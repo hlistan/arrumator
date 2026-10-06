@@ -163,19 +163,28 @@ public struct PipelineServices: Sendable {
     @discardableResult
     public func queueReadingAgain(_ document: DocumentRecord, settings: AppSettings) async throws -> Int64? {
         guard let docID = document.id else { throw IngestError.documentNotPersisted }
-        var doc = document
-        let inArchive = isInArchive(doc)
+        let inArchive = isInArchive(document)
         let readable: Set<DocumentStatus> = inArchive ? [.filed, .needsReview, .failed, .held, .processing]
             : [.undone, .held, .failed, .arrived, .processing]
-        guard readable.contains(doc.status), FileManager.default.fileExists(atPath: doc.path) else {
+        guard readable.contains(document.status), FileManager.default.fileExists(atPath: document.path) else {
             throw IngestError.cannotReadAgain(docID)
         }
-        if !inArchive || [.undone, .held].contains(doc.status) {
-            doc = try await documents.update(docID) { $0.status = .processing }
+        let folderTags = inArchive ? [] : tags(for: document.url, given: [], settings: settings)
+        let now = time.now()
+        // Its status and its job in one write, so a file arriving at its path meanwhile finds both, or neither.
+        return try await database.writer.write { [document] db in
+            var doc = document
+            if !inArchive || [.undone, .held].contains(doc.status) {
+                guard let read = try DocumentRecord.fetchOne(db, key: docID) else { throw IngestError.documentNotFound(docID) }
+                doc = read
+                doc.status = .processing
+                doc.updatedAt = now
+                try doc.updateChanges(db, from: read)
+            }
+            return try JobStore.enqueue(db, path: doc.path, kind: inArchive ? .reanalyse : .ingest, docID: docID,
+                                        payload: Self.readingAgain(tags: Self.keptTags(doc.labels) + folderTags, asked: inArchive ? doc : nil),
+                                        givesWay: false, at: now).id
         }
-        let tags = Self.keptTags(doc.labels) + (inArchive ? [] : self.tags(for: doc.url, given: [], settings: settings))
-        return try await jobs.enqueue(path: doc.path, kind: inArchive ? .reanalyse : .ingest, docID: docID,
-                                      payload: Self.readingAgain(tags: tags, asked: inArchive ? doc : nil)).id
     }
 
     /// Whether document `docID` is still the original an exact copy is handed over to (`takesCopy`).
