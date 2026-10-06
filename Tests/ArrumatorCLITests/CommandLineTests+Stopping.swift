@@ -322,9 +322,10 @@ extension CommandLineTests {
         defer { home.cleanup() }
         let note = home.root.appendingPathComponent("note.txt")
         try Data("Fatura de Maria Exemplo".utf8).write(to: note)
-        // The error is the server's, asked once: no time is spent asking it again.
+        // The error is the server's, asked once: no time is spent asking it again, and the file is not due again before
+        // the command ends.
         let pipeline = home.root.appendingPathComponent("pipeline.json")
-        try JSONSerialization.data(withJSONObject: ["ollama": ["retryDelays": [Int]()]]).write(to: pipeline)
+        try JSONSerialization.data(withJSONObject: ["ollama": ["retryDelays": [Int]()], "ingest": ["retryDelays": [3_600]]]).write(to: pipeline)
         let ingested = try run(home, ["ingest", "--json", note.path], environment: ["ARRUMATOR_PIPELINE_CONFIG": pipeline.path])
         let queue = try DatabaseQueue(path: try index(home).path)
         defer { try? queue.close() }

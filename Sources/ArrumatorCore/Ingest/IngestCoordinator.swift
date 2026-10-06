@@ -174,13 +174,16 @@ public actor IngestCoordinator {
     /// is left to it, and the job in hand when the task is cancelled carries on at the next start. Which jobs it takes,
     /// `draining` says: by default only those that come in their turn. Once a job finds Ollama away, it takes only the
     /// files that came and are not hashed yet, each then waiting before its text, and ends: no other is taken until that
-    /// one is tried again (`ollamaRetryAt`), which a command does not wait for. Says which jobs it recorded a failure of:
-    /// an attempt it spent and kept, or the job it ended failed; not one that waits, nor any another process failed.
+    /// one is tried again (`ollamaRetryAt`), which a command does not wait for. Says which jobs it recorded a failure of
+    /// at their last attempt in it: an attempt it spent and kept, or the job it ended failed; not one it filed or that
+    /// waits, nor one another process failed.
     @discardableResult
     public func drain(_ draining: Draining = .inTurn) async -> Set<Int64> {
         var failed: Set<Int64> = []
         while !Task.isCancelled, case let .taken(job) = await nextDue(givingWay: draining == .everything) {
-            if await process(job), let id = job.id { failed.insert(id) }
+            // A job taken again in this drain, as one due again after it failed, ends as its last attempt ends.
+            guard let id = job.id else { continue }
+            if await process(job) { failed.insert(id) } else { failed.remove(id) }
         }
         await refreshQueueCount()
         return failed

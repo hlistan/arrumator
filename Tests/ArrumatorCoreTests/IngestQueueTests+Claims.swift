@@ -138,6 +138,10 @@ extension IngestQueueTests {
         let id = try #require(await h.coordinator.enqueue(url))
         #expect(await h.coordinator.drain().isEmpty, "a failure no longer the worker's to set aside is none it recorded")
         #expect(try await h.services.jobs.job(id: id)?.state == .cancelled, "the job stays cancelled")
+        let ended = try await env.database.reader.read { db in
+            try String.fetchOne(db, sql: "SELECT outcome FROM traces WHERE job_id = ? ORDER BY id DESC LIMIT 1", arguments: [id])
+        }
+        #expect(ended == JobOutcome.cancelled.rawValue, "and its trace ends there, as cancelled")
         let archived = try FileManager.default.contentsOfDirectory(atPath: env.archive.path)
         #expect(FileManager.default.fileExists(atPath: url.path) && archived.isEmpty,
                 "the file is not moved: the claim is checked again in the write just before the move")
@@ -157,6 +161,10 @@ extension IngestQueueTests {
         #expect(await h.coordinator.drain().isEmpty, "the attempt is not saved, so the drain failed nothing")
         let job = try await h.services.jobs.job(id: id)
         #expect(job?.state == .cancelled && job?.attempt == 0, "the job stays as it was cancelled: \(String(describing: job))")
+        let ended = try await env.database.reader.read { db in
+            try String.fetchOne(db, sql: "SELECT outcome FROM traces WHERE job_id = ? ORDER BY id DESC LIMIT 1", arguments: [id])
+        }
+        #expect(ended == JobOutcome.cancelled.rawValue, "and its trace ends there, as cancelled, rather than run on")
     }
 
     @Test func aFailureOfAJobCancelledMeanwhileChangesNothingOfItsFileOrItsDocument() async throws {

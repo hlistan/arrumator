@@ -264,6 +264,44 @@ extension IngestQueueTests {
         #expect(await h.coordinator.drain().isEmpty, "nor one waiting for Ollama")
     }
 
+    /// A file that fails and is taken again in the same drain, its time come while another is read, ends as its last
+    /// attempt does: filed, or waiting for Ollama, it is no failure the drain recorded (the review of the fix of the final
+    /// review of #17).
+    @Test func aFileTakenAgainInTheSameDrainEndsAsItsLastAttempt() async throws {
+        let env = try await TestEnvironment.make()
+        defer { env.cleanup() }
+        let attempts = Attempts()
+        let analyzer = StubAnalyzer { name in
+            let attempt = await attempts.next(name)
+            switch (name, attempt) {
+            case ("flaky.txt", 1), ("away.txt", 1): throw TestFailure("boom")
+            case ("away.txt", _): throw OllamaError.unreachable("connection refused")
+            // Read long enough for the others to be due again.
+            case ("slow.txt", _): env.time.advance(by: env.config.ingest.retryDelays.first + 1)
+            default: break
+            }
+        }
+        let h = Harness(env: env, services: Harness.services(env, analyzer: analyzer, config: env.config))
+        var ids: [String: Int64] = [:]
+        for name in ["flaky.txt", "away.txt", "slow.txt"] {
+            let id = try #require(await h.coordinator.enqueue(try env.drop(name, text: "\(IngestTests.bill) \(name)")))
+            ids[name] = id
+        }
+        #expect(await h.coordinator.drain().isEmpty, "each failed once, then was filed or waits for Ollama: no failure at the end")
+        let flaky = try await h.services.jobs.job(id: try #require(ids["flaky.txt"]))
+        #expect(flaky?.state == .done && flaky?.attempt == 1, "the flaky file was taken again and filed: \(String(describing: flaky))")
+    }
+
+    /// A file waiting for its model fails nothing each time the worker looks whether the model is there yet.
+    @Test func aFileWaitingForItsModelFailsNothingWhenItLooksAgain() async throws {
+        let h = try await Harness.make(analyzer: StubAnalyzer(error: OllamaError.modelNotFound("not-installed")))
+        defer { h.env.cleanup() }
+        await h.coordinator.enqueue(try h.env.drop("bill.txt", text: IngestTests.bill))
+        #expect(await h.coordinator.drain().isEmpty, "its model not installed, it waits for it")
+        h.env.time.advance(by: h.env.config.ingest.modelRecheckSeconds)
+        #expect(await h.coordinator.drain().isEmpty, "and looking again, the model still missing, fails nothing")
+    }
+
     /// While Ollama is away only a job whose next stage needs no model is taken (`JobStore.beforeTheModel`): a file that
     /// came, in Incoming or put into the archive, not hashed yet; not one at a later stage, nor a document read again or
     /// indexed again, whose next stage reads its text for the model.
@@ -422,5 +460,15 @@ private actor TakenOut {
     func takeOut() throws {
         guard let folder, FileManager.default.fileExists(atPath: folder.path) else { return }
         try FileManager.default.removeItem(at: folder)
+    }
+}
+
+/// How many times the model was given each file.
+private actor Attempts {
+    private var counts: [String: Int] = [:]
+
+    func next(_ name: String) -> Int {
+        counts[name, default: 0] += 1
+        return counts[name, default: 0]
     }
 }
