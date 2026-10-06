@@ -68,7 +68,7 @@ extension IngestTests {
         let path = file.spelledOnDisk.path
         let id = try await record(h, at: path, status: .failed, sha256: "an earlier version")
         let found = try #require(try await h.services.documents.document(id: id))
-        let reading = try #require(try await h.services.queueReadingAgain(found, settings: await h.services.settings.current))
+        let reading = try #require(try await h.services.queueReadingAgain(id, settings: await h.services.settings.current))
         #expect(try await h.coordinator.queue(path, again: found, payload: JobPayload()) == nil, "nothing is decided on it as it was")
         #expect(await h.coordinator.enqueue(file, tags: ["Taxes 2024"]) == reading, "asked once more, it is the reading's job")
         let tags = try await h.services.jobs.job(id: reading)?.tags.map(\.value)
@@ -84,44 +84,57 @@ extension IngestTests {
         defer { h.env.cleanup() }
         let file = try h.env.drop("scan.txt", text: Self.bill)
         let id = try await record(h, at: file.spelledOnDisk.path, status: .failed, sha256: "an earlier version")
-        let found = try #require(try await h.services.documents.document(id: id))
         try await h.env.database.writer.write { db in
             try db.execute(sql: "CREATE TEMP TRIGGER queueing_fails BEFORE INSERT ON jobs BEGIN SELECT RAISE(ABORT, 'the queue is unavailable'); END")
         }
-        await #expect(throws: (any Error).self) { try await h.services.queueReadingAgain(found, settings: await h.services.settings.current) }
+        await #expect(throws: (any Error).self) { try await h.services.queueReadingAgain(id, settings: await h.services.settings.current) }
         #expect(try await h.services.documents.document(id: id)?.status == .failed, "it is left as it was")
+        #expect(try await h.services.history.events(limit: 10, kinds: [.retry]).isEmpty, "and nothing is said of it")
     }
 
     /// What becomes of a document between the user asking to read it again and that being queued: ended, as another
-    /// file came where it was undone; its file removed, before the archive's watcher tells; given a tag; or left for
-    /// later.
-    enum BeforeItIsQueued: String, CaseIterable, Sendable { case ended, removed, tagged, leftForLater }
+    /// file came where it was undone; its file removed, before the archive's watcher tells; filed into the archive, as
+    /// one left in Incoming read meanwhile; given a tag; or left for later.
+    enum BeforeItIsQueued: String, CaseIterable, Sendable { case ended, removed, filed, tagged, leftForLater }
 
     /// A reading again is decided on the document as the write that queues it finds it, never as the user's request
-    /// found it: one ended meanwhile is refused, and one changed is read as it is now, its status and its tags.
+    /// found it: one ended meanwhile, or whose file is gone, is refused, and one changed is read as it is now, where it is,
+    /// with its status and its tags.
     @Test(arguments: BeforeItIsQueued.allCases)
     func aReadingAgainIsDecidedOnTheDocumentAsItIsWhenQueued(_ meanwhile: BeforeItIsQueued) async throws {
         let h = try await Harness.make()
         defer { h.env.cleanup() }
         let settings = await h.services.settings.current
-        if meanwhile == .ended {
+        switch meanwhile {
+        case .ended, .filed:
             let file = try h.env.drop("scan.txt", text: Self.bill)
-            let id = try await record(h, at: file.spelledOnDisk.path, status: .undone, sha256: "an earlier version")
-            let asked = try #require(try await h.services.documents.document(id: id))
-            try await h.services.documents.update(id) { $0.status = .missing }
-            await #expect(throws: IngestError.self, "one ended meanwhile is refused") {
-                try await h.services.queueReadingAgain(asked, settings: settings)
+            let id = try await record(h, at: file.spelledOnDisk.path, status: meanwhile == .ended ? .undone : .failed, sha256: "an earlier version")
+            if meanwhile == .ended {
+                try await h.services.documents.update(id) { $0.status = .missing }
+                await #expect(throws: IngestError.cannotReadAgain(id), "one ended meanwhile is refused") {
+                    try await h.services.queueReadingAgain(id, settings: settings)
+                }
+                #expect(try await h.services.documents.document(id: id)?.status == .missing, "and stays as it is")
+                #expect(try await h.jobs().isEmpty, "nothing is queued")
+                return
             }
-            #expect(try await h.services.documents.document(id: id)?.status == .missing, "and stays as it is")
-            #expect(try await h.jobs().isEmpty, "nothing is queued")
+            let filed = h.env.archive.appendingPathComponent("scan.txt")
+            try FileManager.default.moveItem(at: file, to: filed)
+            try await h.services.documents.update(id) { ($0.status, $0.path) = (.filed, filed.spelledOnDisk.path) }
+            let job = try #require(try await h.services.queueReadingAgain(id, settings: settings))
+            let reading = try #require(try await h.services.jobs.job(id: job))
+            #expect(reading.kind == .reanalyse && reading.sourcePath == filed.spelledOnDisk.path,
+                    "filed meanwhile, it is read again where it is in the archive: \(reading.kind) \(reading.sourcePath)")
+            #expect(try await h.services.documents.document(id: id)?.status == .filed, "found as it is until it is filed again")
             return
+        default: break
         }
         let asked = try await h.ingest("bill.txt", text: Self.bill)
         let id = try #require(asked.id)
         if meanwhile == .removed {
             try FileManager.default.removeItem(at: asked.url)
-            await #expect(throws: IngestError.self, "one whose file is gone is refused") {
-                try await h.services.queueReadingAgain(asked, settings: settings)
+            await #expect(throws: IngestError.cannotReadAgain(id), "one whose file is gone is refused") {
+                try await h.services.queueReadingAgain(id, settings: settings)
             }
             #expect(try await h.services.documents.document(id: id)?.status == asked.status, "and stays as it is")
             return
@@ -133,7 +146,7 @@ extension IngestTests {
         default: try await h.services.documents.update(id) { $0.status = .held }
         }
         h.env.time.advance(by: 60)
-        let job = try #require(try await h.services.queueReadingAgain(asked, settings: settings))
+        let job = try #require(try await h.services.queueReadingAgain(id, settings: settings))
         let read = try #require(try await h.services.documents.document(id: id))
         if meanwhile == .tagged {
             let reading = try #require(try await h.services.jobs.job(id: job))
@@ -143,6 +156,21 @@ extension IngestTests {
         } else {
             #expect(read.status == .processing && read.updatedAt == h.env.time.now(), "left for later meanwhile, it is read again from there")
         }
+    }
+
+    /// Read Again asked twice while the first waits queues one reading and is recorded in History once: asking again
+    /// changes nothing, and records nothing.
+    @Test func readAgainAskedTwiceIsQueuedAndRecordedOnce() async throws {
+        let h = try await Harness.make()
+        defer { h.env.cleanup() }
+        let doc = try await h.ingest("bill.txt", text: Self.bill)
+        let id = try #require(doc.id)
+        try await h.review.retry(id)
+        try await h.review.retry(id)
+        let readings = try await h.jobs().filter { $0.kind == .reanalyse }
+        #expect(readings.count == 1, "one reading: \(readings.map(\.state))")
+        let said = try await h.services.history.events(limit: 10, kinds: [.retry]).map(\.summary)
+        #expect(said == ["Read again: \(doc.filename)"], "recorded once: \(said)")
     }
 
     /// A document asked whose file a path holds, changed by the user before it is ended, as one left in Incoming then

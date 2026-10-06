@@ -144,11 +144,10 @@ public struct ReviewActions: Sendable {
     /// Reads the document again from the start, as after changing models, from its file, and files it under the name the
     /// model gives: where it is in the archive, found as it was until then, or, for one back in Incoming, at the top of
     /// the archive. It keeps its tags, which its row in the queue shows, and one in a folder in Incoming is given that
-    /// folder's too (`PipelineServices.queueReadingAgain`).
+    /// folder's too (`PipelineServices.queueReadingAgain`), and History records it once, however often it is asked
+    /// before it is read.
     public func retry(_ docID: Int64) async throws {
-        let doc = try await document(docID)
-        try await services.queueReadingAgain(doc, settings: await services.settings.current)
-        try await services.history.record(.retry, actor: .user, doc: docID, summary: "Read again: \(doc.filename)")
+        try await services.queueReadingAgain(docID, settings: await services.settings.current)
         await coordinator.wake()
     }
 

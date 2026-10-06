@@ -246,7 +246,7 @@ extension IngestQueueTests {
         var config = env.config
         config.ingest.maxAttempts = 1
         let h = Harness(env: env, services: Harness.services(env, analyzer: StubAnalyzer(error: TestFailure("boom")), config: config))
-        _ = try await h.services.queueReadingAgain(document, settings: await h.services.settings.current)
+        _ = try await h.services.queueReadingAgain(try #require(document.id), settings: await h.services.settings.current)
         // The user leaves it for later as its failed attempt is kept, as `ReviewActions.hold` does it.
         try await env.database.writer.write { db in
             try db.execute(sql: """
@@ -370,7 +370,7 @@ extension IngestQueueTests {
         var config = env.config
         config.ingest.maxAttempts = 1
         let h = Harness(env: env, services: Harness.services(env, analyzer: StubAnalyzer(error: TestFailure("boom")), config: config))
-        _ = try await h.services.queueReadingAgain(document, settings: await h.services.settings.current)
+        _ = try await h.services.queueReadingAgain(try #require(document.id), settings: await h.services.settings.current)
         _ = await h.coordinator.drain(.everything)
         let failed = try #require(try await h.services.documents.document(id: docID))
         #expect(failed.status == .failed, "it is marked failed: \(failed.status)")

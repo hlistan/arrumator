@@ -151,21 +151,22 @@ public struct PipelineServices: Sendable {
         return Reading(outcome: outcome, tags: kept, changes: consolidation.changes)
     }
 
-    /// Queues `document` to be read again from the start, as a file that arrives is read: its file hashed and its text
-    /// read again, then the model reads it, and it is filed under the name it gives: where it is in the archive, or, for
-    /// one outside it (back in Incoming), at the top of the archive. One in the archive (`reanalyse`) is found as it was
+    /// Queues document `docID` to be read again from the start, as the user asks it (**Read Again**), as a file that
+    /// arrives is read: its file hashed and its text read again, then the model reads it, and it is filed under the name
+    /// it gives: where it is in the archive, or, for one outside it (back in Incoming), at the top of the archive. One in the archive (`reanalyse`) is found as it was
     /// until it is filed, when what it reads takes the place of everything it had at once (`IndexStore.replaceReading`).
     /// It keeps its tags, which its row in the queue shows, and one in a folder in Incoming is given that folder's too.
     /// One outside the archive, as one left in Incoming, is read as an arrival, so an exact copy is handed over to its
     /// original (`IngestCoordinator`). One with no file to read where it is recorded, as one missing, or a copy an earlier
-    /// version filed, is refused before anything changes (`IngestError.cannotReadAgain`). The job, or the one already
-    /// queued for its file, which reads it as well.
+    /// version filed, is refused before anything changes (`IngestError.cannotReadAgain`). All of it is decided on the
+    /// document as the write that queues it finds it, and recorded in History in that write, once: a request that queues
+    /// nothing new, as one asked again while the first waits, records nothing. The job, or the one already queued for its
+    /// file, which reads it as well.
     @discardableResult
-    public func queueReadingAgain(_ document: DocumentRecord, settings: AppSettings) async throws -> Int64? {
-        guard let docID = document.id else { throw IngestError.documentNotPersisted }
+    public func queueReadingAgain(_ docID: Int64, settings: AppSettings) async throws -> Int64? {
         let now = time.now()
-        // Decided on the document as the write that queues it finds it, its status and its job written together, so a
-        // file arriving at its path meanwhile, or the document filed or ended, finds both, or neither.
+        // Its status, its job and its event written together, so a file arriving at its path meanwhile, or the document
+        // filed or ended, finds all of them, or none.
         return try await database.writer.write { [self] db in
             guard let read = try DocumentRecord.fetchOne(db, key: docID) else { throw IngestError.documentNotFound(docID) }
             let inArchive = isInArchive(read)
@@ -181,9 +182,11 @@ public struct PipelineServices: Sendable {
                 try doc.updateChanges(db, from: read)
             }
             let folderTags = inArchive ? [] : tags(for: read.url, given: [], settings: settings)
-            return try JobStore.enqueue(db, path: read.path, kind: inArchive ? .reanalyse : .ingest, docID: docID,
-                                        payload: Self.readingAgain(tags: Self.keptTags(read.labels) + folderTags, asked: inArchive ? doc : nil),
-                                        givesWay: false, at: now).id
+            let queued = try JobStore.enqueue(db, path: read.path, kind: inArchive ? .reanalyse : .ingest, docID: docID,
+                                              payload: Self.readingAgain(tags: Self.keptTags(read.labels) + folderTags, asked: inArchive ? doc : nil),
+                                              givesWay: false, at: now)
+            if queued.isNew { try HistoryStore.insert(db, .retry, at: now, actor: .user, doc: docID, summary: "Read again: \(read.filename)") }
+            return queued.id
         }
     }
 
