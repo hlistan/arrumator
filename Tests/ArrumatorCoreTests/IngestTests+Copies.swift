@@ -145,8 +145,9 @@ extension IngestTests {
 
     /// What is at a copy's path at the next start, the copy in the Trash since a stop: its original, undone back where
     /// it was; the same, but alike in all that a volume that keeps no file numbers tells, as a copy that kept its date;
-    /// or another file the user put there, of the copy's size and date, its original still in the archive.
-    enum AtTheCopysPath: String, CaseIterable, Sendable { case undone, undoneAlike, another }
+    /// the same, then left for later; or another file the user put there, of the copy's size and date, its original
+    /// still in the archive.
+    enum AtTheCopysPath: String, CaseIterable, Sendable { case undone, undoneAlike, leftForLaterAlike, another }
 
     /// A copy in the Trash when a stop came, before its original's reading was queued, is still handed over at the next
     /// start, whatever is at its path then: History never says the copy disappeared, and the file there is never taken
@@ -176,10 +177,12 @@ extension IngestTests {
         await coordinator.drain()
         #expect(base.env.trashed().count == 1, "\(found): the copy went to the Trash before the stop")
         switch found {
-        case .undone, .undoneAlike:
-            try await ReviewActions(services: services, coordinator: coordinator).undo(originalID)
+        case .undone, .undoneAlike, .leftForLaterAlike:
+            let review = ReviewActions(services: services, coordinator: coordinator)
+            try await review.undo(originalID)
             #expect(FileManager.default.fileExists(atPath: copy.path), "\(found): the original is back where the copy was")
-            if found == .undoneAlike {
+            if found == .leftForLaterAlike { try await review.hold(originalID) }
+            if found != .undone {
                 try await base.env.database.writer.write { db in
                     try db.execute(sql: "UPDATE jobs SET payload_json = json_remove(payload_json, '$.inode') WHERE id = ?", arguments: [id])
                 }
@@ -208,9 +211,76 @@ extension IngestTests {
             #expect(documents.count == 2 && documents.allSatisfy { $0.status == .filed }, "a document of its own: \(documents.map(\.path))")
         } else {
             #expect(files.isEmpty, "\(found): the undone original is neither read again nor read as the copy: \(files)")
-            #expect(documents.map(\.id) == [originalID] && documents.first?.status == .undone,
+            #expect(documents.map(\.id) == [originalID] && documents.first?.status.isSetAside == true,
                     "\(found): it stays as the user left it, and no second document is made of it: \(documents.map(\.path))")
         }
+    }
+
+    /// What follows a copy that is a document of its own, as one the Trash would not take, read again once it does,
+    /// handed over: a stop once it is in the Trash, at whose next start its original, undone back where it was, is that
+    /// file or alike in all that a volume that keeps no file numbers tells; or no stop, its original undone afterwards,
+    /// found there by a rescan.
+    enum Afterwards: String, CaseIterable, Sendable { case stopped, stoppedAlike, rescanned }
+
+    /// The original of a copy that was a document of its own, undone back where the copy was, is never taken for the
+    /// copy, nor read in as a new document, though the copy's own document is recorded at that path too.
+    @Test(arguments: Afterwards.allCases)
+    func anOriginalUndoneWhereItsCopyOfItsOwnWasIsNeverReadInForIt(_ afterwards: Afterwards) async throws {
+        let base = try await Harness.make()
+        defer { base.env.cleanup() }
+        let original = try await base.ingest("bill.txt", text: Self.bill)
+        let originalID = try #require(original.id)
+        let copy = try base.env.drop("bill.txt", text: Self.bill)
+        let date = try #require(try FileManager.default.attributesOfItem(atPath: original.path)[.modificationDate] as? Date)
+        try FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: copy.path)
+        // Left in Incoming as a document of its own, as the Trash would not take it.
+        var refusing = base.services
+        refusing.trash = RefusingTrash()
+        let refused = IngestCoordinator(services: refusing)
+        await refused.enqueue(copy)
+        await refused.drain()
+        let own = try #require(try await base.services.documents.list(DocumentFilter(), limit: 5).first { $0.id != originalID }?.id)
+        var services = base.with { $0.ingest.retryDelays = NonEmpty(60, []) }.services
+        let analyzer = StubAnalyzer()
+        services.analyzer = analyzer
+        let coordinator = IngestCoordinator(services: services)
+        let review = ReviewActions(services: services, coordinator: coordinator)
+        // Read again once the Trash takes it; a stop, once it is in the Trash, before its original's reading is queued.
+        let stops = afterwards != .rescanned
+        if stops {
+            try await base.env.database.writer.write { db in
+                try db.execute(sql: """
+                    CREATE TEMP TRIGGER queueing_fails BEFORE INSERT ON jobs WHEN NEW.kind = '\(JobKind.reanalyse.rawValue)'
+                    BEGIN SELECT RAISE(ABORT, 'the queue is briefly unavailable'); END
+                    """)
+            }
+        }
+        try await review.retry(own)
+        await coordinator.drain()
+        #expect(base.env.trashed().count == 1, "\(afterwards): the copy is in the Trash")
+        try await review.undo(originalID)
+        #expect(FileManager.default.fileExists(atPath: copy.path), "\(afterwards): the original is back where the copy was")
+        try await base.env.database.writer.write { db in
+            if stops { try db.execute(sql: "DROP TRIGGER queueing_fails") }
+            if afterwards == .stoppedAlike {
+                try db.execute(sql: "UPDATE jobs SET payload_json = json_remove(payload_json, '$.inode') WHERE doc_id = ?", arguments: [own])
+            }
+        }
+        base.env.time.advance(by: 60)
+        if afterwards == .rescanned { await coordinator.enqueue(copy) }
+        await coordinator.drain()
+
+        let documents = try await services.documents.list(DocumentFilter(), limit: 5)
+        #expect(Set(documents.map(\.id)) == [originalID, own], "\(afterwards): no other document is made: \(documents.map(\.path))")
+        let undone = try #require(documents.first { $0.id == originalID })
+        #expect(undone.status == .undone && FileManager.default.fileExists(atPath: undone.path),
+                "\(afterwards): the original stays as the user left it, its file where it is")
+        #expect(documents.first { $0.id == own }?.status == .duplicate, "\(afterwards): the copy's own document ends a copy")
+        #expect(await analyzer.calls.files == (stops ? [] : [original.filename]),
+                "\(afterwards): the original is read again only while it was in the archive, never as the copy")
+        let events = try await services.history.events(limit: 10, kinds: [.duplicate, .missing])
+        #expect(events.map(\.kind) == [.duplicate] && events.first?.docId == originalID,
+                "\(afterwards): the copy is recorded once, under its original: \(events.map(\.summary))")
     }
 
     /// A copy of a document in the archive waiting for the user, set aside after failing, left for later, or being read
@@ -295,6 +365,23 @@ extension IngestTests {
         #expect(events == ["bill copy.txt is a copy of \(original.filename), which is read again"],
                 "History says its original is read again: \(events)")
         #expect(await analyzer.calls.files == [original.filename], "as it is, once")
+    }
+
+    /// Of the documents recorded at one path, as an original undone back where its copy, a document of its own, was
+    /// before the copy went to the Trash, the path names one whose file may be there before any that ended there:
+    /// missing, or a copy gone to the Trash.
+    @Test func aPathNamesADocumentWhoseFileMayBeThereBeforeOnesThatEndedThere() async throws {
+        let h = try await Harness.make()
+        defer { h.env.cleanup() }
+        let path = h.env.incoming.appendingPathComponent("bill.txt").path
+        var ids: [Int64] = []
+        for status in [DocumentStatus.undone, .duplicate, .missing] {
+            var record = DocumentRecord.arrived(path: path, sha256: "sha", size: 1, uttype: "public.plain-text", inode: nil,
+                                                modified: nil, now: h.env.time.now())
+            record.status = status
+            ids.append(try #require(try await h.services.documents.save(record).id))
+        }
+        #expect(try await h.services.documents.document(path: path)?.id == ids.first, "the undone one, though those that ended are newer")
     }
 
     /// What a file in the archive is to a request to file it, as `arrumatorcli ingest` makes: a document's own, named

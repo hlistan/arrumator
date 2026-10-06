@@ -432,10 +432,10 @@ server refuses, is noted with the document, which is read without it.
 
 ## Exact copies
 
-A file in Incoming with the same bytes as a document in the archive (filed, waiting for you, parked after failing or
-left for later), by its SHA-256 and by that document's file as it is on disk now, is no second document: it asks for
-that document to be read again. This is how you have some documents read with another profile
-([profile and effort](#profile-and-effort)): choose it, and put them into Incoming again, as they are.
+A file in Incoming with the same bytes as a document in the archive (filed, waiting for you, parked after failing, left
+for later, or being read, as one you put into the archive), by its SHA-256 and by that document's file as it is on disk
+now, is no second document: it asks for that document to be read again. This is how you have some documents read with
+another profile ([profile and effort](#profile-and-effort)): choose it, and put them into Incoming again, as they are.
 
 - **The document is read again from the start**, with the profile in use, as [reading documents
   again](#reading-documents-again) says: from its file, found as it was until it is read, and then renamed where it is

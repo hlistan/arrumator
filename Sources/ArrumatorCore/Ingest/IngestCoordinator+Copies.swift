@@ -76,13 +76,15 @@ extension IngestCoordinator {
     }
 
     /// Whether the file at `copy` is still the copy the job hashed (`JobPayload.fingerprint`, kept with `copyOf`), not
-    /// another put at its path once the copy went to the Trash: one that is not that file, or a document the user set
-    /// aside recorded there (`DocumentStatus.isSetAside`), as its original undone back into Incoming, which a volume that
-    /// keeps no file numbers would not tell from a copy that kept its date. No job of a copy is one of those: the
-    /// queue takes none for a file set aside (`stays`), and the user sets none aside while it is read in.
+    /// another put at its path once the copy went to the Trash: one that is not that file, or the file of a document the
+    /// user set aside recorded there (`DocumentStatus.isSetAside`), as its original undone back into Incoming, which a
+    /// volume that keeps no file numbers would not tell from a copy that kept its date. Every document recorded there is
+    /// looked at, as a copy that was a document of its own is recorded there too. A document set aside has its file at
+    /// its path: another file put there is queued, and ends it (`replaced`); and no job of a copy is one set aside, as
+    /// the queue takes none for a file set aside (`stays`), and the user sets none aside while it is read in.
     func isStill(_ copy: URL, payload: JobPayload) async throws -> Bool {
         guard let hashed = payload.fingerprint, let now = try? FileFingerprint.of(copy), now.matches(hashed) else { return false }
-        return try await services.documents.document(path: copy.path)?.status.isSetAside != true
+        return try await !services.documents.documents(path: copy.path).contains { $0.status.isSetAside }
     }
 }
 
