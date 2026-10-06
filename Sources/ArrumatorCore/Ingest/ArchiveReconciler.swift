@@ -235,12 +235,13 @@ public actor ArchiveReconciler {
     }
 
     /// Takes a file new to the archive in, to be read and labelled where it is, unless the index has a document or a job
-    /// for it already, or it is in the system folder, which holds none. An identifier on it that is not its own, a copy's
+    /// for it already, or it is in the system folder, which holds none. A document missing from its path is none for it,
+    /// as its own file found there again is that document (`found`). An identifier on it that is not its own, a copy's
     /// or another archive's, is taken off it first, so it is not taken for the document whose identifier it carries; it
     /// is given one of its own when it is filed (`DocumentFiler`).
     private func adopt(_ url: URL, identifier: String?) async throws {
         let path = url.path
-        if try await services.documents.document(path: path) != nil { return }
+        if let recorded = try await services.documents.document(path: path), recorded.status != .missing { return }
         if ArchiveLayout(root: services.archive, records: services.config.records, watcher: services.config.watcher).system.holds(path) { return }
         if try await services.jobs.active(path: path) != nil { return }
         if identifier != nil {

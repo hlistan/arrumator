@@ -8,15 +8,14 @@ import Testing
 /// for `ollama serve` and a double for its API, never the user's Ollama.
 @Suite struct OllamaLifecycleTests {
     /// A server whose version is answered as `answers` says, call by call: the first call is 0. From call `holdingAt` on,
-    /// if given, it answers nothing until the request is cancelled, and says it got there (`held`) and was let go
-    /// (`released`): where a test that counts calls stops what makes them, rather than leave it looking as fast as test
-    /// time lets it while it waits.
+    /// if given, it answers nothing until the request is cancelled, and says it got there (`held`): where a test that
+    /// counts calls (`count`) stops what makes them, rather than leave it looking as fast as test time lets it while it
+    /// waits.
     final class ScriptedServer: OllamaAPI {
         private let calls = Mutex(0)
         private let answers: @Sendable (Int) -> Result<String, OllamaError>
         private let holdingAt: Int?
         let held = Signal()
-        let released = Signal()
 
         init(holdingAt: Int? = nil, _ answers: @escaping @Sendable (Int) -> Result<String, OllamaError>) {
             self.holdingAt = holdingAt
@@ -32,11 +31,13 @@ import Testing
             }
             if let holdingAt, call >= holdingAt {
                 held.fire()
-                defer { released.fire() }
                 try await TestTime(.blocks).sleep(seconds: 0)
             }
             return try answers(call).get()
         }
+
+        /// How many times it was asked its version.
+        var count: Int { calls.withLock { $0 } }
 
         func tags() async throws -> [OllamaModelInfo] { [] }
         func show(model: String) async throws -> OllamaShowResponse { MockOllama.shown(capabilities: [], thinking: nil) }
@@ -145,7 +146,14 @@ import Testing
         let steady = try PipelineConfig.bundledDefaults().ollama.healthPollSteady
         #expect(time.now() == TestTime.start.addingTimeInterval(2 * steady), "each look after waiting its time")
         await lifecycle.shutdown()
-        #expect(await Patience.until { api.released.fired }, "and stops looking once the app stops")
+        let supervision = await lifecycle.monitorTask
+        let ended = Signal()
+        Task {
+            await supervision?.value
+            ended.fire()
+        }
+        try #require(await Patience.until { ended.fired }, "supervision ends once the app stops")
+        #expect(api.count == 2, "having looked no more")
     }
 
     /// Each look made here, one after another, rather than by supervision's own task, which a loaded Mac may leave

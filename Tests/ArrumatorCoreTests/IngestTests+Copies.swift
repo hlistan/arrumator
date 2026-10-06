@@ -367,6 +367,42 @@ extension IngestTests {
         #expect(await analyzer.calls.files == [original.filename], "as it is, once")
     }
 
+    /// A copy put where documents set aside one after another were, their files gone since, is handed over once, and
+    /// goes to the Trash: every document set aside there is ended as the copy comes, not the one named first alone, so
+    /// none is left recorded where its file is not, to be taken for the copy's file.
+    @Test func aCopyPutWhereDocumentsSetAsideOneAfterAnotherWereIsHandedOverOnce() async throws {
+        let base = try await Harness.make()
+        defer { base.env.cleanup() }
+        let original = try await base.ingest("bill.txt", text: Self.bill)
+        let originalID = try #require(original.id)
+        let path = base.env.incoming.appendingPathComponent("scan.txt").spelledOnDisk.path
+        var aside: [Int64] = []
+        for _ in 0..<2 {
+            var record = DocumentRecord.arrived(path: path, sha256: "another", size: 1, uttype: "public.plain-text", inode: nil,
+                                                modified: nil, now: base.env.time.now())
+            record.status = .undone
+            aside.append(try #require(try await base.services.documents.save(record).id))
+        }
+        var services = base.services
+        let analyzer = StubAnalyzer()
+        services.analyzer = analyzer
+        let coordinator = IngestCoordinator(services: services)
+        let id = try #require(await coordinator.enqueue(try base.env.drop("scan.txt", text: Self.bill)))
+        await coordinator.drain()
+
+        let job = try #require(try await services.jobs.job(id: id))
+        let copyOf = try job.payload.copyOf
+        #expect(job.state == .duplicate && copyOf == originalID, "the copy is handed over")
+        #expect(base.env.trashed().map(\.lastPathComponent) == ["scan.txt"], "and goes to the Trash")
+        let events = try await services.history.events(limit: 10, kinds: [.duplicate]).map(\.summary)
+        #expect(events == ["scan.txt is a copy of \(original.filename), which is read again; the copy is in the Trash"],
+                "recorded once: \(events)")
+        #expect(await analyzer.calls.files == [original.filename], "its original is read again once")
+        for document in aside {
+            #expect(try await services.documents.document(id: document)?.status == .missing, "each set aside there is ended")
+        }
+    }
+
     /// Of the documents recorded at one path, as an original undone back where its copy, a document of its own, was
     /// before the copy went to the Trash, the path names one whose file may be there before any that ended there:
     /// missing, or a copy gone to the Trash.

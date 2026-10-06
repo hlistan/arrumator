@@ -74,6 +74,19 @@ extension IngestCoordinator {
         }
     }
 
+    /// Counts the jobs the status says are queued, and forgets the wait for Ollama once none is left to wait.
+    func refreshQueueCount() async {
+        do {
+            let counts = try await services.jobs.counts()
+            (status.queued, status.reindexing, status.readingAgain) = (counts.queued, counts.reindexing, counts.readingAgain)
+            // Nothing left waits, for Ollama or anything else, as when the job that found it away was cancelled, a
+            // document left for later meanwhile: no wait is said, nor kept, for what is gone.
+            if counts.queued + counts.reindexing + counts.readingAgain == 0 { (status.waitingForOllama, ollamaRetryAt) = (false, nil) }
+        } catch {
+            Log.error(.ingest, "Could not count the job queue", ["error": error.localizedDescription])
+        }
+    }
+
     /// Whether another process holds jobs; a queue that cannot be read says nothing of it.
     private func heldElsewhere() async -> Bool {
         do { return try await services.jobs.heldElsewhere(claiming: services.claims) } catch {

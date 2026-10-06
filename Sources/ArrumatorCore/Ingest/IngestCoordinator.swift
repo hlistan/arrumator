@@ -151,7 +151,11 @@ public actor IngestCoordinator {
                 Log.debug(.ingest, "Ignoring held document", ["path": path, "doc": String(known.id ?? 0)])
                 return nil
             }
-            if let known, [.held, .undone].contains(known.status) { try await replaced(known) }
+            // Each document set aside here is no longer here, as this file is none of theirs: another came in its place.
+            // Every one is ended, not the one named first alone, so none is left recorded where its file is not (`isStill`).
+            for document in try await services.documents.documents(path: path) where document.status.isSetAside {
+                try await replaced(document)
+            }
             // A file put where a document was left in Incoming, as an editor saving it, is that document arriving again.
             let again = known.flatMap { isLeftInIncoming($0) ? $0.id : nil }
             if let again { try await services.index.forgetReading(docID: again) }
@@ -258,18 +262,6 @@ public actor IngestCoordinator {
             await doorbell.wait(timeout: await idleWait(paused: settings.paused, power: powerReason != nil,
                                                         archiveThere: archiveThere, queueUnread: look == .unreadable),
                                 time: services.time)
-        }
-    }
-
-    private func refreshQueueCount() async {
-        do {
-            let counts = try await services.jobs.counts()
-            (status.queued, status.reindexing, status.readingAgain) = (counts.queued, counts.reindexing, counts.readingAgain)
-            // Nothing left waits, for Ollama or anything else, as when the job that found it away was cancelled, a
-            // document left for later meanwhile: no wait is said, nor kept, for what is gone.
-            if counts.queued + counts.reindexing + counts.readingAgain == 0 { (status.waitingForOllama, ollamaRetryAt) = (false, nil) }
-        } catch {
-            Log.error(.ingest, "Could not count the job queue", ["error": error.localizedDescription])
         }
     }
 

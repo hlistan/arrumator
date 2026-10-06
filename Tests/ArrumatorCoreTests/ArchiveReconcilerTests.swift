@@ -108,6 +108,23 @@ import Testing
         #expect(back.summary == "\(doc.filename) is back in the archive", "History says so")
     }
 
+    /// A new file saved where a document was removed from is taken in, a document of its own, the removed one staying
+    /// missing: a document missing from a path is none taken in for a file there (the review of the fix of the final
+    /// review of #17).
+    @Test func aNewFileSavedWhereARemovedDocumentWasIsTakenIn() async throws {
+        let h = try await Harness.make()
+        defer { h.env.cleanup() }
+        let doc = try await h.ingest("bill.txt", text: IngestTests.bill)
+        let id = try #require(doc.id)
+        _ = try h.moveOutOfArchive(doc.url)
+        try await h.reconciler.apply([.gone(path: doc.path)])
+        try Data("Water bill of August".utf8).write(to: doc.url)
+        try await h.reconciler.apply([.found(path: doc.path)])
+        #expect(try await h.services.jobs.active().map(\.sourcePath) == [doc.path], "the new file is queued to be read where it is")
+        #expect(try await h.services.history.events(limit: 10, kinds: [.adopted]).count == 1, "and History says it was added")
+        #expect(try await h.services.documents.document(id: id)?.status == .missing, "the document removed stays missing")
+    }
+
     @Test func aDocumentLeftForLaterIsMissingWhenItsFileGoesAndLeftForLaterWhenItComesBack() async throws {
         let h = try await Harness.make()
         defer { h.env.cleanup() }
