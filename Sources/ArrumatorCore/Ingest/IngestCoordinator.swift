@@ -147,14 +147,18 @@ public actor IngestCoordinator {
         }
         do {
             let known = try await services.documents.document(path: path)
-            if let known, try await stays(known, at: url) {
-                Log.debug(.ingest, "Ignoring held document", ["path": path, "doc": String(known.id ?? 0)])
-                return nil
+            let setAside = try await services.documents.documents(path: path).filter(\.status.isSetAside)
+            // The document whose file this is stays as it is: the one the path names, or any set aside here.
+            var staying: DocumentRecord?
+            for document in [known].compactMap({ $0 }) + setAside.filter({ $0.id != known?.id }) where staying == nil {
+                if try await stays(document, at: url) { staying = document }
             }
-            // Each document set aside here is no longer here, as this file is none of theirs: another came in its place.
-            // Every one is ended, not the one named first alone, so none is left recorded where its file is not (`isStill`).
-            for document in try await services.documents.documents(path: path) where document.status.isSetAside {
-                try await replaced(document)
+            // Every other document set aside here is no longer here: another file came in its place. Each is ended, not the
+            // one named first alone, so none is left recorded where its file is not (`isStill`).
+            for document in setAside where document.id != staying?.id { try await replaced(document) }
+            if let staying {
+                Log.debug(.ingest, "Ignoring held document", ["path": path, "doc": String(staying.id ?? 0)])
+                return nil
             }
             // A file put where a document was left in Incoming, as an editor saving it, is that document arriving again.
             let again = known.flatMap { isLeftInIncoming($0) ? $0.id : nil }

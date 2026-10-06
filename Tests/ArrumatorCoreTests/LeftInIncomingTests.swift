@@ -107,6 +107,7 @@ struct RefusingUntil: Trashing {
         #expect(try await documents(h).count == 1 && filed.id == id && filed.status == .filed,
                 "saved (\(save)) once the Trash takes it, it is filed, one document, never a second beside one stuck")
         #expect(try filed.sha256 == HashService.sha256(of: filed.url), "as what the file holds now")
+        #expect(try await h.services.history.events(limit: 10, kinds: [.missing]).isEmpty, "never said to be gone from Incoming")
     }
 
     @Test func readAgainOnADocumentWhoseFileChangedReadsTheFileNotTheTextStoredOfIt() async throws {

@@ -403,6 +403,29 @@ extension IngestTests {
         }
     }
 
+    /// The file of a document set aside, where another set aside since was recorded too, its file gone, stays that
+    /// document's, left where it is, and the other is ended: whose file it is is asked of every document set aside there,
+    /// not of the one the path names first alone.
+    @Test func theFileOfADocumentSetAsideStaysItsOwnThoughAnotherWasSetAsideThereSince() async throws {
+        let h = try await Harness.make()
+        defer { h.env.cleanup() }
+        let file = try h.env.drop("scan.txt", text: Self.bill)
+        let path = file.spelledOnDisk.path
+        let onDisk = try FileFingerprint.of(file)
+        var ids: [Int64] = []
+        for owns in [true, false] {
+            var record = DocumentRecord.arrived(path: path, sha256: owns ? "its own" : "another", size: owns ? onDisk.size : 1,
+                                                uttype: "public.plain-text", inode: owns ? onDisk.inode : nil,
+                                                modified: owns ? onDisk.modified : nil, now: h.env.time.now())
+            record.status = .undone
+            ids.append(try #require(try await h.services.documents.save(record).id))
+        }
+        #expect(await h.coordinator.enqueue(file) == nil, "the file is not queued: it is the document undone first")
+        #expect(try await h.services.documents.document(id: ids[0])?.status == .undone, "which stays as the user left it")
+        #expect(try await h.services.documents.document(id: ids[1])?.status == .missing, "and the other, its file gone, is ended")
+        #expect(try await h.jobs().isEmpty, "nothing is read")
+    }
+
     /// Of the documents recorded at one path, as an original undone back where its copy, a document of its own, was
     /// before the copy went to the Trash, the path names one whose file may be there before any that ended there:
     /// missing, or a copy gone to the Trash.

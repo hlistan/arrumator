@@ -145,8 +145,8 @@ import Testing
         try #require(await Patience.until { api.held.fired }, "supervision looks again after its first look")
         let steady = try PipelineConfig.bundledDefaults().ollama.healthPollSteady
         #expect(time.now() == TestTime.start.addingTimeInterval(2 * steady), "each look after waiting its time")
-        await lifecycle.shutdown()
         let supervision = await lifecycle.monitorTask
+        await lifecycle.shutdown()
         let ended = Signal()
         Task {
             await supervision?.value
