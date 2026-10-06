@@ -273,11 +273,20 @@ extension IngestCoordinator {
     }
 
     /// Ends `known`, a document left for later or undone in Incoming, whose file is no longer there: another file came
-    /// in its place, which is taken as an arrival of its own. History says so.
+    /// in its place. History says so, in the write that ends it, which ends only one still set aside, so a document is
+    /// ended once however many requests for its path come at once, and one of another status, as one left in Incoming
+    /// whose file was saved again, is left as it is.
     func replaced(_ known: DocumentRecord) async throws {
         guard let docID = known.id else { return }
-        try await services.documents.update(docID) { $0.status = .missing }
-        try await services.history.record(.missing, doc: docID, summary: "\(known.filename) is no longer in Incoming; the file there now is another")
+        let now = services.time.now()
+        try await services.database.writer.write { db in
+            guard let read = try DocumentRecord.fetchOne(db, key: docID), read.status.isSetAside else { return }
+            var gone = read
+            gone.status = .missing
+            gone.updatedAt = now
+            try gone.updateChanges(db, from: read)
+            try HistoryStore.insert(db, .missing, at: now, doc: docID, summary: "\(read.filename) is no longer in Incoming; the file there now is another")
+        }
     }
 
     /// Whether `document` was left in Incoming, not filed (`leaveInIncoming`): failed, and its file outside the archive

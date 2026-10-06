@@ -147,17 +147,18 @@ public actor IngestCoordinator {
         }
         do {
             let known = try await services.documents.document(path: path)
-            let setAside = try await services.documents.documents(path: path).filter(\.status.isSetAside)
-            // The document whose file this is stays as it is: the one the path names, or any set aside here.
-            var staying: DocumentRecord?
-            for document in [known].compactMap({ $0 }) + setAside.filter({ $0.id != known?.id }) where staying == nil {
-                if try await stays(document, at: url) { staying = document }
+            // Whose file this is is asked of every document recorded here whose file it may be: one set aside, or left in
+            // Incoming. One whose file it is stays as it is, and the file with it; once all are asked, every one set aside
+            // whose file it is not is ended (`replaced`), another file having come in its place, so none is left recorded
+            // where its file is not (`isStill`).
+            var stayed = false
+            var gone: [DocumentRecord] = []
+            for document in try await services.documents.documents(path: path) where document.status.isSetAside || isLeftInIncoming(document) {
+                if try await stays(document, at: url) { stayed = true } else { gone.append(document) }
             }
-            // Every other document set aside here is no longer here: another file came in its place. Each is ended, not the
-            // one named first alone, so none is left recorded where its file is not (`isStill`).
-            for document in setAside where document.id != staying?.id { try await replaced(document) }
-            if let staying {
-                Log.debug(.ingest, "Ignoring held document", ["path": path, "doc": String(staying.id ?? 0)])
+            for document in gone { try await replaced(document) }
+            if stayed {
+                Log.debug(.ingest, "Ignoring a document's own file, left where it is", ["path": path])
                 return nil
             }
             // A file put where a document was left in Incoming, as an editor saving it, is that document arriving again.

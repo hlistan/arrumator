@@ -423,7 +423,44 @@ extension IngestTests {
         #expect(await h.coordinator.enqueue(file) == nil, "the file is not queued: it is the document undone first")
         #expect(try await h.services.documents.document(id: ids[0])?.status == .undone, "which stays as the user left it")
         #expect(try await h.services.documents.document(id: ids[1])?.status == .missing, "and the other, its file gone, is ended")
+        let ended = try await h.services.history.events(limit: 10, kinds: [.missing]).map(\.docId)
+        #expect(ended == [ids[1]], "History says so of it, once: \(ended)")
         #expect(try await h.jobs().isEmpty, "nothing is read")
+    }
+
+    /// A file two documents may each have, as a volume that gives a freed file number again makes alike, one undone and
+    /// one left in Incoming named first, is neither's new file: both stay as they are, and nothing is said to be gone.
+    @Test func aFileTwoDocumentsMayEachHaveEndsNeither() async throws {
+        let h = try await Harness.make()
+        defer { h.env.cleanup() }
+        let file = try h.env.drop("scan.txt", text: Self.bill)
+        let onDisk = try FileFingerprint.of(file)
+        var ids: [Int64] = []
+        for status in [DocumentStatus.undone, .failed] {
+            var record = DocumentRecord.arrived(path: file.spelledOnDisk.path, sha256: "its own", size: onDisk.size, uttype: "public.plain-text",
+                                                inode: onDisk.inode, modified: onDisk.modified, now: h.env.time.now())
+            record.status = status
+            ids.append(try #require(try await h.services.documents.save(record).id))
+        }
+        #expect(await h.coordinator.enqueue(file) == nil, "the file is not queued")
+        let statuses = try await h.services.documents.documents(ids: ids).map(\.status)
+        #expect(statuses == [.undone, .failed], "both stay as they are: \(statuses)")
+        #expect(try await h.services.history.events(limit: 10, kinds: [.missing]).isEmpty, "and neither is said to be gone")
+    }
+
+    /// A document set aside, ended as another file comes in its place, is ended once, however many requests for its path
+    /// come at once: one no longer set aside is left as it is.
+    @Test func aDocumentSetAsideIsEndedOnceThoughTwoRequestsEndIt() async throws {
+        let h = try await Harness.make()
+        defer { h.env.cleanup() }
+        var record = DocumentRecord.arrived(path: h.env.incoming.appendingPathComponent("scan.txt").spelledOnDisk.path, sha256: "another",
+                                            size: 1, uttype: "public.plain-text", inode: nil, modified: nil, now: h.env.time.now())
+        record.status = .undone
+        let undone = try await h.services.documents.save(record)
+        try await h.coordinator.replaced(undone)
+        try await h.coordinator.replaced(undone)
+        #expect(try await h.services.documents.document(id: try #require(undone.id))?.status == .missing, "it is ended")
+        #expect(try await h.services.history.events(limit: 10, kinds: [.missing]).count == 1, "once")
     }
 
     /// Of the documents recorded at one path, as an original undone back where its copy, a document of its own, was

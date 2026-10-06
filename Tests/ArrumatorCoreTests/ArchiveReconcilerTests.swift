@@ -434,11 +434,11 @@ extension ArchiveReconcilerTests {
     /// without its identifier on a volume that keeps no file numbers, where nothing tells it from the document's file.
     enum SavedWhere: String, CaseIterable, Sendable { case removed, savedAgain }
 
-    /// A new file saved where a document was removed from is taken in, a document of its own, the removed one staying
-    /// missing: a document missing from a path is none taken in for a file there; one still there is, its file saved
-    /// again staying that document (the review of the fix of the final review of #17).
+    /// A file saved where a document was is taken in, a document of its own, only once that document was removed, which
+    /// stays missing: a document missing from a path is none taken in for a file there; one still there is, its file
+    /// saved again staying that document (the review of the fix of the final review of #17).
     @Test(arguments: SavedWhere.allCases)
-    func aNewFileSavedWhereARemovedDocumentWasIsTakenIn(_ saved: SavedWhere) async throws {
+    func aFileSavedWhereADocumentWasIsTakenInOnlyOnceTheDocumentIsRemoved(_ saved: SavedWhere) async throws {
         let h = try await Harness.make()
         defer { h.env.cleanup() }
         let doc = try await h.ingest("bill.txt", text: IngestTests.bill)
