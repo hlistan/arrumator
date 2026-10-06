@@ -71,7 +71,7 @@ import Testing
         try await Self.neverTakenForAbsent(.utf16)
     }
 
-    @Test(.enabled(if: getuid() != 0, "the superuser opens a file whatever its permissions, so none is unopenable to it"))
+    @Test(.fileModesKeepOut)
     func aRecordFileNobodyMayReadIsNeverTakenForAbsent() async throws {
         try await Self.neverTakenForAbsent(.forbidden)
     }
@@ -149,7 +149,7 @@ import Testing
         #expect(rules.map(\.summary) == ["sender “EDP Comercial” → “EDP”"], "it is read into the index instead, and kept: \(rules.map(\.summary))")
     }
 
-    @Test func aFolderOfRecordFilesThatCannotBeListedIsNeverTakenForAnEmptyOne() async throws {
+    @Test(.folderModesKeepOut) func aFolderOfRecordFilesThatCannotBeListedIsNeverTakenForAnEmptyOne() async throws {
         let w = try await RecordsWorld.make()
         let folder = w.h.env.layout.history
         defer {

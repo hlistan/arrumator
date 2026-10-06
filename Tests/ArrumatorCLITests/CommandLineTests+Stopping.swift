@@ -230,26 +230,33 @@ extension CommandLineTests {
     }
 
     /// A file that fails before it becomes a document, as one that cannot be read, is named on standard error with why,
-    /// and fails the command, though it is tried again later: it is never said to be queued, not read yet; one that
-    /// waits, as for the archive's folder, spending no attempt, is (the reviews of the fix of the final review of #17).
-    @Test(.enabled(if: getuid() != 0, "the superuser opens a file whatever its permissions, so none is unopenable to it"))
-    func ingestNamesAFileThatFailedWithWhyAndOneThatWaitsAsQueued() throws {
+    /// and fails the command, though it is tried again later: it is never said to be queued, not read yet (the reviews of
+    /// the fix of the final review of #17).
+    @Test(.fileModesKeepOut) func ingestNamesAFileThatFailedWithWhy() throws {
         let home = try Home.make()
         defer { home.cleanup() }
-        let (locked, waiting) = (home.root.appendingPathComponent("locked.txt"), home.root.appendingPathComponent("waiting.txt"))
-        for note in [locked, waiting] { try Data("Fatura de Maria Exemplo \(note.lastPathComponent)".utf8).write(to: note) }
+        let locked = home.root.appendingPathComponent("locked.txt")
+        try Data("Fatura de Maria Exemplo".utf8).write(to: locked)
         try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: locked.path)
         let ingested = try run(home, ["ingest", "--json", locked.path])
-        let index = try #require(try FileManager.default.contentsOfDirectory(at: home.support.appendingPathComponent("Indexes"),
-                                                                           includingPropertiesForKeys: nil).first { $0.pathExtension == "sqlite" })
-        let queue = try DatabaseQueue(path: index.path)
+        let queue = try DatabaseQueue(path: try index(home).path)
+        defer { try? queue.close() }
         let why = try #require(try queue.read { db in
             try String.fetchOne(db, sql: "SELECT last_error FROM jobs WHERE source_path = ?", arguments: [locked.spelledOnDisk.path])
         }, "the attempt that failed is recorded with why")
         #expect(ingested.status == 1 && ingested.stderr.contains("\(locked.path): \(why)"),
                 "the file is named with why it failed: \(ingested.stderr)")
-        // The archive's folder was not there when the file was taken, as on a disk not attached: it waits for it, spending
-        // no attempt, and is tried again after a while.
+    }
+
+    /// A file that waits, as for the archive's folder when it was taken, spending no attempt, is no failure: it is
+    /// queued, saying why it waits, as Incoming says it (the review of the fix of the final review of #17).
+    @Test func ingestNamesAFileThatWaitsWithWhyAsNoFailure() throws {
+        let home = try Home.make()
+        defer { home.cleanup() }
+        let waiting = home.root.appendingPathComponent("waiting.txt")
+        try Data("Fatura de Maria Exemplo".utf8).write(to: waiting)
+        #expect(try run(home, ["history", "--json"]).status == 0, "the archive's index is made")
+        let queue = try DatabaseQueue(path: try index(home).path)
         let now = Date().timeIntervalSince1970
         try queue.write { db in
             try db.execute(sql: """
@@ -259,8 +266,16 @@ extension CommandLineTests {
         }
         try queue.close()
         let waited = try run(home, ["ingest", "--json", waiting.path])
-        #expect(waited.status == 0 && waited.stderr.contains("\(waiting.path): queued, not read yet"),
-                "a file that waits is no failure: \(waited.stderr)")
+        #expect(waited.status == 0 && waited.stderr.contains("\(waiting.path): queued, not read yet: it waits: The archive is not there"),
+                "a file that waits is no failure, and says why: \(waited.stderr)")
+        let listed = try run(home, ["ingest", waiting.path])
+        #expect(listed.status == 0 && listed.text.contains("waits: The archive is not there"), "and so does the list: \(listed.text)")
+    }
+
+    /// The index of `home`'s archive, once a command has made it.
+    func index(_ home: Home) throws -> URL {
+        try #require(try FileManager.default.contentsOfDirectory(at: home.support.appendingPathComponent("Indexes"),
+                                                                includingPropertiesForKeys: nil).first { $0.pathExtension == "sqlite" })
     }
 
     /// With Ollama away, the first file is read for its text and waits, and the rest are looked at, but not read: each
@@ -277,9 +292,7 @@ extension CommandLineTests {
                 "the JSON lists the documents both files became, the second looked at but not read while the first waits for Ollama: \(ingested.text)")
         #expect(ingested.status == 0 && ingested.stderr.isEmpty, "and fails nothing: \(ingested.stderr)")
         // The app has the third file in hand, as this test's own process stands in for it, before it is looked at.
-        let index = try #require(try FileManager.default.contentsOfDirectory(at: home.support.appendingPathComponent("Indexes"),
-                                                                           includingPropertiesForKeys: nil).first { $0.pathExtension == "sqlite" })
-        let queue = try DatabaseQueue(path: index.path)
+        let queue = try DatabaseQueue(path: try index(home).path)
         let now = Date().timeIntervalSince1970
         try queue.write { db in
             try db.execute(sql: """

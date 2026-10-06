@@ -182,7 +182,7 @@ extension IngestQueueTests {
     /// A file taken while Ollama is away that fails before the model, as one that cannot be read, says nothing of
     /// Ollama: the wait stays as it is, and no other file is read for its text only to wait too (the review of the fix
     /// of the final review of #17).
-    @Test(.enabled(if: getuid() != 0, "the superuser opens a file whatever its permissions, so none is unopenable to it"))
+    @Test(.fileModesKeepOut)
     func aFileThatFailsWhileOllamaIsAwayLeavesTheWaitAsItIs() async throws {
         let h = try await Harness.make(analyzer: StubAnalyzer { name in
             if name != "bill.txt" { throw OllamaError.unreachable("connection refused") }

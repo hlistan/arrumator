@@ -273,7 +273,7 @@ import Testing
         #expect(!FileManager.default.fileExists(atPath: home.folder("First").path), "and nothing is made or written where it was")
     }
 
-    @Test func anArchiveOnADiskThatIsNotConnectedIsSaidToBeAwayRatherThanFailingTheStart() async throws {
+    @Test(.folderModesKeepOut) func anArchiveOnADiskThatIsNotConnectedIsSaidToBeAwayRatherThanFailingTheStart() async throws {
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }
         // The mount point of disks, which the user cannot write in, with the disk the archive is on not connected.

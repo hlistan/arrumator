@@ -79,7 +79,7 @@ import Testing
         #expect(throws: (any Error).self, "an archive already there is not written over") { try ZipFolderArchiver().zip(root, to: zip) }
         #expect(try Data(contentsOf: zip) == before, "and is as it was")
     }
-    @Test(.enabled(if: getuid() != 0, "the superuser opens a file whatever its permissions, so none is unopenable to it"))
+    @Test(.fileModesKeepOut)
     func anExportTheArchiverFailsToPackLeavesNothingWhereTheArchiveWouldGo() throws {
         // The real archiver, given a folder that holds a file it cannot read, as a file whose permissions changed meanwhile.
         struct WithUnreadable: FolderArchiving {

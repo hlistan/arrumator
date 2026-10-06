@@ -198,7 +198,7 @@ import Testing
         #expect(paths(taken) == [bill.path], "\(why)")
     }
 
-    @Test(.enabled(if: getuid() != 0, "the superuser opens a file whatever its permissions, so none is unopenable to it"))
+    @Test(.fileModesKeepOut)
     func aFileThatCannotBeOpenedIsWaitedForThenLeftAndTakenUpOnceItCanBe() async throws {
         let env = try TestEnvironmentSync.make()
         defer { env.cleanup() }
@@ -230,7 +230,7 @@ import Testing
         #expect(Self.paths(taken) == [locked.path], "once it can be opened, it is taken in")
     }
 
-    @Test(.enabled(if: getuid() != 0, "the superuser lists a folder whatever its permissions, so none is unreadable to it"))
+    @Test(.folderModesKeepOut)
     func aPackageThatCannotBeReadWholeIsWaitedForThenLeft() async throws {
         let env = try TestEnvironmentSync.make()
         defer { env.cleanup() }

@@ -253,7 +253,7 @@ import Testing
         #expect(try await h.services.jobs.active().map(\.sourcePath) == [copy.path], "and only the copy is taken in, as a document of its own")
     }
 
-    @Test func aCopyWhoseIdentifierCannotBeTakenOffStaysOneDocumentWhenRenamed() async throws {
+    @Test(.fileModesKeepOut) func aCopyWhoseIdentifierCannotBeTakenOffStaysOneDocumentWhenRenamed() async throws {
         let h = try await Harness.make()
         defer { h.env.cleanup() }
         let original = try await h.ingest("bill.txt", text: IngestTests.bill)
@@ -377,7 +377,7 @@ import Testing
                 "after a rebuild too, the document follows its own file, told from the copy by its inode")
     }
 
-    @Test func aCopyWhoseIdentifierCannotBeTakenOffStaysOneDocumentAfterTheIndexIsRebuilt() async throws {
+    @Test(.fileModesKeepOut) func aCopyWhoseIdentifierCannotBeTakenOffStaysOneDocumentAfterTheIndexIsRebuilt() async throws {
         let w = try await RecordsWorld.make()
         defer { w.h.env.cleanup() }
         let original = try #require(try await w.h.services.documents.document(id: w.documents[0]))

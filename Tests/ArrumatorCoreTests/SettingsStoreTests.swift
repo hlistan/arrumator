@@ -160,7 +160,7 @@ import Testing
         #expect(try Data(contentsOf: env.paths.settingsURL) == edited, "and the file is left as the user wrote it")
     }
 
-    @Test func aChangeWhoseRecordIsRefusedIsNotSavedAndOneThatCannotBeSavedIsNotRecorded() async throws {
+    @Test(.folderModesKeepOut) func aChangeWhoseRecordIsRefusedIsNotSavedAndOneThatCannotBeSavedIsNotRecorded() async throws {
         let env = try await TestEnvironment.make()
         defer { env.cleanup() }
         let history = HistoryStore(database: env.database, time: env.time)

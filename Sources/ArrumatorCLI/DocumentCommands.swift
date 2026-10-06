@@ -50,16 +50,16 @@ struct Ingest: AsyncParsableCommand {
         // The documents these files became, whatever else the archive holds; for an exact copy of a document in the
         // archive, that document, read again in its place.
         var docs: [DocumentRecord] = []
-        var waiting: [URL] = []
+        var waiting: [(url: URL, why: String?)] = []
         for (url, id) in jobs {
             let job = try await runtime.services.jobs.job(id: id)
             if let doc = job?.docId ?? (try? job?.payload)?.copyOf, let document = try await runtime.services.documents.document(id: doc) {
                 docs.append(document)
                 if job?.state == .failed { failed.append((url, job?.lastError ?? "it could not be filed")) }
-            } else if job?.state.isActive == true, job?.attempt == 0 {
+            } else if let job, job.state.isActive, !job.failedAnAttempt {
                 // Not begun, as one another process, such as the app, has in hand before it is looked at, or one that
-                // waits, as for the archive's folder, which spends no attempt: no failure.
-                waiting.append(url)
+                // waits, as for the archive's folder, saying why, as Incoming does: no failure.
+                waiting.append((url, job.lastError))
             } else {
                 // One that spent an attempt before it became a document, tried again later or not, fails here, saying why.
                 failed.append((url, job?.lastError ?? "it became no document"))
@@ -69,15 +69,21 @@ struct Ingest: AsyncParsableCommand {
             (docs.map { document in
                 "\(document.status.rawValue.padding(toLength: 11, withPad: " ", startingAt: 0)) \(document.path)"
                     + (document.labels(.tag).isEmpty ? "" : "\n            tags: " + document.labels(.tag).joined(separator: " · "))
-            } + waiting.map { "\("queued".padding(toLength: 11, withPad: " ", startingAt: 0)) \($0.path)" }).joined(separator: "\n")
+            } + waiting.map { file in
+                "\("queued".padding(toLength: 11, withPad: " ", startingAt: 0)) \(file.url.path)" + (file.why.map { "\n            waits: \($0)" } ?? "")
+            }).joined(separator: "\n")
         }
         // The JSON is the documents alone; a file not begun, which is none yet, is named beside it, as no failure.
-        if options.json { for url in waiting { FileHandle.standardError.write(Data("\(url.path): \(Self.notBegun)\n".utf8)) } }
+        if options.json {
+            for file in waiting { FileHandle.standardError.write(Data("\(file.url.path): \(Self.notBegun(file.why))\n".utf8)) }
+        }
         return failed
     }
 
-    /// What `--json` says of a file queued and not begun, as one the app has in hand.
-    static let notBegun = "queued, not read yet: the app or `run` files it"
+    /// What `--json` says of a file queued and not begun: one the app has in hand, or one that waits, saying why.
+    static func notBegun(_ why: String?) -> String {
+        why.map { "queued, not read yet: it waits: \($0)" } ?? "queued, not read yet: the app or `run` files it"
+    }
 
     /// Reads and labels each file without moving it or recording anything, and shows what came of them in one list; the
     /// files that could not be read, each with why.
