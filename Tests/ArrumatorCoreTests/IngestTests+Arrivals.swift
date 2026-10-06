@@ -68,7 +68,7 @@ extension IngestTests {
         let path = file.spelledOnDisk.path
         let id = try await record(h, at: path, status: .failed, sha256: "an earlier version")
         let found = try #require(try await h.services.documents.document(id: id))
-        let reading = try #require(try await h.services.queueReadingAgain(id, settings: await h.services.settings.current))
+        let reading = try await h.services.queueReadingAgain(id, settings: await h.services.settings.current)
         #expect(try await h.coordinator.queue(path, again: found, payload: JobPayload()) == nil, "nothing is decided on it as it was")
         #expect(await h.coordinator.enqueue(file, tags: ["Taxes 2024"]) == reading, "asked once more, it is the reading's job")
         let tags = try await h.services.jobs.job(id: reading)?.tags.map(\.value)
@@ -121,7 +121,7 @@ extension IngestTests {
             let filed = h.env.archive.appendingPathComponent("scan.txt")
             try FileManager.default.moveItem(at: file, to: filed)
             try await h.services.documents.update(id) { ($0.status, $0.path) = (.filed, filed.spelledOnDisk.path) }
-            let job = try #require(try await h.services.queueReadingAgain(id, settings: settings))
+            let job = try await h.services.queueReadingAgain(id, settings: settings)
             let reading = try #require(try await h.services.jobs.job(id: job))
             #expect(reading.kind == .reanalyse && reading.sourcePath == filed.spelledOnDisk.path,
                     "filed meanwhile, it is read again where it is in the archive: \(reading.kind) \(reading.sourcePath)")
@@ -146,7 +146,7 @@ extension IngestTests {
         default: try await h.services.documents.update(id) { $0.status = .held }
         }
         h.env.time.advance(by: 60)
-        let job = try #require(try await h.services.queueReadingAgain(id, settings: settings))
+        let job = try await h.services.queueReadingAgain(id, settings: settings)
         let read = try #require(try await h.services.documents.document(id: id))
         if meanwhile == .tagged {
             let reading = try #require(try await h.services.jobs.job(id: job))
@@ -169,8 +169,24 @@ extension IngestTests {
         try await h.review.retry(id)
         let readings = try await h.jobs().filter { $0.kind == .reanalyse }
         #expect(readings.count == 1, "one reading: \(readings.map(\.state))")
-        let said = try await h.services.history.events(limit: 10, kinds: [.retry]).map(\.summary)
-        #expect(said == ["Read again: \(doc.filename)"], "recorded once: \(said)")
+        let said = try await h.services.history.events(limit: 10, kinds: [.retry], docID: id)
+        #expect(said.map(\.summary) == ["Read again: \(doc.filename)"] && said.first?.actor == .user,
+                "recorded once, under the document, as the user's: \(said.map(\.summary))")
+    }
+
+    /// Read Again on a document the user confirmed takes the confirmation back: the document is to be looked at again
+    /// once it is read, and its card no longer says it was confirmed.
+    @Test func readAgainTakesBackAConfirmation() async throws {
+        let h = try await Harness.make()
+        defer { h.env.cleanup() }
+        let doc = try await h.ingest("bill.txt", text: Self.bill)
+        let id = try #require(doc.id)
+        try await h.review.confirm(id)
+        #expect(try await h.review.choices(for: try #require(try await h.services.documents.document(id: id))).confirmed != nil, "confirmed")
+        h.env.time.advance(by: 60)
+        try await h.review.retry(id)
+        let read = try #require(try await h.services.documents.document(id: id))
+        #expect(try await h.review.choices(for: read).confirmed == nil, "and asked to be read again, no longer")
     }
 
     /// A document asked whose file a path holds, changed by the user before it is ended, as one left in Incoming then

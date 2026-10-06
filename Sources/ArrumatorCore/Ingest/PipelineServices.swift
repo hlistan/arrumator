@@ -153,8 +153,9 @@ public struct PipelineServices: Sendable {
 
     /// Queues document `docID` to be read again from the start, as the user asks it (**Read Again**), as a file that
     /// arrives is read: its file hashed and its text read again, then the model reads it, and it is filed under the name
-    /// it gives: where it is in the archive, or, for one outside it (back in Incoming), at the top of the archive. One in the archive (`reanalyse`) is found as it was
-    /// until it is filed, when what it reads takes the place of everything it had at once (`IndexStore.replaceReading`).
+    /// it gives: where it is in the archive, or, for one outside it (back in Incoming), at the top of the archive. One in
+    /// the archive (`reanalyse`) is found as it was until it is filed, when what it reads takes the place of everything it
+    /// had at once (`IndexStore.replaceReading`).
     /// It keeps its tags, which its row in the queue shows, and one in a folder in Incoming is given that folder's too.
     /// One outside the archive, as one left in Incoming, is read as an arrival, so an exact copy is handed over to its
     /// original (`IngestCoordinator`). One with no file to read where it is recorded, as one missing, or a copy an earlier
@@ -163,7 +164,7 @@ public struct PipelineServices: Sendable {
     /// nothing new, as one asked again while the first waits, records nothing. The job, or the one already queued for its
     /// file, which reads it as well.
     @discardableResult
-    public func queueReadingAgain(_ docID: Int64, settings: AppSettings) async throws -> Int64? {
+    public func queueReadingAgain(_ docID: Int64, settings: AppSettings) async throws -> Int64 {
         let now = time.now()
         // Its status, its job and its event written together, so a file arriving at its path meanwhile, or the document
         // filed or ended, finds all of them, or none.

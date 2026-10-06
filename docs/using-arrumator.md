@@ -260,7 +260,8 @@ by meaning**, documents embedded by another model are found by meaning only once
 ## Audit, logs and tuning
 
 - **History**: every arrival (with the tag its folder in Incoming gives it), file in Incoming that cannot be opened,
-  exact copy (under the document it has read again, with where the copy went and the tags it gave), every document read
+  exact copy (under the document it has read again, with where the copy went and the tags it gave), a document you ask
+  to read again (under it, `Read again: <name>`, once however often you ask while it waits), every document read
   again at once (under none, with the profile and the documents, `Read every document again with the profile
   “Standard”: 120 documents`), extraction, reading
   (with the labels it gave, which of the model's labels were tidied and why, and what gave its tags, or that nothing
