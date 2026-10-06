@@ -39,7 +39,11 @@ final class LoopbackOllama: Sendable {
         // A client gone before its answer is written ends the write, not the test process: every connection taken from
         // this socket inherits it, whatever state the client left it in.
         var noSignal: Int32 = 1
-        setsockopt(socket, SOL_SOCKET, SO_NOSIGPIPE, &noSignal, socklen_t(MemoryLayout<Int32>.size))
+        guard setsockopt(socket, SOL_SOCKET, SO_NOSIGPIPE, &noSignal, socklen_t(MemoryLayout<Int32>.size)) == 0 else {
+            let failure = POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            close(socket)
+            throw failure
+        }
         var loopback = sockaddr_in()
         loopback.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
         loopback.sin_family = sa_family_t(AF_INET)

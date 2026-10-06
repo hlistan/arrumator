@@ -26,7 +26,8 @@ enum JobOutcome: String {
 /// What a failure does to a job: a stop is none; Ollama away, the archive's folder gone or a model not installed makes it
 /// wait without spending an attempt; a refusal that will not change ends it at once, leaving its file in Incoming
 /// (`leaveInIncoming`); a file changed after it was read goes back to the start (`readFromTheStart`); anything else is
-/// tried again after `ingest.retryDelays`, and after `ingest.maxAttempts` the file is parked in the archive as failed.
+/// tried again after `ingest.retryDelays`, and after `ingest.maxAttempts` the file is parked in the archive as failed,
+/// but for a document the user set aside, read again for search after a rebuild, which stays as the user left it.
 extension IngestCoordinator {
     /// Handles `error`, which ended `job`'s attempt; `takenWhileAway` says the job was taken while Ollama is away, as only
     /// one whose next stage needs no model is (`JobStore.beforeTheModel`), so its failure says nothing of Ollama. Says
@@ -379,19 +380,21 @@ extension IngestCoordinator {
                                           message: "\(message); nor could it be moved into the archive: \(error.localizedDescription)", trace: trace)
                 }
             } else {
-                // The document is marked failed, and History says so, in the write that checks the job's claim still
-                // holds, as a file is filed (`DocumentFiler`): one the user left for later before it stays as the user
-                // left it, as leaving it for later cancels the job in its own write (`ReviewActions.hold`). A filed
-                // document read again for search after a rebuild (`reindex`) stays as its record says, filed, held or
-                // undone, whose reading for search alone failed: History says so.
+                // The document is marked failed, to be read again from Needs You, and History says so, in the write that
+                // checks the job's claim still holds, as a file is filed (`DocumentFiler`): one the user left for later
+                // before it stays as the user left it, as leaving it for later cancels the job in its own write
+                // (`ReviewActions.hold`); and so does one set aside that is read again for search after a rebuild
+                // (`reindex`), which leaving it for later does not cancel, whose reading for search alone failed: a
+                // document the user set aside is never marked failed here.
                 let now = services.time.now()
                 let analysisJSON = try JSON.string(analysis)
-                let summary = "\(document.originalFilename): \(message)"
+                let summary = job.kind == .reindex ? "\(document.originalFilename) could not be read again for search: \(message)"
+                    : "\(document.originalFilename): \(message)"
                 do {
                     try await services.database.writer.write { db in
                         _ = try JobStore.save(job, at: now, in: db)
-                        if job.kind != .reindex {
-                            guard let read = try DocumentRecord.fetchOne(db, key: docID) else { throw IngestError.documentNotFound(docID) }
+                        guard let read = try DocumentRecord.fetchOne(db, key: docID) else { throw IngestError.documentNotFound(docID) }
+                        if !read.status.isSetAside {
                             var failed = read
                             failed.status = .failed
                             failed.analysisJson = analysisJSON

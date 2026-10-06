@@ -325,7 +325,7 @@ afresh.
 | The worker was stopped. | Nothing more is saved. The job keeps its stage and is taken first at the next start. |
 | The model is not installed. | The job waits at its stage, its row saying which model to download and how, and looks every `ingest.modelRecheckSeconds` whether the server lists it, starting no trace until it does. No attempt is spent, and History says once which model is missing. |
 | Ollama is away, timed out or answered with a server error. | The job waits the last of `ingest.retryDelays` and is tried again. No attempt is spent. |
-| Anything else failed. | One attempt is spent and the job waits its `ingest.retryDelays` step. After `ingest.maxAttempts` the file is parked in the archive as failed, where it waits for the user. |
+| Anything else failed. | One attempt is spent and the job waits its `ingest.retryDelays` step. After `ingest.maxAttempts` the file is parked in the archive as failed, where it waits for the user; a document the user set aside that is read again for search after a rebuild stays as the user left it, History saying its reading for search failed. |
 
 The queue has one order, the order jobs were queued in (`JobStore.nextDue`); when a job is due only gates it. A job
 that gives way (`JobRecord.givesWay`: reading documents again after a rebuild, and the whole archive read again at once)

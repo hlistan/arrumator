@@ -345,11 +345,11 @@ extension IngestQueueTests {
         #expect(said.map(\.docId) == [docID] && said.map(\.summary) == ["bill.txt: boom"], "and History says so: \(said.map(\.summary))")
     }
 
-    /// A filed document read again for search after a rebuild (`reindex`) whose reading fails stays as its record says,
-    /// filed or left for later: only History says its reading for search failed (the review of the fix of the final
-    /// review of #17).
+    /// A document read again for search after a rebuild (`reindex`) whose reading fails is marked failed and waits for
+    /// the user, to be read again, as one whose reading fails does; one the user left for later stays so. History says
+    /// its reading for search failed (the reviews of the fix of the final review of #17).
     @Test(arguments: [false, true])
-    func aDocumentWhoseReadingForSearchFailsStaysAsItsRecordSays(_ leftForLater: Bool) async throws {
+    func aDocumentWhoseReadingForSearchFailsWaitsForTheUserUnlessSetAside(_ leftForLater: Bool) async throws {
         let env = try await TestEnvironment.make()
         defer { env.cleanup() }
         let filed = Harness(env: env, services: Harness.services(env, analyzer: StubAnalyzer(), config: env.config))
@@ -362,9 +362,34 @@ extension IngestQueueTests {
         try await h.services.jobs.enqueue(path: document.path, kind: .reindex, docID: docID, givesWay: true)
         _ = await h.coordinator.drain(.everything)
         let after = try #require(try await h.services.documents.document(id: docID))
-        #expect(after.status == (leftForLater ? .held : .filed), "it stays as its record says: \(after.status)")
+        #expect(after.status == (leftForLater ? .held : .failed), "it waits for the user, unless set aside: \(after.status)")
         let said = try await h.services.history.events(limit: 10, kinds: [.failed]).map(\.summary)
-        #expect(said == ["bill.txt: boom"], "and History says its reading failed: \(said)")
+        #expect(said == ["bill.txt could not be read again for search: boom"], "and History says its reading for search failed: \(said)")
+    }
+
+    /// A file read in whose last attempt fails where it is not moved, as one put into the archive (`adopt`), or one in
+    /// Incoming gone meanwhile, is marked failed, to wait for the user (the review of the fix of the final review of #17).
+    @Test(arguments: [true, false])
+    func aFileReadInWhoseLastAttemptFailsWhereItIsIsMarkedFailed(_ adopted: Bool) async throws {
+        let env = try await TestEnvironment.make()
+        defer { env.cleanup() }
+        var config = env.config
+        config.ingest.maxAttempts = 1
+        let incoming = env.incoming.appendingPathComponent("gone.txt")
+        let analyzer = StubAnalyzer(during: { _ in
+            if !adopted { try FileManager.default.removeItem(at: incoming) }
+            throw TestFailure("boom")
+        })
+        let h = Harness(env: env, services: Harness.services(env, analyzer: analyzer, config: config))
+        let jobID: Int64
+        if adopted {
+            jobID = try await h.services.jobs.enqueue(path: try env.put("Kept/adopted.txt", text: IngestTests.bill).path, kind: .adopt).id
+        } else {
+            jobID = try #require(await h.coordinator.enqueue(try env.drop("gone.txt", text: IngestTests.bill)))
+        }
+        #expect(await h.coordinator.drain() == [jobID], "its failure is recorded")
+        let docID = try #require(try await h.services.jobs.job(id: jobID)?.docId)
+        #expect(try await h.services.documents.document(id: docID)?.status == .failed, "and it is marked failed, waiting for the user")
     }
 
     /// A job cancelled while its failure is looked at, as while Ollama is probed for a request that took too long, is

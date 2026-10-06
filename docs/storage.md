@@ -220,8 +220,9 @@ model; the `System` folder and the folders the watcher ignores, such as a hidden
 never inside the archive ([Configuration](using-arrumator.md#configuration)). Then, in the background and giving way to
 new arrivals, each document's text is extracted again and its embedding recomputed. The model is not asked again: labels
 come back from the entries. Search by words and by meaning fills in as that proceeds; filing works from the start. A
-document whose text cannot be read again stays as its entry says, filed, left for later or undone; History says its
-reading failed, and search finds it by its labels until it is read again.
+document that cannot be read again for search is marked failed and waits in Needs You, to be read again, as one whose
+reading fails does; one you left for later or undid stays as you left it. History says its reading for search failed
+either way.
 
 ### Documents in two places
 
