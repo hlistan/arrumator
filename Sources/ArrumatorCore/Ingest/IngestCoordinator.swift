@@ -468,7 +468,8 @@ public actor IngestCoordinator {
     /// transaction that records its filing (`PipelineServices.replaceReading`), so it is found as it was until then.
     ///
     /// The job's destination is recorded in the transaction that records the filing, so a job that stopped after it,
-    /// on an error or a crash, finds it filed and finishes what is left instead of filing it again. Where the file is
+    /// on an error or a crash, finds it filed and finishes what is left instead of filing it again, wherever the document
+    /// is by then. Where the file is
     /// moved is kept with the job before it is moved (`JobPayload.plannedPath`), so a job cut off between the move and
     /// its record, as by a crash, finds the file there, by its identity or its bytes, and records it there.
     private func fileDocument(_ job: inout JobRecord, payload: inout JobPayload, docID: Int64, content: ExtractedContent,
@@ -477,7 +478,9 @@ public actor IngestCoordinator {
         var analysis = outcome.analysis
         let status: DocumentStatus = analysis.problems.isEmpty ? .filed : .needsReview
         let filedRecord: DocumentRecord
-        if let target = payload.targetPath, document.path == target, FileManager.default.fileExists(atPath: target) {
+        // Its filing recorded (`targetPath`, kept in that transaction), it is done: what is left is finished where the
+        // document is now, as the user may have renamed or moved it since, which no filing again undoes.
+        if payload.targetPath != nil {
             Log.info(.ingest, "Filing already completed before the job stopped", ["doc": String(docID)])
             filedRecord = document
         } else {

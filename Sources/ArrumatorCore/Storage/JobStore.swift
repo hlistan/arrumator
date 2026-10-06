@@ -231,7 +231,7 @@ public struct JobStore: Sendable {
     /// after a rebuild, or the whole archive at once) waits until no other is due, so neither ever holds up filing.
     /// `beforeTheModel` keeps only the jobs whose next stage needs no model (`beforeTheModel`).
     private static func due(at now: Date, givingWay: Bool, beforeTheModel: Bool = false) -> QueryInterfaceRequest<JobRecord> {
-        var due = JobRecord.filter(activeStates.contains(Column("state")))
+        var due = JobRecord.filter(activeStates.contains(Column("state"))).filter(!waitsForItsReadingIn)
             .filter(Column("next_run_at") == nil || Column("next_run_at") <= now.unixSeconds)
             .order(Column("gives_way"), Column("id"))
         if beforeTheModel {
@@ -239,6 +239,19 @@ public struct JobStore: Sendable {
                 .filter(Self.beforeTheModel.states.map(\.rawValue).contains(Column("state")))
         }
         return givingWay ? due : due.filter(Column("gives_way") == false)
+    }
+
+    /// A job reading a document again whose reading in has not ended, which waits for it, neither taken nor waited for
+    /// until then: taken before, it would be undone by what that reading does after its filing, its text and meaning
+    /// indexed, as when it waits to be tried again after a failure that came after its filing. Reading it for search
+    /// (`reindex`) indexes what that reading read, and need not wait.
+    private static var waitsForItsReadingIn: SQLExpression {
+        let states = activeStates.map { "'\($0)'" }.joined(separator: ", ")
+        return SQL(sql: """
+            kind = '\(JobKind.reanalyse.rawValue)' AND EXISTS (SELECT 1 FROM jobs AS readingIn
+              WHERE readingIn.doc_id = jobs.doc_id AND readingIn.kind IN ('\(JobKind.ingest.rawValue)', '\(JobKind.adopt.rawValue)')
+              AND readingIn.state IN (\(states)))
+            """).sqlExpression
     }
 
     /// The jobs whose next stage needs no model, taken while Ollama is away (`IngestCoordinator.ollamaRetryAt`): a file
@@ -297,6 +310,7 @@ public struct JobStore: Sendable {
     public func earliestDue(claiming claims: JobClaims, excluding: Set<Int64> = []) async throws -> Date? {
         try await database.reader.read { db in
             let active = JobRecord.filter(Self.activeStates.contains(Column("state"))).filter(!excluding.contains(Column("id")))
+                .filter(!Self.waitsForItsReadingIn)
             let free = try active.filter(Column("claim") == nil)
                 .select(min(Column("next_run_at")), as: Double.self).fetchOne(db).map(Date.init(unixSeconds:))
             // Claimed jobs are few: one per worker in hand, and those a process that has ended left.

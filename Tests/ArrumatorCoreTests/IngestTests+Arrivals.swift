@@ -178,17 +178,66 @@ extension IngestTests {
         let h = try await Harness.make(analyzer: StubAnalyzer(labels: nil))
         defer { h.env.cleanup() }
         var ids: [Int64] = []
-        for name in ["a.txt", "b.txt"] { ids.append(try #require(try await h.ingest(name, text: "\(Self.bill) \(name)").id)) }
+        for name in ["a.txt", "b.txt", "c.txt"] { ids.append(try #require(try await h.ingest(name, text: "\(Self.bill) \(name)").id)) }
         let reading = ids[1]
         let path = try #require(try await h.services.documents.document(id: reading)).path
         // As a file put into the archive, filed where it is, its job not yet ended.
         try await h.env.database.writer.write { db in
             try db.execute(sql: "UPDATE jobs SET state = 'filing', kind = 'adopt', source_path = ? WHERE doc_id = ?", arguments: [path, reading])
         }
-        #expect(try await h.review.retryAll() == [ids[0]], "reading every document again leaves it to its reading")
+        #expect(try await h.review.retryAll() == [ids[0], ids[2]], "reading every document again leaves it to its reading")
+        // One whose file is gone since, with nothing to read again, is left out too.
+        try FileManager.default.removeItem(at: try #require(try await h.services.documents.document(id: ids[2])).url)
         #expect(try await h.review.retryUnlabelled() == [ids[0]], "and so does reading those not labelled yet, without failing")
         let jobs = try await h.jobs().filter { $0.docId == reading && $0.state.isActive }
         #expect(jobs.map(\.kind) == [.adopt], "its reading in is its one job: \(jobs.map(\.kind))")
+    }
+
+    /// What happens to a document while its reading in, failed after its filing, waits to be tried again: Read Again is
+    /// asked, or the user renames it.
+    enum AfterItsFiling: String, CaseIterable, Sendable { case readAgain, renamed }
+
+    /// A reading in that fails after its filing, as its text is indexed, and waits to be tried again, finishes first and
+    /// where the document is: a Read Again asked meanwhile waits for it, neither read before it nor undone by it, and a
+    /// name the user gives the document meanwhile stays, as that reading, its filing recorded, never files it again.
+    @Test(arguments: AfterItsFiling.allCases)
+    func aReadingInFailedAfterItsFilingFinishesFirstAndWhereTheDocumentIs(_ meanwhile: AfterItsFiling) async throws {
+        let analyzer = StubAnalyzer()
+        let base = try await Harness.make(analyzer: analyzer)
+        defer { base.env.cleanup() }
+        let h = base.with { $0.ingest.retryDelays = NonEmpty(60, []) }
+        try await h.env.database.writer.write { db in
+            try db.execute(sql: """
+                CREATE TEMP TRIGGER indexing_fails_once BEFORE INSERT ON embeddings
+                WHEN (SELECT COUNT(*) FROM events WHERE kind = '\(EventKind.retry.rawValue)') = 0
+                BEGIN SELECT RAISE(ABORT, 'the index is briefly unavailable'); END
+                """)
+        }
+        await h.coordinator.enqueue(try h.env.drop("bill.txt", text: Self.bill))
+        await h.coordinator.drain()
+        let waiting = try #require(try await h.jobs().first)
+        let id = try #require(waiting.docId)
+        #expect(waiting.state == .filing && waiting.attempt == 1, "its reading in waits to be tried again, after its filing")
+        switch meanwhile {
+        case .readAgain:
+            try await h.review.retry(id)
+            await h.coordinator.drain()
+            #expect(await analyzer.calls.files.count == 1, "a Read Again meanwhile waits for that reading to end")
+            let idle = await h.coordinator.idleWait(paused: false, power: false, archiveThere: true, queueUnread: false)
+            #expect(idle == 60, "and the worker waits for that reading's next try, not for the Read Again: \(idle ?? -1)")
+        case .renamed:
+            try await h.review.edit(id, fileName: "Mine", labels: nil)
+        }
+        h.env.time.advance(by: 60)
+        await h.coordinator.drain()
+        let jobs = try await h.jobs()
+        #expect(jobs.allSatisfy { !$0.state.isActive }, "\(meanwhile): every reading ends: \(jobs.map(\.state))")
+        let document = try #require(try await h.services.documents.document(id: id))
+        if meanwhile == .readAgain {
+            #expect(await analyzer.calls.files.count == 2, "then it is read again")
+        } else {
+            #expect(document.filename == "Mine.txt", "the name the user gave it meanwhile stays: \(document.filename)")
+        }
     }
 
     /// Read Again asked twice while the first waits queues one reading and is recorded in History once: asking again
