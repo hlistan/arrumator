@@ -146,7 +146,8 @@ public struct ReviewActions: Sendable {
     /// the archive. It keeps its tags, which its row in the queue shows, and one in a folder in Incoming is given that
     /// folder's too (`PipelineServices.queueReadingAgain`), and History records it when it queues the reading, as in
     /// place of one that gives way (`JobRecord.givesWay`): not while another reading of it waits or is under way, an
-    /// earlier Read Again's, an exact copy's, or its reading in, which it is read with.
+    /// earlier Read Again's, an exact copy's, or its reading in at its file, in Incoming or put into the archive, which
+    /// it is read with.
     public func retry(_ docID: Int64) async throws {
         try await services.queueReadingAgain(docID, settings: await services.settings.current)
         await coordinator.wake()

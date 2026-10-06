@@ -504,9 +504,9 @@ an earlier version filed, cannot be read again, which is said at once.
   it is read in its turn. History records the request once, naming the profile
   and the documents, and asked again while every one of them waits, nothing; each reading is recorded under its
   document, before its filing. **Read Again** on one document is recorded so too, under it, as `Read again: <name>`,
-  when it queues the reading, as it does in place of a reading that gives way, all documents' or one for search; asked
-  while another reading of it waits or is under way, an earlier Read Again's, an exact copy's, or, for one in Incoming,
-  its reading in, it is read with that one, and nothing more is recorded.
+  when it queues the reading, as it does in place of a reading that gives way, of every document or one for search;
+  asked while another reading of it waits or is under way, an earlier Read Again's, an exact copy's, or its reading in at
+  its file, in Incoming or put into the archive, it is read with that one, and nothing more is recorded.
 
 ## Your own changes
 
