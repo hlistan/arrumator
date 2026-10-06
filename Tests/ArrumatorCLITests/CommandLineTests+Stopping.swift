@@ -244,32 +244,37 @@ extension CommandLineTests {
         let why = try #require(try queue.read { db in
             try String.fetchOne(db, sql: "SELECT last_error FROM jobs WHERE source_path = ?", arguments: [locked.spelledOnDisk.path])
         }, "the attempt that failed is recorded with why")
-        #expect(ingested.status == 1 && ingested.stderr.contains("\(locked.path): \(why)"),
+        #expect(ingested.status == 1 && ingested.stderr.contains("\(locked.spelledOnDisk.path): \(why)"),
                 "the file is named with why it failed: \(ingested.stderr)")
     }
 
-    /// A file that waits, as for the archive's folder when it was taken, spending no attempt, is no failure: it is
-    /// queued, saying why it waits, as Incoming says it (the review of the fix of the final review of #17).
+    /// A file this command spends no attempt on is no failure: one that waits, as for the archive's folder when it was
+    /// taken, and one that failed before and waits now, each queued with why and when it is tried again, as Incoming
+    /// says it (the reviews of the fix of the final review of #17).
     @Test func ingestNamesAFileThatWaitsWithWhyAsNoFailure() throws {
         let home = try Home.make()
         defer { home.cleanup() }
-        let waiting = home.root.appendingPathComponent("waiting.txt")
-        try Data("Fatura de Maria Exemplo".utf8).write(to: waiting)
+        let files = ["waiting.txt", "earlier.txt"].map { home.root.appendingPathComponent($0) }
+        for file in files { try Data("Fatura de Maria Exemplo \(file.lastPathComponent)".utf8).write(to: file) }
         #expect(try run(home, ["history", "--json"]).status == 0, "the archive's index is made")
         let queue = try DatabaseQueue(path: try index(home).path)
         let now = Date().timeIntervalSince1970
         try queue.write { db in
-            try db.execute(sql: """
-                INSERT INTO jobs (kind, source_path, state, attempt, last_error, next_run_at, created_at, updated_at)
-                VALUES ('ingest', ?, 'hashing', 0, 'The archive is not there', ?, ?, ?)
-                """, arguments: [waiting.spelledOnDisk.path, now + 3_600, now, now])
+            for (file, attempt) in zip(files, [0, 1]) {
+                try db.execute(sql: """
+                    INSERT INTO jobs (kind, source_path, state, attempt, last_error, next_run_at, created_at, updated_at)
+                    VALUES ('ingest', ?, 'hashing', ?, 'The archive is not there', ?, ?, ?)
+                    """, arguments: [file.spelledOnDisk.path, attempt, now + 3_600, now, now])
+            }
         }
         try queue.close()
-        let waited = try run(home, ["ingest", "--json", waiting.path])
-        #expect(waited.status == 0 && waited.stderr.contains("\(waiting.path): queued, not read yet: it waits: The archive is not there"),
-                "a file that waits is no failure, and says why: \(waited.stderr)")
-        let listed = try run(home, ["ingest", waiting.path])
-        #expect(listed.status == 0 && listed.text.contains("waits: The archive is not there"), "and so does the list: \(listed.text)")
+        let waited = try run(home, ["ingest", "--json"] + files.map(\.path))
+        let said = files.map { "\($0.spelledOnDisk.path): queued, not read yet: The archive is not there; tried again at " }
+        #expect(waited.status == 0 && said.allSatisfy(waited.stderr.contains),
+                "a file that waits is no failure, though it failed before, and says why and until when: \(waited.stderr)")
+        let listed = try run(home, ["ingest", files[0].path])
+        #expect(listed.status == 0 && listed.text.contains("queued      \(files[0].spelledOnDisk.path)\n            The archive is not there; tried again at "),
+                "and so does the list: \(listed.text)")
     }
 
     /// The index of `home`'s archive, once a command has made it.
@@ -302,8 +307,11 @@ extension CommandLineTests {
         }
         try queue.close()
         let listed = try run(home, ["ingest", "--json", notes[2].path])
-        #expect(listed.status == 0 && listed.stderr.contains("\(notes[2].path): queued, not read yet"),
+        #expect(listed.status == 0 && listed.stderr.contains("\(notes[2].spelledOnDisk.path): queued, not read yet: the app or `run` files it\n"),
                 "a file not begun is named on standard error as queued, failing nothing: \(listed.text) \(listed.stderr)")
+        let shown = try run(home, ["ingest", notes[2].path])
+        #expect(shown.status == 0 && shown.text.contains("queued      \(notes[2].spelledOnDisk.path)\n            the app or `run` files it"),
+                "and the list shows it so: \(shown.text)")
     }
 
     @Test func aDryRunOfSeveralFilesPrintsOneListNamingEachAndIngestShowsWhatCameOfTheRest() async throws {

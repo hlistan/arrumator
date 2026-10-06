@@ -160,7 +160,7 @@ import Testing
         #expect(try Data(contentsOf: env.paths.settingsURL) == edited, "and the file is left as the user wrote it")
     }
 
-    @Test(.folderModesKeepOut) func aChangeWhoseRecordIsRefusedIsNotSavedAndOneThatCannotBeSavedIsNotRecorded() async throws {
+    @Test func aChangeWhoseRecordIsRefusedIsNotSaved() async throws {
         let env = try await TestEnvironment.make()
         defer { env.cleanup() }
         let history = HistoryStore(database: env.database, time: env.time)
@@ -175,7 +175,9 @@ import Testing
         }
         #expect(try Data(contentsOf: env.paths.settingsURL) == file, "so the setting is not saved")
         #expect(await env.settings.current.renameFiles, "and the settings in force are as they were")
+    }
 
+    @Test(.folderModesKeepOut) func aChangeWhoseSettingsCannotBeSavedIsNotRecorded() async throws {
         let recording = try await TestEnvironment.make()
         defer { recording.cleanup() }
         let recorded = SettingsActions(store: recording.settings, history: HistoryStore(database: recording.database, time: recording.time))

@@ -229,11 +229,6 @@ public struct JobRecord: ArrumatorRecord, Identifiable, Hashable {
     /// that neither holds up a file that arrives meanwhile.
     public var givesWay: Bool
     public mutating func didInsert(_ inserted: InsertionSuccess) { id = inserted.rowID }
-
-    /// Whether the job spent an attempt on a failure, as every failure that leaves it queued does; one that waits, for
-    /// Ollama, the archive's folder or its model, spends none, and keeps why it waits (`lastError`), which Incoming shows
-    /// as it shows a failure's, with when it is tried again (`IngestStatus.progress(of:)`).
-    public var failedAnAttempt: Bool { attempt > 0 }
 }
 
 public struct TraceRecord: ArrumatorRecord, Identifiable, Hashable {
