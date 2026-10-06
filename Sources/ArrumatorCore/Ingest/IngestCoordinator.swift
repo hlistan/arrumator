@@ -154,8 +154,12 @@ public actor IngestCoordinator {
             var arrival = try await arrive(url, payload: payload)
             if case .changed = arrival { arrival = try await arrive(url, payload: payload) }
             guard case .queued(let queued) = arrival else {
-                Log.debug(.ingest, arrival == .stays ? "Ignoring a document's own file, left where it is"
-                                                     : "Not queued: the documents recorded there changed as it arrived", ["path": path])
+                if arrival == .stays {
+                    Log.debug(.ingest, "Ignoring a document's own file, left where it is", ["path": path])
+                } else {
+                    Log.info(.ingest, "Not queued: the documents recorded where it is changed as it came; it is taken at the next change or start",
+                             ["path": path])
+                }
                 return nil
             }
             // A file already queued arrives once: a rescan, or a request that asks no more, records nothing again.

@@ -8,7 +8,8 @@ extension IngestCoordinator {
         case stays
         /// Queued, or found queued already.
         case queued(JobStore.Queued)
-        /// The document found left in Incoming changed before the write that would queue the file: nothing is decided.
+        /// The document found left in Incoming changed before the write that would queue the file, which is not queued,
+        /// though documents set aside there may have been ended (`replaced`).
         case changed
     }
 

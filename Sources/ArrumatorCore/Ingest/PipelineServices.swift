@@ -163,26 +163,26 @@ public struct PipelineServices: Sendable {
     @discardableResult
     public func queueReadingAgain(_ document: DocumentRecord, settings: AppSettings) async throws -> Int64? {
         guard let docID = document.id else { throw IngestError.documentNotPersisted }
-        let inArchive = isInArchive(document)
-        let readable: Set<DocumentStatus> = inArchive ? [.filed, .needsReview, .failed, .held, .processing]
-            : [.undone, .held, .failed, .arrived, .processing]
-        guard readable.contains(document.status), FileManager.default.fileExists(atPath: document.path) else {
-            throw IngestError.cannotReadAgain(docID)
-        }
-        let folderTags = inArchive ? [] : tags(for: document.url, given: [], settings: settings)
         let now = time.now()
-        // Its status and its job in one write, so a file arriving at its path meanwhile finds both, or neither.
-        return try await database.writer.write { [document] db in
-            var doc = document
-            if !inArchive || [.undone, .held].contains(doc.status) {
-                guard let read = try DocumentRecord.fetchOne(db, key: docID) else { throw IngestError.documentNotFound(docID) }
-                doc = read
+        // Decided on the document as the write that queues it finds it, its status and its job written together, so a
+        // file arriving at its path meanwhile, or the document filed or ended, finds both, or neither.
+        return try await database.writer.write { [self] db in
+            guard let read = try DocumentRecord.fetchOne(db, key: docID) else { throw IngestError.documentNotFound(docID) }
+            let inArchive = isInArchive(read)
+            let readable: Set<DocumentStatus> = inArchive ? [.filed, .needsReview, .failed, .held, .processing]
+                : [.undone, .held, .failed, .arrived, .processing]
+            guard readable.contains(read.status), FileManager.default.fileExists(atPath: read.path) else {
+                throw IngestError.cannotReadAgain(docID)
+            }
+            var doc = read
+            if !inArchive || [.undone, .held].contains(read.status) {
                 doc.status = .processing
                 doc.updatedAt = now
                 try doc.updateChanges(db, from: read)
             }
-            return try JobStore.enqueue(db, path: doc.path, kind: inArchive ? .reanalyse : .ingest, docID: docID,
-                                        payload: Self.readingAgain(tags: Self.keptTags(doc.labels) + folderTags, asked: inArchive ? doc : nil),
+            let folderTags = inArchive ? [] : tags(for: read.url, given: [], settings: settings)
+            return try JobStore.enqueue(db, path: read.path, kind: inArchive ? .reanalyse : .ingest, docID: docID,
+                                        payload: Self.readingAgain(tags: Self.keptTags(read.labels) + folderTags, asked: inArchive ? doc : nil),
                                         givesWay: false, at: now).id
         }
     }

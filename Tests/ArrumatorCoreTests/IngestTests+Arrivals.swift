@@ -92,6 +92,59 @@ extension IngestTests {
         #expect(try await h.services.documents.document(id: id)?.status == .failed, "it is left as it was")
     }
 
+    /// What becomes of a document between the user asking to read it again and that being queued: ended, as another
+    /// file came where it was undone; its file removed, before the archive's watcher tells; given a tag; or left for
+    /// later.
+    enum BeforeItIsQueued: String, CaseIterable, Sendable { case ended, removed, tagged, leftForLater }
+
+    /// A reading again is decided on the document as the write that queues it finds it, never as the user's request
+    /// found it: one ended meanwhile is refused, and one changed is read as it is now, its status and its tags.
+    @Test(arguments: BeforeItIsQueued.allCases)
+    func aReadingAgainIsDecidedOnTheDocumentAsItIsWhenQueued(_ meanwhile: BeforeItIsQueued) async throws {
+        let h = try await Harness.make()
+        defer { h.env.cleanup() }
+        let settings = await h.services.settings.current
+        if meanwhile == .ended {
+            let file = try h.env.drop("scan.txt", text: Self.bill)
+            let id = try await record(h, at: file.spelledOnDisk.path, status: .undone, sha256: "an earlier version")
+            let asked = try #require(try await h.services.documents.document(id: id))
+            try await h.services.documents.update(id) { $0.status = .missing }
+            await #expect(throws: IngestError.self, "one ended meanwhile is refused") {
+                try await h.services.queueReadingAgain(asked, settings: settings)
+            }
+            #expect(try await h.services.documents.document(id: id)?.status == .missing, "and stays as it is")
+            #expect(try await h.jobs().isEmpty, "nothing is queued")
+            return
+        }
+        let asked = try await h.ingest("bill.txt", text: Self.bill)
+        let id = try #require(asked.id)
+        if meanwhile == .removed {
+            try FileManager.default.removeItem(at: asked.url)
+            await #expect(throws: IngestError.self, "one whose file is gone is refused") {
+                try await h.services.queueReadingAgain(asked, settings: settings)
+            }
+            #expect(try await h.services.documents.document(id: id)?.status == asked.status, "and stays as it is")
+            return
+        }
+        let tag = try #require(h.services.config.labels.label("Taxes 2024", kind: .tag))
+        h.env.time.advance(by: 60)
+        switch meanwhile {
+        case .tagged: try await h.services.index.addLabels([tag], docID: id)
+        default: try await h.services.documents.update(id) { $0.status = .held }
+        }
+        h.env.time.advance(by: 60)
+        let job = try #require(try await h.services.queueReadingAgain(asked, settings: settings))
+        let read = try #require(try await h.services.documents.document(id: id))
+        if meanwhile == .tagged {
+            let reading = try #require(try await h.services.jobs.job(id: job))
+            #expect(reading.tags == [tag], "read with the tag given meanwhile: \(reading.tags)")
+            #expect(try reading.payload.rereading?.before.contains(tag) == true, "and kept as one it had when asked")
+            #expect(read.labels?.contains(tag) == true, "which it keeps")
+        } else {
+            #expect(read.status == .processing && read.updatedAt == h.env.time.now(), "left for later meanwhile, it is read again from there")
+        }
+    }
+
     /// A document asked whose file a path holds, changed by the user before it is ended, as one left in Incoming then
     /// left for later, is left as the user changed it.
     @Test func aDocumentTheUserChangedSinceItWasAskedIsNotEnded() async throws {
