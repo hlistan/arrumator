@@ -30,6 +30,7 @@ public actor MockOllama: OllamaAPI {
     private var streamFailure: (words: Int, error: any Error & Sendable)?
     private var holdingAfter: Int?
     private var versionFailure: OllamaError?
+    private var whileProbed: (@Sendable () async -> Void)?
     private var listingFailure: OllamaError?
     private var promptTokens: @Sendable (OllamaChatRequest) -> Int = { _ in MockOllama.promptTokens }
 
@@ -107,7 +108,11 @@ public actor MockOllama: OllamaAPI {
     /// Makes `version` fail with `error` from now on, as a server that answers nothing.
     public func failVersion(with error: OllamaError) { versionFailure = error }
 
+    /// Runs `action` each time `version` is asked, before it answers, as what another process does while a probe waits.
+    public func whileProbed(_ action: @escaping @Sendable () async -> Void) { whileProbed = action }
+
     public func version() async throws -> String {
+        await whileProbed?()
         if let versionFailure { throw versionFailure }
         return "mock"
     }

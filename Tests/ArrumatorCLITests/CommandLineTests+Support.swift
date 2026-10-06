@@ -12,6 +12,12 @@ extension CommandLineTests {
         let root: URL
         var support: URL { root.appendingPathComponent("support", isDirectory: true) }
         var archive: URL { root.appendingPathComponent("Archive", isDirectory: true) }
+        /// What the command runs in: this home, its own Trash, and the test's time zone, so a time it prints is the one
+        /// the test formats.
+        var environment: [String: String] {
+            ["ARRUMATOR_HOME": support.path, "ARRUMATOR_TRASH": root.appendingPathComponent("Trash").path,
+             "HOME": FileManager.default.homeDirectoryForCurrentUser.path, "TZ": TimeZone.current.identifier]
+        }
 
         /// Port 9 is the discard service: nothing answers there, so every model check sees Ollama as not running.
         static let nowhere = "http://127.0.0.1:9"
@@ -40,14 +46,12 @@ extension CommandLineTests {
         var text: String { String(decoding: stdout, as: UTF8.self) }
     }
 
-    func run(_ home: Home, _ arguments: [String]) throws -> Result {
+    /// Runs the command in `home`, with `environment` besides its own.
+    func run(_ home: Home, _ arguments: [String], environment: [String: String] = [:]) throws -> Result {
         let command = Bundle(for: Marker.self).bundleURL.deletingLastPathComponent().appendingPathComponent("arrumatorcli")
         guard FileManager.default.isExecutableFile(atPath: command.path) else { throw CocoaError(.fileNoSuchFile) }
         // Only what the command needs: its scratch home and Trash, and a home folder for the disk-space check.
-        let outcome = try ChildProcess.run(command, arguments, environment: [
-            "ARRUMATOR_HOME": home.support.path, "ARRUMATOR_TRASH": home.root.appendingPathComponent("Trash").path,
-            "HOME": FileManager.default.homeDirectoryForCurrentUser.path,
-        ])
+        let outcome = try ChildProcess.run(command, arguments, environment: home.environment.merging(environment) { _, given in given })
         return Result(status: outcome.status, stdout: outcome.stdout, stderr: String(decoding: outcome.stderr, as: UTF8.self))
     }
 

@@ -28,7 +28,7 @@ extension IngestQueueTests {
                 "and the job stays the app's, where the app has it")
 
         app.cancel()
-        _ = await app.value
+        #expect(await app.value.isEmpty, "a job stopped part way is no failure the drain recorded")
         let letGo = try #require(try await h.services.jobs.job(id: id))
         #expect(letGo.claim == nil && letGo.state == .analysing, "the app, stopped, lets go of the job where it stopped")
         await command.drain()
@@ -136,11 +136,27 @@ extension IngestQueueTests {
         }
         let url = try env.drop("bill.txt", text: IngestTests.bill)
         let id = try #require(await h.coordinator.enqueue(url))
-        await h.coordinator.drain()
+        #expect(await h.coordinator.drain().isEmpty, "a failure no longer the worker's to set aside is none it recorded")
         #expect(try await h.services.jobs.job(id: id)?.state == .cancelled, "the job stays cancelled")
         let archived = try FileManager.default.contentsOfDirectory(atPath: env.archive.path)
         #expect(FileManager.default.fileExists(atPath: url.path) && archived.isEmpty,
                 "the file is not moved: the claim is checked again in the write just before the move")
+    }
+
+    /// A job cancelled while its failure is looked at, as while Ollama is probed for a request that took too long, is
+    /// no longer the worker's when the failure would be saved: nothing is saved, and the drain records no failure of it.
+    @Test func aJobCancelledAsItsFailureIsSavedIsNoFailureTheDrainRecorded() async throws {
+        let env = try await TestEnvironment.make()
+        defer { env.cleanup() }
+        let jobs = JobStore(database: env.database, time: env.time)
+        let ollama = MockOllama { _ in "" }
+        await ollama.whileProbed { _ = try? await jobs.cancelActive(kinds: [.ingest]) }
+        let h = Harness(env: env, services: Harness.services(env, analyzer: StubAnalyzer(error: OllamaError.timeout("took too long")),
+                                                             ollama: ollama, config: env.config))
+        let id = try #require(await h.coordinator.enqueue(try env.drop("bill.txt", text: IngestTests.bill)))
+        #expect(await h.coordinator.drain().isEmpty, "the attempt is not saved, so the drain failed nothing")
+        let job = try await h.services.jobs.job(id: id)
+        #expect(job?.state == .cancelled && job?.attempt == 0, "the job stays as it was cancelled: \(String(describing: job))")
     }
 
     @Test func aFailureOfAJobCancelledMeanwhileChangesNothingOfItsFileOrItsDocument() async throws {
@@ -156,7 +172,7 @@ extension IngestQueueTests {
         let h = Harness(env: env, services: Harness.services(env, analyzer: analyzer, config: config))
         let url = try env.drop("bill.txt", text: IngestTests.bill)
         let id = try #require(await h.coordinator.enqueue(url))
-        await h.coordinator.drain()
+        #expect(await h.coordinator.drain().isEmpty, "a failure of a job no longer the worker's is none it recorded")
         #expect(try await h.services.jobs.job(id: id)?.state == .cancelled, "the job stays cancelled")
         #expect(FileManager.default.fileExists(atPath: url.path), "its file is not set aside in the archive as failed")
         let failed = try await h.services.history.events(limit: 5, kinds: [.failed, .retry]).count

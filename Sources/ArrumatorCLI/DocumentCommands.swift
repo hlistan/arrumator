@@ -45,7 +45,7 @@ struct Ingest: AsyncParsableCommand {
                 failed.append((url, "not queued: it is held or undone in the archive, or the queue could not be written (see the log)"))
             }
         }
-        // The jobs this command failed, an attempt spent on each; one another process fails meanwhile is that process's.
+        // The jobs this command recorded a failure of; one another process fails meanwhile, and tries again, is queued.
         let failedHere = await runtime.coordinator.drain()
         try Task.checkCancellation()
         // The documents these files became, whatever else the archive holds; for an exact copy of a document in the
@@ -57,13 +57,13 @@ struct Ingest: AsyncParsableCommand {
             let job = try await runtime.services.jobs.job(id: id)
             if let doc = job?.docId ?? (try? job?.payload)?.copyOf, let document = try await runtime.services.documents.document(id: doc) {
                 docs.append(document)
-                if job?.state == .failed { failed.append((url, job?.lastError ?? "it could not be filed")) }
+                if job?.state == .failed || failedHere.contains(id) { failed.append((url, job?.lastError ?? "it could not be filed")) }
             } else if let job, job.state.isActive, !failedHere.contains(id) {
                 // Not failed by this command: one another process, such as the app, has in hand, or one that waits, as for
                 // the archive's folder, which spends no attempt: queued, saying what its job records.
                 waiting.append((url, Self.queued(job, now: now)))
             } else {
-                // One this command spent an attempt on, before it became a document, fails here, saying why.
+                // One this command failed, or whose job ended failed, whoever ended it, came to nothing: it fails, saying why.
                 failed.append((url, job?.lastError ?? "it became no document"))
             }
         }

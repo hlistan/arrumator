@@ -174,8 +174,8 @@ public actor IngestCoordinator {
     /// is left to it, and the job in hand when the task is cancelled carries on at the next start. Which jobs it takes,
     /// `draining` says: by default only those that come in their turn. Once a job finds Ollama away, it takes only the
     /// files that came and are not hashed yet, each then waiting before its text, and ends: no other is taken until that
-    /// one is tried again (`ollamaRetryAt`), which a command does not wait for. Says which jobs it spent an attempt on,
-    /// as a failure does: those that failed here, whatever another process did meanwhile.
+    /// one is tried again (`ollamaRetryAt`), which a command does not wait for. Says which jobs it recorded a failure of:
+    /// an attempt it spent and kept, or the job it ended failed; not one that waits, nor any another process failed.
     @discardableResult
     public func drain(_ draining: Draining = .inTurn) async -> Set<Int64> {
         var failed: Set<Int64> = []
@@ -284,11 +284,12 @@ public actor IngestCoordinator {
 
     // MARK: Job processing
 
-    /// Works on `initial`, a job taken for this worker (`nextDue`), as far as it goes now, then lets it go.
-    /// Works on `initial` from where it stopped, and says whether it spent an attempt on it, as a failure does.
+    /// Works on `initial`, a job taken for this worker (`nextDue`), as far as it goes now, then lets it go; says whether it
+    /// recorded a failure of it (`handleFailure`).
     @discardableResult
     private func process(_ initial: JobRecord) async -> Bool {
         var job = initial
+        var failed = false
         let takenWhileAway = ollamaRetryAt != nil
         // A job that waits for its model looks for it first, and waits on, with no trace and no attempt, while it is
         // not installed.
@@ -344,14 +345,14 @@ public actor IngestCoordinator {
             Log.info(.ingest, "Job no longer this worker's; left as it is", ["job": String(job.id ?? 0)])
             await finish(trace, .cancelled, docID: job.docId)
         } catch {
-            await handleFailure(&job, payload: payload, error: error, trace: trace, takenWhileAway: takenWhileAway)
+            failed = await handleFailure(&job, payload: payload, error: error, trace: trace, takenWhileAway: takenWhileAway)
         }
         // Let go of in a task of its own, as a stopped worker's database accesses are cancelled, and before the worker
         // looks for its next job, which may be this one again.
         await Task { [services] in await Self.letGo(initial, services: services) }.value
         // A stopped worker reads nothing more: the database cancels a stopped task's reads, which is no error to log.
         if !Task.isCancelled { await refreshQueueCount() }
-        return job.attempt > initial.attempt
+        return failed
     }
 
     /// Lets go of the claim `job` was taken with (`JobStore.release`), whatever stopped the worker. A job that has not

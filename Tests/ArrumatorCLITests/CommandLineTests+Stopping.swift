@@ -14,8 +14,7 @@ extension CommandLineTests {
         let process = Process()
         process.executableURL = command
         process.arguments = arguments
-        process.environment = ["ARRUMATOR_HOME": home.support.path, "ARRUMATOR_TRASH": home.root.appendingPathComponent("Trash").path,
-                               "HOME": FileManager.default.homeDirectoryForCurrentUser.path].merging(environment) { _, given in given }
+        process.environment = home.environment.merging(environment) { _, given in given }
         let printed = home.root.appendingPathComponent(Self.standardOutput)
         FileManager.default.createFile(atPath: printed.path, contents: nil)
         process.standardOutput = try FileHandle(forWritingTo: printed)
@@ -311,6 +310,32 @@ extension CommandLineTests {
         let later = Format.date(Date(timeIntervalSince1970: now + 3_600))
         #expect(ingested.status == 0 && ingested.stderr.contains("\(held.spelledOnDisk.path): queued, not read yet: The app could not read it; tried again at \(later)\n"),
                 "the app's failure is no failure of the command: \(ingested.stderr)")
+    }
+
+    /// A file this command fails once it became a document, as when Ollama answers its reading with an error, fails the
+    /// command, saying why, though it is tried again later (the review of the fix of the final review of #17).
+    @Test func ingestFailsAFileWhoseReadingFailedHereOnceItBecameADocument() async throws {
+        let ollama = try LoopbackOllama(chat: ("500 Internal Server Error", #"{"error":"model runner has unexpectedly stopped"}"#))
+        defer { ollama.stop() }
+        #expect(await Patience.until { ollama.address != nil }, "the stand-in listens")
+        let home = try Home.make(ollamaURL: try #require(ollama.address))
+        defer { home.cleanup() }
+        let note = home.root.appendingPathComponent("note.txt")
+        try Data("Fatura de Maria Exemplo".utf8).write(to: note)
+        // The error is the server's, asked once: no time is spent asking it again.
+        let pipeline = home.root.appendingPathComponent("pipeline.json")
+        try JSONSerialization.data(withJSONObject: ["ollama": ["retryDelays": [Int]()]]).write(to: pipeline)
+        let ingested = try run(home, ["ingest", "--json", note.path], environment: ["ARRUMATOR_PIPELINE_CONFIG": pipeline.path])
+        let queue = try DatabaseQueue(path: try index(home).path)
+        defer { try? queue.close() }
+        let job = try #require(try await queue.read { db -> (document: Int64?, attempt: Int, why: String?)? in
+            try Row.fetchOne(db, sql: "SELECT doc_id, attempt, last_error FROM jobs WHERE source_path = ?", arguments: [note.spelledOnDisk.path])
+                .map { ($0["doc_id"], $0["attempt"], $0["last_error"]) }
+        }, "the file was queued")
+        let why = try #require(job.why, "the failed attempt is recorded with why")
+        #expect(job.document != nil && job.attempt == 1, "the file became a document, and its reading failed once")
+        #expect(ingested.status == 1 && ingested.stderr.contains("\(note.spelledOnDisk.path): \(why)\n"),
+                "the command fails it, saying why: \(ingested.stderr)")
     }
 
     /// The index of `home`'s archive, once a command has made it.

@@ -206,18 +206,62 @@ extension IngestQueueTests {
         #expect(try await h.services.history.events(limit: 20, kinds: [.extracted]).count == 2, "no other text is read")
     }
 
-    /// A drain says which jobs it spent an attempt on, as a failure does: the command that drains them fails those, and
-    /// leaves the rest queued, whatever another process did meanwhile (the review of the fix of the final review of #17).
+    /// A drain says which jobs it recorded a failure of: an attempt it spent and kept, or a job it ended failed; not one
+    /// it filed, though an earlier attempt had failed, nor one that waits, for its model or Ollama. The command that
+    /// drains them fails those, and leaves the rest queued (the reviews of the fix of the final review of #17).
     @Test func aDrainSaysWhichJobsItFailed() async throws {
+        let changing = ChangedOnce()
+        let disk = TakenOut()
         let h = try await Harness.make(analyzer: StubAnalyzer { name in
-            if name == "bad.txt" { throw TestFailure("boom") }
+            switch name {
+            case "bad.txt", "last.txt": throw TestFailure("boom")
+            case "parked.txt":
+                try await disk.takeOut()
+                throw TestFailure("boom")
+            case "changed.txt": try await changing.change()
+            case "final.txt": throw IngestError.notTrashed(name, reason: "the Trash refused it")
+            case "payload.txt": throw IngestError.unreadablePayload(0, reason: "garbled")
+            case "model.txt": throw OllamaError.modelNotFound("not-installed")
+            case "away.txt": throw OllamaError.unreachable("connection refused")
+            default: break
+            }
         })
         defer { h.env.cleanup() }
-        let good = try #require(await h.coordinator.enqueue(try h.env.drop("good.txt", text: IngestTests.bill)))
-        let bad = try #require(await h.coordinator.enqueue(try h.env.drop("bad.txt", text: "\(IngestTests.bill) bad")))
+        await disk.set(h.env.archive)
+        var ids: [String: Int64] = [:]
+        let names = ["good.txt", "earlier.txt", "changed.txt", "bad.txt", "last.txt", "final.txt", "payload.txt", "model.txt"]
+        for name in names {
+            let url = try h.env.drop(name, text: "\(IngestTests.bill) \(name)")
+            if name == "changed.txt" { await changing.watch(url) }
+            let id = try #require(await h.coordinator.enqueue(url))
+            ids[name] = id
+        }
+        // One whose earlier attempt failed, and one that has one attempt left.
+        for (name, attempt) in [("earlier.txt", 1), ("last.txt", h.env.config.ingest.maxAttempts - 1)] {
+            let id = try #require(ids[name])
+            var job = try #require(try await h.services.jobs.job(id: id))
+            job.attempt = attempt
+            try await h.services.jobs.update(job)
+        }
         let failed = await h.coordinator.drain()
-        #expect(failed == [bad] && !failed.contains(good), "the file it read fails, an attempt spent; the one it filed does not")
+        #expect(failed == Set(["bad.txt", "last.txt", "final.txt", "payload.txt"].compactMap { ids[$0] }),
+                "its failures, one set aside after its last attempt; not one filed, read again as it changed, or waiting: \(failed)")
         #expect(await h.coordinator.drain().isEmpty, "and a drain that takes nothing failed nothing")
+        // The archive's disk is taken out as the last attempt of a file fails: its attempt is kept, a failure, and it waits
+        // for the archive to be set aside there.
+        let parked = try #require(await h.coordinator.enqueue(try h.env.drop("parked.txt", text: "\(IngestTests.bill) parked")))
+        var last = try #require(try await h.services.jobs.job(id: parked))
+        last.attempt = h.env.config.ingest.maxAttempts - 1
+        try await h.services.jobs.update(last)
+        #expect(await h.coordinator.drain() == [parked], "the last attempt failed, kept while the archive is not there")
+        // Told the archive is away, as the app is: a file that comes waits for it, no failure.
+        await h.coordinator.archive(isAway: true)
+        _ = try #require(await h.coordinator.enqueue(try h.env.drop("unfiled.txt", text: "\(IngestTests.bill) unfiled")))
+        #expect(await h.coordinator.drain().isEmpty, "a file waiting for the archive failed nothing")
+        // And with the archive back, a file that finds Ollama away waits for it, no failure.
+        await h.coordinator.archive(isAway: false)
+        _ = try #require(await h.coordinator.enqueue(try h.env.drop("away.txt", text: "\(IngestTests.bill) away")))
+        #expect(await h.coordinator.drain().isEmpty, "nor one waiting for Ollama")
     }
 
     /// While Ollama is away only a job whose next stage needs no model is taken (`JobStore.beforeTheModel`): a file that
@@ -352,5 +396,31 @@ actor IngestWitness {
     func watch(_ coordinator: IngestCoordinator) { self.coordinator = coordinator }
     func look() async {
         if let coordinator { seen.append(await coordinator.status) }
+    }
+}
+
+/// A file the reading changes once, as an editor saving it while it is read: its bytes then differ from those read.
+private actor ChangedOnce {
+    private var url: URL?
+    private var changed = false
+
+    func watch(_ url: URL) { self.url = url }
+
+    func change() throws {
+        guard !changed, let url else { return }
+        changed = true
+        try Data("changed while it was read, and longer than before".utf8).write(to: url)
+    }
+}
+
+/// The archive's folder, taken out when told, as a disk taken out while a file is read.
+private actor TakenOut {
+    private var folder: URL?
+
+    func set(_ folder: URL) { self.folder = folder }
+
+    func takeOut() throws {
+        guard let folder, FileManager.default.fileExists(atPath: folder.path) else { return }
+        try FileManager.default.removeItem(at: folder)
     }
 }
