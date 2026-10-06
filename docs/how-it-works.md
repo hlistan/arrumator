@@ -503,8 +503,9 @@ an earlier version filed, cannot be read again, which is said at once.
   waiting to be read is read once, and asked for again, as with **Read Again** on its card or a copy of it in Incoming,
   it is read in its turn. History records the request once, naming the profile
   and the documents, and asked again while every one of them waits, nothing; each reading is recorded under its
-  document, before its filing. **Read Again** on one document is recorded so too, under it: once, as `Read again:
-  <name>`, and asked again while it waits, not again.
+  document, before its filing. **Read Again** on one document is recorded so too, under it, as `Read again: <name>`,
+  when it queues the reading; asked again while it waits, or while a reading of it waits already, as an exact copy's, it
+  is read with that one, and nothing more is recorded.
 
 ## Your own changes
 

@@ -261,9 +261,9 @@ by meaning**, documents embedded by another model are found by meaning only once
 
 - **History**: every arrival (with the tag its folder in Incoming gives it), file in Incoming that cannot be opened,
   exact copy (under the document it has read again, with where the copy went and the tags it gave), a document you ask
-  to read again (under it, `Read again: <name>`, once however often you ask while it waits), every document read
-  again at once (under none, with the profile and the documents, `Read every document again with the profile
-  “Standard”: 120 documents`), extraction, reading
+  to read again (under it, `Read again: <name>`, when your request queues its reading: not while one waits already),
+  every document read again at once (under none, with the profile and the documents, `Read every document again with
+  the profile “Standard”: 120 documents`), extraction, reading
   (with the labels it gave, which of the model's labels were tidied and why, and what gave its tags, or that nothing
   could be read of it and why it waits for you), filing (from the name it had to the one it was given, or that it kept
   its name or waits where it is), correction of a name or labels, decision about labels (a merge, a label removed

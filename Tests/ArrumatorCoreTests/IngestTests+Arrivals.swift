@@ -174,8 +174,8 @@ extension IngestTests {
                 "recorded once, under the document, as the user's: \(said.map(\.summary))")
     }
 
-    /// Read Again on a document the user confirmed takes the confirmation back: the document is to be looked at again
-    /// once it is read, and its card no longer says it was confirmed.
+    /// Read Again on a document the user confirmed, queueing its reading, takes the confirmation back: the document is
+    /// to be looked at again once it is read, and its card no longer says it was confirmed.
     @Test func readAgainTakesBackAConfirmation() async throws {
         let h = try await Harness.make()
         defer { h.env.cleanup() }
