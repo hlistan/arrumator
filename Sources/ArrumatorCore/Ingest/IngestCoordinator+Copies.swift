@@ -80,7 +80,7 @@ extension IngestCoordinator {
     /// user set aside recorded there (`DocumentStatus.isSetAside`), as its original undone back into Incoming, which a
     /// volume that keeps no file numbers would not tell from a copy that kept its date. Every document recorded there is
     /// looked at, as a copy that was a document of its own is recorded there too. A document set aside has its file at
-    /// its path: another file put there ends, as it is queued, every one set aside there whose file it is not
+    /// its path: another file put there ends, as it arrives (`enqueue`), every one set aside there whose file it is not
     /// (`replaced`); and no job of a copy is one set aside, as the queue takes none for a file set aside (`stays`), and
     /// the user sets none aside while it is read in.
     func isStill(_ copy: URL, payload: JobPayload) async throws -> Bool {

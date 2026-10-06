@@ -273,19 +273,35 @@ extension IngestCoordinator {
     }
 
     /// Ends `known`, a document left for later or undone in Incoming, whose file is no longer there: another file came
-    /// in its place. History says so, in the write that ends it, which ends only one still set aside, so a document is
-    /// ended once however many requests for its path come at once, and one of another status, as one left in Incoming
-    /// whose file was saved again, is left as it is.
+    /// in its place. History says so, in the write that ends it, which ends it only as it was when `known` was read, and
+    /// set aside: a document is ended once however many requests for its path come at once, and one of another status,
+    /// as one left in Incoming whose file was saved again, or one the user changed since, as one left in Incoming then
+    /// left for later, is left as it is.
     func replaced(_ known: DocumentRecord) async throws {
         guard let docID = known.id else { return }
         let now = services.time.now()
         try await services.database.writer.write { db in
-            guard let read = try DocumentRecord.fetchOne(db, key: docID), read.status.isSetAside else { return }
+            guard let read = try DocumentRecord.fetchOne(db, key: docID), read.status == known.status, read.status.isSetAside else { return }
             var gone = read
             gone.status = .missing
             gone.updatedAt = now
             try gone.updateChanges(db, from: read)
             try HistoryStore.insert(db, .missing, at: now, doc: docID, summary: "\(read.filename) is no longer in Incoming; the file there now is another")
+        }
+    }
+
+    /// Queues the file at `path` to be read in, as document `again`, left in Incoming, arriving again (its reading
+    /// forgotten, `IndexStore.forgetReading`), or as a new file: decided in the write that queues it, so a document the
+    /// user left for later or undid since it was found left in Incoming stays as the user left it, and nothing is
+    /// queued (nil).
+    func queue(_ path: String, again: Int64?, payload: JobPayload) async throws -> JobStore.Queued? {
+        let now = services.time.now()
+        return try await services.database.writer.write { db in
+            if let again {
+                guard let read = try DocumentRecord.fetchOne(db, key: again), read.status == .failed else { return nil }
+                try IndexStore.forgetReading(db, of: read, at: now)
+            }
+            return try JobStore.enqueue(db, path: path, kind: .ingest, docID: again, payload: payload, givesWay: false, at: now)
         }
     }
 

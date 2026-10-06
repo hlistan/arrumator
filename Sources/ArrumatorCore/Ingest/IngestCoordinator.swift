@@ -163,11 +163,13 @@ public actor IngestCoordinator {
             }
             // A file put where a document was left in Incoming, as an editor saving it, is that document arriving again.
             let again = known.flatMap { isLeftInIncoming($0) ? $0.id : nil }
-            if let again { try await services.index.forgetReading(docID: again) }
             var payload = JobPayload()
             let given = services.tags(for: url, given: tags, settings: await services.settings.current)
             payload.tags = given.isEmpty ? nil : given
-            let queued = try await services.jobs.enqueue(path: path, kind: .ingest, docID: again, payload: payload)
+            guard let queued = try await queue(path, again: again, payload: payload) else {
+                Log.info(.ingest, "Not queued: the document left in Incoming there was changed meanwhile", ["path": path])
+                return nil
+            }
             // A file already queued arrives once: a rescan, or a request that asks no more, records nothing again.
             if queued.isNew {
                 let summary = ([url.lastPathComponent] + [GivenTag.note(given)].compactMap { $0 }).joined(separator: " · ")

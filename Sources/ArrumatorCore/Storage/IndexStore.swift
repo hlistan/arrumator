@@ -119,14 +119,20 @@ public struct IndexStore: Sendable {
         let now = time.now()
         try await database.writer.write { db in
             guard let document = try DocumentRecord.fetchOne(db, key: docID) else { throw IngestError.documentNotFound(docID) }
-            try Self.saveLabels(db, (document.labels ?? []).filter(\.kind.isUsersOwn), docID: docID, labelled: false, at: now)
-            try db.execute(sql: """
-                UPDATE documents SET analysis_json = NULL, content_json = NULL, page_count = NULL, extracted_at = NULL,
-                embedded_at = NULL, status = ?, updated_at = ? WHERE id = ?
-                """, arguments: [DocumentStatus.processing.rawValue, now.unixSeconds, docID])
-            try db.execute(sql: "DELETE FROM document_text WHERE doc_id = ?", arguments: [docID])
-            try db.execute(sql: "DELETE FROM embeddings WHERE doc_id = ?", arguments: [docID])
+            try Self.forgetReading(db, of: document, at: now)
         }
+    }
+
+    /// `forgetReading`, of `document` as the caller's transaction read it.
+    static func forgetReading(_ db: Database, of document: DocumentRecord, at now: Date) throws {
+        guard let docID = document.id else { throw IngestError.documentNotPersisted }
+        try saveLabels(db, (document.labels ?? []).filter(\.kind.isUsersOwn), docID: docID, labelled: false, at: now)
+        try db.execute(sql: """
+            UPDATE documents SET analysis_json = NULL, content_json = NULL, page_count = NULL, extracted_at = NULL,
+            embedded_at = NULL, status = ?, updated_at = ? WHERE id = ?
+            """, arguments: [DocumentStatus.processing.rawValue, now.unixSeconds, docID])
+        try db.execute(sql: "DELETE FROM document_text WHERE doc_id = ?", arguments: [docID])
+        try db.execute(sql: "DELETE FROM embeddings WHERE doc_id = ?", arguments: [docID])
     }
 
     /// Updates the searchable file name after a rename, keeping the rest.

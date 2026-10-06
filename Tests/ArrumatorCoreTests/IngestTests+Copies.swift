@@ -448,6 +448,72 @@ extension IngestTests {
         #expect(try await h.services.history.events(limit: 10, kinds: [.missing]).isEmpty, "and neither is said to be gone")
     }
 
+    /// The file of a document left in Incoming, where a document undone since was recorded too, its file gone, stays that
+    /// document's, and the other is ended: whose file it is is asked of every document left in Incoming there too, not of
+    /// the one the path names first alone.
+    @Test func theFileOfADocumentLeftInIncomingStaysItsOwnThoughAnotherWasUndoneThereSince() async throws {
+        let h = try await Harness.make()
+        defer { h.env.cleanup() }
+        let file = try h.env.drop("scan.txt", text: Self.bill)
+        let onDisk = try FileFingerprint.of(file)
+        var ids: [Int64] = []
+        for owns in [true, false] {
+            var record = DocumentRecord.arrived(path: file.spelledOnDisk.path, sha256: owns ? "its own" : "another", size: owns ? onDisk.size : 1,
+                                                uttype: "public.plain-text", inode: owns ? onDisk.inode : nil,
+                                                modified: owns ? onDisk.modified : nil, now: h.env.time.now())
+            record.status = owns ? .failed : .undone
+            ids.append(try #require(try await h.services.documents.save(record).id))
+        }
+        #expect(await h.coordinator.enqueue(file) == nil, "the file is not queued: it is the document left in Incoming")
+        let statuses = try await h.services.documents.documents(ids: ids).map(\.status)
+        #expect(statuses == [.failed, .missing], "which stays as it was, and the one undone, its file gone, is ended: \(statuses)")
+    }
+
+    /// A file saved again where a document was left in Incoming, which the user leaves for later as it arrives, is not
+    /// queued: the document stays as the user left it, its reading kept, decided in the write that would queue it.
+    @Test func aDocumentLeftInIncomingThatTheUserLeavesForLaterAsItsFileArrivesStaysSo() async throws {
+        let h = try await Harness.make()
+        defer { h.env.cleanup() }
+        let file = try h.env.drop("scan.txt", text: Self.bill)
+        let path = file.spelledOnDisk.path
+        var ids: [Int64] = []
+        // Undone there before, its file gone since, so its ending comes between the asking and the queueing; then left
+        // in Incoming, its file saved again since.
+        for status in [DocumentStatus.undone, .failed] {
+            var record = DocumentRecord.arrived(path: path, sha256: "an earlier version", size: 1, uttype: "public.plain-text", inode: nil,
+                                                modified: nil, now: h.env.time.now())
+            record.status = status
+            ids.append(try #require(try await h.services.documents.save(record).id))
+        }
+        let left = ids[1]
+        try await h.env.database.writer.write { db in
+            try db.execute(sql: """
+                CREATE TEMP TRIGGER left_for_later_meanwhile AFTER UPDATE OF status ON documents WHEN NEW.status = 'missing' BEGIN
+                  UPDATE documents SET status = 'held' WHERE id = \(left);
+                END
+                """)
+        }
+        #expect(await h.coordinator.enqueue(file) == nil, "the file is not queued")
+        #expect(try await h.services.documents.document(id: left)?.status == .held, "the document stays as the user left it")
+        #expect(try await h.jobs().isEmpty, "and nothing is read")
+    }
+
+    /// A document asked whose file a path holds, changed by the user before it is ended, as one left in Incoming then
+    /// left for later, is left as the user changed it.
+    @Test func aDocumentTheUserChangedSinceItWasAskedIsNotEnded() async throws {
+        let h = try await Harness.make()
+        defer { h.env.cleanup() }
+        var record = DocumentRecord.arrived(path: h.env.incoming.appendingPathComponent("scan.txt").spelledOnDisk.path, sha256: "another",
+                                            size: 1, uttype: "public.plain-text", inode: nil, modified: nil, now: h.env.time.now())
+        record.status = .failed
+        let asked = try await h.services.documents.save(record)
+        let id = try #require(asked.id)
+        try await h.services.documents.update(id) { $0.status = .held }
+        try await h.coordinator.replaced(asked)
+        #expect(try await h.services.documents.document(id: id)?.status == .held, "left for later, it stays so")
+        #expect(try await h.services.history.events(limit: 10, kinds: [.missing]).isEmpty, "and nothing is said to be gone")
+    }
+
     /// A document set aside, ended as another file comes in its place, is ended once, however many requests for its path
     /// come at once: one no longer set aside is left as it is.
     @Test func aDocumentSetAsideIsEndedOnceThoughTwoRequestsEndIt() async throws {
