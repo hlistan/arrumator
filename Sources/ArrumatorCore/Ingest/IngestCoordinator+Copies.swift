@@ -26,26 +26,33 @@ extension IngestCoordinator {
     /// Hands a file that is an exact copy of `original` over to it, rather than making a second document of the same
     /// bytes. It is decided while the original is in the archive as itself (`PipelineServices.takesCopy`), and kept with
     /// the job (`copyOf`); from then on it is done whatever the user does to the original meanwhile, as though the user
-    /// did it after: the copy goes to the Trash, never deleted, and the original, still in the archive as itself, is
-    /// read again from the start, as the file would have been, so a copy put into Incoming reads its document again
-    /// with the profile in use (`PipelineServices.queueReadingAgain(forCopyOf:)`); one undone, or gone from the archive,
-    /// meanwhile is not read again, and nothing comes back from the Trash. Then the original is given the tags the file
-    /// was queued with (`PipelineServices.giveTags`). History records this once, under the original. A stop part way
-    /// finishes the rest at the next start, the copy in the Trash already or not, and another file put at its path
-    /// meanwhile, as its original undone back into Incoming, is never taken for it (`isStill`); a copy the Trash refuses
-    /// fails the job before its original is read, and stays where it is. Whether it was handed over: not when the
-    /// original no longer takes a copy as it is decided, and the copy is then a document of its own.
-    @discardableResult
+    /// did it after (`finishHandingOver`), but for a stop before the copy is in the Trash, after which the copy is looked
+    /// at again, by its original as it is then (`original(of:)`). Whether it was handed over: not when the original no
+    /// longer takes a copy as it is decided, and the copy is then a document of its own.
     func handOver(_ copy: URL, to original: DocumentRecord, job: inout JobRecord, payload: inout JobPayload,
                   trace: TraceContext) async throws -> Bool {
         guard let originalID = original.id else { throw IngestError.documentNotPersisted }
-        if payload.copyOf != originalID {
-            guard try await services.takesCopy(of: originalID) else { return false }
-            payload.copyOf = originalID
-            try await save(&job, &payload, state: .hashing, trace: trace)
-        }
+        guard try await services.takesCopy(of: originalID) else { return false }
+        payload.copyOf = originalID
+        try await save(&job, &payload, state: .hashing, trace: trace)
+        try await finishHandingOver(copy, to: original, job: &job, payload: &payload, trace: trace)
+        return true
+    }
+
+    /// Does what is left of handing a copy over to `original`, decided and kept with the job (`copyOf`): the copy goes to
+    /// the Trash, never deleted, and the original, still in the archive as itself, is read again from the start, as the
+    /// file would have been, so a copy put into Incoming reads its document again with the profile in use
+    /// (`PipelineServices.queueReadingAgain(forCopyOf:)`); one undone, or gone from the archive, meanwhile is not read
+    /// again, and nothing comes back from the Trash. Then the original is given the tags the file was queued with
+    /// (`PipelineServices.giveTags`). History records this once, under the original. A stop part way finishes the rest
+    /// at the next start, the copy in the Trash already or not, and another file put at its path meanwhile, as its
+    /// original undone back into Incoming, is never taken for it (`isStill`); a copy the Trash refuses fails the job
+    /// before its original is read, and stays where it is.
+    func finishHandingOver(_ copy: URL, to original: DocumentRecord, job: inout JobRecord, payload: inout JobPayload,
+                           trace: TraceContext) async throws {
+        guard let originalID = original.id else { throw IngestError.documentNotPersisted }
         var trashed: URL?
-        if isStill(copy, payload: payload) {
+        if try await isStill(copy, payload: payload) {
             do { trashed = try services.trash.trash(copy) } catch {
                 throw IngestError.notTrashed(copy.path, reason: error.localizedDescription)
             }
@@ -66,14 +73,16 @@ extension IngestCoordinator {
         // Another file put at the copy's path once it was in the Trash, which a request for it found this job for, is
         // queued as it came: one the user put there is read, an undone original left where it is (`stays`).
         if FileManager.default.fileExists(atPath: copy.path) { await enqueue(copy) }
-        return true
     }
 
     /// Whether the file at `copy` is still the copy the job hashed (`JobPayload.fingerprint`, kept with `copyOf`), not
-    /// another put at its path once the copy went to the Trash, as its original undone back into Incoming.
-    func isStill(_ copy: URL, payload: JobPayload) -> Bool {
-        guard let hashed = payload.fingerprint, let now = try? FileFingerprint.of(copy) else { return false }
-        return now.matches(hashed)
+    /// another put at its path once the copy went to the Trash: one that is not that file, or a document the user set
+    /// aside recorded there (`DocumentStatus.isSetAside`), as its original undone back into Incoming, which a volume that
+    /// keeps no file numbers would not tell from a copy that kept its date. No job of a copy is one of those: the
+    /// queue takes none for a file set aside (`stays`), and the user sets none aside while it is read in.
+    func isStill(_ copy: URL, payload: JobPayload) async throws -> Bool {
+        guard let hashed = payload.fingerprint, let now = try? FileFingerprint.of(copy), now.matches(hashed) else { return false }
+        return try await services.documents.document(path: copy.path)?.status.isSetAside != true
     }
 }
 

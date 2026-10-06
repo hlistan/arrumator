@@ -143,10 +143,16 @@ extension IngestTests {
         }
     }
 
+    /// What is at a copy's path at the next start, the copy in the Trash since a stop: its original, undone back where
+    /// it was; the same, but alike in all that a volume that keeps no file numbers tells, as a copy that kept its date;
+    /// or another file the user put there, of the copy's size and date, its original still in the archive.
+    enum AtTheCopysPath: String, CaseIterable, Sendable { case undone, undoneAlike, another }
+
     /// A copy in the Trash when a stop came, before its original's reading was queued, is still handed over at the next
-    /// start, though the user undid the original meanwhile, back where the copy was: History never says the copy
-    /// disappeared, and the undone original is neither read again nor taken for the copy.
-    @Test func aCopyInTheTrashAtAStopIsHandedOverThoughItsOriginalIsUndoneBeforeTheNextStart() async throws {
+    /// start, whatever is at its path then: History never says the copy disappeared, and the file there is never taken
+    /// for the copy, an undone original neither read again nor made a second document.
+    @Test(arguments: AtTheCopysPath.allCases)
+    func aCopyInTheTrashAtAStopIsHandedOverWhateverIsAtItsPathAtTheNextStart(_ found: AtTheCopysPath) async throws {
         let base = try await Harness.make()
         defer { base.env.cleanup() }
         let original = try await base.ingest("bill.txt", text: Self.bill)
@@ -159,36 +165,58 @@ extension IngestTests {
         try await base.env.database.writer.write { db in
             try db.execute(sql: """
                 CREATE TEMP TRIGGER queueing_fails BEFORE INSERT ON jobs WHEN NEW.kind = '\(JobKind.reanalyse.rawValue)'
+                  AND (SELECT COUNT(*) FROM events WHERE kind = '\(EventKind.retry.rawValue)') = 0
                 BEGIN SELECT RAISE(ABORT, 'the queue is briefly unavailable'); END
                 """)
         }
         let copy = try base.env.drop("bill.txt", text: Self.bill)
+        let date = try #require(try FileManager.default.attributesOfItem(atPath: original.path)[.modificationDate] as? Date)
+        try FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: copy.path)
         let id = try #require(await coordinator.enqueue(copy))
         await coordinator.drain()
-        #expect(base.env.trashed().count == 1, "the copy went to the Trash before the stop")
-        try await ReviewActions(services: services, coordinator: coordinator).undo(originalID)
-        #expect(FileManager.default.fileExists(atPath: copy.path), "the original is back where the copy was")
+        #expect(base.env.trashed().count == 1, "\(found): the copy went to the Trash before the stop")
+        switch found {
+        case .undone, .undoneAlike:
+            try await ReviewActions(services: services, coordinator: coordinator).undo(originalID)
+            #expect(FileManager.default.fileExists(atPath: copy.path), "\(found): the original is back where the copy was")
+            if found == .undoneAlike {
+                try await base.env.database.writer.write { db in
+                    try db.execute(sql: "UPDATE jobs SET payload_json = json_remove(payload_json, '$.inode') WHERE id = ?", arguments: [id])
+                }
+            }
+        case .another:
+            try Data("Water bill of August".utf8).write(to: copy)
+            try FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: copy.path)
+        }
         base.env.time.advance(by: 60)
         await coordinator.drain()
 
         let job = try #require(try await services.jobs.job(id: id))
         let copyOf = try job.payload.copyOf
-        #expect(job.state == .duplicate && copyOf == originalID, "the copy is handed over")
+        #expect(job.state == .duplicate && copyOf == originalID, "\(found): the copy is handed over")
         let events = try await services.history.events(limit: 10, kinds: [.duplicate, .missing])
-        #expect(events.map(\.kind) == [.duplicate] && events.first?.docId == originalID
-                    && events.first?.summary == "bill.txt is a copy of bill.txt, which has left the archive since, and is not read again",
-                "recorded once, under its original, named as it is now, never as a file that disappeared: \(events.map(\.summary))")
-        #expect(await analyzer.calls.files.isEmpty, "the undone original is neither read again nor read as the copy")
+        let said = found == .another ? "bill.txt is a copy of \(original.filename), which is read again"
+            : "bill.txt is a copy of bill.txt, which has left the archive since, and is not read again"
+        #expect(events.map(\.kind) == [.duplicate] && events.first?.docId == originalID && events.first?.summary == said,
+                "\(found): recorded once, under its original, named as it is now, never as a file that disappeared: \(events.map(\.summary))")
+        #expect(base.env.trashed().count == 1, "\(found): the copy stays in the Trash, and nothing else goes there")
         let documents = try await services.documents.list(DocumentFilter(), limit: 5)
-        #expect(documents.map(\.id) == [originalID] && documents.first?.status == .undone,
-                "it stays as the user left it, and no second document is made of it: \(documents.map(\.path))")
-        #expect(base.env.trashed().count == 1, "the copy stays in the Trash")
+        let files = await analyzer.calls.files
+        if found == .another {
+            #expect(Set(files) == [original.filename, "bill.txt"] && files.count == 2,
+                    "its original is read again, and the file put in the copy's place read in its own turn: \(files)")
+            #expect(documents.count == 2 && documents.allSatisfy { $0.status == .filed }, "a document of its own: \(documents.map(\.path))")
+        } else {
+            #expect(files.isEmpty, "\(found): the undone original is neither read again nor read as the copy: \(files)")
+            #expect(documents.map(\.id) == [originalID] && documents.first?.status == .undone,
+                    "\(found): it stays as the user left it, and no second document is made of it: \(documents.map(\.path))")
+        }
     }
 
-    /// A copy of a document in the archive waiting for the user, set aside after failing, or left for later is handed
-    /// over to it, which is read again in its place.
-    @Test(arguments: [DocumentStatus.needsReview, .failed, .held])
-    func aCopyOfADocumentWaitingForTheUserOrSetAsideHasItReadAgain(_ status: DocumentStatus) async throws {
+    /// A copy of a document in the archive waiting for the user, set aside after failing, left for later, or being read
+    /// again is handed over to it, which is read again in its place, once.
+    @Test(arguments: [DocumentStatus.needsReview, .failed, .held, .processing])
+    func aCopyOfADocumentInTheArchiveHasItReadAgainWhereverItStands(_ status: DocumentStatus) async throws {
         let base = try await Harness.make()
         defer { base.env.cleanup() }
         let original = try await base.ingest("bill.txt", text: Self.bill)
@@ -208,6 +236,34 @@ extension IngestTests {
         #expect(job.state == .duplicate && copyOf == originalID, "\(status): the copy is handed over")
         #expect(base.env.trashed().map(\.lastPathComponent) == ["bill copy.txt"], "\(status): and goes to the Trash")
         #expect(await analyzer.calls.files == [original.filename], "\(status): its original is read again in its place")
+    }
+
+    /// Two copies of a document left for later, put into Incoming together, are both handed over to it, though the
+    /// first has it read again: it is read again once, and no second document is made of it.
+    @Test func twoCopiesOfADocumentLeftForLaterAreBothHandedOverToIt() async throws {
+        let base = try await Harness.make()
+        defer { base.env.cleanup() }
+        let original = try await base.ingest("bill.txt", text: Self.bill)
+        let originalID = try #require(original.id)
+        try await base.env.database.writer.write { db in
+            try db.execute(sql: "UPDATE documents SET status = 'held' WHERE id = ?", arguments: [originalID])
+        }
+        var services = base.services
+        let analyzer = StubAnalyzer()
+        services.analyzer = analyzer
+        let coordinator = IngestCoordinator(services: services)
+        let first = try #require(await coordinator.enqueue(try base.env.drop("bill copy.txt", text: Self.bill)))
+        let second = try #require(await coordinator.enqueue(try base.env.drop("bill copy 2.txt", text: Self.bill)))
+        await coordinator.drain()
+
+        for id in [first, second] {
+            let job = try #require(try await services.jobs.job(id: id))
+            let copyOf = try job.payload.copyOf
+            #expect(job.state == .duplicate && copyOf == originalID, "each copy is handed over: \(job.sourcePath)")
+        }
+        let documents = try await services.documents.list(DocumentFilter(), limit: 5)
+        #expect(documents.map(\.id) == [originalID], "no second document is made of it: \(documents.map(\.path))")
+        #expect(await analyzer.calls.files == [original.filename], "it is read again once")
     }
 
     /// A copy whose hand-over stopped once its original, left for later, was queued to be read again finishes at the

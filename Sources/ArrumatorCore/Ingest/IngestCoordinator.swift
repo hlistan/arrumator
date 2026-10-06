@@ -404,9 +404,10 @@ public actor IngestCoordinator {
             try checkArchiveThere()
             try await save(&job, &payload, state: .hashing, trace: trace)
             // A copy whose hand-over was decided (`copyOf`), gone to the Trash before a stop: what is left of handing it over
-            // is done now, whatever its original became meanwhile, and whatever file is at its path now (`handOver`).
-            if let id = payload.copyOf, !isStill(source, payload: payload), let original = try await services.documents.document(id: id) {
-                try await handOver(source, to: original, job: &job, payload: &payload, trace: trace)
+            // is done now, whatever its original became meanwhile, and whatever file is at its path now (`finishHandingOver`).
+            if let id = payload.copyOf, try await !isStill(source, payload: payload),
+               let original = try await services.documents.document(id: id) {
+                try await finishHandingOver(source, to: original, job: &job, payload: &payload, trace: trace)
                 return
             }
             guard FileManager.default.fileExists(atPath: source.path) else {

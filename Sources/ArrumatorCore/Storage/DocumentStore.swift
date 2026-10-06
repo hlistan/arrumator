@@ -192,14 +192,14 @@ public struct DocumentStore: Sendable {
         try await database.reader.read { db in try DocumentRecord.filter(Column("uid") == uid).fetchOne(db) }
     }
 
-    /// The oldest document in the archive at `archive` as itself (`DocumentStatus.inArchive`: filed, waiting for the
-    /// user, parked after failing or left for later, and its file in the archive) recorded with this content hash, other
-    /// than `id`: what an exact copy of it is a copy of. A copy an earlier version filed (`duplicate`) is none, and so is a
-    /// document left in Incoming, as one the Trash would not take.
+    /// The oldest document in the archive at `archive` an exact copy is a copy of (`DocumentStatus.takesCopies`: filed,
+    /// waiting for the user, parked after failing, left for later or being read again, and its file in the archive)
+    /// recorded with this content hash, other than `id`. A copy an earlier version filed (`duplicate`) is none, and so is
+    /// a document left in Incoming, as one the Trash would not take.
     public func existing(sha256: String, excluding id: Int64?, archive: URL) async throws -> DocumentRecord? {
         try await database.reader.read { db in
             let (within, args) = DocumentFilter.pathCondition(within: archive)
-            let statuses = DocumentStatus.inArchive.map(\.rawValue).sorted()
+            let statuses = DocumentStatus.takesCopies.map(\.rawValue).sorted()
             var sql = "SELECT d.* FROM documents d WHERE d.sha256 = ? AND d.status IN (\(databaseQuestionMarks(count: statuses.count)))\(within)"
             var arguments: StatementArguments = [sha256]
             arguments += StatementArguments(statuses)

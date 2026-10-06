@@ -186,7 +186,7 @@ public struct PipelineServices: Sendable {
     /// Whether `document` is the original an exact copy is handed over to: in the archive as itself, read again or not,
     /// its file there, as `queueReadingAgain` reads one in the archive; not one undone, or gone from the archive.
     func takesCopy(_ document: DocumentRecord) -> Bool {
-        [.filed, .needsReview, .failed, .held, .processing].contains(document.status) && isInArchive(document)
+        DocumentStatus.takesCopies.contains(document.status) && isInArchive(document)
             && FileManager.default.fileExists(atPath: document.path)
     }
 

@@ -328,8 +328,9 @@ public actor OllamaLifecycle {
     }
 
     /// Restarts a server that stopped, after a backoff, at most `maxRestartsPerHour` times an hour. A restart counts
-    /// only when one was made: not when the server answered again meanwhile, or none could be started.
-    private func supervise() async {
+    /// only when one was made: not when the server answered again meanwhile, or none could be started. One look of
+    /// supervision (`startMonitoring`).
+    func supervise() async {
         if await check().isReady || management == .external || Task.isCancelled { return }
         let hourAgo = time.now().addingTimeInterval(-Units.secondsPerHour)
         restarts = restarts.filter { $0 > hourAgo }
