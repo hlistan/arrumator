@@ -411,6 +411,15 @@ public struct JobStore: Sendable {
         let added = Self.lacking(stored.flatMap { Self.tags(ofPayload: $0["payload_json"], in: db) } ?? [], in: had)
         try saved.update(db)
         if !added.isEmpty { try Self.setTags(had + added, job: id, in: db) }
+        // A filing recorded (`targetPath`, kept in that filing's transaction) is never lost by a save that does not carry
+        // it, as a failure's after it, so the job finishes it and never files the document again.
+        if let storedPayload: String = stored?["payload_json"] {
+            try db.execute(sql: """
+                UPDATE jobs SET payload_json = json_set(payload_json, '$.targetPath', json_extract(?, '$.targetPath'))
+                WHERE id = ? AND json_valid(payload_json) AND json_extract(payload_json, '$.targetPath') IS NULL
+                  AND json_valid(?) AND json_extract(?, '$.targetPath') IS NOT NULL
+                """, arguments: [storedPayload, id, storedPayload, storedPayload])
+        }
         if !saved.state.isActive { try db.execute(sql: "UPDATE jobs SET payload_json = \(Self.withoutText) WHERE id = ?", arguments: [id]) }
         guard !added.isEmpty || !saved.state.isActive else { return Saved(job: saved, tagsAdded: []) }
         saved = try JobRecord.fetchOne(db, key: id) ?? saved

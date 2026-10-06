@@ -163,7 +163,9 @@ extension CommandLineTests {
     /// With Ollama away, `run` says when the file waiting for it is tried again (the second review of the fix of QA
     /// 2026-10-05, RA-1).
     @Test func runSaysWhenAFileWaitingForOllamaIsTriedAgain() async throws {
-        let home = try Home.make()
+        // The file is taken once it has stopped changing, looked at closely, so the test waits for what `run` says, not
+        // for the watcher's patience, on a loaded machine.
+        let home = try Home.make(pipeline: ["watcher": ["stabilityPollInterval": 0.2]])
         defer { home.cleanup() }
         let incoming = home.root.appendingPathComponent("Incoming", isDirectory: true)
         try FileManager.default.createDirectory(at: incoming, withIntermediateDirectories: true)

@@ -46,8 +46,8 @@ public enum DocumentStatus: String, Sendable, Codable, CaseIterable {
 
     /// Statuses of a document an exact copy is a copy of, its file in the archive (`IngestCoordinator.handOver`): one kept
     /// there as itself (`inArchive`), or one being read there (`processing`): left for later, and read again for a copy
-    /// or by the user, or put into the archive by the user and read for the first time (`adopt`), whose job then reads
-    /// it for the copy too (`JobStore.enqueue`).
+    /// or by the user, or put into the archive by the user and read for the first time (`adopt`), which a copy leaves to
+    /// that reading (`PipelineServices.queueReadingAgain(forCopyOf:)`).
     static let takesCopies: Set<DocumentStatus> = inArchive.union([.processing])
 
     /// Statuses of documents whose file is in the archive: those kept as themselves (`inArchive`) and the copies earlier

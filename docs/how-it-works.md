@@ -415,7 +415,8 @@ that is already confirmed, with nothing read, corrected, renamed or moved since 
 nothing and records nothing again. A file that keeps failing to be processed at all (`ingest.maxAttempts`) is parked in
 the archive the same way, with status failed, so Incoming stays clean and nothing is lost; one that cannot be moved into
 the archive either stays in Incoming, failed, saying why, and one that cannot be moved there because the archive's
-folder is not there waits for it to be.
+folder is not there waits for it to be. One already filed when what follows its filing keeps failing, as indexing its
+text, is marked failed where it is, under the name it was filed under or where you moved it since.
 
 While Ollama cannot be reached a document waits where it stopped, an image whose text is too sparse to tell what it is
 included, which is described when Ollama is back rather than filed without its description, and no other file is read
@@ -441,8 +442,9 @@ another profile ([profile and effort](#profile-and-effort)): choose it, and put 
   again](#reading-documents-again) says: from its file, found as it was until it is read, and then renamed where it is
   under the name the model gives, everything the earlier reading gave it, its labels, text and meaning, replaced at
   once. It is queued behind the files already waiting, and shows in Incoming while it waits. Reading with the model takes
-  the place of having only its text read again after a rebuild of the index. A file you put into the archive whose first
-  reading has not ended is left to that reading, and History says it is being read in.
+  the place of having only its text read again after a rebuild of the index. A document whose first reading has not
+  ended and is still at its file, as a file you put into the archive and have not renamed or moved since, is left to that
+  reading, and History says it is being read in; one whose first reading is elsewhere is read again once it has ended.
 - **It keeps its tags**, the folders' and those you gave it, and a copy put into a folder in Incoming, or given `--tag`,
   gives it those tags at once, before it is read; what the model gives replaces what it gave before.
 - **The copy goes to the Trash**, never deleted, as the archive holds the same bytes; take it back from there. A copy

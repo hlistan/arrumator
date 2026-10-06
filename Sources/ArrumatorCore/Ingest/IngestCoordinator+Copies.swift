@@ -43,8 +43,8 @@ extension IngestCoordinator {
     /// the Trash, never deleted, and the original, still in the archive as itself, is read again from the start, as the
     /// file would have been, so a copy put into Incoming reads its document again with the profile in use
     /// (`PipelineServices.queueReadingAgain(forCopyOf:)`); one undone, or gone from the archive, meanwhile is not read
-    /// again, and nothing comes back from the Trash, and one whose reading in is at its file is left to it. Then the original is given the tags the file was queued with
-    /// (`PipelineServices.giveTags`). History records this once, under the original. A stop part way finishes the rest
+    /// again, and nothing comes back from the Trash, and one whose reading in is at its file is left to it. Then the
+    /// original is given the tags the file was queued with (`PipelineServices.giveTags`). History records this once, under the original. A stop part way finishes the rest
     /// at the next start, the copy in the Trash already or not, and another file put at its path meanwhile, as its
     /// original undone back into Incoming, is never taken for it (`isStill`); a copy the Trash refuses fails the job
     /// before its original is read, and stays where it is.
@@ -68,7 +68,7 @@ extension IngestCoordinator {
         try await services.history.record(.duplicate, doc: originalID, job: job.id, trace: trace.traceID, summary: summary,
                                           payload: CopyPayload(copy: copy.path, trashed: trashed?.path, tags: tags.isEmpty ? nil : tags))
         try await save(&job, &payload, state: .duplicate, trace: trace)
-        Log.info(.ingest, "A copy of a document in the archive; its original is read again",
+        Log.info(.ingest, "A copy of a document in the archive, handed over to it",
                  ["copy": copy.path, "doc": String(originalID), "trashed": trashed?.path ?? "-", "original": Self.said(reading)])
         // Another file put at the copy's path once it was in the Trash, which a request for it found this job for, is
         // queued as it came: one the user put there is read, an undone original left where it is (`stays`).
