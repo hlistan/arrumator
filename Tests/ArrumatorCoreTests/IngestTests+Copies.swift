@@ -469,9 +469,10 @@ extension IngestTests {
         #expect(statuses == [.failed, .missing], "which stays as it was, and the one undone, its file gone, is ended: \(statuses)")
     }
 
-    /// A file saved again where a document was left in Incoming, which the user leaves for later as it arrives, is not
-    /// queued: the document stays as the user left it, its reading kept, decided in the write that would queue it.
-    @Test func aDocumentLeftInIncomingThatTheUserLeavesForLaterAsItsFileArrivesStaysSo() async throws {
+    /// A file saved again where a document was left in Incoming, which the user leaves for later as it arrives, is a new
+    /// arrival: the document left for later is the user's decision about the file it was, which this one does not
+    /// inherit, and is ended, decided in the write that queues the file, and so at every later pass alike.
+    @Test func aDocumentLeftInIncomingLeftForLaterAsItsFileArrivesIsEndedAndTheFileIsANewArrival() async throws {
         let h = try await Harness.make()
         defer { h.env.cleanup() }
         let file = try h.env.drop("scan.txt", text: Self.bill)
@@ -488,14 +489,42 @@ extension IngestTests {
         let left = ids[1]
         try await h.env.database.writer.write { db in
             try db.execute(sql: """
-                CREATE TEMP TRIGGER left_for_later_meanwhile AFTER UPDATE OF status ON documents WHEN NEW.status = 'missing' BEGIN
+                CREATE TEMP TRIGGER left_for_later_meanwhile AFTER UPDATE OF status ON documents
+                WHEN NEW.status = 'missing' AND NEW.id != \(left) BEGIN
                   UPDATE documents SET status = 'held' WHERE id = \(left);
                 END
                 """)
         }
-        #expect(await h.coordinator.enqueue(file) == nil, "the file is not queued")
-        #expect(try await h.services.documents.document(id: left)?.status == .held, "the document stays as the user left it")
-        #expect(try await h.jobs().isEmpty, "and nothing is read")
+        let id = try #require(await h.coordinator.enqueue(file), "the file is queued")
+        #expect(try await h.services.jobs.job(id: id)?.docId == nil, "as a new arrival, not as the document left for later")
+        #expect(try await h.services.documents.document(id: left)?.status == .missing, "which is ended")
+        #expect(await h.coordinator.enqueue(file) == id, "a rescan finds the same job")
+        let ended = try await h.services.history.events(limit: 10, kinds: [.missing]).filter { $0.docId == left }
+        #expect(ended.count == 1, "and History says it ended once: \(ended.map(\.summary))")
+        await h.coordinator.drain()
+        let read = try await h.services.documents.list(DocumentFilter(), limit: 5).filter { !ids.contains($0.id ?? 0) }
+        #expect(read.count == 1 && read.first?.status == .filed, "the file is filed, a document of its own: \(read.map(\.path))")
+    }
+
+    /// A file asked for where a document was left in Incoming, which the user has read again as it arrives, is that
+    /// reading's: the request is found to be its job, and gives it its tags.
+    @Test func aFileAskedForAsItsDocumentIsReadAgainGivesThatReadingItsTags() async throws {
+        let h = try await Harness.make()
+        defer { h.env.cleanup() }
+        let file = try h.env.drop("scan.txt", text: Self.bill)
+        var record = DocumentRecord.arrived(path: file.spelledOnDisk.path, sha256: "an earlier version", size: 1, uttype: "public.plain-text",
+                                            inode: nil, modified: nil, now: h.env.time.now())
+        record.status = .failed
+        let left = try await h.services.documents.save(record)
+        let id = try #require(left.id)
+        let reading = try #require(try await h.services.queueReadingAgain(left, settings: await h.services.settings.current))
+        var payload = JobPayload()
+        payload.tags = h.services.tags(for: file, given: ["Taxes 2024"], settings: await h.services.settings.current)
+        let queued = try await h.coordinator.queue(file.spelledOnDisk.path, again: id, payload: payload)
+        #expect(queued.id == reading && !queued.isNew && queued.tagsAdded.map(\.label.value) == ["Taxes 2024"],
+                "the reading's job, given the tags: \(queued)")
+        #expect(try await h.services.documents.document(id: id)?.status == .processing, "the document is read as it is")
+        #expect(try await h.services.history.events(limit: 10, kinds: [.missing]).isEmpty, "and is never said to be gone")
     }
 
     /// A document asked whose file a path holds, changed by the user before it is ended, as one left in Incoming then

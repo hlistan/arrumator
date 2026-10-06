@@ -166,10 +166,7 @@ public actor IngestCoordinator {
             var payload = JobPayload()
             let given = services.tags(for: url, given: tags, settings: await services.settings.current)
             payload.tags = given.isEmpty ? nil : given
-            guard let queued = try await queue(path, again: again, payload: payload) else {
-                Log.info(.ingest, "Not queued: the document left in Incoming there was changed meanwhile", ["path": path])
-                return nil
-            }
+            let queued = try await queue(path, again: again, payload: payload)
             // A file already queued arrives once: a rescan, or a request that asks no more, records nothing again.
             if queued.isNew {
                 let summary = ([url.lastPathComponent] + [GivenTag.note(given)].compactMap { $0 }).joined(separator: " · ")

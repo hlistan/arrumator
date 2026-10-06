@@ -1,4 +1,5 @@
 import Foundation
+import GRDB
 
 /// How a job's trace ends (`TraceRecord.outcome`): the state the job ended in, or what it waits for.
 enum JobOutcome: String {
@@ -282,26 +283,38 @@ extension IngestCoordinator {
         let now = services.time.now()
         try await services.database.writer.write { db in
             guard let read = try DocumentRecord.fetchOne(db, key: docID), read.status == known.status, read.status.isSetAside else { return }
-            var gone = read
-            gone.status = .missing
-            gone.updatedAt = now
-            try gone.updateChanges(db, from: read)
-            try HistoryStore.insert(db, .missing, at: now, doc: docID, summary: "\(read.filename) is no longer in Incoming; the file there now is another")
+            try Self.end(db, replaced: read, at: now)
         }
     }
 
+    /// Marks `read`, a document set aside whose file another came in place of, missing, and says so in History, in the
+    /// caller's transaction.
+    private static func end(_ db: Database, replaced read: DocumentRecord, at now: Date) throws {
+        var gone = read
+        gone.status = .missing
+        gone.updatedAt = now
+        try gone.updateChanges(db, from: read)
+        try HistoryStore.insert(db, .missing, at: now, doc: read.id, summary: "\(read.filename) is no longer in Incoming; the file there now is another")
+    }
+
     /// Queues the file at `path` to be read in, as document `again`, left in Incoming, arriving again (its reading
-    /// forgotten, `IndexStore.forgetReading`), or as a new file: decided in the write that queues it, so a document the
-    /// user left for later or undid since it was found left in Incoming stays as the user left it, and nothing is
-    /// queued (nil).
-    func queue(_ path: String, again: Int64?, payload: JobPayload) async throws -> JobStore.Queued? {
+    /// forgotten, `IndexStore.forgetReading`), or as a new file, decided in the write that queues it. A document no longer
+    /// left in Incoming by then is not the file's: one the user left for later meanwhile is the user's decision about the
+    /// file it was, which this one does not inherit, and is ended (`replaced`); one read again meanwhile is read by its
+    /// own job, which this request is then found to be (`JobStore.enqueue`), its tags given to it.
+    func queue(_ path: String, again: Int64?, payload: JobPayload) async throws -> JobStore.Queued {
         let now = services.time.now()
         return try await services.database.writer.write { db in
-            if let again {
-                guard let read = try DocumentRecord.fetchOne(db, key: again), read.status == .failed else { return nil }
-                try IndexStore.forgetReading(db, of: read, at: now)
+            var docID = again
+            if let again, let read = try DocumentRecord.fetchOne(db, key: again) {
+                if read.status == .failed {
+                    try IndexStore.forgetReading(db, of: read, at: now)
+                } else {
+                    if read.status.isSetAside { try Self.end(db, replaced: read, at: now) }
+                    docID = nil
+                }
             }
-            return try JobStore.enqueue(db, path: path, kind: .ingest, docID: again, payload: payload, givesWay: false, at: now)
+            return try JobStore.enqueue(db, path: path, kind: .ingest, docID: docID, payload: payload, givesWay: false, at: now)
         }
     }
 
