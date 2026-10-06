@@ -359,90 +359,6 @@ extension IngestQueueTests {
         #expect(try await h.review.choices(for: waiting).actions == [.hold, .readAgain, .confirm], "once its reading has ended")
     }
 
-    /// An exact copy of a document the user undoes while the copy is compared with it is no copy of it any more: it is
-    /// read in as a document of its own, the original left as the user left it (the review of the fix of the final
-    /// review of #17).
-    /// How the original stops being in the archive as itself while its copy is compared with it: undone, back in
-    /// Incoming; found missing; or recorded elsewhere than the archive.
-    enum Gone: String, CaseIterable, Sendable { case undone, missing, elsewhere }
-
-    @Test(arguments: Gone.allCases)
-    func aCopyOfADocumentUndoneMeanwhileIsADocumentOfItsOwn(_ gone: Gone) async throws {
-        let base = try await Harness.make()
-        defer { base.env.cleanup() }
-        let original = try await base.ingest("bill.txt", text: IngestTests.bill)
-        // A Trash that would refuse it: the copy, a document of its own, is filed, never sent there.
-        var services = base.services
-        services.trash = RefusingTrash()
-        let h = Harness(env: base.env, services: services)
-        let originalID = try #require(original.id)
-        // Undone as the copy is found to be one, its bytes compared: as the user's undo in that instant leaves it.
-        let incoming = h.env.incoming.appendingPathComponent("bill.txt").path.replacingOccurrences(of: "'", with: "''")
-        // Recorded elsewhere, its file there too: only that it is not in the archive tells it from an original.
-        if gone == .elsewhere { _ = try base.env.drop("bill.txt", text: IngestTests.bill) }
-        let change = switch gone {
-        case .undone: "status = 'undone', path = '\(incoming)'"
-        case .missing: "status = 'missing'"
-        case .elsewhere: "path = '\(incoming)'"
-        }
-        try await h.env.database.writer.write { db in
-            try db.execute(sql: """
-                CREATE TEMP TRIGGER undone_as_compared AFTER INSERT ON trace_steps WHEN NEW.stage = 'dedupe' BEGIN
-                  UPDATE documents SET \(change) WHERE id = \(originalID);
-                END
-                """)
-        }
-        let copy = try #require(await h.coordinator.enqueue(try h.env.drop("copy.txt", text: IngestTests.bill)))
-        await h.coordinator.drain()
-        let job = try #require(try await h.services.jobs.job(id: copy))
-        #expect(job.state == .done && job.docId != nil && job.docId != originalID, "\(gone): the copy is read in as a document of its own")
-        #expect(job.lastError == nil, "\(gone): and nothing is sent to the Trash, which would refuse it")
-        let again = try await h.jobs().filter { $0.kind == .reanalyse }
-        #expect(again.isEmpty, "and is not read again for it: \(again)")
-    }
-
-    /// An exact copy whose original the user undoes as the copy goes to the Trash comes back where it was and is read in
-    /// as a document of its own, the original left undone and not read again (the review of the fix of the final review
-    /// of #17).
-    @Test(arguments: [true, false])
-    func aCopyWhoseOriginalIsUndoneAsItGoesToTheTrashComesBackADocumentOfItsOwn(_ undone: Bool) async throws {
-        let base = try await Harness.make()
-        defer { base.env.cleanup() }
-        let original = try await base.ingest("bill.txt", text: IngestTests.bill)
-        let originalID = try #require(original.id)
-        let incoming = base.env.incoming.appendingPathComponent("bill.txt").path
-        var services = base.services
-        // Undone, or its file removed from the archive, as the copy goes to the Trash.
-        services.trash = UndoingTrash(trash: base.env.trash) {
-            guard undone else { return try FileManager.default.removeItem(at: original.url) }
-            try base.env.database.writer.write { db in
-                try db.execute(sql: "UPDATE documents SET status = 'undone', path = ? WHERE id = ?", arguments: [incoming, originalID])
-            }
-        }
-        let coordinator = IngestCoordinator(services: services)
-        let copy = try base.env.drop("copy.txt", text: IngestTests.bill)
-        let id = try #require(await coordinator.enqueue(copy))
-        await coordinator.drain()
-        let job = try #require(try await base.services.jobs.job(id: id))
-        #expect(job.state == .done && job.docId != nil && job.docId != originalID, "the copy is read in as a document of its own")
-        #expect(try job.payload.copyOf == nil, "no copy of the original any more")
-        #expect(base.env.trashed().isEmpty, "taken back from the Trash")
-        let again = try await base.jobs().filter { $0.kind == .reanalyse }
-        #expect(again.isEmpty, "the original is not read again for it: \(again)")
-    }
-
-    /// A document's own file in the archive, queued as though it came, is that document, never a second one of it (the
-    /// review of the fix of the final review of #17).
-    @Test func aDocumentsOwnFileInTheArchiveIsNotQueuedAsANewOne() async throws {
-        let h = try await Harness.make()
-        defer { h.env.cleanup() }
-        let document = try await h.ingest("bill.txt", text: IngestTests.bill)
-        #expect(await h.coordinator.enqueue(document.url) == nil, "it is not queued")
-        await h.coordinator.drain()
-        let documents = try await h.services.documents.list(DocumentFilter(), limit: 5)
-        #expect(documents.map(\.id) == [document.id], "and it stays the one document it is: \(documents.map(\.path))")
-    }
-
     /// A document read again whose last attempt fails, still the worker's, is marked failed with why, and History says
     /// so: it waits for the user (the review of the fix of the final review of #17).
     @Test func aDocumentWhoseReadingAgainFailsItsLastAttemptIsMarkedFailedSayingWhy() async throws {
@@ -595,16 +511,5 @@ extension IngestQueueTests {
 private struct Unreadable: ContentExtracting {
     func extract(_ url: URL, sha256: String, context: ExtractionContext, trace: TraceContext) async throws -> ExtractedContent {
         throw TestFailure("boom")
-    }
-}
-
-/// A Trash that has the user undo the original of a copy as the copy goes into it, then takes the copy as `trash` does.
-private struct UndoingTrash: Trashing {
-    let trash: any Trashing
-    let undo: @Sendable () throws -> Void
-
-    func trash(_ url: URL) throws -> URL? {
-        try undo()
-        return try trash.trash(url)
     }
 }

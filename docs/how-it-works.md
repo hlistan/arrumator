@@ -448,10 +448,11 @@ that document to be read again. This is how you have some documents read with an
   the Trash will not take, as on a volume without one, is not tried again: it stays in Incoming, waiting for you in
   Needs You as not filed, saying why, a rescan leaves it alone, and the document is not read again. **Read Again** on
   it, once the Trash takes it, hands it over as any copy: it becomes no second document. A copy of a document you undo,
-  or that leaves the archive, while the copy is looked at is a document of its own, taken back from the Trash should it
-  have gone there meanwhile; the document is left as you left it.
-- **A document's own file in the archive**, given to `arrumatorcli ingest`, is that document, never a second one of it:
-  it is not queued, and **Read Again** reads it again.
+  or that leaves the archive, before the copy is found one is a document of its own. Once it is found one, it is
+  handed over whatever you do to the document meanwhile, as though you did it after: it stays in the Trash, and a
+  document no longer in the archive is not read again; a file put where the copy was is never taken for it.
+- **A file in the archive**, given to `arrumatorcli ingest`, is not queued: a document's own file is that document,
+  never a second one of it, and **Read Again** reads it again; one you put there is read where it is.
 - **History records it once, under the document**: `bill.pdf is a copy of 2026-07-05 EDP Comercial - Fatura.pdf, which
   is read again; the copy is in the Trash; tagged “Taxes 2024” by its folder in Incoming`, with where the copy was and
   went. The reading that follows is recorded as any: renamed from the name the document has, never the one it arrived

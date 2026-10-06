@@ -138,16 +138,17 @@ public actor IngestCoordinator {
             return nil
         }
         let path = url.path
+        // A file in the archive is never an arrival, which would be a second document of a document's own file, or send
+        // to the Trash, as a copy, one the user put there, which is read where it is, or one an earlier version set
+        // aside beside its original: a document is read again as such (`ReviewActions.retry`).
+        if services.archive.holds(path) {
+            Log.debug(.ingest, "Ignoring a file in the archive", ["path": path])
+            return nil
+        }
         do {
-            let known = try await knownDocument(at: path)
+            let known = try await services.documents.document(path: path)
             if let known, try await stays(known, at: url) {
                 Log.debug(.ingest, "Ignoring held document", ["path": path, "doc": String(known.id ?? 0)])
-                return nil
-            }
-            // A document's own file in the archive is that document, never a second one of it: read again, it is asked
-            // for as such (`ReviewActions.retry`).
-            if let known, DocumentStatus.inArchive.contains(known.status), services.isInArchive(known) {
-                Log.debug(.ingest, "Ignoring a document's own file in the archive", ["path": path, "doc": String(known.id ?? 0)])
                 return nil
             }
             if let known, [.held, .undone].contains(known.status) { try await replaced(known) }
@@ -402,13 +403,13 @@ public actor IngestCoordinator {
         if job.state == .pending || job.state == .hashing {
             try checkArchiveThere()
             try await save(&job, &payload, state: .hashing, trace: trace)
+            // A copy whose hand-over was decided (`copyOf`), gone to the Trash before a stop: what is left of handing it over
+            // is done now, whatever its original became meanwhile, and whatever file is at its path now (`handOver`).
+            if let id = payload.copyOf, !isStill(source, payload: payload), let original = try await services.documents.document(id: id) {
+                try await handOver(source, to: original, job: &job, payload: &payload, trace: trace)
+                return
+            }
             guard FileManager.default.fileExists(atPath: source.path) else {
-                // A copy that went to the Trash before a stop: what is left of handing it over is done now, unless its
-                // original left the archive meanwhile, and the copy is then a file gone.
-                if let id = payload.copyOf, let original = try await services.documents.document(id: id),
-                   try await handOver(source, to: original, job: &job, payload: &payload, trace: trace) {
-                    return
-                }
                 try await save(&job, &payload, state: .cancelled, trace: trace)
                 try await end(job.docId, as: .missing)
                 try await services.history.record(.missing, doc: job.docId, job: job.id, trace: trace.traceID,
@@ -423,11 +424,13 @@ public actor IngestCoordinator {
             payload.size = fingerprint.size
             payload.mtime = fingerprint.modified
             payload.inode = fingerprint.inode
-            // A copy of a document undone or gone from the archive meanwhile is a document of its own (`handOver`).
+            // A copy of a document undone or gone from the archive before it is handed over is a document of its own
+            // (`handOver`), as is one of no original any more, though a stop came after it was found one.
             if let original = try await original(of: source, sha256: sha, job: job, trace: trace),
                try await handOver(source, to: original, job: &job, payload: &payload, trace: trace) {
                 return
             }
+            payload.copyOf = nil
             let document = try await ensureDocument(for: job, source: source, sha: sha, fingerprint: fingerprint)
             job.docId = document.id
             // The tags are the document's from when it is one, read or not.

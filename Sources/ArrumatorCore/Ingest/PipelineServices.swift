@@ -192,8 +192,8 @@ public struct PipelineServices: Sendable {
 
     /// Queues document `docID`, the original an exact copy came of, to be read again in its place, as `queueReadingAgain`
     /// queues a document in the archive, in the write that finds it there still as itself, its file in the archive: one
-    /// undone, or gone from the archive, meanwhile is not read again for the copy, which is then a document of its own
-    /// (`IngestCoordinator`). Whether it was queued.
+    /// undone, or gone from the archive, since the copy was handed over to it is not read again for it
+    /// (`IngestCoordinator.handOver`). Whether it was queued.
     public func queueReadingAgain(forCopyOf docID: Int64) async throws -> Bool {
         let now = time.now()
         return try await database.writer.write { [self] db in
