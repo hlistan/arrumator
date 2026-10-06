@@ -441,7 +441,8 @@ another profile ([profile and effort](#profile-and-effort)): choose it, and put 
   again](#reading-documents-again) says: from its file, found as it was until it is read, and then renamed where it is
   under the name the model gives, everything the earlier reading gave it, its labels, text and meaning, replaced at
   once. It is queued behind the files already waiting, and shows in Incoming while it waits. Reading with the model takes
-  the place of having only its text read again after a rebuild of the index.
+  the place of having only its text read again after a rebuild of the index. A file you put into the archive whose first
+  reading has not ended is left to that reading, and History says it is being read in.
 - **It keeps its tags**, the folders' and those you gave it, and a copy put into a folder in Incoming, or given `--tag`,
   gives it those tags at once, before it is read; what the model gives replaces what it gave before.
 - **The copy goes to the Trash**, never deleted, as the archive holds the same bytes; take it back from there. A copy
@@ -506,10 +507,12 @@ an earlier version filed, cannot be read again, which is said at once.
   and the documents, and asked again while every one of them waits, nothing; each reading is recorded under its
   document, before its filing. **Read Again** on one document is recorded so too, under it, as `Read again: <name>`,
   when it queues the reading, as it does in place of its turn in reading every document again, or of reading its text
-  again after a rebuild of the index. Asked while another reading of it waits or is under way, an earlier Read Again's,
-  an exact copy's, or its reading in (as it came into Incoming, as its file was saved again there, or as a file you put
-  into the archive yourself), it is read with that one, and nothing more is recorded; once the reading in of a file you
-  put into the archive has filed it where it is, and until that reading ends, Read Again is refused.
+  again after a rebuild of the index. Asked while another reading of it waits or is under way at its file, an earlier
+  Read Again's, an exact copy's, or its reading in before that has filed it (as it came into Incoming, as its file was
+  saved again there, or as a file you put into the archive yourself), it is read with that one, and nothing more is
+  recorded. Asked once its reading in has filed it, before that reading ends, it is recorded and read once that reading
+  has ended; but where that reading is at the document's file, as for a file you put into the archive, filed where it
+  is, Read Again is refused until then.
 
 ## Your own changes
 

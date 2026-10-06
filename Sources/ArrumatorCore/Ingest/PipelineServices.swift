@@ -211,14 +211,26 @@ public struct PipelineServices: Sendable {
             && FileManager.default.fileExists(atPath: document.path)
     }
 
+    /// What becomes of the original an exact copy is handed over to (`queueReadingAgain(forCopyOf:)`).
+    public enum CopysOriginal: Sendable, Equatable {
+        /// It is read again in the copy's place.
+        case readAgain
+        /// Its reading in, at its file, as a file put into the archive, reads it, or has just read it.
+        case beingReadIn
+        /// It is no longer in the archive as itself, undone or gone, and is not read again.
+        case left
+    }
+
     /// Queues document `docID`, the original an exact copy came of, to be read again in its place, as `queueReadingAgain`
     /// queues a document in the archive, in the write that finds it there still as itself, its file in the archive: one
     /// undone, or gone from the archive, since the copy was handed over to it is not read again for it
-    /// (`IngestCoordinator.handOver`). Whether it was queued.
-    public func queueReadingAgain(forCopyOf docID: Int64) async throws -> Bool {
+    /// (`IngestCoordinator.handOver`), and one whose reading in is at its file, which a request for that file would only
+    /// join, is left to it. What became of it.
+    public func queueReadingAgain(forCopyOf docID: Int64) async throws -> CopysOriginal {
         let now = time.now()
         return try await database.writer.write { [self] db in
-            guard let read = try DocumentRecord.fetchOne(db, key: docID), takesCopy(read) else { return false }
+            guard let read = try DocumentRecord.fetchOne(db, key: docID), takesCopy(read) else { return .left }
+            if try JobStore.isReadIn(db, docID: docID, at: read.path) { return .beingReadIn }
             var doc = read
             if doc.status == .held {
                 doc.status = .processing
@@ -227,7 +239,7 @@ public struct PipelineServices: Sendable {
             }
             _ = try JobStore.enqueue(db, path: doc.path, kind: .reanalyse, docID: docID,
                                      payload: Self.readingAgain(tags: Self.keptTags(doc.labels), asked: doc), givesWay: false, at: now)
-            return true
+            return .readAgain
         }
     }
 

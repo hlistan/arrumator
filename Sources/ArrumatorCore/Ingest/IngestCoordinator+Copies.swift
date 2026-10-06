@@ -43,7 +43,7 @@ extension IngestCoordinator {
     /// the Trash, never deleted, and the original, still in the archive as itself, is read again from the start, as the
     /// file would have been, so a copy put into Incoming reads its document again with the profile in use
     /// (`PipelineServices.queueReadingAgain(forCopyOf:)`); one undone, or gone from the archive, meanwhile is not read
-    /// again, and nothing comes back from the Trash. Then the original is given the tags the file was queued with
+    /// again, and nothing comes back from the Trash, and one whose reading in is at its file is left to it. Then the original is given the tags the file was queued with
     /// (`PipelineServices.giveTags`). History records this once, under the original. A stop part way finishes the rest
     /// at the next start, the copy in the Trash already or not, and another file put at its path meanwhile, as its
     /// original undone back into Incoming, is never taken for it (`isStill`); a copy the Trash refuses fails the job
@@ -57,22 +57,31 @@ extension IngestCoordinator {
                 throw IngestError.notTrashed(copy.path, reason: error.localizedDescription)
             }
         }
-        let readAgain = try await services.queueReadingAgain(forCopyOf: originalID)
+        let reading = try await services.queueReadingAgain(forCopyOf: originalID)
         if let given = payload.tags { payload.tags = try await services.giveTags(given, docID: originalID, trace: trace) }
         // A file that was a document of its own, as one left in Incoming or one that changed into this copy, ends as one.
         try await end(job.docId, as: .duplicate, of: originalID)
         let tags = payload.tags ?? []
         let summary = ["\(copy.lastPathComponent) is a copy of \(original.filename), "
-                       + (readAgain ? "which is read again" : "which has left the archive since, and is not read again"),
+                       + Self.said(reading),
                        trashed.map { _ in "the copy is in the Trash" }, GivenTag.note(tags)].compactMap { $0 }.joined(separator: "; ")
         try await services.history.record(.duplicate, doc: originalID, job: job.id, trace: trace.traceID, summary: summary,
                                           payload: CopyPayload(copy: copy.path, trashed: trashed?.path, tags: tags.isEmpty ? nil : tags))
         try await save(&job, &payload, state: .duplicate, trace: trace)
         Log.info(.ingest, "A copy of a document in the archive; its original is read again",
-                 ["copy": copy.path, "doc": String(originalID), "trashed": trashed?.path ?? "-", "readAgain": String(readAgain)])
+                 ["copy": copy.path, "doc": String(originalID), "trashed": trashed?.path ?? "-", "original": Self.said(reading)])
         // Another file put at the copy's path once it was in the Trash, which a request for it found this job for, is
         // queued as it came: one the user put there is read, an undone original left where it is (`stays`).
         if FileManager.default.fileExists(atPath: copy.path) { await enqueue(copy) }
+    }
+
+    /// What History says of the original a copy is handed over to, as it became (`PipelineServices.CopysOriginal`).
+    static func said(_ original: PipelineServices.CopysOriginal) -> String {
+        switch original {
+        case .readAgain: "which is read again"
+        case .beingReadIn: "which is being read in"
+        case .left: "which has left the archive since, and is not read again"
+        }
     }
 
     /// Whether the file at `copy` is still the copy the job hashed (`JobPayload.fingerprint`, kept with `copyOf`), not

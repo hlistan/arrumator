@@ -205,9 +205,12 @@ public struct JobStore: Sendable {
 
     /// The active jobs reading document `docID` in (`isReadIn`).
     private static func readingIn(_ docID: Int64) -> QueryInterfaceRequest<JobRecord> {
-        JobRecord.filter(Column("doc_id") == docID).filter([JobKind.ingest, .adopt].map(\.rawValue).contains(Column("kind")))
+        JobRecord.filter(Column("doc_id") == docID).filter(readingInKinds.map(\.rawValue).contains(Column("kind")))
             .filter(activeStates.contains(Column("state")))
     }
+
+    /// The jobs that read a document in, as its file came: into Incoming (`ingest`), or put into the archive (`adopt`).
+    private static let readingInKinds: [JobKind] = [.ingest, .adopt]
 
     /// Cancels the active job reading document `docID` again (`reanalyse`), in a transaction of the caller's that sets
     /// the document aside, as leaving it for later or undoing it: its worker loses its claim, and its reading changes
@@ -246,11 +249,10 @@ public struct JobStore: Sendable {
     /// indexed, as when it waits to be tried again after a failure that came after its filing. Reading it for search
     /// (`reindex`) indexes what that reading read, and need not wait.
     private static var waitsForItsReadingIn: SQLExpression {
-        let states = activeStates.map { "'\($0)'" }.joined(separator: ", ")
+        let (states, kinds) = (activeStates.map { "'\($0)'" }.joined(separator: ", "), readingInKinds.map { "'\($0.rawValue)'" }.joined(separator: ", "))
         return SQL(sql: """
             kind = '\(JobKind.reanalyse.rawValue)' AND EXISTS (SELECT 1 FROM jobs AS readingIn
-              WHERE readingIn.doc_id = jobs.doc_id AND readingIn.kind IN ('\(JobKind.ingest.rawValue)', '\(JobKind.adopt.rawValue)')
-              AND readingIn.state IN (\(states)))
+              WHERE readingIn.doc_id = jobs.doc_id AND readingIn.kind IN (\(kinds)) AND readingIn.state IN (\(states)))
             """).sqlExpression
     }
 

@@ -265,7 +265,7 @@ by meaning**, documents embedded by another model are found by meaning only once
   exact copy (under the document it has read again, with where the copy went and the tags it gave), a document you ask
   to read again (under it, `Read again: <name>`, when your request queues its reading, as it does in place of its
   turn in reading every document again, or of reading its text again after a rebuild of the index: not while an earlier
-  Read Again's, an exact copy's or its reading in waits or is under way),
+  Read Again's, an exact copy's, or its reading in, before that has filed it, waits or is under way),
   every document read again at once (under none, with the profile and the documents, `Read every document again with
   the profile “Standard”: 120 documents`), extraction, reading
   (with the labels it gave, which of the model's labels were tidied and why, and what gave its tags, or that nothing
