@@ -9,7 +9,8 @@ import Synchronization
 /// tests that wait on a command hold (`ChildProcess`): an answer queued behind them might never be sent.
 final class LoopbackOllama: Sendable {
     private let stopped = Flag()
-    private let port: UInt16
+    /// The address of the server, which listens from the moment it is made.
+    let address: String
 
     /// Whether the server is to stop, which its listening thread looks at between connections.
     private final class Flag: Sendable {
@@ -17,9 +18,6 @@ final class LoopbackOllama: Sendable {
         var isSet: Bool { value.withLock { $0 } }
         func set() { value.withLock { $0 = true } }
     }
-
-    /// The address of the server, which listens from the moment it is made.
-    var address: String? { "http://127.0.0.1:\(port)" }
 
     /// Settings for a command run against the stand-in (`Home.make(pipeline:)`): its answers are waited for as long as a
     /// loaded machine may take, as a test asks what the command does with them, never how fast the runner is.
@@ -38,6 +36,10 @@ final class LoopbackOllama: Sendable {
     init(chat: Answer = emptyAnswer) throws {
         let socket = Darwin.socket(AF_INET, SOCK_STREAM, 0)
         guard socket >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        // A client gone before its answer is written ends the write, not the test process: every connection taken from
+        // this socket inherits it, whatever state the client left it in.
+        var noSignal: Int32 = 1
+        setsockopt(socket, SOL_SOCKET, SO_NOSIGPIPE, &noSignal, socklen_t(MemoryLayout<Int32>.size))
         var loopback = sockaddr_in()
         loopback.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
         loopback.sin_family = sa_family_t(AF_INET)
@@ -55,7 +57,7 @@ final class LoopbackOllama: Sendable {
             close(socket)
             throw failure
         }
-        port = UInt16(bigEndian: assigned.sin_port)
+        address = "http://127.0.0.1:\(UInt16(bigEndian: assigned.sin_port))"
         let stopped = stopped
         Thread { Self.accept(on: socket, until: stopped, chat: chat) }.start()
     }
@@ -78,9 +80,6 @@ final class LoopbackOllama: Sendable {
     /// Reads a request whole, by its headers and its Content-Length, then answers it and closes the connection.
     private static func serve(_ connection: Int32, chat: Answer) {
         defer { close(connection) }
-        // A client gone before its answer is written ends the write, not the test process.
-        var noSignal: Int32 = 1
-        setsockopt(connection, SOL_SOCKET, SO_NOSIGPIPE, &noSignal, socklen_t(MemoryLayout<Int32>.size))
         var received = Data()
         var chunk = [UInt8](repeating: 0, count: 1 << 16)
         while true {

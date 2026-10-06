@@ -381,19 +381,23 @@ extension IngestCoordinator {
             } else {
                 // The document is marked failed, and History says so, in the write that checks the job's claim still
                 // holds, as a file is filed (`DocumentFiler`): one the user left for later before it stays as the user
-                // left it, as leaving it for later cancels the job in its own write (`ReviewActions.hold`).
+                // left it, as leaving it for later cancels the job in its own write (`ReviewActions.hold`). A filed
+                // document read again for search after a rebuild (`reindex`) stays as its record says, filed, held or
+                // undone, whose reading for search alone failed: History says so.
                 let now = services.time.now()
                 let analysisJSON = try JSON.string(analysis)
                 let summary = "\(document.originalFilename): \(message)"
                 do {
                     try await services.database.writer.write { db in
                         _ = try JobStore.save(job, at: now, in: db)
-                        guard let read = try DocumentRecord.fetchOne(db, key: docID) else { throw IngestError.documentNotFound(docID) }
-                        var failed = read
-                        failed.status = .failed
-                        failed.analysisJson = analysisJSON
-                        failed.updatedAt = now
-                        try failed.updateChanges(db, from: read)
+                        if job.kind != .reindex {
+                            guard let read = try DocumentRecord.fetchOne(db, key: docID) else { throw IngestError.documentNotFound(docID) }
+                            var failed = read
+                            failed.status = .failed
+                            failed.analysisJson = analysisJSON
+                            failed.updatedAt = now
+                            try failed.updateChanges(db, from: read)
+                        }
                         try HistoryStore.insert(db, .failed, at: now, doc: docID, job: job.id, trace: trace.traceID, summary: summary)
                     }
                 } catch IngestError.claimLost { return .lost }

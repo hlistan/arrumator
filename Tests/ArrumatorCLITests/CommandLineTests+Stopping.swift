@@ -317,13 +317,12 @@ extension CommandLineTests {
     @Test func ingestFailsAFileWhoseReadingFailedHereOnceItBecameADocument() async throws {
         let ollama = try LoopbackOllama(chat: ("500 Internal Server Error", #"{"error":"model runner has unexpectedly stopped"}"#))
         defer { ollama.stop() }
-        #expect(await Patience.until { ollama.address != nil }, "the stand-in listens")
         // The error is the server's, asked once: no time is spent asking it again, and the file is not due again before
         // the command ends.
         var once = LoopbackOllama.patient
         once["ollama"] = (once["ollama"] as? [String: Any] ?? [:]).merging(["retryDelays": [Int]()]) { $1 }
         once["ingest"] = ["retryDelays": [3_600]]
-        let home = try Home.make(ollamaURL: try #require(ollama.address), pipeline: once)
+        let home = try Home.make(ollamaURL: ollama.address, pipeline: once)
         defer { home.cleanup() }
         let note = home.root.appendingPathComponent("note.txt")
         try Data("Fatura de Maria Exemplo".utf8).write(to: note)
@@ -377,11 +376,10 @@ extension CommandLineTests {
                 "and the list shows it so: \(shown.text)")
     }
 
-    @Test func aDryRunOfSeveralFilesPrintsOneListNamingEachAndIngestShowsWhatCameOfTheRest() async throws {
+    @Test func aDryRunOfSeveralFilesPrintsOneListNamingEachAndIngestShowsWhatCameOfTheRest() throws {
         let ollama = try LoopbackOllama()
         defer { ollama.stop() }
-        try #require(await Patience.until { ollama.address != nil }, "the stand-in Ollama listens on the loopback address")
-        let home = try Home.make(ollamaURL: try #require(ollama.address), pipeline: LoopbackOllama.patient)
+        let home = try Home.make(ollamaURL: ollama.address, pipeline: LoopbackOllama.patient)
         defer { home.cleanup() }
         let notes = ["one.txt", "two.txt"].map { home.root.appendingPathComponent($0) }
         for (index, note) in notes.enumerated() { try Data("Note number \(index + 1)".utf8).write(to: note) }

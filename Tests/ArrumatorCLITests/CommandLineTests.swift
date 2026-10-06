@@ -192,11 +192,10 @@ import UniformTypeIdentifiers
         #expect(paths == [moved.path], "and the document is where it was moved to: \(String(describing: found))")
     }
 
-    @Test func modelsAndReplayAnswerInJSONFromTheServerTheSettingsName() async throws {
+    @Test func modelsAndReplayAnswerInJSONFromTheServerTheSettingsName() throws {
         let ollama = try LoopbackOllama()
         defer { ollama.stop() }
-        try #require(await Patience.until { ollama.address != nil }, "the stand-in Ollama listens on the loopback address")
-        let home = try Home.make(ollamaURL: try #require(ollama.address), pipeline: LoopbackOllama.patient)
+        let home = try Home.make(ollamaURL: ollama.address, pipeline: LoopbackOllama.patient)
         defer { home.cleanup() }
         let listed = try run(home, ["models", "list", "--json"])
         #expect(try JSON.decoder.decode([InstalledModel].self, from: listed.stdout).isEmpty,

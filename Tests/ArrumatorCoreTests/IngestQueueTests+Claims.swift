@@ -191,8 +191,8 @@ extension IngestQueueTests {
             try String.fetchOne(db, sql: "SELECT outcome FROM traces WHERE job_id = ? ORDER BY id DESC LIMIT 1", arguments: [id])
         }
         #expect(ended == JobOutcome.cancelled.rawValue, "\(failing): its trace ends as cancelled")
-        let document = try await h.services.documents.list(DocumentFilter(), limit: 5).first
-        #expect(document?.status != .failed, "\(failing): its document is not marked failed: \(String(describing: document?.status))")
+        let document = try #require(try await h.services.documents.list(DocumentFilter(), limit: 5).first, "\(failing): its document is there")
+        #expect(document.status == .processing, "\(failing): its document is as it was, not marked failed: \(document.status)")
         let said = try await h.services.history.events(limit: 20, kinds: [.failed, .retry, .error]).map(\.summary)
         #expect(said.isEmpty, "\(failing): History records no failure of it: \(said)")
     }
@@ -297,17 +297,74 @@ extension IngestQueueTests {
         let holding = Holding()
         let h = try await Harness.make(analyzer: StubAnalyzer(during: { try await holding.read($0) }))
         defer { h.env.cleanup() }
+        let read = try #require(try await h.ingest("read.txt", text: "\(IngestTests.bill) read").id)
         await holding.hold("bill.txt")
         let jobID = try #require(await h.coordinator.enqueue(try h.env.drop("bill.txt", text: IngestTests.bill)))
-        let worker = Task { await h.coordinator.drain() }
+        var worker = Task { await h.coordinator.drain() }
         #expect(await Patience.until { await holding.held == "bill.txt" }, "the file is being read in")
         let docID = try #require(try await h.services.jobs.job(id: jobID)?.docId)
         await #expect(throws: IngestError.beingReadIn(docID), "it is refused while it is read in") { try await h.review.hold(docID) }
+        try await h.review.hold(read)
+        #expect(try await h.services.documents.document(id: read)?.status == .held, "another document, read, is left for later meanwhile")
         await holding.letGo()
         _ = await worker.value
         #expect(try await h.services.documents.document(id: docID)?.status == .filed, "the reading files it, as nothing was changed")
         try await h.review.hold(docID)
         #expect(try await h.services.documents.document(id: docID)?.status == .held, "and once read, it is left for later")
+
+        // A file put into the archive by hand is read in where it is, and is refused as long, too.
+        let adopted = try h.env.put("Kept/adopted.txt", text: "\(IngestTests.bill) adopted")
+        await holding.hold("adopted.txt")
+        let adopting = try await h.services.jobs.enqueue(path: adopted.path, kind: .adopt).id
+        worker = Task { await h.coordinator.drain() }
+        #expect(await Patience.until { await holding.held == "adopted.txt" }, "the file put into the archive is being read in")
+        let adoptedID = try #require(try await h.services.jobs.job(id: adopting)?.docId)
+        await #expect(throws: IngestError.beingReadIn(adoptedID), "it is refused while it is read in") { try await h.review.hold(adoptedID) }
+        await holding.letGo()
+        _ = await worker.value
+    }
+
+    /// A document read again whose last attempt fails, still the worker's, is marked failed with why, and History says
+    /// so: it waits for the user (the review of the fix of the final review of #17).
+    @Test func aDocumentWhoseReadingAgainFailsItsLastAttemptIsMarkedFailedSayingWhy() async throws {
+        let env = try await TestEnvironment.make()
+        defer { env.cleanup() }
+        let filed = Harness(env: env, services: Harness.services(env, analyzer: StubAnalyzer(), config: env.config))
+        let document = try await filed.ingest("bill.txt", text: IngestTests.bill)
+        let docID = try #require(document.id)
+        var config = env.config
+        config.ingest.maxAttempts = 1
+        let h = Harness(env: env, services: Harness.services(env, analyzer: StubAnalyzer(error: TestFailure("boom")), config: config))
+        _ = try await h.services.queueReadingAgain(document, settings: await h.services.settings.current)
+        _ = await h.coordinator.drain(.everything)
+        let failed = try #require(try await h.services.documents.document(id: docID))
+        #expect(failed.status == .failed, "it is marked failed: \(failed.status)")
+        let analysis = try JSON.decoder.decode(DocumentAnalysis.self, from: Data(try #require(failed.analysisJson).utf8))
+        #expect(analysis.problems == ["Processing failed: boom"], "saying why: \(analysis.problems)")
+        let said = try await h.services.history.events(limit: 10, kinds: [.failed])
+        #expect(said.map(\.docId) == [docID] && said.map(\.summary) == ["bill.txt: boom"], "and History says so: \(said.map(\.summary))")
+    }
+
+    /// A filed document read again for search after a rebuild (`reindex`) whose reading fails stays as its record says,
+    /// filed or left for later: only History says its reading for search failed (the review of the fix of the final
+    /// review of #17).
+    @Test(arguments: [false, true])
+    func aDocumentWhoseReadingForSearchFailsStaysAsItsRecordSays(_ leftForLater: Bool) async throws {
+        let env = try await TestEnvironment.make()
+        defer { env.cleanup() }
+        let filed = Harness(env: env, services: Harness.services(env, analyzer: StubAnalyzer(), config: env.config))
+        let document = try await filed.ingest("bill.txt", text: IngestTests.bill)
+        let docID = try #require(document.id)
+        if leftForLater { try await filed.review.hold(docID) }
+        var config = env.config
+        config.ingest.maxAttempts = 1
+        let h = Harness(env: env, services: Harness.services(env, analyzer: StubAnalyzer(), extractor: Unreadable(), config: config))
+        try await h.services.jobs.enqueue(path: document.path, kind: .reindex, docID: docID, givesWay: true)
+        _ = await h.coordinator.drain(.everything)
+        let after = try #require(try await h.services.documents.document(id: docID))
+        #expect(after.status == (leftForLater ? .held : .filed), "it stays as its record says: \(after.status)")
+        let said = try await h.services.history.events(limit: 10, kinds: [.failed]).map(\.summary)
+        #expect(said == ["bill.txt: boom"], "and History says its reading failed: \(said)")
     }
 
     /// A job cancelled while its failure is looked at, as while Ollama is probed for a request that took too long, is
@@ -385,5 +442,12 @@ extension IngestQueueTests {
         guard let job = try await jobs.nextDue(claiming: Harness.claims) else { return nil }
         try await jobs.release(job, claims: Harness.claims)
         return job.id
+    }
+}
+
+/// An extractor that cannot read any file.
+private struct Unreadable: ContentExtracting {
+    func extract(_ url: URL, sha256: String, context: ExtractionContext, trace: TraceContext) async throws -> ExtractedContent {
+        throw TestFailure("boom")
     }
 }
