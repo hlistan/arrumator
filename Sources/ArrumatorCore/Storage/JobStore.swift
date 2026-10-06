@@ -272,14 +272,6 @@ public struct JobStore: Sendable {
         }
     }
 
-    /// Whether the claim `job` was taken with still holds it; a job taken with none is held by whoever has it. A queue
-    /// that cannot be read says it does not, so nothing is done on a claim that cannot be shown.
-    public func holds(_ job: JobRecord) async -> Bool {
-        guard let id = job.id, let claim = job.claim else { return true }
-        let stored = try? await database.reader.read { db in try String.fetchOne(db, sql: "SELECT claim FROM jobs WHERE id = ?", arguments: [id]) }
-        return stored == claim
-    }
-
     /// When the next active job that no worker holds is due, whatever stage it waits in: what the worker waits until
     /// when none is due now. A job a worker holds (`JobClaims.holds`, as `nextDue` asks) is not waited for; one whose
     /// claim holds no more, as that of a process that has ended, is, as `nextDue` takes it. `excluding` are jobs this

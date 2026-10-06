@@ -147,6 +147,117 @@ extension IngestQueueTests {
                 "the file is not moved: the claim is checked again in the write just before the move")
     }
 
+    /// How a reading fails, each a path of its own through the failure of a job (`handleFailure`).
+    enum Failing: String, CaseIterable, Sendable {
+        case retried, lastAttempt, ollamaAway, modelMissing, archiveAway, refused, unreadablePayload, changed
+
+        var error: any Error & Sendable {
+            switch self {
+            case .retried, .lastAttempt: TestFailure("boom")
+            case .ollamaAway: OllamaError.unreachable("connection refused")
+            case .modelMissing: OllamaError.modelNotFound("not-installed")
+            case .archiveAway: FileOperationError.folderMissing("/archive")
+            case .refused: IngestError.notTrashed("bill.txt", reason: "the Trash refused it")
+            case .unreadablePayload: IngestError.unreadablePayload(0, reason: "garbled")
+            case .changed: FileOperationError.sourceChanged("bill.txt")
+            }
+        }
+    }
+
+    /// A job cancelled while it is read, whichever way its reading then fails, is no longer the worker's when the
+    /// failure would be saved: nothing of it is saved, its file stays where it is, its trace ends as cancelled, and the
+    /// drain records no failure of it (the reviews of the fix of the final review of #17).
+    @Test(arguments: Failing.allCases)
+    func aJobCancelledWhileReadIsNoFailureHoweverItsReadingFails(_ failing: Failing) async throws {
+        let env = try await TestEnvironment.make()
+        defer { env.cleanup() }
+        let jobs = JobStore(database: env.database, time: env.time)
+        let analyzer = StubAnalyzer(during: { _ in
+            try await jobs.cancelActive(kinds: [.ingest])
+            throw failing.error
+        })
+        let h = Harness(env: env, services: Harness.services(env, analyzer: analyzer, config: env.config))
+        let url = try env.drop("bill.txt", text: IngestTests.bill)
+        let id = try #require(await h.coordinator.enqueue(url))
+        if failing == .lastAttempt, var job = try await jobs.job(id: id) {
+            job.attempt = env.config.ingest.maxAttempts - 1
+            try await jobs.update(job)
+        }
+        #expect(await h.coordinator.drain().isEmpty, "\(failing): no failure the drain recorded")
+        let job = try await jobs.job(id: id)
+        #expect(job?.state == .cancelled && FileManager.default.fileExists(atPath: url.path),
+                "\(failing): the job stays cancelled, its file where it was: \(String(describing: job))")
+        let ended = try await env.database.reader.read { db in
+            try String.fetchOne(db, sql: "SELECT outcome FROM traces WHERE job_id = ? ORDER BY id DESC LIMIT 1", arguments: [id])
+        }
+        #expect(ended == JobOutcome.cancelled.rawValue, "\(failing): its trace ends as cancelled")
+    }
+
+    /// A job whose last attempt is kept, a failure recorded, then is cancelled as its file is set aside: as it is moved
+    /// into the archive, or as the archive's folder is found gone, the failure stands, and its trace ends as it was left.
+    @Test(arguments: [true, false])
+    func aFailureKeptStandsThoughTheJobIsCancelledAsItsFileIsSetAside(_ archiveThere: Bool) async throws {
+        let env = try await TestEnvironment.make()
+        defer { env.cleanup() }
+        var config = env.config
+        config.ingest.maxAttempts = 1
+        let archive = env.archive
+        let analyzer = StubAnalyzer(during: { _ in
+            if !archiveThere { try FileManager.default.removeItem(at: archive) }
+            throw TestFailure("boom")
+        })
+        let h = Harness(env: env, services: Harness.services(env, analyzer: analyzer, config: config))
+        // The job is cancelled once its failed attempt is kept and its claim checked just before its file is moved: the
+        // move is made, or finds the folder gone, and what follows is saved after.
+        try await env.database.writer.write { db in
+            try db.execute(sql: """
+                CREATE TEMP TABLE saves (count INTEGER);
+                INSERT INTO saves VALUES (0);
+                CREATE TEMP TRIGGER cancelled_after_kept AFTER UPDATE ON jobs WHEN NEW.claim IS NOT NULL AND NEW.last_error IS NOT NULL BEGIN
+                  UPDATE saves SET count = count + 1;
+                  UPDATE jobs SET state = 'cancelled', claim = NULL, claimed_by = NULL
+                  WHERE id = NEW.id AND (SELECT count FROM saves) = 2;
+                END
+                """)
+        }
+        let id = try #require(await h.coordinator.enqueue(try env.drop("bill.txt", text: IngestTests.bill)))
+        #expect(await h.coordinator.drain() == [id], "the failure kept stands as one the drain recorded")
+        let ended = try await env.database.reader.read { db in
+            try String.fetchOne(db, sql: "SELECT outcome FROM traces WHERE job_id = ? ORDER BY id DESC LIMIT 1", arguments: [id])
+        }
+        let left = archiveThere ? JobOutcome.failed : JobOutcome.waiting
+        #expect(ended == left.rawValue, "and its trace ends as it was left: \(String(describing: ended))")
+    }
+
+    /// A document read again whose last attempt fails as the user leaves it for later stays as the user left it: it is
+    /// marked failed only while the job is still the worker's, checked just before (the review of the fix of the final
+    /// review of #17).
+    @Test func aDocumentLeftForLaterAsItsReadingAgainFailsStaysAsTheUserLeftIt() async throws {
+        let env = try await TestEnvironment.make()
+        defer { env.cleanup() }
+        let filed = Harness(env: env, services: Harness.services(env, analyzer: StubAnalyzer(), config: env.config))
+        let document = try await filed.ingest("bill.txt", text: IngestTests.bill)
+        let docID = try #require(document.id)
+        var config = env.config
+        config.ingest.maxAttempts = 1
+        let h = Harness(env: env, services: Harness.services(env, analyzer: StubAnalyzer(error: TestFailure("boom")), config: config))
+        _ = try await h.services.queueReadingAgain(document, settings: await h.services.settings.current)
+        // The user leaves it for later as its failed attempt is kept, as `ReviewActions.hold` does it.
+        try await env.database.writer.write { db in
+            try db.execute(sql: """
+                CREATE TEMP TRIGGER left_for_later AFTER UPDATE OF last_error ON jobs
+                WHEN NEW.kind = 'reanalyse' AND NEW.claim IS NOT NULL AND NEW.last_error IS NOT NULL BEGIN
+                  UPDATE documents SET status = 'held' WHERE id = NEW.doc_id;
+                  UPDATE jobs SET state = 'cancelled', claim = NULL, claimed_by = NULL WHERE id = NEW.id;
+                END
+                """)
+        }
+        #expect(await h.coordinator.drain(.everything).isEmpty, "the drain records no failure of a job no longer its")
+        #expect(try await h.services.documents.document(id: docID)?.status == .held, "the document stays left for later")
+        let failed = try await h.services.history.events(limit: 10, kinds: [.failed])
+        #expect(failed.isEmpty, "and History records no failure of it: \(failed.map(\.summary))")
+    }
+
     /// A job cancelled while its failure is looked at, as while Ollama is probed for a request that took too long, is
     /// no longer the worker's when the failure would be saved: nothing is saved, and the drain records no failure of it.
     @Test func aJobCancelledAsItsFailureIsSavedIsNoFailureTheDrainRecorded() async throws {

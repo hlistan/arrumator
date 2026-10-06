@@ -51,13 +51,9 @@ extension IngestCoordinator {
             Log.info(.ingest, "Job interrupted by stopping", ["job": String(job.id ?? 0), "stage": job.state.rawValue])
             return false
         }
-        // A job no longer this worker's, cancelled or taken over meanwhile, is not this worker's to fail: nothing of it,
-        // its document or its file is changed.
-        guard await services.jobs.holds(job) else {
-            Log.info(.ingest, "Job no longer this worker's; its failure changes nothing", ["job": String(job.id ?? 0)])
-            await finish(trace, .cancelled, docID: job.docId)
-            return false
-        }
+        // A job no longer this worker's, cancelled or taken over meanwhile, is not this worker's to fail: the first write
+        // of every path below saves the job only while its claim holds (`keep`), so nothing of it, its document or its
+        // file is changed, and `handleFailure` ends it there.
         let message = error.localizedDescription
         let config = services.config.ingest
         // Ollama away costs no attempt, however long it is away; a server that answers, but with a failure or not in time,
@@ -133,7 +129,9 @@ extension IngestCoordinator {
     }
 
     /// Fails a job that has spent its attempts, setting its file aside in the archive (`parkFailedDocument`), or waits for
-    /// the archive's folder to do so, its last attempt kept: a failure recorded either way.
+    /// the archive's folder to do so: a failure recorded either way, once its last attempt is kept. Throws
+    /// `IngestError.claimLost` when the job is no longer this worker's before that, or before its file is set aside; one
+    /// lost after it changes nothing of the failure recorded.
     private func setAside(_ job: inout JobRecord, message: String, lastError: String?, trace: TraceContext) async throws -> Bool {
         let config = services.config.ingest
         // The attempt is saved while the claim holds, before the file is parked; the move itself is made only if the
@@ -147,14 +145,15 @@ extension IngestCoordinator {
             // The archive's folder is not there to park the file in: the job waits for it, as a stage does, and is tried
             // once more when it is back, then parked; History says so once.
             job.nextRunAt = services.time.now().addingTimeInterval(config.retryDelays.last)
-            try await keep(job, event: lastError == message ? nil : .retry, summary: "Waiting for the archive to set aside: \(message)",
-                       trace: trace)
+            try? await keep(job, event: lastError == message ? nil : .retry, summary: "Waiting for the archive to set aside: \(message)",
+                            trace: trace)
             await finish(trace, .waiting, docID: job.docId)
             Log.warning(.ingest, "The archive's folder is not there to park a failed file; will retry", ["job": String(job.id ?? 0)])
             return true
         }
         job.state = .failed
-        try await keep(job, event: nil, summary: message, trace: trace)
+        // The file is set aside as failed, which History records: the failure stands, whoever has the job now.
+        try? await keep(job, event: nil, summary: message, trace: trace)
         await finish(trace, .failed, docID: job.docId)
         Log.error(.ingest, "Job failed", ["job": String(job.id ?? 0), "error": message])
         return true
@@ -368,6 +367,9 @@ extension IngestCoordinator {
                                           message: "\(message); nor could it be moved into the archive: \(error.localizedDescription)", trace: trace)
                 }
             } else {
+                // The document is changed only while the job's claim holds, checked in a write just before, as the file
+                // is moved above: one the user left for later meanwhile stays as the user left it.
+                do { try await services.jobs.update(job) } catch IngestError.claimLost { return .lost }
                 try await services.documents.update(docID) { failed in
                     failed.status = .failed
                     failed.analysisJson = try JSON.string(analysis)

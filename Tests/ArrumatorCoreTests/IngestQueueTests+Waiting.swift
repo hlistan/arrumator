@@ -292,6 +292,26 @@ extension IngestQueueTests {
         #expect(flaky?.state == .done && flaky?.attempt == 1, "the flaky file was taken again and filed: \(String(describing: flaky))")
     }
 
+    /// A file that changed while read is read again from the start, which is no failure, though the drain does not take
+    /// it again, as work its reading gave up on still runs (the review of the fix of the final review of #17).
+    @Test func aFileReadAgainFromTheStartIsNoFailureThoughNotTakenAgainInTheDrain() async throws {
+        let env = try await TestEnvironment.make()
+        defer { env.cleanup() }
+        let stuck = Hold()
+        let url = env.incoming.appendingPathComponent("bill.txt")
+        let analyzer = StubAnalyzer(during: { _ in
+            // A wait given up on, its work left running, as OCR's deadline leaves a page it gave up on.
+            _ = try? await Deadline.run(1, time: TestTime(.advances), expired: { DeadlineExceeded(seconds: 1) }) { await stuck.arrive() }
+            try Data("changed while it was read, and longer than before".utf8).write(to: url)
+        })
+        let h = Harness(env: env, services: Harness.services(env, analyzer: analyzer, config: env.config))
+        let id = try #require(await h.coordinator.enqueue(try env.drop("bill.txt", text: IngestTests.bill)))
+        #expect(await h.coordinator.drain().isEmpty, "read again from the start is no failure")
+        let job = try await h.services.jobs.job(id: id)
+        #expect(job?.state == .pending && job?.attempt == 1, "the job is back at the start, not taken again: \(String(describing: job))")
+        stuck.open()
+    }
+
     /// A file waiting for its model fails nothing each time the worker looks whether the model is there yet.
     @Test func aFileWaitingForItsModelFailsNothingWhenItLooksAgain() async throws {
         let h = try await Harness.make(analyzer: StubAnalyzer(error: OllamaError.modelNotFound("not-installed")))
