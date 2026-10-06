@@ -48,7 +48,7 @@ extension IngestCoordinator {
         // Ollama away costs no attempt, however long it is away; a server that answers, but with a failure or not in time,
         // as it may for one image or one document alone, does, so the job ends rather than coming back for ever.
         let ollamaDown = await services.ollamaIsAway(error)
-        // A failure of anything else says Ollama answered, but for a job that ended before the model.
+        // A failure of anything else says Ollama answered, but for a job taken while Ollama is away, which never asks it.
         if !takenWhileAway {
             status.waitingForOllama = ollamaDown
             if !ollamaDown { ollamaRetryAt = nil }

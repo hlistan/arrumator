@@ -328,8 +328,8 @@ public actor IngestCoordinator {
             try await LeftRunning.$current.withValue(left) {
                 try await runStages(&job, payload: &payload, settings: settings, trace: trace)
             }
-            // Only a job that went on to the model says Ollama answers: one taken while it is away ends before it, or
-            // waits before its text is read (`waitsForOllama`), which its trace ends saying.
+            // A job taken while Ollama is away says nothing of it: it ends before the model, or waits before its text is
+            // read (`waitsForOllama`), which its trace ends saying; any other that ends says Ollama answers.
             if !takenWhileAway { (status.waitingForOllama, ollamaRetryAt) = (false, nil) }
             // A copy is no document: its trace is reached from its event in its original's History (`handOver`).
             await finish(trace, JobOutcome(ended: job.state), docID: job.docId)

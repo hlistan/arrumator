@@ -230,17 +230,37 @@ extension CommandLineTests {
     }
 
     /// A file that fails before it becomes a document, as one that cannot be read, is named on standard error with why,
-    /// and fails the command, though it is tried again later: it is never said to be queued, not read yet (the review of
-    /// the fix of the final review of #17).
-    @Test func ingestNamesAFileThatCouldNotBeReadWithWhy() throws {
+    /// and fails the command, though it is tried again later: it is never said to be queued, not read yet; one that
+    /// waits, as for the archive's folder, spending no attempt, is (the reviews of the fix of the final review of #17).
+    @Test(.enabled(if: getuid() != 0, "the superuser opens a file whatever its permissions, so none is unopenable to it"))
+    func ingestNamesAFileThatFailedWithWhyAndOneThatWaitsAsQueued() throws {
         let home = try Home.make()
         defer { home.cleanup() }
-        let locked = home.root.appendingPathComponent("locked.txt")
-        try Data("Fatura de Maria Exemplo".utf8).write(to: locked)
+        let (locked, waiting) = (home.root.appendingPathComponent("locked.txt"), home.root.appendingPathComponent("waiting.txt"))
+        for note in [locked, waiting] { try Data("Fatura de Maria Exemplo \(note.lastPathComponent)".utf8).write(to: note) }
         try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: locked.path)
         let ingested = try run(home, ["ingest", "--json", locked.path])
-        #expect(ingested.status == 1 && ingested.stderr.contains("\(locked.path): ") && !ingested.stderr.contains("queued"),
+        let index = try #require(try FileManager.default.contentsOfDirectory(at: home.support.appendingPathComponent("Indexes"),
+                                                                           includingPropertiesForKeys: nil).first { $0.pathExtension == "sqlite" })
+        let queue = try DatabaseQueue(path: index.path)
+        let why = try #require(try queue.read { db in
+            try String.fetchOne(db, sql: "SELECT last_error FROM jobs WHERE source_path = ?", arguments: [locked.spelledOnDisk.path])
+        }, "the attempt that failed is recorded with why")
+        #expect(ingested.status == 1 && ingested.stderr.contains("\(locked.path): \(why)"),
                 "the file is named with why it failed: \(ingested.stderr)")
+        // The archive's folder was not there when the file was taken, as on a disk not attached: it waits for it, spending
+        // no attempt, and is tried again after a while.
+        let now = Date().timeIntervalSince1970
+        try queue.write { db in
+            try db.execute(sql: """
+                INSERT INTO jobs (kind, source_path, state, attempt, last_error, next_run_at, created_at, updated_at)
+                VALUES ('ingest', ?, 'hashing', 0, 'The archive is not there', ?, ?, ?)
+                """, arguments: [waiting.spelledOnDisk.path, now + 3_600, now, now])
+        }
+        try queue.close()
+        let waited = try run(home, ["ingest", "--json", waiting.path])
+        #expect(waited.status == 0 && waited.stderr.contains("\(waiting.path): queued, not read yet"),
+                "a file that waits is no failure: \(waited.stderr)")
     }
 
     /// With Ollama away, the first file is read for its text and waits, and the rest are looked at, but not read: each
