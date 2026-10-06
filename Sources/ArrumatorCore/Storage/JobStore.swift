@@ -191,6 +191,13 @@ public struct JobStore: Sendable {
             .filter(activeStates.contains(Column("state"))).fetchOne(db)
     }
 
+    /// Whether document `docID` is still being read in, as its file has just come: an active job takes it in (`ingest`),
+    /// or one put into the archive (`adopt`), in a transaction of the caller's.
+    static func isReadIn(_ db: Database, docID: Int64) throws -> Bool {
+        try JobRecord.filter(Column("doc_id") == docID).filter([JobKind.ingest, .adopt].map(\.rawValue).contains(Column("kind")))
+            .filter(activeStates.contains(Column("state"))).fetchCount(db) > 0
+    }
+
     /// Cancels the active job reading document `docID` again (`reanalyse`), in a transaction of the caller's that sets
     /// the document aside, as leaving it for later or undoing it: its worker loses its claim, and its reading changes
     /// nothing of the document (`IngestError.claimLost`).

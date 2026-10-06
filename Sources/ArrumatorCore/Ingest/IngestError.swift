@@ -13,6 +13,9 @@ public enum IngestError: Error, LocalizedError, Equatable {
     /// A document can be read again only from its file where the index records it, kept as itself: one missing, or a copy
     /// an earlier version filed, has none to read (`PipelineServices.queueReadingAgain`).
     case cannotReadAgain(Int64)
+    /// A document can be left for later once it is first read in: one being read in, as its file has just come, is
+    /// still the reading's (`ReviewActions.hold`).
+    case beingReadIn(Int64)
     /// The Trash would not take the file at the path, for the reason given.
     case notTrashed(String, reason: String)
     /// A document was given a name it cannot have: one that leaves nothing a file name may hold once cleaned, as one of
@@ -40,6 +43,7 @@ public enum IngestError: Error, LocalizedError, Equatable {
             "Document \(id) is not in the archive; only a document in the archive can be \(action == .undo ? "undone" : "confirmed")"
         case let .cannotReadAgain(id):
             "Document \(id) cannot be read again: its file is not where the archive records it, or it is a copy of another document"
+        case let .beingReadIn(id): "Document \(id) is still being read in; it can be left for later once it is read"
         case let .notTrashed(path, reason): "Could not move \(path) to the Trash: \(reason)"
         case let .notTaken(path, reason): "\(path) is not taken in: \(reason)"
         case let .claimLost(id): "Job \(id) is no longer this worker's: it was cancelled or taken over"

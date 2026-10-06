@@ -157,11 +157,14 @@ public struct ReviewActions: Sendable {
     }
 
     /// Keeps the document where it is; the watcher and queue leave it alone, and a reading of it again under way changes
-    /// nothing of it (`JobStore.cancelReadingAgain`), decided with the change and recorded in History with it.
+    /// nothing of it (`JobStore.cancelReadingAgain`), decided with the change and recorded in History with it. A document
+    /// still being read in, as its file has just come, is refused (`IngestError.beingReadIn`), as the app offers it no
+    /// such choice: its reading files it.
     public func hold(_ docID: Int64) async throws {
         let now = services.time.now()
         try await services.database.writer.write { db in
             guard let read = try DocumentRecord.fetchOne(db, key: docID) else { throw IngestError.documentNotFound(docID) }
+            guard try !JobStore.isReadIn(db, docID: docID) else { throw IngestError.beingReadIn(docID) }
             var held = read
             held.status = .held
             held.updatedAt = now

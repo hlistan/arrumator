@@ -175,9 +175,10 @@ public actor IngestCoordinator {
     /// `draining` says: by default only those that come in their turn. Once a job finds Ollama away, it takes only the
     /// files that came and are not hashed yet, each then waiting before its text, and ends: no other is taken until that
     /// one is tried again (`ollamaRetryAt`), which a command does not wait for. Says which jobs it recorded a failure of
-    /// at their last attempt in it: an attempt it spent and kept, though the job then waits to be set aside, or the job it
-    /// ended failed; not one whose last attempt in it was filed or ended waiting with no failure kept, nor one another
-    /// process failed.
+    /// at their last attempt in it: an attempt it spent and kept, its last, though its file then waits to be set aside, or
+    /// one it spent before the job is tried again, or the job it ended failed; not one whose last attempt in it was filed,
+    /// was read again from the start, as a file changed, or ended waiting with no failure kept, nor one another process
+    /// failed.
     @discardableResult
     public func drain(_ draining: Draining = .inTurn) async -> Set<Int64> {
         var failed: Set<Int64> = []

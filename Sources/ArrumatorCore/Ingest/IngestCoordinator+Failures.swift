@@ -145,9 +145,14 @@ extension IngestCoordinator {
             // The archive's folder is not there to park the file in: the job waits for it, as a stage does, and is tried
             // once more when it is back, then parked; History says so once.
             job.nextRunAt = services.time.now().addingTimeInterval(config.retryDelays.last)
-            try? await keep(job, event: lastError == message ? nil : .retry, summary: "Waiting for the archive to set aside: \(message)",
-                            trace: trace)
-            await finish(trace, .waiting, docID: job.docId)
+            // The failure is kept; a job taken over meanwhile waits for nothing of this worker's, and its trace says so.
+            do {
+                try await keep(job, event: lastError == message ? nil : .retry, summary: "Waiting for the archive to set aside: \(message)",
+                               trace: trace)
+                await finish(trace, .waiting, docID: job.docId)
+            } catch {
+                await finish(trace, .cancelled, docID: job.docId)
+            }
             Log.warning(.ingest, "The archive's folder is not there to park a failed file; will retry", ["job": String(job.id ?? 0)])
             return true
         }
@@ -345,7 +350,14 @@ extension IngestCoordinator {
         do {
             let settings = await services.settings.current
             guard let docID = job.docId, let document = try await services.documents.document(id: docID) else {
-                try await services.history.record(.failed, job: job.id, trace: trace.traceID, summary: message)
+                // Recorded in the write that checks the job's claim still holds, as below.
+                let now = services.time.now()
+                do {
+                    try await services.database.writer.write { db in
+                        _ = try JobStore.save(job, at: now, in: db)
+                        try HistoryStore.insert(db, .failed, at: now, job: job.id, trace: trace.traceID, summary: message)
+                    }
+                } catch IngestError.claimLost { return .lost }
                 return .parked
             }
             let analysis = DocumentAnalysis(problems: ["Processing failed: \(message)"])
@@ -367,15 +379,24 @@ extension IngestCoordinator {
                                           message: "\(message); nor could it be moved into the archive: \(error.localizedDescription)", trace: trace)
                 }
             } else {
-                // The document is changed only while the job's claim holds, checked in a write just before, as the file
-                // is moved above: one the user left for later meanwhile stays as the user left it.
-                do { try await services.jobs.update(job) } catch IngestError.claimLost { return .lost }
-                try await services.documents.update(docID) { failed in
-                    failed.status = .failed
-                    failed.analysisJson = try JSON.string(analysis)
-                }
-                try await services.history.record(.failed, doc: docID, job: job.id, trace: trace.traceID,
-                                                  summary: "\(document.originalFilename): \(message)")
+                // The document is marked failed, and History says so, in the write that checks the job's claim still
+                // holds, as a file is filed (`DocumentFiler`): one the user left for later before it stays as the user
+                // left it, as leaving it for later cancels the job in its own write (`ReviewActions.hold`).
+                let now = services.time.now()
+                let analysisJSON = try JSON.string(analysis)
+                let summary = "\(document.originalFilename): \(message)"
+                do {
+                    try await services.database.writer.write { db in
+                        _ = try JobStore.save(job, at: now, in: db)
+                        guard let read = try DocumentRecord.fetchOne(db, key: docID) else { throw IngestError.documentNotFound(docID) }
+                        var failed = read
+                        failed.status = .failed
+                        failed.analysisJson = analysisJSON
+                        failed.updatedAt = now
+                        try failed.updateChanges(db, from: read)
+                        try HistoryStore.insert(db, .failed, at: now, doc: docID, job: job.id, trace: trace.traceID, summary: summary)
+                    }
+                } catch IngestError.claimLost { return .lost }
             }
         } catch {
             Log.error(.ingest, "Could not park failed document", ["job": String(job.id ?? 0), "error": error.localizedDescription])

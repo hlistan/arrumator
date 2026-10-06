@@ -191,6 +191,10 @@ extension IngestQueueTests {
             try String.fetchOne(db, sql: "SELECT outcome FROM traces WHERE job_id = ? ORDER BY id DESC LIMIT 1", arguments: [id])
         }
         #expect(ended == JobOutcome.cancelled.rawValue, "\(failing): its trace ends as cancelled")
+        let document = try await h.services.documents.list(DocumentFilter(), limit: 5).first
+        #expect(document?.status != .failed, "\(failing): its document is not marked failed: \(String(describing: document?.status))")
+        let said = try await h.services.history.events(limit: 20, kinds: [.failed, .retry, .error]).map(\.summary)
+        #expect(said.isEmpty, "\(failing): History records no failure of it: \(said)")
     }
 
     /// A job whose last attempt is kept, a failure recorded, then is cancelled as its file is set aside: as it is moved
@@ -225,7 +229,8 @@ extension IngestQueueTests {
         let ended = try await env.database.reader.read { db in
             try String.fetchOne(db, sql: "SELECT outcome FROM traces WHERE job_id = ? ORDER BY id DESC LIMIT 1", arguments: [id])
         }
-        let left = archiveThere ? JobOutcome.failed : JobOutcome.waiting
+        // Set aside, it failed; waiting for the archive to be set aside, it waits for nothing of this worker's now.
+        let left = archiveThere ? JobOutcome.failed : JobOutcome.cancelled
         #expect(ended == left.rawValue, "and its trace ends as it was left: \(String(describing: ended))")
     }
 
@@ -256,6 +261,53 @@ extension IngestQueueTests {
         #expect(try await h.services.documents.document(id: docID)?.status == .held, "the document stays left for later")
         let failed = try await h.services.history.events(limit: 10, kinds: [.failed])
         #expect(failed.isEmpty, "and History records no failure of it: \(failed.map(\.summary))")
+    }
+
+    /// A file that fails before it is a document, as one nobody may read, whose job is cancelled as it would be set aside,
+    /// records nothing of its failure: it is checked, with History's record of it, in one write (the review of the fix
+    /// of the final review of #17).
+    @Test(.fileModesKeepOut) func aFileThatFailsBeforeItIsADocumentRecordsNothingOnceItsJobIsCancelled() async throws {
+        let env = try await TestEnvironment.make()
+        defer { env.cleanup() }
+        var config = env.config
+        config.ingest.maxAttempts = 1
+        let h = Harness(env: env, services: Harness.services(env, analyzer: StubAnalyzer(), config: config))
+        let url = try env.drop("locked.txt", text: IngestTests.bill)
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: url.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: url.path) }
+        // Cancelled once its failed attempt is kept, before what is left of it is recorded.
+        try await env.database.writer.write { db in
+            try db.execute(sql: """
+                CREATE TEMP TRIGGER cancelled_once_kept AFTER UPDATE OF last_error ON jobs
+                WHEN NEW.last_error IS NOT NULL AND NEW.claim IS NOT NULL
+                BEGIN UPDATE jobs SET state = 'cancelled', claim = NULL, claimed_by = NULL WHERE id = NEW.id; END
+                """)
+        }
+        let id = try #require(await h.coordinator.enqueue(url))
+        #expect(await h.coordinator.drain().isEmpty, "a failure no longer the worker's to record is none it recorded")
+        #expect(try await h.services.jobs.job(id: id)?.docId == nil, "the file never became a document")
+        let failed = try await h.services.history.events(limit: 10, kinds: [.failed]).map(\.summary)
+        #expect(failed.isEmpty, "and History records no failure of it: \(failed)")
+    }
+
+    /// A document still being read in, as its file has just come, cannot be left for later: its reading would file it
+    /// over the user's choice, which the app never offers; once read, it can (the review of the fix of the final review
+    /// of #17).
+    @Test func aDocumentBeingReadInIsNotLeftForLaterUntilItIsRead() async throws {
+        let holding = Holding()
+        let h = try await Harness.make(analyzer: StubAnalyzer(during: { try await holding.read($0) }))
+        defer { h.env.cleanup() }
+        await holding.hold("bill.txt")
+        let jobID = try #require(await h.coordinator.enqueue(try h.env.drop("bill.txt", text: IngestTests.bill)))
+        let worker = Task { await h.coordinator.drain() }
+        #expect(await Patience.until { await holding.held == "bill.txt" }, "the file is being read in")
+        let docID = try #require(try await h.services.jobs.job(id: jobID)?.docId)
+        await #expect(throws: IngestError.beingReadIn(docID), "it is refused while it is read in") { try await h.review.hold(docID) }
+        await holding.letGo()
+        _ = await worker.value
+        #expect(try await h.services.documents.document(id: docID)?.status == .filed, "the reading files it, as nothing was changed")
+        try await h.review.hold(docID)
+        #expect(try await h.services.documents.document(id: docID)?.status == .held, "and once read, it is left for later")
     }
 
     /// A job cancelled while its failure is looked at, as while Ollama is probed for a request that took too long, is
