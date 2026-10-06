@@ -12,18 +12,22 @@ extension CommandLineTests {
         let root: URL
         var support: URL { root.appendingPathComponent("support", isDirectory: true) }
         var archive: URL { root.appendingPathComponent("Archive", isDirectory: true) }
-        /// What the command runs in: this home, its own Trash, and the test's time zone, so a time it prints is the one
-        /// the test formats.
+        /// The settings every command in this home reads besides the bundled ones, when the home was made with some.
+        var pipeline: URL { root.appendingPathComponent("pipeline.json") }
+        /// What the command runs in: this home, its own Trash, the test's time zone, so a time it prints is the one the
+        /// test formats, and the home's settings, if it has any.
         var environment: [String: String] {
             ["ARRUMATOR_HOME": support.path, "ARRUMATOR_TRASH": root.appendingPathComponent("Trash").path,
              "HOME": FileManager.default.homeDirectoryForCurrentUser.path, "TZ": TimeZone.current.identifier]
+                .merging(FileManager.default.fileExists(atPath: pipeline.path) ? ["ARRUMATOR_PIPELINE_CONFIG": pipeline.path] : [:]) { $1 }
         }
 
         /// Port 9 is the discard service: nothing answers there, so every model check sees Ollama as not running.
         static let nowhere = "http://127.0.0.1:9"
 
-        /// A home whose settings save `ollamaURL` as the Ollama server.
-        static func make(ollamaURL: String = nowhere) throws -> Home {
+        /// A home whose settings save `ollamaURL` as the Ollama server, and whose commands read `pipeline` besides the
+        /// bundled settings, when given.
+        static func make(ollamaURL: String = nowhere, pipeline: [String: Any]? = nil) throws -> Home {
             let root = FileManager.default.temporaryDirectory.appendingPathComponent("arrumator-cli-\(UUID().uuidString)", isDirectory: true)
             let home = Home(root: root)
             try FileManager.default.createDirectory(at: home.support, withIntermediateDirectories: true)
@@ -33,6 +37,7 @@ extension CommandLineTests {
             try JSONEncoder().encode(settings).write(to: home.support.appendingPathComponent("settings.json"))
             // The archive the user has: no command makes its folder but `archive switch`.
             try FileManager.default.createDirectory(at: home.archive, withIntermediateDirectories: true)
+            if let pipeline { try JSONSerialization.data(withJSONObject: pipeline).write(to: home.pipeline) }
             return home
         }
 
@@ -46,12 +51,11 @@ extension CommandLineTests {
         var text: String { String(decoding: stdout, as: UTF8.self) }
     }
 
-    /// Runs the command in `home`, with `environment` besides its own.
-    func run(_ home: Home, _ arguments: [String], environment: [String: String] = [:]) throws -> Result {
+    func run(_ home: Home, _ arguments: [String]) throws -> Result {
         let command = Bundle(for: Marker.self).bundleURL.deletingLastPathComponent().appendingPathComponent("arrumatorcli")
         guard FileManager.default.isExecutableFile(atPath: command.path) else { throw CocoaError(.fileNoSuchFile) }
         // Only what the command needs: its scratch home and Trash, and a home folder for the disk-space check.
-        let outcome = try ChildProcess.run(command, arguments, environment: home.environment.merging(environment) { _, given in given })
+        let outcome = try ChildProcess.run(command, arguments, environment: home.environment)
         return Result(status: outcome.status, stdout: outcome.stdout, stderr: String(decoding: outcome.stderr, as: UTF8.self))
     }
 

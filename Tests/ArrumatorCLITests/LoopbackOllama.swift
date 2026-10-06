@@ -20,6 +20,10 @@ final class LoopbackOllama: Sendable {
     /// The address of the server, once it listens.
     var address: String? { ready.value.map { "http://127.0.0.1:\($0)" } }
 
+    /// Settings for a command run against the stand-in (`Home.make(pipeline:)`): its answers are waited for as long as a
+    /// loaded machine may take, as a test asks what the command does with them, never how fast the runner is.
+    static var patient: [String: Any] { ["ollama": ["timeouts": ["meta": 60, "version": 60, "resolve": 60]]] }
+
     /// An answer to a chat: a status line's code and text, and a JSON body.
     typealias Answer = (status: String, body: String)
 

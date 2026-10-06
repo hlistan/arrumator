@@ -318,15 +318,16 @@ extension CommandLineTests {
         let ollama = try LoopbackOllama(chat: ("500 Internal Server Error", #"{"error":"model runner has unexpectedly stopped"}"#))
         defer { ollama.stop() }
         #expect(await Patience.until { ollama.address != nil }, "the stand-in listens")
-        let home = try Home.make(ollamaURL: try #require(ollama.address))
+        // The error is the server's, asked once: no time is spent asking it again, and the file is not due again before
+        // the command ends.
+        var once = LoopbackOllama.patient
+        once["ollama"] = (once["ollama"] as? [String: Any] ?? [:]).merging(["retryDelays": [Int]()]) { $1 }
+        once["ingest"] = ["retryDelays": [3_600]]
+        let home = try Home.make(ollamaURL: try #require(ollama.address), pipeline: once)
         defer { home.cleanup() }
         let note = home.root.appendingPathComponent("note.txt")
         try Data("Fatura de Maria Exemplo".utf8).write(to: note)
-        // The error is the server's, asked once: no time is spent asking it again, and the file is not due again before
-        // the command ends.
-        let pipeline = home.root.appendingPathComponent("pipeline.json")
-        try JSONSerialization.data(withJSONObject: ["ollama": ["retryDelays": [Int]()], "ingest": ["retryDelays": [3_600]]]).write(to: pipeline)
-        let ingested = try run(home, ["ingest", "--json", note.path], environment: ["ARRUMATOR_PIPELINE_CONFIG": pipeline.path])
+        let ingested = try run(home, ["ingest", "--json", note.path])
         let queue = try DatabaseQueue(path: try index(home).path)
         defer { try? queue.close() }
         let job = try #require(try await queue.read { db -> (document: Int64?, attempt: Int, why: String?)? in
@@ -380,7 +381,7 @@ extension CommandLineTests {
         let ollama = try LoopbackOllama()
         defer { ollama.stop() }
         try #require(await Patience.until { ollama.address != nil }, "the stand-in Ollama listens on the loopback address")
-        let home = try Home.make(ollamaURL: try #require(ollama.address))
+        let home = try Home.make(ollamaURL: try #require(ollama.address), pipeline: LoopbackOllama.patient)
         defer { home.cleanup() }
         let notes = ["one.txt", "two.txt"].map { home.root.appendingPathComponent($0) }
         for (index, note) in notes.enumerated() { try Data("Note number \(index + 1)".utf8).write(to: note) }
