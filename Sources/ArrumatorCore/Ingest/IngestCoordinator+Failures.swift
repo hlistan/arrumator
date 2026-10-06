@@ -376,7 +376,7 @@ extension IngestCoordinator {
             // the job is stored, which keeps it though the worker's copy, saved by a failure after it, has not it
             // (`JobStore.save`): then it is filed, where the user may have moved it since, and is marked failed there.
             var recorded = false
-            if let id = job.id, let stored = try await services.jobs.job(id: id) { recorded = (try? stored.payload)?.targetPath != nil }
+            if let id = job.id { recorded = try await services.jobs.recordsFiling(id) }
             if FileManager.default.fileExists(atPath: document.path), job.kind == .ingest, !recorded {
                 let jobs = services.jobs
                 // The file is moved only while the job's claim holds, checked in a write just before the move.

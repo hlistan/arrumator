@@ -61,7 +61,8 @@ import Testing
     }
 
     /// A payload that cannot be read: JSON that is no payload, or no JSON at all.
-    @Test(arguments: ["{\"tags\":7}", "not JSON"])
+    /// A regression that leaves such a job due for ever fails here in its time, never holding the run up.
+    @Test(.timeLimit(.minutes(1)), arguments: ["{\"tags\":7}", "not JSON"])
     func aJobWhosePayloadCannotBeReadFailsSayingWhyAndTheFileIsQueuedAfreshByARescan(_ garbled: String) async throws {
         let h = try await Harness.make()
         defer { h.env.cleanup() }

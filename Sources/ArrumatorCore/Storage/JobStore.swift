@@ -425,6 +425,15 @@ public struct JobStore: Sendable {
         return Saved(job: saved, tagsAdded: added)
     }
 
+    /// Whether job `id`, as it is stored, records its filing (`JobPayload.targetPath`), read by the database, whatever else
+    /// its payload holds: a job its worker has worked on, whose payload is that worker's.
+    func recordsFiling(_ id: Int64) async throws -> Bool {
+        try await database.reader.read { db in
+            try Bool.fetchOne(db, sql: "SELECT json_extract(payload_json, '$.targetPath') IS NOT NULL FROM jobs WHERE id = ?",
+                              arguments: [id]) ?? false
+        }
+    }
+
     /// A job's payload without its document's text and embedding, as SQL over `payload_json`: what an ended job keeps.
     /// A payload that is no JSON is kept as it is, to say why its job failed.
     static let withoutText = "CASE WHEN json_valid(payload_json) THEN json_remove(payload_json, '$.content', '$.outcome.embedding') ELSE payload_json END"
