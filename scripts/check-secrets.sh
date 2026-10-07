@@ -17,6 +17,7 @@ if ! command -v gitleaks >/dev/null 2>&1; then
 fi
 
 private_fixtures=Tests/Fixtures/private
+# Shared with its functions: failed
 failed=0
 
 leaks() {
@@ -34,10 +35,10 @@ refuse_private() {
 # identities <revs>: a commit's author and committer are published with it. An address such as
 # name@MacBook-Pro.local names the account and the machine it was made on; use your GitHub no-reply address.
 identities() {
-  bad=$(git log --format='%h %an <%ae> / %cn <%ce>' "$@" |
+  identities_found=$(git log --format='%h %an <%ae> / %cn <%ce>' "$@" |
     grep -E '<[^>]*(\.local|\.localdomain|@localhost|\(none\))>' || true)
-  if [ -n "$bad" ]; then
-    printf 'check-secrets: these commits carry a machine-local identity:\n%s\n' "$bad" >&2
+  if [ -n "$identities_found" ]; then
+    printf 'check-secrets: these commits carry a machine-local identity:\n%s\n' "$identities_found" >&2
     echo "Set user.email to your GitHub no-reply address and rewrite them before pushing." >&2
     failed=1
   fi

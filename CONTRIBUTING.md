@@ -33,11 +33,14 @@ version and checksum `scripts/tools.sh` pins, into `.tools/`, and turns on the G
 ```bash
 xcodegen generate
 xcodebuild -project Arrumator.xcodeproj -scheme Arrumator -configuration Debug -derivedDataPath build/DerivedData build
-open build/DerivedData/Build/Products/Debug/Arrumator.app   # first launch shows onboarding
+open build/DerivedData/Build/Products/Debug/Arrumator.app
 
-swift test                                                  # every suite; no Ollama needed
-swift run arrumatorcli doctor                                  # environment self-check
+swift test
+swift run arrumatorcli doctor
 ```
+
+The app's first launch shows onboarding. `swift test` runs every suite and needs no Ollama, and `arrumatorcli doctor`
+checks the environment.
 
 The command line tool writes to the archive your settings name. Before running a command that can change it, give
 it a scratch home and scratch folders, as [the command line reference](docs/cli.md) explains.
@@ -53,7 +56,7 @@ needs only `scripts/verify.sh --checks-only`: `scripts/change-scope.sh main` tel
 |---|---|
 | `scripts/verify.sh [--app \| --checks-only] [--no-lint]` | Everything below, then `swift build`, the documentation check, `swift test` and `fixturegen --verify` on the corpus, and with `--app` the release build (`scripts/build-release.sh`) and the unused-code search. Every build uses the versions in `Package.resolved` alone, and a warning in Arrumator's own code fails it. With `--checks-only`, the static checks and the documentation check alone, building only `arrumatorcli`. |
 | `scripts/change-scope.sh <base> [<head>]` | Which scope a change falls in, from the files it touches (without `<head>`, uncommitted ones too): `release` (code), `build` (what builds, tests, checks or releases it) or `checks` (anything else). CI builds, tests and releases by it, scoping a pull request with `main`'s copy. |
-| `scripts/lint.sh` | Static checks that build nothing: the guideline gates from AGENTS.md (environment, network, crash, quit, trash, delete, rows, calendar, test-sleeps, archive, debt, icon), each of which first proves it refuses a sample and fails when its search cannot run; the imports check, which refuses an `import` of a module of the package or its dependencies that the importing target does not declare (`Package.swift`, or `project.yml` for the app); that the tools are the pinned ones; secrets, [SwiftLint](https://realm.github.io/SwiftLint/) (`.swiftlint.yml`), [ShellCheck](https://www.shellcheck.net), [actionlint](https://github.com/rhysd/actionlint) and [zizmor](https://docs.zizmor.sh) for the workflows, [markdownlint](https://github.com/DavidAnson/markdownlint-cli2) (`.markdownlint-cli2.jsonc`) and [lychee](https://lychee.cli.rs) for links between documents. |
+| `scripts/lint.sh` | Static checks that build nothing: the guideline gates from AGENTS.md (environment, network, crash, quit, trash, delete, rows, calendar, test-sleeps, archive, debt, icon), each of which first proves it refuses a sample and fails when its search cannot run; the imports check, which refuses an `import` of a module of the package or its dependencies that the importing target does not declare (`Package.swift`, or `project.yml` for the app); that the tools are the pinned ones; secrets, [SwiftLint](https://realm.github.io/SwiftLint/) (`.swiftlint.yml`), [ShellCheck](https://www.shellcheck.net), [actionlint](https://github.com/rhysd/actionlint) and [zizmor](https://docs.zizmor.sh) for the workflows, [markdownlint](https://github.com/DavidAnson/markdownlint-cli2) (`.markdownlint-cli2.jsonc`) and [lychee](https://lychee.cli.rs) for links between documents; that the commands the documents give carry no `#` comment, which zsh on macOS passes on to the command as arguments; and that a shell function sets only variables named after it or those its script's `# Shared with its functions:` line names, as `sh` has none local. Each check of the documents fails when Git lists none. |
 | `scripts/check-secrets.sh [--staged \| --range <revs>…]` | [gitleaks](https://github.com/gitleaks/gitleaks) with `.gitleaks.toml` over every commit, the index, the working tree and untracked files; real documents; with `--range`, commit identities. |
 | `scripts/check-docs.sh <arrumatorcli>` | Every command and option in [docs/cli.md](docs/cli.md), and no option in a command's synopsis there that it does not take, every `ARRUMATOR_*` variable in [docs/using-arrumator.md](docs/using-arrumator.md), every `pipeline.json` key the docs name, and every script here. |
 | `scripts/deadcode.sh` | Unused code across the package, its tests, the command and the app, with [Periphery](https://github.com/peripheryapp/periphery) (`.periphery.yml`). |

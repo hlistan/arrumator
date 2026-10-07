@@ -77,17 +77,32 @@ notarytool() { # notarytool <command> <arguments…>, with the credentials the e
 }
 # notarize <zip>: fails unless Apple accepts it, printing Apple's log of what it found otherwise.
 notarize() {
-  submission=$(notarytool submit "$1" --wait --timeout "$notary_timeout" --output-format json) || {
-    echo "release: notarytool could not submit $1 or did not hear back within $notary_timeout: $submission" >&2
+  notarize_answer=$(notarytool submit "$1" --wait --timeout "$notary_timeout" --output-format json) || {
+    echo "release: notarytool could not submit $1 or did not hear back within $notary_timeout: $notarize_answer" >&2
     return 1
   }
-  status=$(printf '%s' "$submission" | plutil -extract status raw -o - -)
-  if [ "$status" != Accepted ]; then
-    id=$(printf '%s' "$submission" | plutil -extract id raw -o - -)
-    notarytool log "$id" >&2 || true
-    echo "release: Apple did not accept $1: $status" >&2
+  notarize_status=$(printf '%s' "$notarize_answer" | plutil -extract status raw -o - -)
+  if [ "$notarize_status" != Accepted ]; then
+    notarize_id=$(printf '%s' "$notarize_answer" | plutil -extract id raw -o - -)
+    notarytool log "$notarize_id" >&2 || true
+    echo "release: Apple did not accept $1: $notarize_status" >&2
     return 1
   fi
+}
+# notarized <app>: fails unless Gatekeeper accepts it as notarized by Apple. Accepted for another reason, as where
+# assessments are turned off, it proves nothing about the notarization.
+notarized() {
+  notarized_assessment=$(spctl --assess --type execute -vv "$1" 2>&1) || {
+    echo "release: Gatekeeper rejects $1: $notarized_assessment" >&2
+    return 1
+  }
+  case $notarized_assessment in
+    *"source=Notarized Developer ID"*) ;;
+    *)
+      echo "release: Gatekeeper accepts $1, but not as notarized: $notarized_assessment" >&2
+      return 1
+      ;;
+  esac
 }
 # sign <code>: signs it with the identity chosen above, with no entitlements: the build signs it to run locally, which
 # grants a debugger access (get-task-allow), and notarization refuses that.
@@ -104,28 +119,35 @@ sign() {
 
 echo "→ Arrumator $version, signed $RELEASE_SIGNING${DEVELOPER_ID:+ by $DEVELOPER_ID}"
 
-for variant in universal apple-silicon; do
-  app=$stage/$variant/Arrumator.app
-  sign "$app"
-  zip=$out/Arrumator-$version-$variant.zip
-  ditto -c -k --keepParent "$app" "$zip"
-  if [ "$RELEASE_SIGNING" = developer-id ]; then
-    notarize "$zip"
-    xcrun stapler staple "$app"
-    spctl --assess --type execute "$app"
-    rm "$zip"
-    ditto -c -k --keepParent "$app" "$zip"
-  fi
-done
-
 cli=$stage/arrumatorcli-$version
+for variant in universal apple-silicon; do
+  sign "$stage/$variant/Arrumator.app"
+done
 sign "$cli/arrumatorcli"
 test "$("$cli/arrumatorcli" --version)" = "$version"
-cli_zip=$out/arrumatorcli-$version-apple-silicon.zip
-ditto -c -k --keepParent "$cli" "$cli_zip"
+
 if [ "$RELEASE_SIGNING" = developer-id ]; then
-  notarize "$cli_zip"
+  # Everything goes to Apple in one submission. The two apps share the Apple-silicon slice and so its code directory,
+  # and Apple serves one ticket for a code directory, the last submitted: notarized apart, the Apple-silicon app's
+  # ticket, which lacks the Intel slice, replaces the universal app's, and Gatekeeper rejects the universal app as
+  # unnotarized. One submission gives every download one ticket that names every slice.
+  upload=$(mktemp -d)
+  trap 'rm -rf "$upload"' EXIT
+  ditto -c -k --keepParent "$stage" "$upload/Arrumator-$version.zip"
+  notarize "$upload/Arrumator-$version.zip"
+  for variant in universal apple-silicon; do
+    xcrun stapler staple "$stage/$variant/Arrumator.app"
+  done
+  # Gatekeeper is asked only once nothing more is submitted, as a later submission can change what it answers.
+  for variant in universal apple-silicon; do
+    notarized "$stage/$variant/Arrumator.app"
+  done
 fi
+
+for variant in universal apple-silicon; do
+  ditto -c -k --keepParent "$stage/$variant/Arrumator.app" "$out/Arrumator-$version-$variant.zip"
+done
+ditto -c -k --keepParent "$cli" "$out/arrumatorcli-$version-apple-silicon.zip"
 
 (cd "$out" && shasum -a 256 -- *.zip > SHA256SUMS)
 echo "Signed and packaged $version:"

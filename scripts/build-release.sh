@@ -39,16 +39,17 @@ mkdir -p "$stage/universal" "$stage/apple-silicon"
 notices() {
   printf 'Arrumator\n\n'
   cat LICENSE
-  for package in "$1"/*/; do
-    found=false
-    for file in "$package"LICENSE* "$package"LICENCE* "$package"NOTICE* "$package"COPYING*; do
-      [ -f "$file" ] || continue
-      found=true
-      printf '\n\n%s\n\n' "$(basename "$package") ($(basename "$file"))"
-      cat "$file"
+  for notices_package in "$1"/*/; do
+    notices_found=false
+    for notices_file in "$notices_package"LICENSE* "$notices_package"LICENCE* "$notices_package"NOTICE* \
+      "$notices_package"COPYING*; do
+      [ -f "$notices_file" ] || continue
+      notices_found=true
+      printf '\n\n%s\n\n' "$(basename "$notices_package") ($(basename "$notices_file"))"
+      cat "$notices_file"
     done
-    if [ "$found" = false ]; then
-      echo "build-release: $package has no licence file to ship with it" >&2
+    if [ "$notices_found" = false ]; then
+      echo "build-release: $notices_package has no licence file to ship with it" >&2
       return 1
     fi
   done

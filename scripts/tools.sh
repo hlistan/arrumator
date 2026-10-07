@@ -52,40 +52,40 @@ installed() { # installed <tool> <version> <checksum>: the wrapper runs this ver
 }
 
 install() { # install <tool> <version> <download> <checksum>
-  folder=$root/$1-$2
-  rm -rf "$folder"
-  mkdir -p "$folder" "$root/bin"
-  archive=$folder/$(basename "$3")
+  install_folder=$root/$1-$2
+  rm -rf "$install_folder"
+  mkdir -p "$install_folder" "$root/bin"
+  install_archive=$install_folder/$(basename "$3")
   # A server's passing failure, as an error 500 from a release's download, is tried again whatever curl calls it: the
   # checksum below, not the transfer, decides what is installed.
-  curl --fail --silent --show-error --location --retry 3 --retry-all-errors --output "$archive" "$3"
-  actual=$(checksum "$archive" "$4")
-  if [ "$actual" != "$4" ]; then
-    echo "tools: $1 $2 from $3 has checksum $actual, not the pinned $4; nothing was installed" >&2
-    rm -rf "$folder"
+  curl --fail --silent --show-error --location --retry 3 --retry-all-errors --output "$install_archive" "$3"
+  install_actual=$(checksum "$install_archive" "$4")
+  if [ "$install_actual" != "$4" ]; then
+    echo "tools: $1 $2 from $3 has checksum $install_actual, not the pinned $4; nothing was installed" >&2
+    rm -rf "$install_folder"
     return 1
   fi
-  case $archive in
+  case $install_archive in
     *.tgz)
       # An npm package, installed from the verified archive without running scripts. The archive is pinned; its
       # dependencies are not: npm resolves them from the registry, checked only against the registry's integrity.
-      npm install --prefix "$folder" --no-audit --no-fund --ignore-scripts --silent "$archive"
-      executable=$folder/node_modules/.bin/$1 ;;
-    *.zip) ditto -x -k "$archive" "$folder/unpacked" ;;
-    *.tar.gz) mkdir "$folder/unpacked" && tar -xzf "$archive" -C "$folder/unpacked" ;;
+      npm install --prefix "$install_folder" --no-audit --no-fund --ignore-scripts --silent "$install_archive"
+      install_executable=$install_folder/node_modules/.bin/$1 ;;
+    *.zip) ditto -x -k "$install_archive" "$install_folder/unpacked" ;;
+    *.tar.gz) mkdir "$install_folder/unpacked" && tar -xzf "$install_archive" -C "$install_folder/unpacked" ;;
   esac
-  if [ -d "$folder/unpacked" ]; then
-    executable=$(find "$folder/unpacked" -type f -name "$1" -perm -u+x | head -n 1)
+  if [ -d "$install_folder/unpacked" ]; then
+    install_executable=$(find "$install_folder/unpacked" -type f -name "$1" -perm -u+x | head -n 1)
   fi
-  if [ -z "$executable" ] || [ ! -e "$executable" ]; then
+  if [ -z "$install_executable" ] || [ ! -e "$install_executable" ]; then
     echo "tools: $3 holds no executable named $1" >&2
-    rm -rf "$folder"
+    rm -rf "$install_folder"
     return 1
   fi
   # A wrapper, not a link: some tools find their own resources beside the executable.
-  printf '#!/bin/sh\nexec "%s" "$@"\n' "$executable" > "$root/bin/$1"
+  printf '#!/bin/sh\nexec "%s" "$@"\n' "$install_executable" > "$root/bin/$1"
   chmod +x "$root/bin/$1"
-  printf '%s' "$4" > "$folder/.verified"
+  printf '%s' "$4" > "$install_folder/.verified"
   echo "tools: $1 $2 installed"
 }
 
