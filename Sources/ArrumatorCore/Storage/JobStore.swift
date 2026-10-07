@@ -425,9 +425,10 @@ public struct JobStore: Sendable {
         return Saved(job: saved, tagsAdded: added)
     }
 
-    /// Whether job `id`, as it is stored, records its filing (`JobPayload.targetPath`), read by the database without its
-    /// text: for a job its worker holds, whose payload that worker wrote, so is JSON (one that is not throws, as one an
-    /// ended job may keep, `withoutText`); false for a job no longer stored.
+    /// Whether job `id`, as it is stored, records its filing (`JobPayload.targetPath`), read by the database, as the
+    /// payload can hold a document's whole text: for a job its worker holds, whose payload its worker read when it took
+    /// it (`JobRecord.payload`), so is JSON (one that is not throws, as one an ended job may keep, `withoutText`); false
+    /// for a job no longer stored.
     func recordsFiling(_ id: Int64) async throws -> Bool {
         try await database.reader.read { db in
             try Bool.fetchOne(db, sql: "SELECT json_extract(payload_json, '$.targetPath') IS NOT NULL FROM jobs WHERE id = ?",
