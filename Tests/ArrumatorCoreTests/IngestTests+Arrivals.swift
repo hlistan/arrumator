@@ -1,0 +1,413 @@
+@testable import ArrumatorCore
+import ArrumatorTesting
+import Foundation
+import GRDB
+import Testing
+
+/// What a file that arrives is when the user changes a document recorded where it is as it arrives: decided in the
+/// write that queues it, or decided once more as a pass after it would (the review of the fix of the final review of
+/// #17).
+extension IngestTests {
+    /// Records a document at `path`, as an earlier run left it, with `status`.
+    private func record(_ h: Harness, at path: String, status: DocumentStatus, sha256: String) async throws -> Int64 {
+        var record = DocumentRecord.arrived(path: path, sha256: sha256, size: 1, uttype: "public.plain-text", inode: nil, modified: nil,
+                                            now: h.env.time.now())
+        record.status = status
+        return try #require(try await h.services.documents.save(record).id)
+    }
+
+    /// A file saved again where a document was left in Incoming, which the user leaves for later as it arrives, is
+    /// decided as a pass after it would decide it: a new arrival when the bytes are others, as the document left for
+    /// later is the user's decision about the file it was, which this one does not inherit, and is ended; the document's
+    /// own when they are its, which stays as the user left it.
+    @Test(arguments: [false, true])
+    func aDocumentLeftInIncomingLeftForLaterAsItsFileArrivesIsDecidedAsAfterwards(_ sameBytes: Bool) async throws {
+        let h = try await Harness.make()
+        defer { h.env.cleanup() }
+        let file = try h.env.drop("scan.txt", text: Self.bill)
+        let path = file.spelledOnDisk.path
+        // Undone there before, its file gone since, so its ending comes between the asking and the queueing; then left
+        // in Incoming, its file saved again since, with other bytes or the same.
+        let undone = try await record(h, at: path, status: .undone, sha256: "an earlier version")
+        let left = try await record(h, at: path, status: .failed, sha256: sameBytes ? try HashService.sha256(of: file) : "an earlier version")
+        try await h.env.database.writer.write { db in
+            try db.execute(sql: """
+                CREATE TEMP TRIGGER left_for_later_meanwhile AFTER UPDATE OF status ON documents
+                WHEN NEW.status = 'missing' AND NEW.id != \(left) BEGIN
+                  UPDATE documents SET status = 'held' WHERE id = \(left);
+                END
+                """)
+        }
+        let queued = await h.coordinator.enqueue(file)
+        let ended = try await h.services.history.events(limit: 10, kinds: [.missing]).filter { $0.docId == left }
+        if sameBytes {
+            #expect(queued == nil, "its own file is not queued")
+            #expect(try await h.services.documents.document(id: left)?.status == .held, "the document stays as the user left it")
+            let jobs = try await h.jobs()
+            #expect(ended.isEmpty && jobs.isEmpty, "never said to be gone, and nothing read")
+            return
+        }
+        let id = try #require(queued, "the file is queued")
+        #expect(try await h.services.jobs.job(id: id)?.docId == nil, "as a new arrival, not as the document left for later")
+        #expect(try await h.services.documents.document(id: left)?.status == .missing, "which is ended")
+        #expect(await h.coordinator.enqueue(file) == id, "a rescan finds the same job")
+        let endedAfter = try await h.services.history.events(limit: 10, kinds: [.missing]).filter { $0.docId == left }
+        #expect(endedAfter.count == 1, "and History says it ended once: \(endedAfter.map(\.summary))")
+        await h.coordinator.drain()
+        let read = try await h.services.documents.list(DocumentFilter(), limit: 5).filter { ![undone, left].contains($0.id ?? 0) }
+        #expect(read.count == 1 && read.first?.status == .filed, "the file is filed, a document of its own: \(read.map(\.path))")
+    }
+
+    /// A file asked for where a document was left in Incoming, which the user has read again as it arrives, is that
+    /// reading's: nothing is decided on the document as it was found, and asked once more, the request is found to be
+    /// the reading's job, and gives it its tags.
+    @Test func aFileAskedForAsItsDocumentIsReadAgainGivesThatReadingItsTags() async throws {
+        let h = try await Harness.make()
+        defer { h.env.cleanup() }
+        let file = try h.env.drop("scan.txt", text: Self.bill)
+        let path = file.spelledOnDisk.path
+        let id = try await record(h, at: path, status: .failed, sha256: "an earlier version")
+        let found = try #require(try await h.services.documents.document(id: id))
+        let reading = try await h.services.queueReadingAgain(id, settings: await h.services.settings.current)
+        #expect(try await h.coordinator.queue(path, again: found, payload: JobPayload()) == nil, "nothing is decided on it as it was")
+        #expect(await h.coordinator.enqueue(file, tags: ["Taxes 2024"]) == reading, "asked once more, it is the reading's job")
+        let tags = try await h.services.jobs.job(id: reading)?.tags.map(\.value)
+        #expect(tags == ["Taxes 2024"], "given the tags: \(tags ?? [])")
+        #expect(try await h.services.documents.document(id: id)?.status == .processing, "the document is read as it is")
+        #expect(try await h.services.history.events(limit: 10, kinds: [.missing]).isEmpty, "and is never said to be gone")
+    }
+
+    /// A document read again whose queueing fails changes nothing: its status and its job are written together, so a
+    /// file arriving at its path never finds it being read with no job to read it.
+    @Test func aReadingAgainWhoseQueueingFailsChangesNothing() async throws {
+        let h = try await Harness.make()
+        defer { h.env.cleanup() }
+        let file = try h.env.drop("scan.txt", text: Self.bill)
+        let id = try await record(h, at: file.spelledOnDisk.path, status: .failed, sha256: "an earlier version")
+        try await h.env.database.writer.write { db in
+            try db.execute(sql: "CREATE TEMP TRIGGER queueing_fails BEFORE INSERT ON jobs BEGIN SELECT RAISE(ABORT, 'the queue is unavailable'); END")
+        }
+        await #expect(throws: (any Error).self) { try await h.services.queueReadingAgain(id, settings: await h.services.settings.current) }
+        #expect(try await h.services.documents.document(id: id)?.status == .failed, "it is left as it was")
+        #expect(try await h.services.history.events(limit: 10, kinds: [.retry]).isEmpty, "and nothing is said of it")
+    }
+
+    /// What becomes of a document between the user asking to read it again and that being queued: ended, as another
+    /// file came where it was undone; its file removed, before the archive's watcher tells; filed into the archive, as
+    /// one left in Incoming read meanwhile; given a tag; or left for later.
+    enum BeforeItIsQueued: String, CaseIterable, Sendable { case ended, removed, filed, tagged, leftForLater }
+
+    /// A reading again is decided on the document as the write that queues it finds it, never as the user's request
+    /// found it: one ended meanwhile, or whose file is gone, is refused, and one changed is read as it is now, where it is,
+    /// with its status and its tags.
+    @Test(arguments: BeforeItIsQueued.allCases)
+    func aReadingAgainIsDecidedOnTheDocumentAsItIsWhenQueued(_ meanwhile: BeforeItIsQueued) async throws {
+        let h = try await Harness.make()
+        defer { h.env.cleanup() }
+        let settings = await h.services.settings.current
+        switch meanwhile {
+        case .ended, .filed:
+            let file = try h.env.drop("scan.txt", text: Self.bill)
+            let id = try await record(h, at: file.spelledOnDisk.path, status: meanwhile == .ended ? .undone : .failed, sha256: "an earlier version")
+            if meanwhile == .ended {
+                try await h.services.documents.update(id) { $0.status = .missing }
+                await #expect(throws: IngestError.cannotReadAgain(id), "one ended meanwhile is refused") {
+                    try await h.services.queueReadingAgain(id, settings: settings)
+                }
+                #expect(try await h.services.documents.document(id: id)?.status == .missing, "and stays as it is")
+                #expect(try await h.jobs().isEmpty, "nothing is queued")
+                return
+            }
+            let filed = h.env.archive.appendingPathComponent("scan.txt")
+            try FileManager.default.moveItem(at: file, to: filed)
+            try await h.services.documents.update(id) { ($0.status, $0.path) = (.filed, filed.spelledOnDisk.path) }
+            let job = try await h.services.queueReadingAgain(id, settings: settings)
+            let reading = try #require(try await h.services.jobs.job(id: job))
+            #expect(reading.kind == .reanalyse && reading.sourcePath == filed.spelledOnDisk.path,
+                    "filed meanwhile, it is read again where it is in the archive: \(reading.kind) \(reading.sourcePath)")
+            #expect(try await h.services.documents.document(id: id)?.status == .filed, "found as it is until it is filed again")
+            return
+        default: break
+        }
+        let asked = try await h.ingest("bill.txt", text: Self.bill)
+        let id = try #require(asked.id)
+        if meanwhile == .removed {
+            try FileManager.default.removeItem(at: asked.url)
+            await #expect(throws: IngestError.cannotReadAgain(id), "one whose file is gone is refused") {
+                try await h.services.queueReadingAgain(id, settings: settings)
+            }
+            #expect(try await h.services.documents.document(id: id)?.status == asked.status, "and stays as it is")
+            return
+        }
+        let tag = try #require(h.services.config.labels.label("Taxes 2024", kind: .tag))
+        h.env.time.advance(by: 60)
+        switch meanwhile {
+        case .tagged: try await h.services.index.addLabels([tag], docID: id)
+        default: try await h.services.documents.update(id) { $0.status = .held }
+        }
+        h.env.time.advance(by: 60)
+        let job = try await h.services.queueReadingAgain(id, settings: settings)
+        let read = try #require(try await h.services.documents.document(id: id))
+        if meanwhile == .tagged {
+            let reading = try #require(try await h.services.jobs.job(id: job))
+            #expect(reading.tags == [tag], "read with the tag given meanwhile: \(reading.tags)")
+            #expect(try reading.payload.rereading?.before.contains(tag) == true, "and kept as one it had when asked")
+            #expect(read.labels?.contains(tag) == true, "which it keeps")
+        } else {
+            #expect(read.status == .processing && read.updatedAt == h.env.time.now(), "left for later meanwhile, it is read again from there")
+        }
+    }
+
+    /// Read Again on a document left in Incoming whose file, saved again, is being read in, not filed yet, is read with
+    /// that reading: it is not refused, and nothing more is queued or recorded.
+    @Test func readAgainOnADocumentBeingReadInBeforeItIsFiledIsReadWithThatReading() async throws {
+        let h = try await Harness.make()
+        defer { h.env.cleanup() }
+        let file = try h.env.drop("scan.txt", text: Self.bill)
+        let id = try await record(h, at: file.spelledOnDisk.path, status: .failed, sha256: "an earlier version")
+        let reading = try #require(await h.coordinator.enqueue(file), "its file saved again is read in as it")
+        try await h.review.retry(id)
+        let jobs = try await h.jobs()
+        #expect(jobs.compactMap(\.id) == [reading], "read with that reading: \(jobs.map(\.kind))")
+        #expect(try await h.services.history.events(limit: 10, kinds: [.retry]).isEmpty, "and nothing more is recorded")
+    }
+
+    /// A document filed where it is by its reading in, whose job has not ended, is left to that reading by every reading
+    /// again in bulk, Read All Documents Again and `arrumatorcli labels unlabelled` alike, which go on with the rest.
+    @Test func aDocumentStillBeingReadInWhereItIsIsLeftToThatReadingByEveryBulkReadingAgain() async throws {
+        let h = try await Harness.make(analyzer: StubAnalyzer(labels: nil))
+        defer { h.env.cleanup() }
+        var ids: [Int64] = []
+        for name in ["a.txt", "b.txt", "c.txt"] { ids.append(try #require(try await h.ingest(name, text: "\(Self.bill) \(name)").id)) }
+        let reading = ids[1]
+        let path = try #require(try await h.services.documents.document(id: reading)).path
+        // As a file put into the archive, filed where it is, its job not yet ended.
+        try await h.env.database.writer.write { db in
+            try db.execute(sql: "UPDATE jobs SET state = 'filing', kind = 'adopt', source_path = ? WHERE doc_id = ?", arguments: [path, reading])
+        }
+        #expect(try await h.review.retryAll() == [ids[0], ids[2]], "reading every document again leaves it to its reading")
+        // One whose file is gone since, with nothing to read again, is left out too.
+        try FileManager.default.removeItem(at: try #require(try await h.services.documents.document(id: ids[2])).url)
+        #expect(try await h.review.retryUnlabelled() == [ids[0]], "and so does reading those not labelled yet, without failing")
+        let jobs = try await h.jobs().filter { $0.docId == reading && $0.state.isActive }
+        #expect(jobs.map(\.kind) == [.adopt], "its reading in is its one job: \(jobs.map(\.kind))")
+    }
+
+    /// What happens to a document while its reading in, failed after its filing, waits to be tried again: Read Again is
+    /// asked; the user renames it; its file is removed; or, a file put into the archive, the user renames it and asks
+    /// Read Again, which is then queued beside that reading, at a path no longer its.
+    enum AfterItsFiling: String, CaseIterable, Sendable { case readAgain, renamed, removed, putIntoTheArchiveRenamedReadAgain }
+
+    /// A reading in that fails after its filing, as its text is indexed, and waits to be tried again, finishes first and
+    /// where the document is: a Read Again asked meanwhile waits for it, neither read before it nor undone by it, and a
+    /// name the user gives the document meanwhile stays, as that reading, its filing recorded, never files it again.
+    @Test(arguments: AfterItsFiling.allCases)
+    func aReadingInFailedAfterItsFilingFinishesFirstAndWhereTheDocumentIs(_ meanwhile: AfterItsFiling) async throws {
+        let analyzer = StubAnalyzer()
+        let base = try await Harness.make(analyzer: analyzer)
+        defer { base.env.cleanup() }
+        let h = base.with { $0.ingest.retryDelays = NonEmpty(60, []) }
+        try await h.env.database.writer.write { db in
+            try db.execute(sql: """
+                CREATE TEMP TRIGGER indexing_fails_once BEFORE INSERT ON embeddings
+                WHEN (SELECT COUNT(*) FROM events WHERE kind = '\(EventKind.retry.rawValue)') = 0
+                BEGIN SELECT RAISE(ABORT, 'the index is briefly unavailable'); END
+                """)
+        }
+        if meanwhile == .putIntoTheArchiveRenamedReadAgain {
+            let put = try h.env.put("bill.txt", text: Self.bill)
+            try await h.reconciler.apply([.found(path: put.path)])
+        } else {
+            await h.coordinator.enqueue(try h.env.drop("bill.txt", text: Self.bill))
+        }
+        await h.coordinator.drain()
+        let waiting = try #require(try await h.jobs().first)
+        let id = try #require(waiting.docId)
+        #expect(waiting.state == .filing && waiting.attempt == 1, "its reading in waits to be tried again, after its filing")
+        switch meanwhile {
+        case .readAgain, .putIntoTheArchiveRenamedReadAgain:
+            if meanwhile == .putIntoTheArchiveRenamedReadAgain { try await h.review.edit(id, fileName: "Mine", labels: nil) }
+            try await h.review.retry(id)
+            await h.coordinator.drain()
+            #expect(await analyzer.calls.files.count == 1, "a Read Again meanwhile waits for that reading to end")
+            let idle = await h.coordinator.idleWait(paused: false, power: false, archiveThere: true, queueUnread: false)
+            #expect(idle == 60, "and the worker waits for that reading's next try, not for the Read Again: \(idle ?? -1)")
+        case .renamed:
+            try await h.review.edit(id, fileName: "Mine", labels: nil)
+        case .removed:
+            try FileManager.default.removeItem(at: try #require(try await h.services.documents.document(id: id)).url)
+        }
+        h.env.time.advance(by: 60)
+        await h.coordinator.drain()
+        let jobs = try await h.jobs()
+        #expect(jobs.allSatisfy { !$0.state.isActive }, "\(meanwhile): every reading ends: \(jobs.map(\.state))")
+        let document = try #require(try await h.services.documents.document(id: id))
+        switch meanwhile {
+        case .readAgain, .putIntoTheArchiveRenamedReadAgain: #expect(await analyzer.calls.files.count == 2, "then it is read again")
+        case .renamed: #expect(document.filename == "Mine.txt", "the name the user gave it meanwhile stays: \(document.filename)")
+        case .removed: #expect(document.status == .filed, "its file gone, it is finished as filed, never filed again")
+        }
+    }
+
+    /// A file that came into Incoming, filed, whose reading in then fails every attempt after its filing, is marked
+    /// failed where it is, where the user moved it since, never filed again at the top of the archive.
+    @Test func aReadingInFailingEveryAttemptAfterItsFilingLeavesTheDocumentWhereItIs() async throws {
+        let base = try await Harness.make()
+        defer { base.env.cleanup() }
+        let h = base.with { $0.ingest.retryDelays = NonEmpty(60, []) }
+        try await h.env.database.writer.write { db in
+            try db.execute(sql: "CREATE TEMP TRIGGER indexing_fails BEFORE INSERT ON embeddings BEGIN SELECT RAISE(ABORT, 'the index is unavailable'); END")
+        }
+        await h.coordinator.enqueue(try h.env.drop("bill.txt", text: Self.bill))
+        await h.coordinator.drain()
+        let id = try #require(try await h.jobs().first?.docId)
+        let filed = try #require(try await h.services.documents.document(id: id))
+        // Moved by the user into a folder of theirs, as the archive's watcher records it.
+        let mine = h.env.archive.appendingPathComponent("Mine", isDirectory: true)
+        try FileManager.default.createDirectory(at: mine, withIntermediateDirectories: true)
+        let moved = mine.appendingPathComponent(filed.filename)
+        try FileManager.default.moveItem(at: filed.url, to: moved)
+        try await h.services.documents.update(id) { $0.path = moved.spelledOnDisk.path }
+        for _ in 0..<h.services.config.ingest.maxAttempts {
+            h.env.time.advance(by: 60)
+            await h.coordinator.drain()
+        }
+        let failed = try #require(try await h.services.documents.document(id: id))
+        #expect(failed.status == .failed && failed.path == moved.spelledOnDisk.path,
+                "marked failed where the user moved it: \(failed.status) \(failed.path)")
+    }
+
+    /// An exact copy of a document whose reading in has filed it and is finishing is left to that reading only where that
+    /// reading is at the document's file, as for a file put into the archive, which a request for that file would only
+    /// join; one whose reading in is elsewhere, as one filed from Incoming, has it read again once that reading ends.
+    @Test(arguments: [JobKind.adopt, .ingest])
+    func aCopyOfADocumentStillBeingReadInIsLeftToThatReadingOnlyAtItsFile(_ kind: JobKind) async throws {
+        let h = try await Harness.make()
+        defer { h.env.cleanup() }
+        let original = try await h.ingest("bill.txt", text: Self.bill)
+        let id = try #require(original.id)
+        // Its job waiting to be tried again: at its file, as a file put into the archive filed where it is; or at the
+        // path it came at in Incoming.
+        let later = h.env.time.now().addingTimeInterval(60).unixSeconds
+        try await h.env.database.writer.write { db in
+            try db.execute(sql: "UPDATE jobs SET state = 'filing', kind = ?, next_run_at = ? WHERE doc_id = ?",
+                           arguments: [kind.rawValue, later, id])
+            if kind == .adopt { try db.execute(sql: "UPDATE jobs SET source_path = ? WHERE doc_id = ?", arguments: [original.path, id]) }
+        }
+        await h.coordinator.enqueue(try h.env.drop("bill copy.txt", text: Self.bill))
+        await h.coordinator.drain()
+        let said = try await h.services.history.events(limit: 5, kinds: [.duplicate]).map(\.summary)
+        let reading = kind == .adopt ? "which is being read in" : "which is read again"
+        #expect(said == ["bill copy.txt is a copy of \(original.filename), \(reading); the copy is in the Trash"], "\(kind): \(said)")
+        let readings = try await h.jobs().filter { $0.kind == .reanalyse }
+        #expect(readings.count == (kind == .adopt ? 0 : 1), "\(kind): \(readings.map(\.state))")
+    }
+
+    /// A filing recorded is never made again, though what follows it in the same attempt fails, as the searchable name
+    /// written after it: a document the user moves meanwhile stays where they moved it, filed once.
+    @Test func aFilingRecordedIsNeverMadeAgainThoughWhatFollowsItFails() async throws {
+        let base = try await Harness.make()
+        defer { base.env.cleanup() }
+        let h = base.with { $0.ingest.retryDelays = NonEmpty(60, []) }
+        try await h.env.database.writer.write { db in
+            try db.execute(sql: """
+                CREATE TEMP TRIGGER naming_fails_once BEFORE UPDATE OF filename ON document_text
+                WHEN (SELECT COUNT(*) FROM events WHERE kind = '\(EventKind.retry.rawValue)') = 0
+                BEGIN SELECT RAISE(ABORT, 'the index is briefly unavailable'); END
+                """)
+        }
+        await h.coordinator.enqueue(try h.env.drop("bill.txt", text: Self.bill))
+        await h.coordinator.drain()
+        let job = try #require(try await h.jobs().first)
+        let id = try #require(job.docId)
+        #expect(job.state.isActive && job.attempt == 1, "the attempt failed after its filing: \(job.state)")
+        #expect(try job.payload.targetPath != nil, "and its filing is kept with the job")
+        let filed = try #require(try await h.services.documents.document(id: id))
+        let mine = h.env.archive.appendingPathComponent("Mine", isDirectory: true)
+        try FileManager.default.createDirectory(at: mine, withIntermediateDirectories: true)
+        let moved = mine.appendingPathComponent(filed.filename)
+        try FileManager.default.moveItem(at: filed.url, to: moved)
+        try await h.services.documents.update(id) { $0.path = moved.spelledOnDisk.path }
+        h.env.time.advance(by: 60)
+        await h.coordinator.drain()
+        let document = try #require(try await h.services.documents.document(id: id))
+        #expect(document.path == moved.spelledOnDisk.path, "it stays where the user moved it: \(document.path)")
+        let filings = try await h.services.history.events(limit: 10, kinds: [.filed], docID: id)
+        #expect(filings.count == 1, "filed once: \(filings.map(\.summary))")
+    }
+
+    /// A filing recorded whose job then spends its last attempt failing after it, as the searchable name written after it,
+    /// is marked failed where it was filed, as the job is stored: never filed again, nor said to stay in Incoming.
+    @Test func aFilingRecordedWhoseLastAttemptFailsAfterItIsMarkedFailedWhereItIs() async throws {
+        let base = try await Harness.make()
+        defer { base.env.cleanup() }
+        let h = base.with { $0.ingest.maxAttempts = 1 }
+        try await h.env.database.writer.write { db in
+            try db.execute(sql: "CREATE TEMP TRIGGER naming_fails BEFORE UPDATE OF filename ON document_text BEGIN SELECT RAISE(ABORT, 'the index is unavailable'); END")
+        }
+        await h.coordinator.enqueue(try h.env.drop("bill.txt", text: Self.bill))
+        await h.coordinator.drain()
+        let id = try #require(try await h.jobs().first?.docId)
+        let document = try #require(try await h.services.documents.document(id: id))
+        #expect(document.status == .failed && h.services.isInArchive(document), "marked failed where it was filed: \(document.path)")
+        let said = try await h.services.history.events(limit: 10, kinds: [.failed]).map(\.summary)
+        #expect(!said.contains { $0.contains("stays in Incoming") }, "never said to stay in Incoming: \(said)")
+    }
+
+    /// Read Again asked twice while the first waits queues one reading and is recorded in History once: asking again
+    /// changes nothing, and records nothing.
+    @Test func readAgainAskedTwiceIsQueuedAndRecordedOnce() async throws {
+        let h = try await Harness.make()
+        defer { h.env.cleanup() }
+        let doc = try await h.ingest("bill.txt", text: Self.bill)
+        let id = try #require(doc.id)
+        try await h.review.retry(id)
+        try await h.review.retry(id)
+        let readings = try await h.jobs().filter { $0.kind == .reanalyse }
+        #expect(readings.count == 1, "one reading: \(readings.map(\.state))")
+        let said = try await h.services.history.events(limit: 10, kinds: [.retry], docID: id)
+        #expect(said.map(\.summary) == ["Read again: \(doc.filename)"] && said.first?.actor == .user,
+                "recorded once, under the document, as the user's: \(said.map(\.summary))")
+    }
+
+    /// Read Again on a document the user confirmed, queueing its reading, takes the confirmation back: the document is
+    /// to be looked at again once it is read, and its card no longer says it was confirmed.
+    @Test func readAgainTakesBackAConfirmation() async throws {
+        let h = try await Harness.make()
+        defer { h.env.cleanup() }
+        let doc = try await h.ingest("bill.txt", text: Self.bill)
+        let id = try #require(doc.id)
+        try await h.review.confirm(id)
+        #expect(try await h.review.choices(for: try #require(try await h.services.documents.document(id: id))).confirmed != nil, "confirmed")
+        h.env.time.advance(by: 60)
+        try await h.review.retry(id)
+        let read = try #require(try await h.services.documents.document(id: id))
+        #expect(try await h.review.choices(for: read).confirmed == nil, "and asked to be read again, no longer")
+    }
+
+    /// A document asked whose file a path holds, changed by the user before it is ended, as one left in Incoming then
+    /// left for later, is left as the user changed it.
+    @Test func aDocumentTheUserChangedSinceItWasAskedIsNotEnded() async throws {
+        let h = try await Harness.make()
+        defer { h.env.cleanup() }
+        let id = try await record(h, at: h.env.incoming.appendingPathComponent("scan.txt").spelledOnDisk.path, status: .failed, sha256: "another")
+        let asked = try #require(try await h.services.documents.document(id: id))
+        try await h.services.documents.update(id) { $0.status = .held }
+        try await h.coordinator.replaced(asked)
+        #expect(try await h.services.documents.document(id: id)?.status == .held, "left for later, it stays so")
+        #expect(try await h.services.history.events(limit: 10, kinds: [.missing]).isEmpty, "and nothing is said to be gone")
+    }
+
+    /// A document set aside, ended as another file comes in its place, is ended once, however many requests for its path
+    /// come at once: one no longer set aside is left as it is.
+    @Test func aDocumentSetAsideIsEndedOnceThoughTwoRequestsEndIt() async throws {
+        let h = try await Harness.make()
+        defer { h.env.cleanup() }
+        let id = try await record(h, at: h.env.incoming.appendingPathComponent("scan.txt").spelledOnDisk.path, status: .undone, sha256: "another")
+        let undone = try #require(try await h.services.documents.document(id: id))
+        try await h.coordinator.replaced(undone)
+        try await h.coordinator.replaced(undone)
+        #expect(try await h.services.documents.document(id: id)?.status == .missing, "it is ended")
+        #expect(try await h.services.history.events(limit: 10, kinds: [.missing]).count == 1, "once")
+    }
+}

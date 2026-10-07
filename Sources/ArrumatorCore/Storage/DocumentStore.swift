@@ -147,11 +147,25 @@ public struct DocumentStore: Sendable {
         return ids.compactMap { byID[$0] }
     }
 
+    /// The document recorded at `path`: of several, as an original undone back where its copy was before the copy went
+    /// to the Trash, one whose file may be there before one that ended (`ended`), then the newest.
     public func document(path: String) async throws -> DocumentRecord? {
         try await database.reader.read { db in
-            try DocumentRecord.filter(Column("path") == path).order(Column("id").desc).fetchOne(db)
+            try DocumentRecord.filter(Column("path") == path).order(Self.ended.contains(Column("status")), Column("id").desc).fetchOne(db)
         }
     }
+
+    /// Every document recorded at `path`, the newest first.
+    func documents(path: String) async throws -> [DocumentRecord] {
+        try await database.reader.read { db in
+            try DocumentRecord.filter(Column("path") == path).order(Column("id").desc).fetchAll(db)
+        }
+    }
+
+    /// Statuses of documents whose file is no longer at their path, as far as a path tells: one missing, and a copy gone
+    /// to the Trash (`duplicate`); a copy an earlier version filed beside its original, still there, is found by its path
+    /// all the same when no other document is recorded there.
+    private static let ended = [DocumentStatus.missing, .duplicate].map(\.rawValue)
 
     /// The documents recorded at `path` or anywhere inside it, as in a folder: those whose path begins `path/`, which
     /// in the paths' byte order are those from `path/` up to `path0`, as `0` follows `/`, so the index on paths finds them.
@@ -192,14 +206,14 @@ public struct DocumentStore: Sendable {
         try await database.reader.read { db in try DocumentRecord.filter(Column("uid") == uid).fetchOne(db) }
     }
 
-    /// The oldest document in the archive at `archive` as itself (`DocumentStatus.inArchive`: filed, waiting for the
-    /// user, parked after failing or left for later, and its file in the archive) recorded with this content hash, other
-    /// than `id`: what an exact copy of it is a copy of. A copy an earlier version filed (`duplicate`) is none, and so is a
-    /// document left in Incoming, as one the Trash would not take.
+    /// The oldest document in the archive at `archive` an exact copy is a copy of (`DocumentStatus.takesCopies`: filed,
+    /// waiting for the user, parked after failing, left for later or being read, and its file in the archive)
+    /// recorded with this content hash, other than `id`. A copy an earlier version filed (`duplicate`) is none, and so is
+    /// a document left in Incoming, as one the Trash would not take.
     public func existing(sha256: String, excluding id: Int64?, archive: URL) async throws -> DocumentRecord? {
         try await database.reader.read { db in
             let (within, args) = DocumentFilter.pathCondition(within: archive)
-            let statuses = DocumentStatus.inArchive.map(\.rawValue).sorted()
+            let statuses = DocumentStatus.takesCopies.map(\.rawValue).sorted()
             var sql = "SELECT d.* FROM documents d WHERE d.sha256 = ? AND d.status IN (\(databaseQuestionMarks(count: statuses.count)))\(within)"
             var arguments: StatementArguments = [sha256]
             arguments += StatementArguments(statuses)

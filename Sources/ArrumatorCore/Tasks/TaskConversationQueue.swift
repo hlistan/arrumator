@@ -22,7 +22,8 @@ public struct ConversationQueueStatus: Sendable, Hashable {
     /// Ollama could not be reached for the last answer: the questions waiting are tried again after the last of
     /// `ingest.retryDelays`. Until an answer reaches it, or nothing is left to answer.
     public var waitingForOllama: Bool
-    /// When the question that found Ollama away is tried again, on the queue's clock; nil while nothing waits for it.
+    /// When the question that found Ollama away is tried again, on the queue's clock; nil while nothing waits for it, and
+    /// while that question is tried again, answered now.
     public var retryAt: Date?
 
     public init(answering: Answering?, queued: Int, queuedTasks: Set<Int64> = [], waitingForOllama: Bool, retryAt: Date? = nil) {
@@ -111,6 +112,7 @@ public actor TaskConversationQueue: ModelQueue {
     var worker: Task<Void, Never>?
     let doorbell = Doorbell()
     var inHand: InHand?
+    var ollamaRetryAt: Date?
     nonisolated let name = "questions"
     private var statusContinuations: [UUID: AsyncStream<ConversationQueueStatus>.Continuation] = [:]
     public private(set) var status = ConversationQueueStatus.idle {
@@ -164,10 +166,8 @@ public actor TaskConversationQueue: ModelQueue {
             next.queuedTasks = Set(queued)
             countPublished = asked
         }
-        if next.answering == nil, next.queued == 0 {
-            next.waitingForOllama = false
-            next.retryAt = nil
-        }
+        (next.waitingForOllama, next.retryAt) = ollamaWait(inHand: next.answering != nil, queued: next.queued,
+                                                          saying: (next.waitingForOllama, next.retryAt))
         status = next
     }
 
@@ -293,14 +293,12 @@ public actor TaskConversationQueue: ModelQueue {
             // Stopping the app interrupts the question; that is no failure, and the next start takes it up again.
             outcome = SearchTaskQueue.interrupted
             reached = nil
-        case let .away(error):
+        case let .away(error, until):
             outcome = TraceRecorder.waitingOutcome
             reached = false
-            let until = retryAt
             do { try await store.postpone(id, by: tag, until: until, trace: trace.traceID) } catch {
                 Log.error(.search, "Could not put a question back in the queue", ["turn": String(id), "error": error.localizedDescription])
             }
-            await publish { $0.retryAt = until }
             Log.warning(.search, "Ollama unavailable; the question waits", ["turn": String(id), "error": error.localizedDescription])
         case let .failed(error):
             outcome = TurnState.failed.rawValue

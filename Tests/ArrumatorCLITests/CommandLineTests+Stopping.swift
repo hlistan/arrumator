@@ -1,6 +1,7 @@
 @testable import ArrumatorCore
 import ArrumatorTesting
 import Foundation
+import GRDB
 import Testing
 
 /// How a command ends: what it started stops with it, Ctrl-C included, and its exit code says whether every file it was
@@ -13,8 +14,7 @@ extension CommandLineTests {
         let process = Process()
         process.executableURL = command
         process.arguments = arguments
-        process.environment = ["ARRUMATOR_HOME": home.support.path, "ARRUMATOR_TRASH": home.root.appendingPathComponent("Trash").path,
-                               "HOME": FileManager.default.homeDirectoryForCurrentUser.path].merging(environment) { _, given in given }
+        process.environment = home.environment.merging(environment) { _, given in given }
         let printed = home.root.appendingPathComponent(Self.standardOutput)
         FileManager.default.createFile(atPath: printed.path, contents: nil)
         process.standardOutput = try FileHandle(forWritingTo: printed)
@@ -160,6 +160,27 @@ extension CommandLineTests {
         #expect(try logged(home).contains("Arrumator stopped"), "its work was stopped as the app stops its own, not cut off")
     }
 
+    /// With Ollama away, `run` says when the file waiting for it is tried again (the second review of the fix of QA
+    /// 2026-10-05, RA-1).
+    @Test func runSaysWhenAFileWaitingForOllamaIsTriedAgain() async throws {
+        // The file is taken once it has stopped changing, looked at closely, so the test waits for what `run` says, not
+        // for the watcher's patience, on a loaded machine.
+        let home = try Home.make(pipeline: ["watcher": ["stabilityPollInterval": 0.2]])
+        defer { home.cleanup() }
+        let incoming = home.root.appendingPathComponent("Incoming", isDirectory: true)
+        try FileManager.default.createDirectory(at: incoming, withIntermediateDirectories: true)
+        try Data("Fatura de julho de Maria Exemplo".utf8).write(to: incoming.appendingPathComponent("fatura.txt"))
+        let running = try launch(home, ["run"])
+        defer { if running.isRunning { running.terminate() } }
+        let output = home.root.appendingPathComponent(Self.standardOutput)
+        let said = await Patience.until {
+            ((try? String(contentsOf: output, encoding: .utf8)) ?? "").contains("Waiting for Ollama: it cannot be reached, and is tried again at ")
+        }
+        #expect(said, "it says, as it happens, when the file is tried again: \((try? String(contentsOf: output, encoding: .utf8)) ?? "")")
+        kill(running.processIdentifier, SIGINT)
+        try #require(await Patience.until { !running.isRunning }, "Ctrl-C ends it")
+    }
+
     @Test func aSecondSignalEndsTheCommandAtOnceAndTheOllamaServerItStartedWithIt() async throws {
         let home = try Home.make()
         defer { home.cleanup() }
@@ -209,11 +230,158 @@ extension CommandLineTests {
                 "which the exit code says, and standard error, naming the file: \(ingested.stderr)")
     }
 
-    @Test func aDryRunOfSeveralFilesPrintsOneListNamingEachAndIngestShowsWhatCameOfTheRest() async throws {
+    /// A file that fails before it becomes a document, as one that cannot be read, is named on standard error with why,
+    /// and fails the command, though it is tried again later: it is never said to be queued, not read yet (the reviews of
+    /// the fix of the final review of #17).
+    @Test(.fileModesKeepOut) func ingestNamesAFileThatFailedWithWhy() throws {
+        let home = try Home.make()
+        defer { home.cleanup() }
+        let locked = home.root.appendingPathComponent("locked.txt")
+        try Data("Fatura de Maria Exemplo".utf8).write(to: locked)
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: locked.path)
+        let ingested = try run(home, ["ingest", "--json", locked.path])
+        let queue = try DatabaseQueue(path: try index(home).path)
+        defer { try? queue.close() }
+        let why = try #require(try queue.read { db in
+            try String.fetchOne(db, sql: "SELECT last_error FROM jobs WHERE source_path = ?", arguments: [locked.spelledOnDisk.path])
+        }, "the attempt that failed is recorded with why")
+        #expect(ingested.status == 1 && ingested.stderr.contains("\(locked.spelledOnDisk.path): \(why)"),
+                "the file is named with why it failed: \(ingested.stderr)")
+    }
+
+    /// A file this command spends no attempt on is no failure: one that waits, as for the archive's folder when it was
+    /// taken, one that failed before and waits now, each queued with why and when it is tried again, as Incoming says
+    /// them, and one another process has in hand, whose time has come, with why it last stopped (the reviews of the fix
+    /// of the final review of #17).
+    @Test func ingestNamesAFileThatWaitsWithWhyAsNoFailure() throws {
+        let home = try Home.make()
+        defer { home.cleanup() }
+        let files = ["waiting.txt", "earlier.txt", "held.txt"].map { home.root.appendingPathComponent($0) }
+        for file in files { try Data("Fatura de Maria Exemplo \(file.lastPathComponent)".utf8).write(to: file) }
+        #expect(try run(home, ["history", "--json"]).status == 0, "the archive's index is made")
+        let queue = try DatabaseQueue(path: try index(home).path)
+        let now = Date().timeIntervalSince1970.rounded()
+        let app = try SystemProcesses().current.description
+        try queue.write { db in
+            for (file, attempt, due, claimedBy) in [(files[0], 0, now + 3_600, nil), (files[1], 1, now + 3_600, nil), (files[2], 1, now - 60, app)] {
+                try db.execute(sql: """
+                    INSERT INTO jobs (kind, source_path, state, attempt, last_error, next_run_at, created_at, updated_at, claim, claimed_by)
+                    VALUES ('ingest', ?, 'hashing', ?, 'The archive is not there', ?, ?, ?, ?, ?)
+                    """, arguments: [file.spelledOnDisk.path, attempt, due, now, now, claimedBy.map { _ in "in hand" }, claimedBy])
+            }
+        }
+        try queue.close()
+        let waited = try run(home, ["ingest", "--json"] + files.map(\.path))
+        let later = Format.date(Date(timeIntervalSince1970: now + 3_600))
+        let said = files.prefix(2).map { "\($0.spelledOnDisk.path): queued, not read yet: The archive is not there; tried again at \(later)\n" }
+            + ["\(files[2].spelledOnDisk.path): queued, not read yet: The archive is not there; the app or `run` files it\n"]
+        #expect(waited.status == 0 && said.allSatisfy(waited.stderr.contains),
+                "a file that waits is no failure, though it failed before, and says why and until when, or who files it: \(waited.stderr)")
+        let listed = try run(home, ["ingest", files[0].path])
+        #expect(listed.status == 0 && listed.text.contains("queued      \(files[0].spelledOnDisk.path)\n            The archive is not there; tried again at \(later)\n"),
+                "and so does the list: \(listed.text)")
+    }
+
+    /// A file another process, as the app, fails while this command runs is that process's failure, not the command's:
+    /// it is queued, saying why (the review of the fix of the final review of #17).
+    @Test func ingestLeavesAFileAnotherProcessFailsMeanwhileQueued() throws {
+        let home = try Home.make()
+        defer { home.cleanup() }
+        let (mine, held) = (home.root.appendingPathComponent("mine.txt"), home.root.appendingPathComponent("held.txt"))
+        for file in [mine, held] { try Data("Fatura de Maria Exemplo \(file.lastPathComponent)".utf8).write(to: file) }
+        #expect(try run(home, ["history", "--json"]).status == 0, "the archive's index is made")
+        let queue = try DatabaseQueue(path: try index(home).path)
+        let now = Date().timeIntervalSince1970.rounded()
+        try queue.write { db in
+            try db.execute(sql: """
+                INSERT INTO jobs (kind, source_path, state, next_run_at, created_at, updated_at, claim, claimed_by)
+                VALUES ('ingest', ?, 'hashing', ?, ?, ?, 'in hand', ?)
+                """, arguments: [held.spelledOnDisk.path, now, now, now, try SystemProcesses().current.description])
+            // The app fails its file while the command works on its own: what the app's worker writes of a failed attempt.
+            // A trigger takes no arguments, so its values are written into it, quoted.
+            let quoted = { (text: String) in "'" + text.replacingOccurrences(of: "'", with: "''") + "'" }
+            try db.execute(sql: """
+                CREATE TRIGGER app_fails AFTER UPDATE ON jobs WHEN NEW.source_path = \(quoted(mine.spelledOnDisk.path)) BEGIN
+                  UPDATE jobs SET attempt = attempt + 1, last_error = 'The app could not read it', next_run_at = \(now + 3_600)
+                  WHERE source_path = \(quoted(held.spelledOnDisk.path));
+                END
+                """)
+        }
+        try queue.close()
+        let ingested = try run(home, ["ingest", "--json", mine.path, held.path])
+        let later = Format.date(Date(timeIntervalSince1970: now + 3_600))
+        #expect(ingested.status == 0 && ingested.stderr.contains("\(held.spelledOnDisk.path): queued, not read yet: The app could not read it; tried again at \(later)\n"),
+                "the app's failure is no failure of the command: \(ingested.stderr)")
+    }
+
+    /// A file this command fails once it became a document, as when Ollama answers its reading with an error, fails the
+    /// command, saying why, though it is tried again later (the review of the fix of the final review of #17).
+    @Test func ingestFailsAFileWhoseReadingFailedHereOnceItBecameADocument() async throws {
+        let ollama = try LoopbackOllama(chat: ("500 Internal Server Error", #"{"error":"model runner has unexpectedly stopped"}"#))
+        defer { ollama.stop() }
+        // The error is the server's, asked once: no time is spent asking it again, and the file is not due again before
+        // the command ends.
+        var once = LoopbackOllama.patient
+        once["ollama"] = (once["ollama"] as? [String: Any] ?? [:]).merging(["retryDelays": [Int]()]) { $1 }
+        once["ingest"] = ["retryDelays": [3_600]]
+        let home = try Home.make(ollamaURL: ollama.address, pipeline: once)
+        defer { home.cleanup() }
+        let note = home.root.appendingPathComponent("note.txt")
+        try Data("Fatura de Maria Exemplo".utf8).write(to: note)
+        let ingested = try run(home, ["ingest", "--json", note.path])
+        let queue = try DatabaseQueue(path: try index(home).path)
+        defer { try? queue.close() }
+        let job = try #require(try await queue.read { db -> (document: Int64?, attempt: Int, why: String?)? in
+            try Row.fetchOne(db, sql: "SELECT doc_id, attempt, last_error FROM jobs WHERE source_path = ?", arguments: [note.spelledOnDisk.path])
+                .map { ($0["doc_id"], $0["attempt"], $0["last_error"]) }
+        }, "the file was queued")
+        let why = try #require(job.why, "the failed attempt is recorded with why")
+        #expect(job.document != nil && job.attempt == 1, "the file became a document, and its reading failed once")
+        #expect(ingested.status == 1 && ingested.stderr.contains("\(note.spelledOnDisk.path): \(why)\n"),
+                "the command fails it, saying why: \(ingested.stderr)")
+    }
+
+    /// The index of `home`'s archive, once a command has made it.
+    func index(_ home: Home) throws -> URL {
+        try #require(try FileManager.default.contentsOfDirectory(at: home.support.appendingPathComponent("Indexes"),
+                                                                includingPropertiesForKeys: nil).first { $0.pathExtension == "sqlite" })
+    }
+
+    /// With Ollama away, the first file is read for its text and waits, and the rest are looked at, but not read: each
+    /// is shown as the document it became, waiting, as no failure (QA 2026-10-05, RA-1; the reviews of its fix). A file
+    /// another process has in hand before it is looked at, as the app may, is not begun: with `--json`, which lists
+    /// documents alone, it is named on standard error as queued, as no failure.
+    @Test func ingestWhileOllamaIsAwayShowsEveryFileAsItWaitsAndOneNotBegunAsQueued() throws {
+        let home = try Home.make()
+        defer { home.cleanup() }
+        let notes = ["a.txt", "b.txt", "c.txt"].map { home.root.appendingPathComponent($0) }
+        for (index, note) in notes.enumerated() { try Data("Fatura número \(index + 1) de Maria Exemplo".utf8).write(to: note) }
+        let ingested = try run(home, ["ingest", "--json", notes[0].path, notes[1].path])
+        #expect(try JSON.decoder.decode([DocumentRecord].self, from: ingested.stdout).map(\.originalFilename) == ["a.txt", "b.txt"],
+                "the JSON lists the documents both files became, the second looked at but not read while the first waits for Ollama: \(ingested.text)")
+        #expect(ingested.status == 0 && ingested.stderr.isEmpty, "and fails nothing: \(ingested.stderr)")
+        // The app has the third file in hand, as this test's own process stands in for it, before it is looked at.
+        let queue = try DatabaseQueue(path: try index(home).path)
+        let now = Date().timeIntervalSince1970
+        try queue.write { db in
+            try db.execute(sql: """
+                INSERT INTO jobs (kind, source_path, state, next_run_at, created_at, updated_at, claim, claimed_by)
+                VALUES ('ingest', ?, 'pending', ?, ?, ?, 'in hand', ?)
+                """, arguments: [notes[2].spelledOnDisk.path, now, now, now, try SystemProcesses().current.description])
+        }
+        try queue.close()
+        let listed = try run(home, ["ingest", "--json", notes[2].path])
+        #expect(listed.status == 0 && listed.stderr.contains("\(notes[2].spelledOnDisk.path): queued, not read yet: the app or `run` files it\n"),
+                "a file not begun is named on standard error as queued, failing nothing: \(listed.text) \(listed.stderr)")
+        let shown = try run(home, ["ingest", notes[2].path])
+        #expect(shown.status == 0 && shown.text.contains("queued      \(notes[2].spelledOnDisk.path)\n            the app or `run` files it"),
+                "and the list shows it so: \(shown.text)")
+    }
+
+    @Test func aDryRunOfSeveralFilesPrintsOneListNamingEachAndIngestShowsWhatCameOfTheRest() throws {
         let ollama = try LoopbackOllama()
         defer { ollama.stop() }
-        try #require(await Patience.until { ollama.address != nil }, "the stand-in Ollama listens on the loopback address")
-        let home = try Home.make(ollamaURL: try #require(ollama.address))
+        let home = try Home.make(ollamaURL: ollama.address, pipeline: LoopbackOllama.patient)
         defer { home.cleanup() }
         let notes = ["one.txt", "two.txt"].map { home.root.appendingPathComponent($0) }
         for (index, note) in notes.enumerated() { try Data("Note number \(index + 1)".utf8).write(to: note) }

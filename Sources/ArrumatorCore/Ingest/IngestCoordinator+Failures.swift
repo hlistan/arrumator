@@ -26,122 +26,149 @@ enum JobOutcome: String {
 /// What a failure does to a job: a stop is none; Ollama away, the archive's folder gone or a model not installed makes it
 /// wait without spending an attempt; a refusal that will not change ends it at once, leaving its file in Incoming
 /// (`leaveInIncoming`); a file changed after it was read goes back to the start (`readFromTheStart`); anything else is
-/// tried again after `ingest.retryDelays`, and after `ingest.maxAttempts` the file is parked in the archive as failed.
+/// tried again after `ingest.retryDelays`, and after `ingest.maxAttempts` the file is parked in the archive as failed,
+/// but for a document the user set aside, read again for search after a rebuild, which stays as the user left it.
 extension IngestCoordinator {
-    func handleFailure(_ job: inout JobRecord, payload: JobPayload, error: any Error, trace: TraceContext) async {
+    /// Handles `error`, which ended `job`'s attempt; `takenWhileAway` says the job was taken while Ollama is away, as only
+    /// one whose next stage needs no model is (`JobStore.beforeTheModel`), so its failure says nothing of Ollama. Says
+    /// whether it recorded a failure of the job: an attempt spent and kept, or the job ended failed; not a stop, nor a
+    /// wait for Ollama, the archive's folder or a model before an attempt is spent, nor a file read again from the start,
+    /// nor a job no longer this worker's, as one cancelled while its failure is saved (`keep`), whose trace ends there.
+    func handleFailure(_ job: inout JobRecord, payload: JobPayload, error: any Error, trace: TraceContext, takenWhileAway: Bool) async -> Bool {
+        do {
+            return try await recordFailure(&job, payload: payload, error: error, trace: trace, takenWhileAway: takenWhileAway)
+        } catch {
+            // `keep` found the job no longer this worker's, cancelled or taken over meanwhile: nothing more is done of it.
+            await lost(job, trace)
+            return false
+        }
+    }
+
+    /// `handleFailure`, which throws `IngestError.claimLost` once the job is found no longer this worker's.
+    private func recordFailure(_ job: inout JobRecord, payload: JobPayload, error: any Error, trace: TraceContext,
+                               takenWhileAway: Bool) async throws -> Bool {
         // Stopping interrupts the job; that is no failure. Its saved stage lets it resume where it stopped.
         guard !Task.isCancelled else {
             Log.info(.ingest, "Job interrupted by stopping", ["job": String(job.id ?? 0), "stage": job.state.rawValue])
-            return
+            return false
         }
-        // A job no longer this worker's, cancelled or taken over meanwhile, is not this worker's to fail: nothing of it,
-        // its document or its file is changed.
-        guard await services.jobs.holds(job) else {
-            Log.info(.ingest, "Job no longer this worker's; its failure changes nothing", ["job": String(job.id ?? 0)])
-            await finish(trace, .cancelled, docID: job.docId)
-            return
-        }
+        // A job no longer this worker's, cancelled or taken over meanwhile, is not this worker's to fail: the first write
+        // of every path below saves the job only while its claim holds (`keep`), so nothing of it, its document or its
+        // file is changed, and `handleFailure` ends it there.
         let message = error.localizedDescription
         let config = services.config.ingest
         // Ollama away costs no attempt, however long it is away; a server that answers, but with a failure or not in time,
         // as it may for one image or one document alone, does, so the job ends rather than coming back for ever.
         let ollamaDown = await services.ollamaIsAway(error)
-        // A failure of anything else says Ollama answered.
-        status.waitingForOllama = ollamaDown
+        // A failure of anything else says Ollama answered, but for a job taken while Ollama is away, which never asks it.
+        if !takenWhileAway {
+            status.waitingForOllama = ollamaDown
+            if !ollamaDown { ollamaRetryAt = nil }
+        }
         let lastError = job.lastError
         job.lastError = message
         if case IngestError.unreadablePayload = error {
             // Trying again cannot read it either: the job ends, its payload kept as it is to show why, and its document
             // with it, which waits for the user in Needs You; the file a rescan finds again is queued afresh.
             job.state = .failed
-            guard await keep(job, event: .failed, summary: message, trace: trace) else { await lost(job, trace); return }
+            try await keep(job, event: .failed, summary: message, trace: trace)
             do { try await end(job.docId, as: .failed) } catch {
                 Log.error(.ingest, "Could not record a document whose job failed", ["job": String(job.id ?? 0), "error": error.localizedDescription])
             }
             await finish(trace, .failed, docID: job.docId)
             Log.error(.ingest, "A job's payload cannot be read; the job failed", ["job": String(job.id ?? 0)])
-            return
+            return true
         }
         // The failure path throws nothing: a payload that cannot be written keeps the one the job had, which is logged.
         do { try job.setPayload(payload) } catch {
             Log.error(.ingest, "Could not keep what a failed job had done", ["job": String(job.id ?? 0), "error": error.localizedDescription])
         }
         if case let OllamaError.modelNotFound(model) = error {
-            await waitForModel(&job, model: model, payload: payload, lastError: lastError, trace: trace)
-            return
+            try await waitForModel(&job, model: model, payload: payload, lastError: lastError, trace: trace)
+            return false
         }
         if ollamaDown {
             job.nextRunAt = services.time.now().addingTimeInterval(config.retryDelays.last)
-            await keep(job, event: lastError == message ? nil : .retry, summary: "Waiting for Ollama: \(message)", trace: trace)
+            // No other job is read for its text meanwhile, as each would only wait for Ollama too (`JobStore.beforeTheModel`).
+            ollamaRetryAt = job.nextRunAt
+            try await keep(job, event: lastError == message ? nil : .retry, summary: "Waiting for Ollama: \(message)", trace: trace)
             await finish(trace, .waiting, docID: job.docId)
             Log.warning(.ingest, "Ollama unavailable; will retry", ["job": String(job.id ?? 0), "error": message])
-            return
+            return false
         }
         if case FileOperationError.folderMissing = error {
             // The archive's folder is not there, as on a disk not attached: the job waits for it, as for Ollama, without
             // spending an attempt, and History says so once.
             job.nextRunAt = services.time.now().addingTimeInterval(config.retryDelays.last)
-            await keep(job, event: lastError == message ? nil : .retry, summary: "Waiting for the archive: \(message)", trace: trace)
+            try await keep(job, event: lastError == message ? nil : .retry, summary: "Waiting for the archive: \(message)", trace: trace)
             await finish(trace, .waiting, docID: job.docId)
             Log.warning(.ingest, "The archive's folder is not there; will retry", ["job": String(job.id ?? 0)])
-            return
+            return false
         }
         if Self.isFinal(error) {
             job.state = .failed
-            guard await keep(job, event: nil, summary: message, trace: trace) else { await lost(job, trace); return }
+            try await keep(job, event: nil, summary: message, trace: trace)
             await leaveInIncoming(job: job, payload: payload, message: message, trace: trace)
             await finish(trace, .failed, docID: job.docId)
             Log.error(.ingest, "The Trash refused the file; it stays in Incoming", ["job": String(job.id ?? 0), "error": message])
-            return
+            return true
         }
         job.attempt += 1
         if job.attempt < config.maxAttempts, case FileOperationError.sourceChanged = error {
-            await readFromTheStart(&job, payload: payload, trace: trace)
-            return
+            try await readFromTheStart(&job, payload: payload, trace: trace)
+            return false
         }
         if job.attempt < config.maxAttempts {
             job.nextRunAt = services.time.now().addingTimeInterval(config.retryDelays.clamped(job.attempt - 1))
-            await keep(job, event: .retry, summary: "Attempt \(job.attempt) failed: \(message)", trace: trace)
+            try await keep(job, event: .retry, summary: "Attempt \(job.attempt) failed: \(message)", trace: trace)
             await finish(trace, .retry, docID: job.docId)
             Log.warning(.ingest, "Stage failed; retrying", ["job": String(job.id ?? 0), "stage": job.state.rawValue,
                                                             "attempt": String(job.attempt), "error": message])
-            return
+            return true
         }
-        await setAside(&job, message: message, lastError: lastError, trace: trace)
+        return try await setAside(&job, message: message, lastError: lastError, trace: trace)
     }
 
     /// Fails a job that has spent its attempts, setting its file aside in the archive (`parkFailedDocument`), or waits for
-    /// the archive's folder to do so.
-    private func setAside(_ job: inout JobRecord, message: String, lastError: String?, trace: TraceContext) async {
+    /// the archive's folder to do so: a failure recorded either way, once its last attempt is kept. Throws
+    /// `IngestError.claimLost` when the job is no longer this worker's before that, or before its file is set aside; one
+    /// lost after it changes nothing of the failure recorded.
+    private func setAside(_ job: inout JobRecord, message: String, lastError: String?, trace: TraceContext) async throws -> Bool {
         let config = services.config.ingest
         // The attempt is saved while the claim holds, before the file is parked; the move itself is made only if the
         // claim still holds when it is (`parkFailedDocument`).
-        guard await keep(job, event: nil, summary: message, trace: trace) else { await lost(job, trace); return }
+        try await keep(job, event: nil, summary: message, trace: trace)
         switch await parkFailedDocument(job: job, message: message, trace: trace) {
         case .parked: break
         case .lost:
-            await lost(job, trace)
-            return
+            throw IngestError.claimLost(job.id ?? 0)
         case .archiveAway:
             // The archive's folder is not there to park the file in: the job waits for it, as a stage does, and is tried
             // once more when it is back, then parked; History says so once.
             job.nextRunAt = services.time.now().addingTimeInterval(config.retryDelays.last)
-            await keep(job, event: lastError == message ? nil : .retry, summary: "Waiting for the archive to set aside: \(message)",
-                       trace: trace)
-            await finish(trace, .waiting, docID: job.docId)
+            // The failure is kept; a job taken over meanwhile waits for nothing of this worker's, and its trace says so.
+            do {
+                try await keep(job, event: lastError == message ? nil : .retry, summary: "Waiting for the archive to set aside: \(message)",
+                               trace: trace)
+                await finish(trace, .waiting, docID: job.docId)
+            } catch {
+                await finish(trace, .cancelled, docID: job.docId)
+            }
             Log.warning(.ingest, "The archive's folder is not there to park a failed file; will retry", ["job": String(job.id ?? 0)])
-            return
+            return true
         }
         job.state = .failed
-        await keep(job, event: nil, summary: message, trace: trace)
+        // The file is set aside as failed, which History records: the failure stands, whoever has the job now.
+        try? await keep(job, event: nil, summary: message, trace: trace)
         await finish(trace, .failed, docID: job.docId)
         Log.error(.ingest, "Job failed", ["job": String(job.id ?? 0), "error": message])
+        return true
     }
 
     /// The model is not installed: the job waits at its stage for it to be, spending no attempt, and looks again every
     /// `ingest.modelRecheckSeconds` whether the server lists it (`stillMissing`), with no trace or attempt until it does;
     /// the Incoming queue says what to do, and History says so once.
-    private func waitForModel(_ job: inout JobRecord, model: String, payload: JobPayload, lastError: String?, trace: TraceContext) async {
+    private func waitForModel(_ job: inout JobRecord, model: String, payload: JobPayload, lastError: String?, trace: TraceContext) async throws {
         var waiting = payload
         waiting.waitingForModel = model
         do { try job.setPayload(waiting) } catch {
@@ -149,7 +176,7 @@ extension IngestCoordinator {
         }
         job.lastError = Self.install(model)
         job.nextRunAt = services.time.now().addingTimeInterval(services.config.ingest.modelRecheckSeconds)
-        await keep(job, event: lastError == job.lastError ? nil : .error, summary: "Model missing: \(Self.install(model))", trace: trace)
+        try await keep(job, event: lastError == job.lastError ? nil : .error, summary: "Model missing: \(Self.install(model))", trace: trace)
         await finish(trace, .waitingForModel, docID: job.docId)
         Log.error(.ingest, "Model missing; the job waits for it", ["job": String(job.id ?? 0)])
     }
@@ -167,25 +194,23 @@ extension IngestCoordinator {
         return !installed.contains { ModelManager.normalized($0.name) == wanted }
     }
 
-    /// Saves what a failure did to a job and records it in the history. Both are already the failure path, so neither
-    /// throws: what cannot be saved is logged, and the job, unchanged in the queue, is taken again in its turn.
-    /// Whether the job was saved, or could not be for another reason than that its claim no longer holds: false when it
-    /// was cancelled or taken over meanwhile, and nothing more is done of its failure.
-    @discardableResult
-    private func keep(_ job: JobRecord, event: EventKind?, summary: String, trace: TraceContext) async -> Bool {
+    /// Saves what a failure did to a job and records it in the history. Both are already the failure path: what cannot be
+    /// saved is logged, and the job, unchanged in the queue, is taken again in its turn. Throws `IngestError.claimLost`
+    /// alone, when the job was cancelled or taken over meanwhile, and nothing more is done of its failure
+    /// (`handleFailure`).
+    private func keep(_ job: JobRecord, event: EventKind?, summary: String, trace: TraceContext) async throws {
         do { try await services.jobs.update(job) } catch IngestError.claimLost {
-            return false
+            throw IngestError.claimLost(job.id ?? 0)
         } catch {
             Log.error(.ingest, "Could not save a failed job", ["job": String(job.id ?? 0), "error": error.localizedDescription])
         }
-        guard let event else { return true }
+        guard let event else { return }
         do {
             try await services.history.record(event, doc: job.docId, job: job.id, trace: trace.traceID, summary: summary)
         } catch {
             Log.error(.ingest, "Could not record a failure in the history", ["job": String(job.id ?? 0), "event": event.rawValue,
                                                                              "error": error.localizedDescription])
         }
-        return true
     }
 
     /// Ends a failure of a job no longer this worker's, found where its outcome was to be saved: nothing more is done.
@@ -200,7 +225,7 @@ extension IngestCoordinator {
     /// but for a document in the archive read again, which keeps what it had until it is filed. Recorded once, and due at
     /// once, as nothing failed; it costs an attempt, so a file that changes at every reading ends as any job that keeps
     /// failing does.
-    private func readFromTheStart(_ job: inout JobRecord, payload: JobPayload, trace: TraceContext) async {
+    private func readFromTheStart(_ job: inout JobRecord, payload: JobPayload, trace: TraceContext) async throws {
         var fresh = JobPayload()
         fresh.tags = payload.tags
         // What a document read again had when it was asked for stays what the user's changes are told by.
@@ -211,10 +236,7 @@ extension IngestCoordinator {
         job.state = .pending
         job.nextRunAt = services.time.now()
         let name = URL(fileURLWithPath: job.sourcePath).lastPathComponent
-        guard await keep(job, event: .retry, summary: "\(name) changed after it was read; it is read again from the start", trace: trace) else {
-            await lost(job, trace)
-            return
-        }
+        try await keep(job, event: .retry, summary: "\(name) changed after it was read; it is read again from the start", trace: trace)
         // The document is an arrival again: nothing read of what the file was stays with it, its tags aside.
         if let docID = job.docId, job.kind != .reanalyse {
             do { try await services.index.forgetReading(docID: docID) } catch {
@@ -251,11 +273,21 @@ extension IngestCoordinator {
     }
 
     /// Ends `known`, a document left for later or undone in Incoming, whose file is no longer there: another file came
-    /// in its place, which is taken as an arrival of its own. History says so.
+    /// in its place. History says so, in the write that ends it, which ends it only as it was when `known` was read, and
+    /// set aside: a document is ended once however many requests for its path come at once, and one of another status,
+    /// as one left in Incoming whose file was saved again, or one the user changed since, as one left in Incoming then
+    /// left for later, is left as it is.
     func replaced(_ known: DocumentRecord) async throws {
         guard let docID = known.id else { return }
-        try await services.documents.update(docID) { $0.status = .missing }
-        try await services.history.record(.missing, doc: docID, summary: "\(known.filename) is no longer in Incoming; the file there now is another")
+        let now = services.time.now()
+        try await services.database.writer.write { db in
+            guard let read = try DocumentRecord.fetchOne(db, key: docID), read.status == known.status, read.status.isSetAside else { return }
+            var gone = read
+            gone.status = .missing
+            gone.updatedAt = now
+            try gone.updateChanges(db, from: read)
+            try HistoryStore.insert(db, .missing, at: now, doc: docID, summary: "\(read.filename) is no longer in Incoming; the file there now is another")
+        }
     }
 
     /// Whether `document` was left in Incoming, not filed (`leaveInIncoming`): failed, and its file outside the archive
@@ -329,14 +361,26 @@ extension IngestCoordinator {
         do {
             let settings = await services.settings.current
             guard let docID = job.docId, let document = try await services.documents.document(id: docID) else {
-                try await services.history.record(.failed, job: job.id, trace: trace.traceID, summary: message)
+                // Recorded in the write that checks the job's claim still holds, as below.
+                let now = services.time.now()
+                do {
+                    try await services.database.writer.write { db in
+                        _ = try JobStore.save(job, at: now, in: db)
+                        try HistoryStore.insert(db, .failed, at: now, job: job.id, trace: trace.traceID, summary: message)
+                    }
+                } catch IngestError.claimLost { return .lost }
                 return .parked
             }
             let analysis = DocumentAnalysis(problems: ["Processing failed: \(message)"])
-            if FileManager.default.fileExists(atPath: document.path), job.kind == .ingest {
+            // A file that came into Incoming is moved into the archive, unless its filing is recorded (`targetPath`), as
+            // the job is stored, which keeps it though the worker's copy, saved by a failure after it, has not it
+            // (`JobStore.save`): then it is filed, where the user may have moved it since, and is marked failed there.
+            var recorded = false
+            if let id = job.id { recorded = try await services.jobs.recordsFiling(id) }
+            if FileManager.default.fileExists(atPath: document.path), job.kind == .ingest, !recorded {
                 let jobs = services.jobs
                 // The file is moved only while the job's claim holds, checked in a write just before the move.
-                let checked = FilingKeeper(planning: { _ in try await jobs.update(job) }, recording: { _, _ in })
+                let checked = FilingKeeper(planning: { _ in try await jobs.update(job) }, recording: { _, _ in .filed })
                 do {
                     _ = try await services.filer.file(document, archive: services.archive, analysis: analysis, status: .failed,
                                                       directory: services.archive,
@@ -351,12 +395,30 @@ extension IngestCoordinator {
                                           message: "\(message); nor could it be moved into the archive: \(error.localizedDescription)", trace: trace)
                 }
             } else {
-                try await services.documents.update(docID) { failed in
-                    failed.status = .failed
-                    failed.analysisJson = try JSON.string(analysis)
-                }
-                try await services.history.record(.failed, doc: docID, job: job.id, trace: trace.traceID,
-                                                  summary: "\(document.originalFilename): \(message)")
+                // The document is marked failed, to be read again from Needs You, and History says so, in the write that
+                // checks the job's claim still holds, as a file is filed (`DocumentFiler`). A document the user set aside
+                // is never marked failed here: leaving it for later or undoing it cancels its reading again in the same
+                // write, so that job finds its claim lost, and refuses it while it is first read in
+                // (`ReviewActions.hold`, `undo`); what is left is a reading for search after a rebuild (`reindex`), which
+                // neither cancels, whose failure leaves the document as the user left it.
+                let now = services.time.now()
+                let analysisJSON = try JSON.string(analysis)
+                let summary = job.kind == .reindex ? "\(document.originalFilename) could not be read again for search: \(message)"
+                    : "\(document.originalFilename): \(message)"
+                do {
+                    try await services.database.writer.write { db in
+                        _ = try JobStore.save(job, at: now, in: db)
+                        guard let read = try DocumentRecord.fetchOne(db, key: docID) else { throw IngestError.documentNotFound(docID) }
+                        if !read.status.isSetAside {
+                            var failed = read
+                            failed.status = .failed
+                            failed.analysisJson = analysisJSON
+                            failed.updatedAt = now
+                            try failed.updateChanges(db, from: read)
+                        }
+                        try HistoryStore.insert(db, .failed, at: now, doc: docID, job: job.id, trace: trace.traceID, summary: summary)
+                    }
+                } catch IngestError.claimLost { return .lost }
             }
         } catch {
             Log.error(.ingest, "Could not park failed document", ["job": String(job.id ?? 0), "error": error.localizedDescription])

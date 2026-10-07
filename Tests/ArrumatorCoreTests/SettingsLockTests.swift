@@ -45,7 +45,7 @@ import Testing
         await #expect(throws: CancellationError.self, "and stops when it is told to") { _ = try await change.value }
     }
 
-    @Test func aLockFileTheUserCannotWriteStillServes() async throws {
+    @Test(.fileModesKeepOut) func aLockFileTheUserCannotWriteStillServes() async throws {
         let env = try await TestEnvironment.make()
         defer { env.cleanup() }
         let path = env.paths.settingsURL.appendingPathExtension(SettingsLock.fileExtension).path

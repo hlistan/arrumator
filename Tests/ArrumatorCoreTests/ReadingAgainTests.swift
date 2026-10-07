@@ -69,8 +69,7 @@ import Testing
                 "and is found by its labels and its text as they were, and by nothing it is being read as")
         #expect(try await Self.embeddingModels(h, id) == [Self.earlierModel, StubAnalyzer.embeddingModel], "and by its meaning as it was")
         await holding.letGo()
-        await worker.value
-
+        _ = await worker.value
         let read = try #require(try await services.documents.document(id: id))
         #expect(read.labels == LabelingTests.meoContract + [Self.tag],
                 "once filed, it has the labels read now and its tag, and none the model gave it before: \(read.labels ?? [])")
@@ -195,6 +194,8 @@ import Testing
         await h.coordinator.enqueue(try h.env.drop("b copy.txt", text: "\(Self.bill) b.txt"))
         #expect(try await h.services.jobs.counts() == JobCounts(queued: 2, reindexing: 0, readingAgain: 2),
                 "Read Again on one takes it out of those that give way, and the copy waits in Incoming")
+        let asked = try await h.services.history.events(limit: 10, kinds: [.retry], docID: ids[2]).map(\.summary)
+        #expect(asked.count == 1, "the Read Again that takes its place is recorded under it: \(asked)")
         await h.coordinator.drain(.everything)
         let read = await analyzer.calls.files
         #expect(Array(read.dropFirst(3)) == ["c.txt", "b.txt", "a.txt"],

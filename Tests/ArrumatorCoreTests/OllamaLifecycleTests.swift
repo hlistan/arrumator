@@ -9,7 +9,8 @@ import Testing
 @Suite struct OllamaLifecycleTests {
     /// A server whose version is answered as `answers` says, call by call: the first call is 0. From call `holdingAt` on,
     /// if given, it answers nothing until the request is cancelled, and says it got there (`held`): where a test that
-    /// counts calls stops what makes them, rather than leave it looking as fast as test time lets it while it waits.
+    /// counts calls (`count`) stops what makes them, rather than leave it looking as fast as test time lets it while it
+    /// waits.
     final class ScriptedServer: OllamaAPI {
         private let calls = Mutex(0)
         private let answers: @Sendable (Int) -> Result<String, OllamaError>
@@ -35,6 +36,9 @@ import Testing
             return try answers(call).get()
         }
 
+        /// How many times it was asked its version.
+        var count: Int { calls.withLock { $0 } }
+
         func tags() async throws -> [OllamaModelInfo] { [] }
         func show(model: String) async throws -> OllamaShowResponse { MockOllama.shown(capabilities: [], thinking: nil) }
         func chat(_ request: OllamaChatRequest, partial: (@Sendable (OllamaChatResponse) async -> Void)?) async throws -> OllamaChatResponse {
@@ -47,12 +51,6 @@ import Testing
         static let version = "0.0.0-test"
         /// A server that is not running.
         static let away: Result<String, OllamaError> = .failure(.unreachable(down))
-    }
-
-    /// Everything a lifecycle publishes on `states()`, in order.
-    actor StateLog {
-        private(set) var states: [OllamaState] = []
-        func add(_ state: OllamaState) { states.append(state) }
     }
 
     /// A folder of the test's own for the stand-in server.
@@ -135,26 +133,47 @@ import Testing
         #expect(await Patience.until { !StandInServer.runs(second) }, "the server the app started last is the one it stops")
     }
 
+    /// Supervision looks at the server again and again once it is started, each time after `healthPollSteady`, until the
+    /// app stops.
+    @Test func supervisionLooksAgainAndAgainUntilTheAppStops() async throws {
+        let folder = try folder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let api = ScriptedServer(holdingAt: 1) { _ in .success(ScriptedServer.version) }
+        let time = TestTime(.advances)
+        let lifecycle = try lifecycle(api, spawning: try StandInServer(in: folder), time: time)
+        await lifecycle.startMonitoring()
+        try #require(await Patience.until { api.held.fired }, "supervision looks again after its first look")
+        let steady = try PipelineConfig.bundledDefaults().ollama.healthPollSteady
+        #expect(time.now() == TestTime.start.addingTimeInterval(2 * steady), "each look after waiting its time")
+        let supervision = await lifecycle.monitorTask
+        await lifecycle.shutdown()
+        let ended = Signal()
+        Task {
+            await supervision?.value
+            ended.fire()
+        }
+        try #require(await Patience.until { ended.fired }, "supervision ends once the app stops")
+        #expect(api.count == 2, "having looked no more")
+    }
+
+    /// Each look made here, one after another, rather than by supervision's own task, which a loaded Mac may leave
+    /// waiting for its turn longer than a test waits.
     @Test func aRestartCountsOnlyWhenAServerWasStarted() async throws {
         let folder = try folder()
         defer { try? FileManager.default.removeItem(at: folder) }
         let server = try StandInServer(in: folder)
-        // Down whenever supervision looks, back by the time it would restart it: no restart is ever made. Held once it
-        // has looked more times than it may restart in an hour.
-        let looks = try PipelineConfig.bundledDefaults().ollama.maxRestartsPerHour * 4
-        let api = ScriptedServer(holdingAt: looks) { $0.isMultiple(of: 2) ? ScriptedServer.away : .success(ScriptedServer.version) }
+        // Down whenever supervision looks, back by the time it would restart it: no restart is ever made, in more looks
+        // than it may restart in an hour.
+        let api = ScriptedServer { $0.isMultiple(of: 2) ? ScriptedServer.away : .success(ScriptedServer.version) }
         let lifecycle = try lifecycle(api, spawning: server, time: TestTime(.advances))
-        let log = StateLog()
-        let states = await lifecycle.states()
-        let following = Task { for await state in states { await log.add(state) } }
-        defer { following.cancel() }
-        await lifecycle.startMonitoring()
-        try #require(await Patience.until { api.held.fired }, "supervision looks again and again")
+        for look in 0..<(try PipelineConfig.bundledDefaults().ollama.maxRestartsPerHour * 2) {
+            await lifecycle.supervise()
+            let state = await lifecycle.state
+            #expect(state == .ready(version: ScriptedServer.version),
+                    "look \(look): supervision never gives up on restarts it did not make: \(state)")
+        }
         await lifecycle.shutdown()
         #expect(server.started.isEmpty, "no server was started, as each time it answered again before")
-        let seen = await log.states
-        #expect(!seen.contains { if case .unhealthy = $0 { true } else { false } },
-                "so supervision never gives up on restarts it did not make: \(seen)")
     }
 
     @Test func aReadyServerIsAwayOnlyOnceProbesInARowFindItSoNotAtOneSlowProbe() async throws {

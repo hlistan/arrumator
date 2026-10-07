@@ -42,30 +42,57 @@ struct Ingest: AsyncParsableCommand {
             if let job = await runtime.coordinator.enqueue(url, tags: tag) {
                 jobs.append((url, job))
             } else {
-                failed.append((url, "not queued: it is held or undone in the archive, or the queue could not be written (see the log)"))
+                failed.append((url, "not queued: it is in the archive, whose files are read where they are; or held or undone; "
+                                    + "or the documents recorded where it is changed as it came; or the queue could not be written (see the log)"))
             }
         }
-        await runtime.coordinator.drain()
+        // The jobs this command recorded a failure of; one another process fails meanwhile, and tries again, is queued.
+        let failedHere = await runtime.coordinator.drain()
         try Task.checkCancellation()
         // The documents these files became, whatever else the archive holds; for an exact copy of a document in the
         // archive, that document, read again in its place.
         var docs: [DocumentRecord] = []
+        let now = runtime.services.time.now()
+        var waiting: [(url: URL, why: String)] = []
         for (url, id) in jobs {
             let job = try await runtime.services.jobs.job(id: id)
             if let doc = job?.docId ?? (try? job?.payload)?.copyOf, let document = try await runtime.services.documents.document(id: doc) {
                 docs.append(document)
-                if job?.state == .failed { failed.append((url, job?.lastError ?? "it could not be filed")) }
+                if job?.state == .failed || failedHere.contains(id) { failed.append((url, job?.lastError ?? "it could not be filed")) }
+            } else if let job, job.state.isActive, !failedHere.contains(id) {
+                // Not failed by this command: one another process, such as the app, has in hand, or one that waits, as for
+                // the archive's folder, which spends no attempt: queued, saying what its job records.
+                waiting.append((url, Self.queued(job, now: now)))
             } else {
+                // One this command failed, or whose job ended failed, whoever ended it, came to nothing: it fails, saying why.
                 failed.append((url, job?.lastError ?? "it became no document"))
             }
         }
         try options.emit(docs) {
-            docs.map { document in
+            (docs.map { document in
                 "\(document.status.rawValue.padding(toLength: 11, withPad: " ", startingAt: 0)) \(document.path)"
                     + (document.labels(.tag).isEmpty ? "" : "\n            tags: " + document.labels(.tag).joined(separator: " · "))
-            }.joined(separator: "\n")
+            } + waiting.map { file in
+                "\("queued".padding(toLength: 11, withPad: " ", startingAt: 0)) \(file.url.path)\n            \(file.why)"
+            }).joined(separator: "\n")
+        }
+        // The JSON is the documents alone; a file not begun, which is none yet, is named beside it, as no failure.
+        if options.json {
+            for file in waiting {
+                FileHandle.standardError.write(Data("\(file.url.path): queued, not read yet: \(file.why)\n".utf8))
+            }
         }
         return failed
+    }
+
+    /// What a file queued and not begun waits for, as its job records it, whichever process has it: why a stage last
+    /// left it and when it is tried again, as Incoming says them, while that time is to come; else that the app or `run`
+    /// files it, in its turn.
+    static func queued(_ job: JobRecord, now: Date) -> String {
+        let files = "the app or `run` files it"
+        guard let why = job.lastError else { return files }
+        guard let at = job.nextRunAt, at > now else { return "\(why); \(files)" }
+        return "\(why); tried again at \(Format.date(at))"
     }
 
     /// Reads and labels each file without moving it or recording anything, and shows what came of them in one list; the

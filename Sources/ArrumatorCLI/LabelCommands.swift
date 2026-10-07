@@ -80,12 +80,7 @@ struct Labels: AsyncParsableCommand {
         func run() async throws {
             let runtime = try await options.runtime()
             _ = await runtime.lifecycle.ensureRunning()
-            var ids: [Int64] = []
-            for id in try await runtime.services.documents.unlabelled() {
-                // One with no file to read, as one missing, is left as it is: there is nothing to read again.
-                do { try await runtime.review.retry(id) } catch IngestError.cannotReadAgain { continue }
-                ids.append(id)
-            }
+            let ids = try await runtime.review.retryUnlabelled()
             await runtime.coordinator.drain()
             let rows = try await Labels.rows(ids, runtime: runtime)
             try options.emit(rows) {

@@ -40,9 +40,15 @@ public enum DocumentStatus: String, Sendable, Codable, CaseIterable {
     /// Statuses of documents the pipeline has finished with, whatever the outcome.
     public static let processed: Set<DocumentStatus> = [.filed, .needsReview, .failed, .duplicate, .undone, .held]
 
-    /// Statuses of documents kept in the archive as themselves: what a search task finds, and what an exact copy is a
-    /// copy of. A duplicate is a copy of one of them, and a document undone or missing is not in the archive.
+    /// Statuses of documents kept in the archive as themselves: what a search task finds. A duplicate is a copy of one of
+    /// them, and a document undone or missing is not in the archive.
     public static let inArchive: Set<DocumentStatus> = [.filed, .needsReview, .failed, .held]
+
+    /// Statuses of a document an exact copy is a copy of, its file in the archive (`IngestCoordinator.handOver`): one kept
+    /// there as itself (`inArchive`), or one being read there (`processing`): left for later, and read again for a copy
+    /// or by the user, or put into the archive by the user and read for the first time (`adopt`), which a copy leaves to
+    /// that reading (`PipelineServices.queueReadingAgain(forCopyOf:)`).
+    static let takesCopies: Set<DocumentStatus> = inArchive.union([.processing])
 
     /// Statuses of documents whose file is in the archive: those kept as themselves (`inArchive`) and the copies earlier
     /// versions filed beside them.

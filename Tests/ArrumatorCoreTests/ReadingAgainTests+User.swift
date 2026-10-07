@@ -29,8 +29,7 @@ extension ReadingAgainTests {
         #expect(await Patience.until { await holding.held == earlier.filename }, "the model reads the document again")
         if action == .hold { try await review.hold(id) } else { try await review.undo(id) }
         await holding.letGo()
-        await worker.value
-
+        _ = await worker.value
         let after = try #require(try await services.documents.document(id: id))
         #expect(after.status == (action == .hold ? .held : .undone) && after.labels == earlier.labels,
                 "\(action): it stays as the user left it, with the labels it had: \(after.status) \(after.labels ?? [])")
@@ -39,6 +38,41 @@ extension ReadingAgainTests {
         #expect(try await services.history.events(limit: 20, kinds: [.analysed, .filed, .failed], docID: id).count == 2,
                 "\(action): nothing of the reading is recorded, nor any failure: what is recorded is its first reading and filing")
         #expect(try await h.jobs().last?.state == .cancelled, "\(action): the reading again is cancelled")
+    }
+
+    @Test func aDocumentLeftForLaterAsItIsRenamedIsRecordedWhereItIsAndKeepsTheRestAsTheUserLeftIt() async throws {
+        let h = try await Harness.make()
+        defer { h.env.cleanup() }
+        let earlier = try await Self.filedEarlier(h)
+        let id = try #require(earlier.id)
+        // The user leaves it for later just as the filing that renames it begins: after the move was planned, before it
+        // is recorded.
+        try await h.env.database.writer.write { db in
+            try db.execute(sql: """
+                CREATE TEMP TRIGGER left_for_later_as_it_moves AFTER UPDATE OF payload_json ON jobs
+                WHEN NEW.kind = '\(JobKind.reanalyse.rawValue)' AND json_extract(NEW.payload_json, '$.plannedPath') IS NOT NULL
+                BEGIN
+                  UPDATE documents SET status = '\(DocumentStatus.held.rawValue)' WHERE id = NEW.doc_id;
+                  UPDATE jobs SET state = '\(JobState.cancelled.rawValue)', claim = NULL, claimed_by = NULL WHERE id = NEW.id;
+                END
+                """)
+        }
+        let (services, coordinator, review) = Self.pipeline(h, StubAnalyzer(labels: LabelingTests.meoContract, title: Harness.otherTitle))
+        try await review.retry(id)
+        await coordinator.drain()
+
+        let after = try #require(try await services.documents.document(id: id))
+        let renamed = h.env.archive.appendingPathComponent(Harness.otherFileName + ".txt").standardizedFileURL.path
+        #expect(after.path == renamed && FileManager.default.fileExists(atPath: renamed), "its record follows the file to where it was moved")
+        #expect(after.status == .held && after.labels == earlier.labels && after.analysis == earlier.analysis,
+                "and it keeps the rest as the user left it, left for later: \(after.status) \(after.labels ?? [])")
+        #expect(try await Self.embeddingModels(h, id) == [Self.earlierModel, StubAnalyzer.embeddingModel], "its meaning too")
+        let events = try await services.history.events(limit: 20, kinds: [.analysed, .filed], docID: id)
+        let said = events.map(\.summary)
+        #expect(said.first?.hasSuffix(DocumentFiler.setAside) == true && said.count == 3,
+                "History says it was renamed and nothing more, and records no reading: \(said)")
+        #expect(events.filter { $0.kind == .filed }.map(\.announcesFiling) == [false, true],
+                "and no notification announces it as filed, as one did its first filing (the review of this fix)")
     }
 
     @Test func aNameTheUserGivesWhileItIsReadAgainStaysAndTheReadingFillsInTheRest() async throws {
@@ -52,8 +86,7 @@ extension ReadingAgainTests {
         #expect(await Patience.until { await holding.held == earlier.filename }, "the model reads the document again")
         try await review.edit(id, fileName: "Mine", labels: nil)
         await holding.letGo()
-        await worker.value
-
+        _ = await worker.value
         let after = try #require(try await services.documents.document(id: id))
         #expect(after.filename == "Mine.txt" && after.analysis?.fileName == "Mine" && FileManager.default.fileExists(atPath: after.path),
                 "the name the user gave while it was read stays: \(after.filename)")

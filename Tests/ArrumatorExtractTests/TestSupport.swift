@@ -60,15 +60,21 @@ struct Scratch {
         return image
     }
 
+    /// How far right of the one before it each column a tab in a line begins is drawn: as an address block beside
+    /// another, or a value beside its label.
+    static let columnWidth: CGFloat = 240
+
     private static func draw(_ lines: [String], in context: CGContext, top: CGFloat, left: CGFloat, fontSize: CGFloat) {
         let font = CTFontCreateWithName("Helvetica" as CFString, fontSize, nil)
         var y = top
         for line in lines {
-            let attributed = NSAttributedString(string: line, attributes: [
-                .font: font, .foregroundColor: CGColor(gray: 0, alpha: 1),
-            ])
-            context.textPosition = CGPoint(x: left, y: y)
-            CTLineDraw(CTLineCreateWithAttributedString(attributed), context)
+            for (column, text) in line.split(separator: "\t", omittingEmptySubsequences: false).enumerated() {
+                let attributed = NSAttributedString(string: String(text), attributes: [
+                    .font: font, .foregroundColor: CGColor(gray: 0, alpha: 1),
+                ])
+                context.textPosition = CGPoint(x: left + CGFloat(column) * columnWidth, y: y)
+                CTLineDraw(CTLineCreateWithAttributedString(attributed), context)
+            }
             y -= fontSize * 1.8
         }
     }
@@ -84,7 +90,7 @@ struct Scratch {
         return url
     }
 
-    /// A PDF with a real text layer: one page per entry of `pages`.
+    /// A PDF with a real text layer: one page per entry of `pages`, a tab in a line beginning a column (`columnWidth`).
     @discardableResult
     func writeTextPDF(_ name: String, pages: [[String]], password: String? = nil,
                       info: [CFString: Any] = [:]) throws -> URL {

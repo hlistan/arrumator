@@ -34,7 +34,7 @@ import Testing
         jobs.map { URL(fileURLWithPath: $0.sourcePath).lastPathComponent }
     }
 
-    @Test func aSwitchThatFailsOnceItHasStoppedTheAppKeepsTheQueueAsItWas() async throws {
+    @Test(.folderModesKeepOut) func aSwitchThatFailsOnceItHasStoppedTheAppKeepsTheQueueAsItWas() async throws {
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }
         try home.watchQuickly()
@@ -64,7 +64,7 @@ import Testing
     static let after = "after.txt"
     static let waiting = "a document waiting in Incoming"
 
-    @Test func aSwitchThatFailsBeforeTheAppStartedLeavesItFreeToStart() async throws {
+    @Test(.folderModesKeepOut) func aSwitchThatFailsBeforeTheAppStartedLeavesItFreeToStart() async throws {
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }
         // As during onboarding: the archive is open, and the app has not started the work yet.
@@ -84,7 +84,7 @@ import Testing
         await runtime.stop()
     }
 
-    @Test func aSwitchThatFailsAfterTheAppQuitStartsNothingAgain() async throws {
+    @Test(.folderModesKeepOut) func aSwitchThatFailsAfterTheAppQuitStartsNothingAgain() async throws {
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }
         let runtime = try await home.open()
@@ -106,7 +106,7 @@ import Testing
         #expect(!running, "and nothing of it runs")
     }
 
-    @Test func aSwitchThatFailsWhileTheArchiveIsReadReadsItBeforeTheWorkStartsAgain() async throws {
+    @Test(.folderModesKeepOut) func aSwitchThatFailsWhileTheArchiveIsReadReadsItBeforeTheWorkStartsAgain() async throws {
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }
         do {

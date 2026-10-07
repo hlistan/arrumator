@@ -41,16 +41,22 @@ public struct IngestStatus: Sendable, Hashable {
     public var current: Current?
     public var waitingForOllama: Bool
     public var powerPauseReason: String?
+    /// Until when the files queued wait for Ollama, as the one that found it away is tried again then and no other is
+    /// read for its text meanwhile (`IngestCoordinator.ollamaRetryAt`); nil while it is not known to be away, and while
+    /// that file is tried again, in hand.
+    public var retryAt: Date?
 
     public static let idle = IngestStatus(queued: 0, reindexing: 0, readingAgain: 0, current: nil, waitingForOllama: false,
                                           powerPauseReason: nil)
 
     /// Where `job` is, as this status says: in the worker's hands, or waiting, and how; nil for a job no longer in the
-    /// queue, whatever a list read before says of it. The Incoming page shows this.
+    /// queue, whatever a list read before says of it. One left while Ollama is known to be away waits for it until the
+    /// one that found it away is tried again. The Incoming page shows this.
     public func progress(of job: JobRecord) -> JobProgress? {
         if let current, current.job == job.id { return current.stage.isActive ? .working(current.work) : nil }
         guard job.state.isActive else { return nil }
         if let error = job.lastError { return .retrying(error, at: job.nextRunAt) }
+        if waitingForOllama, let retryAt { return .waitingForOllama(until: retryAt) }
         return job.state == .pending ? .waiting : .resuming(job.state)
     }
 }
@@ -82,6 +88,8 @@ public enum JobProgress: Sendable, Hashable {
     case resuming(JobState)
     /// It waits for its turn, not begun.
     case waiting
+    /// It waits for Ollama, which another file found away, until that file is tried again.
+    case waitingForOllama(until: Date)
 
     /// Whether the worker has it in hand now.
     public var isWorking: Bool {

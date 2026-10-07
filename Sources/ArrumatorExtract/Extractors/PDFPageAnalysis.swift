@@ -42,6 +42,51 @@ struct PageTextQuality: Sendable, Encodable {
     }
 }
 
+/// A page's text as PDFKit reads it, with text set apart on one of its lines kept apart: two columns side by side, or a
+/// label and its value or a table's cells, with a tab between rather than the space PDFKit joins them by, as OCR parts a
+/// row's cells, so the model never reads two of them as one ("EDP Comercial" beside "Maria Exemplo"). Two are apart when
+/// the gap between the letters either side of a run of spaces is wider than `gap` times their height, on one line. The
+/// letters are placed by what PDFKit selects at each place in the text (`selection(for:)`), as the bounds it gives a
+/// character by its index drift from the text past a line break: two selections for each run of spaces, in one pass.
+enum PDFPageText {
+    static func columned(_ page: PDFPage, gap: Double) -> String {
+        let text = (page.string ?? "") as NSString
+        func isIn(_ set: CharacterSet, _ index: Int) -> Bool {
+            Unicode.Scalar(text.character(at: index)).map(set.contains) ?? false
+        }
+        func letter(_ index: Int) -> CGRect? {
+            guard index >= 0, index < text.length, !isIn(.newlines, index),
+                  let bounds = page.selection(for: NSRange(location: index, length: 1))?.bounds(for: page), !bounds.isEmpty
+            else { return nil }
+            return bounds
+        }
+        var parts: [String] = []
+        var start = 0
+        var index = 0
+        while index < text.length {
+            guard isIn(.whitespaces, index) else {
+                index += 1
+                continue
+            }
+            var end = index
+            while end < text.length, isIn(.whitespaces, end) { end += 1 }
+            if let before = letter(index - 1), let after = letter(end), apart(before, after, gap: gap) {
+                parts.append(text.substring(with: NSRange(location: start, length: index - start)))
+                start = end
+            }
+            index = end
+        }
+        return (parts + [text.substring(from: start)]).joined(separator: "\t")
+    }
+
+    /// Whether `after` stands apart from `before` on their line: the two overlap in height, and the gap from one to the
+    /// other is wider than `gap` times the taller.
+    static func apart(_ before: CGRect, _ after: CGRect, gap: Double) -> Bool {
+        min(before.maxY, after.maxY) > max(before.minY, after.minY)
+            && Double(after.minX - before.maxX) > gap * Double(max(before.height, after.height))
+    }
+}
+
 /// Largest share of the page area covered by a single image XObject drawn directly in the page content stream.
 /// Scans the content stream, tracking the current transformation matrix through `q`/`Q`/`cm`.
 enum PDFImageCoverage {

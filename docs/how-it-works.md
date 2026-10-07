@@ -89,7 +89,10 @@ policy and contract numbers, are those after the words `entities.accountLabels` 
 each way they are written ([Configuration](using-arrumator.md#configuration)), which you can add to for another
 language. OCR asks Vision for the document's own language first, then the hints in
 `extraction.ocrLanguages`, and lets Vision detect any other it reads. A script Vision does not read in images is still
-read from a PDF's text layer, an e-mail or a text file. The model reads the document as written and describes it in
+read from a PDF's text layer, an e-mail or a text file. What a PDF page sets apart on one line, as two address blocks
+side by side or a value beside its label, is read with a tab between, as OCR reads a table's cells, so the model never
+reads two of them as one name: a gap wider than `extraction.pdf.columnGap` times the height of the letters either side
+parts them. The model reads the document as written and describes it in
 labels that do not depend on its language: names and numbers as the document writes them, topics, objects and
 jurisdictions in English, dates, amounts and languages in ISO forms. Documents in different languages are therefore
 found by the same labels. The file name's description is in the document's own language.
@@ -195,21 +198,55 @@ note that names no one is not given the archive's most used sender. This is a ch
 which is unchanged (`analysis.promptVersion` stays).
 
 The title is made of the document's own words, in its own language, as the prompt asks, and that is checked the same
-way: when the document writes fewer than `analysis.titleGroundedShare` of the title's words of
-`labels.groundingLetters` letters or more (numbers and short words, which say nothing of a language, are not counted),
-as of a Portuguese title, "Fatura serviços cloud", for an English invoice, the answer goes back to the model once,
-naming the words the document does not write. An object is a thing the document identifies by a number, a plate, an
-address or a name, so an object with no word of `labels.objectIdentifierDigits` digits or more, nor a number standing
-alone beside a name as a house number after its street, as a job title ("job title Senior Software Engineer") or a
-product on a receipt ("milk 1L x6"), goes back with it, named, for the model to keep only what one of those identifies.
-So does a date given to a document that writes no date and not its year either, as a note: one in which the extractor
-found no date with its year, the vision model saw none, that is no e-mail, and that writes the year neither in four
-digits nor in two. Only that is checked, never which day, as a date written month first or in another calendar may be
-read as another. And a reading with no sender that names `analysis.partiesWithoutSender` parties or more, as a lease
-naming both its sides as parties, goes back asking who issued it. Each is told once in an exchange, when a repair tells
-the model of it; what the model gives then stands, whatever it is, and the trace says so. So does an answer whose only
-fault is such a guess when no repair is left, or none comes of it: a document is never failed for its title, its
-objects, its date or its sender.
+way: when the document writes fewer than `analysis.titleGroundedShare` of the title's words of `labels.groundingLetters`
+letters or more (numbers and short words, which say nothing of a language, are not counted), as of a Portuguese title,
+"Fatura serviços cloud", for an English invoice, the answer goes back to the model once, naming the words the document
+does not write. An object is a thing the document identifies by a number, a plate, an address or a name, so an object
+with no word of `labels.objectIdentifierDigits` digits or more, nor a number standing alone beside a name as a house
+number after its street, as a job title ("job title Senior Software Engineer") or a product on a receipt ("milk 1L x6"),
+goes back with it, named, for the model to keep only what one of those identifies. So does a date given to a document
+that writes no date and not its year either, as a note: one in which the extractor found no date with its year, the
+vision model saw none, that is no e-mail, and that writes the year neither in four digits nor in two. Only that is
+checked, never which day, as a date written month first or in another calendar may be read as another. And a reading
+with no sender that names `analysis.partiesWithoutSender` parties or more, as a lease naming both its sides as parties,
+goes back asking who issued it. Each of these is told once in an exchange, when a repair tells the model of it; what the
+model gives then stands, whatever it is, and the trace says so. So does an answer whose only fault is such a guess when
+no repair is left, or none comes of it: a document is never failed for its title, its objects, its date, its parties,
+its references or its sender. What is written otherwise than the prompt asks, told by its form alone, is written as the
+document itself tells, at once, with a note in the trace, as telling the model would cost a call and a weak one gives
+again what it is told of; what the document tells is read from its own text and an e-mail's sender and subject, never
+from what the vision model wrote of it, nor from the letters of a run of characters between spaces that holds an "@", a
+dot before two letters, an underscore, a backslash or a slash before a letter, as web and e-mail addresses, users' names
+and paths do (but "Arquivo/2026" is read as a word and a number, and `http://10.0.0.1` as a word and numbers). A party
+that joins two neighbouring cells of one line, one of them a sender's name or its start in more than one word, as a
+reading that copies the line two columns stand on does ("EDP Comercial Maria Exemplo", where the invoice prints "EDP
+Comercial" beside "Maria Exemplo"), is the other cell as printed ("Maria Exemplo"), never cut to one word. A title of
+more than one word with a letter that has a case, every such letter a capital ("TÍTULO DE RESIDÊNCIA TEMPORÁRIO"), is
+written as the document writes it in a sentence, letter for letter: where the document writes the title's words in a
+row, within one cell, beginning with a capital, as a sentence or a name does, with a small letter among them and each
+word in capitals beside a word of the sentence, of small letters or a capital and small letters, as an abbreviation
+stands, never beside only an abbreviation's letters, a unit or a word a number follows (after a dot or a degree sign,
+what runs up to the next space with a digit in it, as "No. ABC123" does; after a space or a colon, what begins with a
+digit or holds more digits than letters, as "INV-2026-118" does and "COVID-19" does not; so "No: ABC123", "No. FT
+2026/1" and "No FT 2026/1" are read as words, as "Relatório: Q3 2025", "maio. IMI 2025" and "Relatório IRS 2025" are),
+as a number's name or a month before its year, as a heading's words stand ("Título de residência temporário", "Fatura da
+EDP"; not "FATURA n.º", "INVOICE No. 4711" nor "CONSUMO kWh"), and the title is those words in capitals, as the
+document's language writes its capitals or as any does ("DOĞALGAZ FATURASI" of "Doğalgaz faturası"), or, in a title that
+bears no accents, as capitals in some scripts leave them out, but for its accents ("TAXE FONCIERE A PAYER" of "Taxe
+foncière à payer"). A title of no more than `naming.maxChars` characters is looked for, as no file name holds a longer
+one. A title whose every word the document writes in capitals beside a word of a sentence, as abbreviations are ("IMI
+AT"), is as asked. A reference whose words for what it is, those before its first word that holds a digit, is in
+capitals, as "NIF", "FT" or a series' letter are, or is of another script, are not English, and which the document
+prints as the name of the field the reference is the value of, beside it or above it, is its number ("Fatura n.º FT
+EDPC2026/926804564" is "FT EDPC2026/926804564"). Words are not English that are of another script than the Latin one
+("お客さま番号 03-3542-5545-25"), or, when one of them is no English word the Mac knows, more likely of the document's
+language than of English, or of another language as surely as a short text's language is told
+(`extraction.languageShortTextMinConfidence`: "Zählernummer 1ESY 1160 4478 21"); words English shares with the
+document's language ("Client", "Contract") and a number's own letters, in any script ("Plate ΙΚΤ 1234", "Licence plate
+品川 300 あ 12-34"), are as asked. Where the document does not tell, it goes back once, as the guesses above do: a title
+whose words the document writes in no such sentence, as a card printed in capitals alone, a heading, or a sentence that
+begins them with a small letter, which the app writes no capital for, or whose words it spells more ways than one, as
+only the document could say its small letters; and a reference whose words it runs into the number.
 
 Labels are the document's. They sit in its entry in `_documents.md` and survive a rebuild, and each kind is a field of
 the search: `sender:edp`, `party:"maria silva"`, `type:invoice`, `object:AA-12-BB`, `reference:926804564`,
@@ -378,37 +415,48 @@ that is already confirmed, with nothing read, corrected, renamed or moved since 
 nothing and records nothing again. A file that keeps failing to be processed at all (`ingest.maxAttempts`) is parked in
 the archive the same way, with status failed, so Incoming stays clean and nothing is lost; one that cannot be moved into
 the archive either stays in Incoming, failed, saying why, and one that cannot be moved there because the archive's
-folder is not there waits for it to be.
+folder is not there waits for it to be. One already filed when what follows its filing keeps failing, as indexing its
+text, is marked failed where it is, under the name it was filed under or where you moved it since.
 
-While Ollama cannot be reached a document waits where it stopped, an image whose text is too sparse to tell what it
-is included, which is described when Ollama is back rather than filed without its description; a document whose model
-is not installed waits in the Incoming queue, saying which model to download and how, and looks every
-`ingest.modelRecheckSeconds` whether Ollama lists it, until the model is downloaded, History saying it once; neither
-costs it an attempt. A server that answers, but with a failure (an error of its own or an empty reply) each time it is
-asked, as a model may for one image, costs an attempt each time,
-and so does a request that times out while the server still answers when asked for its version; a timeout while it
-answers nothing is Ollama away. Such a document is parked as failed after `ingest.maxAttempts`, with the reason, for
-you to read again, rather than tried again for ever. A description the vision model fails to give, an answer that is
-not one or an image the server refuses, is noted with the document, which is read without it.
+While Ollama cannot be reached a document waits where it stopped, an image whose text is too sparse to tell what it is
+included, which is described when Ollama is back rather than filed without its description, and no other file is read
+for its text until it is tried again, as each would only wait for Ollama too: a file that comes meanwhile is still
+looked at, so an exact copy goes to its original and a file gone is recorded, and then waits unread, and a document read
+again waits as it is; a document whose model is not installed waits in the Incoming queue, saying which model to
+download and how, and looks every `ingest.modelRecheckSeconds` whether Ollama lists it, until the model is downloaded,
+History saying it once; neither costs it an attempt. A server that answers, but with a failure (an error of its own or
+an empty reply) each time it is asked, as a model may for one image, costs an attempt each time, and so does a request
+that times out while the server still answers when asked for its version; a timeout while it answers nothing is Ollama
+away. Such a document is parked as failed after `ingest.maxAttempts`, with the reason, for you to read again, rather
+than tried again for ever. A description the vision model fails to give, an answer that is not one or an image the
+server refuses, is noted with the document, which is read without it.
 
 ## Exact copies
 
-A file in Incoming with the same bytes as a document in the archive (filed, waiting for you, parked after failing or
-left for later), by its SHA-256 and by that document's file as it is on disk now, is no second document: it asks for
-that document to be read again. This is how you have some documents read with another profile
-([profile and effort](#profile-and-effort)): choose it, and put them into Incoming again, as they are.
+A file in Incoming with the same bytes as a document in the archive (filed, waiting for you, parked after failing, left
+for later, or being read, as one you put into the archive), by its SHA-256 and by that document's file as it is on disk
+now, is no second document: it asks for that document to be read again. This is how you have some documents read with
+another profile ([profile and effort](#profile-and-effort)): choose it, and put them into Incoming again, as they are.
 
 - **The document is read again from the start**, with the profile in use, as [reading documents
   again](#reading-documents-again) says: from its file, found as it was until it is read, and then renamed where it is
   under the name the model gives, everything the earlier reading gave it, its labels, text and meaning, replaced at
   once. It is queued behind the files already waiting, and shows in Incoming while it waits. Reading with the model takes
-  the place of having only its text read again after a rebuild of the index.
+  the place of having only its text read again after a rebuild of the index. A document whose first reading has not
+  ended and is still at its file, as a file you put into the archive and have not renamed or moved since, is left to that
+  reading, and History says it is being read in; one whose first reading is elsewhere is read again once it has ended.
 - **It keeps its tags**, the folders' and those you gave it, and a copy put into a folder in Incoming, or given `--tag`,
   gives it those tags at once, before it is read; what the model gives replaces what it gave before.
 - **The copy goes to the Trash**, never deleted, as the archive holds the same bytes; take it back from there. A copy
   the Trash will not take, as on a volume without one, is not tried again: it stays in Incoming, waiting for you in
   Needs You as not filed, saying why, a rescan leaves it alone, and the document is not read again. **Read Again** on
-  it, once the Trash takes it, hands it over as any copy: it becomes no second document.
+  it, once the Trash takes it, hands it over as any copy: it becomes no second document. A copy of a document you undo,
+  or that leaves the archive, before the copy is found one is a document of its own; a copy still in Incoming when the
+  app stops is looked at again at the next start. Once it is found one, it is handed over whatever you do to the
+  document meanwhile, as though you did it after: it goes to the Trash and stays there, and a document no longer in the
+  archive is not read again; a file put where the copy was is never taken for it.
+- **A file in the archive**, given to `arrumatorcli ingest`, is not queued: a document's own file is that document,
+  never a second one of it, and **Read Again** reads it again; one you put there is read where it is.
 - **History records it once, under the document**: `bill.pdf is a copy of 2026-07-05 EDP Comercial - Fatura.pdf, which
   is read again; the copy is in the Trash; tagged “Taxes 2024” by its folder in Incoming`, with where the copy was and
   went. The reading that follows is recorded as any: renamed from the name the document has, never the one it arrived
@@ -444,19 +492,29 @@ an earlier version filed, cannot be read again, which is said at once.
   embedding model, or that the earlier embeddings were kept.
 - **What you do after asking wins.** A label you change once it is asked for, while it waits or is read, stays as you
   left it, and so does a name you give it ([your own changes](#your-own-changes)); leave it for later or undo it
-  meanwhile, and the reading is dropped, changing nothing of it.
+  meanwhile, and the reading is dropped, changing nothing of it but, should you do so in the instant its file is
+  renamed, the name it gave the file, which History records as set aside, and which no notification announces as
+  filed.
 - **A reading that gives no labels**, as when the model gives no valid answer, made none to put in their place: the
   document keeps the labels it had and its name, and waits for you in Needs You, saying why. One that keeps failing
   (`ingest.maxAttempts`) leaves its labels, text and meaning as they were, and it waits for you in Needs You as failed,
   saying why.
 - **Read All Documents Again**, under Settings › Filing, asks first, naming the profile, then queues every document in
-  the archive that is filed, waiting for you or set aside after failing; those you left for later stay as they are.
+  the archive that is filed, waiting for you or set aside after failing; those you left for later stay as they are, and
+  one a reading in has filed where it is, as a file you put into the archive, whose reading has not ended, is left to it.
   They give way to every file that arrives, so new files are filed first, and Incoming counts them in a line of their
   own rather than listing each; the app, or `arrumatorcli run`, reads them, and no other command does. One already
   waiting to be read is read once, and asked for again, as with **Read Again** on its card or a copy of it in Incoming,
   it is read in its turn. History records the request once, naming the profile
   and the documents, and asked again while every one of them waits, nothing; each reading is recorded under its
-  document, before its filing.
+  document, before its filing. **Read Again** on one document is recorded so too, under it, as `Read again: <name>`,
+  when it queues the reading, as it does in place of its turn in reading every document again, or of reading its text
+  again after a rebuild of the index. Asked while another reading of it waits or is under way at its file, an earlier
+  Read Again's, an exact copy's, or its reading in before that has filed it (as it came into Incoming, as its file was
+  saved again there, or as a file you put into the archive yourself), it is read with that one, and nothing more is
+  recorded. Asked once its reading in has filed it, before that reading ends, it is recorded and read once that reading
+  has ended; but where that reading is at the document's file, as for a file you put into the archive, filed where it
+  is, Read Again is refused until then.
 
 ## Your own changes
 
@@ -558,7 +616,8 @@ arrange the documents, or is left asking for nothing at all, goes back to the mo
 effort's `repairAttempts` says; no other model is asked in its place. A request the model never answers validly fails
 the task, with the reason, and so does an answer that takes longer than the effort's `timeout`
 ([below](#profile-and-effort)). While Ollama cannot be reached, or does not answer in time and answers no probe either,
-a task waits in the queue, as a document does, spending nothing, its one trace taken up again by each attempt; a server
+a task waits in the queue, as a document does, spending nothing, its one trace taken up again by each attempt, and the
+tasks behind it with it, until it is tried again; a server
 that answers with a failure, or answers a probe but not the request in time, fails the task with the reason. A task
 whose reading model is not installed fails, naming the model, until it is downloaded and the task's documents are found
 again (**Find Again**), and one given a profile the settings no longer list fails saying so until it is given another.
@@ -649,7 +708,8 @@ answer that was not valid, sends back as much of it as fits, and the trace says 
 
 **The answer** comes in a fixed schema: the answer, in Markdown, in the language of the question unless it asks for
 another, naming documents by their names, working out a total or a comparison the question asks for over every document
-of the set it is about, saying when documents disagree, and stating nothing the documents do not, such as that a
+of the set it is about, amounts in several currencies totalled each currency apart, saying when documents disagree, and
+stating nothing the documents do not, such as that a
 contract complies with a law; the documents it draws on, by their numbers, which it is shown only for this; and, when
 you asked for more documents, a request for them, which it says it is looking for. It is untrusted input: a document it
 says it draws on is kept only when it is one it was shown, as a citation is checked against its sources, a number it
@@ -675,7 +735,8 @@ elsewhere gets nothing clickable. An answer cut off at its length limit, the eff
 came, saying it was cut off: ask for less, or ask again at a lower effort, which thinks less and so leaves more of the
 limit to the answer. An answer that takes longer than the effort's `timeout` fails the question, keeping what came of
 it. While Ollama cannot be reached, or does not answer in time and answers no probe either, a question waits in the
-queue, as a document does, saying so and when it is tried again, the last of `ingest.retryDelays` later, on its card,
+queue, as a document does, with the questions behind it, saying so and when it is tried again, the last of
+`ingest.retryDelays` later, on its card,
 its task's row and from a terminal, rather than being asked again meanwhile, by the answer or by what it is shown, which
 looks for the documents alike to the question in meaning, its one trace taken up again by each attempt; a server that
 answers with a failure or answers a probe but not the request in time, a reading model that is not installed, or a

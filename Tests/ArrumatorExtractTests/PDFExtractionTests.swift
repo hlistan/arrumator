@@ -43,6 +43,29 @@ struct PDFExtractionTests {
         #expect(stages == [.extract, .entities], "a text PDF records no OCR step")
     }
 
+    /// QA 2026-10-05, READ-6: an invoice's sender and its customer, printed side by side, were read as one line joined
+    /// by a space, and a weak model gave "EDP Comercial Maria Exemplo" as a party.
+    @Test("Text a page sets apart on one line, as two columns or a value beside its label, is kept apart by a tab")
+    func columnsApart() async throws {
+        let scratch = try Scratch()
+        defer { scratch.cleanup() }
+        let url = try scratch.writeTextPDF("fatura.pdf", pages: [[
+            "EDP Comercial\tMaria Exemplo", "Avenida Exemplo 24\tRua Exemplo 12, 3.º Esq.", "Fatura n.º\tFT EDPC2026/926804564",
+            "Pode pagar esta fatura no Multibanco, no MB WAY ou no seu homebanking até 25/08/2026.",
+        ]])
+        let content = try await registry.extract(url, sha256: "x", context: try TestConfig.context(), trace: .disabled)
+        #expect(content.text.contains("EDP Comercial\tMaria Exemplo\nAvenida Exemplo 24\tRua Exemplo 12, 3.º Esq."),
+                "two address blocks side by side are two columns: \(content.text.debugDescription)")
+        #expect(content.text.contains("Fatura n.º\tFT EDPC2026/926804564"), "a value is apart from its label")
+        #expect(content.text.contains("Pode pagar esta fatura no Multibanco, no MB WAY ou no seu homebanking até 25/08/2026."),
+                "the words of a sentence keep the spaces between them")
+        #expect(content.extractorVersion == 4, "a reading of the text layer before columns were kept apart is told by its version")
+
+        var config = try TestConfig.pipeline()
+        config.extraction.pdf.columnGap = 0
+        #expect(config.problems == ["extraction.pdf.columnGap must be more than 0"], "a gap of nothing would part every word")
+    }
+
     @Test("Scanned Russian PDF is OCRed and key words are recovered", .enabled(VisionOCR.unavailable) { await VisionOCR.available.value })
     func scannedRussian() async throws {
         let scratch = try Scratch()

@@ -253,7 +253,7 @@ import Testing
         #expect(try await h.services.jobs.active().map(\.sourcePath) == [copy.path], "and only the copy is taken in, as a document of its own")
     }
 
-    @Test func aCopyWhoseIdentifierCannotBeTakenOffStaysOneDocumentWhenRenamed() async throws {
+    @Test(.fileModesKeepOut) func aCopyWhoseIdentifierCannotBeTakenOffStaysOneDocumentWhenRenamed() async throws {
         let h = try await Harness.make()
         defer { h.env.cleanup() }
         let original = try await h.ingest("bill.txt", text: IngestTests.bill)
@@ -377,7 +377,7 @@ import Testing
                 "after a rebuild too, the document follows its own file, told from the copy by its inode")
     }
 
-    @Test func aCopyWhoseIdentifierCannotBeTakenOffStaysOneDocumentAfterTheIndexIsRebuilt() async throws {
+    @Test(.fileModesKeepOut) func aCopyWhoseIdentifierCannotBeTakenOffStaysOneDocumentAfterTheIndexIsRebuilt() async throws {
         let w = try await RecordsWorld.make()
         defer { w.h.env.cleanup() }
         let original = try #require(try await w.h.services.documents.document(id: w.documents[0]))
@@ -426,6 +426,43 @@ import Testing
 
     static let readOnly = 0o444
     static let writable = 0o644
+}
+
+/// What a file saved where a document was is taken for.
+extension ArchiveReconcilerTests {
+    /// What a file saved where a document was is: one new, the document removed; or the document's own, saved again
+    /// without its identifier on a volume that keeps no file numbers, where nothing tells it from the document's file.
+    enum SavedWhere: String, CaseIterable, Sendable { case removed, savedAgain }
+
+    /// A file saved where a document was is taken in, a document of its own, only once that document was removed, which
+    /// stays missing: a document missing from a path is none taken in for a file there; one still there is, its file
+    /// saved again staying that document (the review of the fix of the final review of #17).
+    @Test(arguments: SavedWhere.allCases)
+    func aFileSavedWhereADocumentWasIsTakenInOnlyOnceTheDocumentIsRemoved(_ saved: SavedWhere) async throws {
+        let h = try await Harness.make()
+        defer { h.env.cleanup() }
+        let doc = try await h.ingest("bill.txt", text: IngestTests.bill)
+        let id = try #require(doc.id)
+        let reconciler = h.reconciler
+        switch saved {
+        case .removed:
+            _ = try h.moveOutOfArchive(doc.url)
+            try await reconciler.apply([.gone(path: doc.path)])
+            try Data("Water bill of August".utf8).write(to: doc.url)
+        case .savedAgain:
+            try Data("Water bill of August".utf8).write(to: doc.url)
+            try Xattr.remove(Xattr.documentID, from: doc.url)
+            await reconciler.use(ArchiveDisk(file: ArchiveDisk.disk.file, volume: ArchiveDisk.disk.volume,
+                                             volumeName: ArchiveDisk.disk.volumeName, keepsFileIDs: { _ in false }))
+        }
+        try await reconciler.apply([.found(path: doc.path)])
+        let adopted = saved == .removed
+        #expect(try await h.services.jobs.active().map(\.sourcePath) == (adopted ? [doc.path] : []),
+                "\(saved): a new file is queued to be read where it is; the document's own is not")
+        #expect(try await h.services.history.events(limit: 10, kinds: [.adopted]).count == (adopted ? 1 : 0), "\(saved): History says so")
+        #expect(try await h.services.documents.document(id: id)?.status == (adopted ? .missing : .filed),
+                "\(saved): the document removed stays missing; the one saved again stays itself")
+    }
 }
 
 extension Harness {

@@ -95,6 +95,9 @@ struct RefusingUntil: Trashing {
         // Refused again after a save, still not filed: its problems are the last attempt's, never piled up.
         try Self.save(bill, save == "in place")
         await h.coordinator.enqueue(bill)
+        let arriving = try #require(try await h.services.documents.document(id: id))
+        #expect(arriving.status == .processing && arriving.analysis == nil,
+                "saved (\(save)), what was read of it before is forgotten as it arrives again")
         await drain(h)
         let again = try #require(try await h.services.documents.document(id: id))
         #expect(try await documents(h).count == 1 && again.status == .failed && again.analysis?.problems.count == 1,
@@ -107,6 +110,7 @@ struct RefusingUntil: Trashing {
         #expect(try await documents(h).count == 1 && filed.id == id && filed.status == .filed,
                 "saved (\(save)) once the Trash takes it, it is filed, one document, never a second beside one stuck")
         #expect(try filed.sha256 == HashService.sha256(of: filed.url), "as what the file holds now")
+        #expect(try await h.services.history.events(limit: 10, kinds: [.missing]).isEmpty, "never said to be gone from Incoming")
     }
 
     @Test func readAgainOnADocumentWhoseFileChangedReadsTheFileNotTheTextStoredOfIt() async throws {

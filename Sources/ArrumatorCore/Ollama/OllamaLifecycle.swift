@@ -46,7 +46,8 @@ public actor OllamaLifecycle {
     /// How many probes in a row have found no server answering in time since it was last ready (`check()`): a server
     /// that answers, whether a probe or a start found it so, has failed none.
     private var failedProbes = 0
-    private var monitorTask: Task<Void, Never>?
+    /// Supervision's task (`startMonitoring`), until it is stopped (`shutdown`).
+    private(set) var monitorTask: Task<Void, Never>?
     /// The start under way (`ensureRunning()`), which every caller meanwhile waits for.
     private var starting: Task<Start, Never>?
     /// How many times `shutdown()` has run: a start begun before the last one starts nothing after it.
@@ -328,8 +329,9 @@ public actor OllamaLifecycle {
     }
 
     /// Restarts a server that stopped, after a backoff, at most `maxRestartsPerHour` times an hour. A restart counts
-    /// only when one was made: not when the server answered again meanwhile, or none could be started.
-    private func supervise() async {
+    /// only when one was made: not when the server answered again meanwhile, or none could be started. One look of
+    /// supervision (`startMonitoring`).
+    func supervise() async {
         if await check().isReady || management == .external || Task.isCancelled { return }
         let hourAgo = time.now().addingTimeInterval(-Units.secondsPerHour)
         restarts = restarts.filter { $0 > hourAgo }
@@ -344,7 +346,9 @@ public actor OllamaLifecycle {
         Log.info(.ollama, "Restarted Ollama", ["attempt": String(restarts.count), "delay": String(delay)])
     }
 
-    /// Stops supervising, ends a start under way, and stops the server the app started.
+    /// Stops supervising, ends a start under way, and stops the server the app started. Supervision's task ends at once
+    /// while it waits, or once the look under way is stopped, which is not waited for, so a stop that waits for nothing
+    /// else is never held up by a look.
     public func shutdown() {
         monitorTask?.cancel()
         monitorTask = nil

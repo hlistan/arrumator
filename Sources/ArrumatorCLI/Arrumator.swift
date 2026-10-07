@@ -318,15 +318,21 @@ struct Run: AsyncParsableCommand {
         let runtime = try await options.runtime()
         guard await runtime.start() else { throw await runtime.database.notRebuilt() }
         let incoming = await runtime.settings.current.incomingURL
-        print("Watching \(incoming.path) → \(runtime.archive.path). Press Ctrl-C to stop.")
+        Self.say("Watching \(incoming.path) → \(runtime.archive.path). Press Ctrl-C to stop.")
         for await status in await runtime.coordinator.statusUpdates() {
             if let current = status.current {
                 let tags = current.tags.isEmpty ? "" : " · " + current.tags.map(\.value).joined(separator: " · ")
-                print("[\(current.stage.rawValue)] \((current.path as NSString).lastPathComponent)\(tags) — queue \(status.queued)")
+                Self.say("[\(current.stage.rawValue)] \((current.path as NSString).lastPathComponent)\(tags) — queue \(status.queued)")
             } else if status.waitingForOllama {
-                print("Waiting for Ollama…")
+                Self.say("Waiting for Ollama" + (status.retryAt.map { ": it cannot be reached, and is tried again at \(Format.date($0))" } ?? "…"))
             }
         }
+    }
+
+    /// Writes `line` to standard output at once, as it happens, also into a file or a pipe, where printing would hold it
+    /// until the command ends.
+    static func say(_ line: String) {
+        FileHandle.standardOutput.write(Data((line + "\n").utf8))
     }
 }
 

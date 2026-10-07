@@ -87,11 +87,21 @@ public struct ReviewActions: Sendable {
         if document.status == .filed, inArchive, let id = document.id {
             confirmed = try await services.database.reader.read { db in try Self.confirmation(db, docID: id) }
         }
-        let actions: [DocumentAction] = switch document.status {
+        var actions: [DocumentAction] = switch document.status {
         case .filed: inArchive ? (confirmed == nil ? [.undo, .confirm] : [.undo]) : []
         case .needsReview, .failed: inArchive ? [.hold, .readAgain, .confirm] : [.hold, .readAgain]
         case .held, .undone: [.readAgain]
         case .arrived, .processing, .duplicate, .missing: []
+        }
+        // Its reading in not ended, as in the instant between its filing and its job's end, it is neither undone nor left
+        // for later (`undo`, `hold`), nor read again where that reading's job is (`PipelineServices.queueReadingAgain`),
+        // so none of those is offered; the card asks again as the worker moves on.
+        if let id = document.id, !actions.isEmpty {
+            let (readIn, here) = try await services.database.reader.read { db in
+                (try JobStore.isReadIn(db, docID: id), try JobStore.isReadIn(db, docID: id, at: document.path))
+            }
+            if readIn { actions.removeAll { [.undo, .hold].contains($0) } }
+            if here { actions.removeAll { $0 == .readAgain } }
         }
         return DocumentChoices(actions: actions, notFiled: !inArchive && document.status == .failed, confirmed: confirmed)
     }
@@ -138,12 +148,27 @@ public struct ReviewActions: Sendable {
     /// Reads the document again from the start, as after changing models, from its file, and files it under the name the
     /// model gives: where it is in the archive, found as it was until then, or, for one back in Incoming, at the top of
     /// the archive. It keeps its tags, which its row in the queue shows, and one in a folder in Incoming is given that
-    /// folder's too (`PipelineServices.queueReadingAgain`).
+    /// folder's too (`PipelineServices.queueReadingAgain`), and History records it when it queues the reading, as in
+    /// place of its turn in reading every document again, or of reading its text again after a rebuild (both give way,
+    /// `JobRecord.givesWay`): not while another reading of it waits or is under way at its file, an earlier Read
+    /// Again's, an exact copy's, or its reading in before that has filed it, which it is read with. One its reading in
+    /// has filed, before that reading ends, is read once it has (`JobStore.nextDue`), but one filed where its reading in
+    /// is, as a file put into the archive, is refused until then (`IngestError.beingReadIn`).
     public func retry(_ docID: Int64) async throws {
-        let doc = try await document(docID)
-        try await services.queueReadingAgain(doc, settings: await services.settings.current)
-        try await services.history.record(.retry, actor: .user, doc: docID, summary: "Read again: \(doc.filename)")
+        try await services.queueReadingAgain(docID, settings: await services.settings.current)
         await coordinator.wake()
+    }
+
+    /// Reads every document the model has not labelled yet again (`retry`), as `arrumatorcli labels unlabelled` asks:
+    /// one with no file to read, as one missing, is left out, as there is nothing to read again, and so is one whose
+    /// reading in has not ended where it is, which is left to it (`IngestError.beingReadIn`). The documents queued.
+    public func retryUnlabelled() async throws -> [Int64] {
+        var ids: [Int64] = []
+        for id in try await services.documents.unlabelled() {
+            do { try await retry(id) } catch IngestError.cannotReadAgain, IngestError.beingReadIn { continue }
+            ids.append(id)
+        }
+        return ids
     }
 
     /// Reads every document of the archive again, as `retry` reads one, with the profile in use, after every file that
@@ -157,11 +182,14 @@ public struct ReviewActions: Sendable {
     }
 
     /// Keeps the document where it is; the watcher and queue leave it alone, and a reading of it again under way changes
-    /// nothing of it (`JobStore.cancelReadingAgain`), decided with the change and recorded in History with it.
+    /// nothing of it (`JobStore.cancelReadingAgain`), decided with the change and recorded in History with it. A document
+    /// still being read in, as its file has just come or it is read again from Incoming, is refused
+    /// (`IngestError.beingReadIn`), as the app offers it no such choice (`choices`): its reading files it.
     public func hold(_ docID: Int64) async throws {
         let now = services.time.now()
         try await services.database.writer.write { db in
             guard let read = try DocumentRecord.fetchOne(db, key: docID) else { throw IngestError.documentNotFound(docID) }
+            guard try !JobStore.isReadIn(db, docID: docID) else { throw IngestError.beingReadIn(docID, name: read.filename) }
             var held = read
             held.status = .held
             held.updatedAt = now
@@ -177,10 +205,15 @@ public struct ReviewActions: Sendable {
     /// volume than the archive; the move is then a copy checked against the document's hash before the archive's file
     /// goes to the Trash (`FileOperations`), never a delete, and a file the Trash will not take stays where it is, undone
     /// in nothing. History records where the file was and went as the disk spells both (`URL.spelledOnDisk`), the one
-    /// form a path in Incoming is recorded in.
+    /// form a path in Incoming is recorded in. A document whose reading in has not ended, as in the instant between its
+    /// filing and its job's end, is refused (`IngestError.beingReadIn`), as leaving it for later is: that reading would
+    /// file it again. No such reading begins for a document already in the archive, so the look before the move holds.
     public func undo(_ docID: Int64) async throws {
         var doc = try await document(docID)
         guard DocumentStatus.inArchive.contains(doc.status), services.isInArchive(doc) else { throw IngestError.notInArchive(docID, .undo) }
+        guard try await !services.database.reader.read({ db in try JobStore.isReadIn(db, docID: docID) }) else {
+            throw IngestError.beingReadIn(docID, name: doc.filename)
+        }
         let settings = await services.settings.current
         guard FileManager.default.fileExists(atPath: doc.path) else { throw IngestError.sourceMissing(doc.path) }
         let from = doc.url.spelledOnDisk.path

@@ -23,7 +23,8 @@ public struct DocumentAnalyzer: DocumentAnalyzing {
         let model = try settings.modelProfile().chatModel
         let validator = AnswerValidator(labels: config.labels, titleGroundedShare: config.analysis.titleGroundedShare,
                                         partiesWithoutSender: config.analysis.partiesWithoutSender,
-                                        grounds: ReadingGrounds(content: content, guidance: guidance, letters: config.labels.groundingLetters))
+                                        grounds: ReadingGrounds(content: content, guidance: guidance, letters: config.labels.groundingLetters),
+                                        languages: LanguageDetector(config: config.extraction), titleMaxChars: config.naming.maxChars)
         let sentBack = SentBack()
         let input = ["model": model]
         let started = Date()

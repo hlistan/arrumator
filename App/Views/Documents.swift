@@ -74,7 +74,7 @@ struct DocumentCard: View {
         }
         .card()
         .onExitCommand { close() }
-        .task(id: model.activity) { await load() }
+        .task(id: model.ingestActivity) { await load() }
         .onChange(of: editingName) { wasEditing, _ in
             if wasEditing { Task { await rename() } }
         }

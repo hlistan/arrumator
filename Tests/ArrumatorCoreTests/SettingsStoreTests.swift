@@ -132,6 +132,20 @@ import Testing
         await heard.stop()
     }
 
+    /// A profile added or filing paused with `arrumatorcli` while the app runs is heard of when it is saved, not at the
+    /// app's next change of its own (QA 2026-10-05, SET-4; AGENTS.md §4.6).
+    @Test(.timeLimit(.minutes(1))) func aChangeAnotherProcessSavesIsHeardOfAtOnce() async throws {
+        let env = try await TestEnvironment.make()
+        defer { env.cleanup() }
+        let app = env.settings
+        let heard = await Collected.reading(await app.changes())
+        try await SettingsStore.opened(paths: env.paths).update { $0.paused = true }
+        #expect(await Patience.until { await heard.all.last?.paused == true },
+                "what the app follows hears of the command's change as it is saved, with no change of the app's own")
+        #expect(await app.current.paused, "and the app goes on with it")
+        await heard.stop()
+    }
+
     @Test func aFileThatCannotBeReadIsNeverSavedOver() async throws {
         let env = try await TestEnvironment.make()
         defer { env.cleanup() }
@@ -146,7 +160,7 @@ import Testing
         #expect(try Data(contentsOf: env.paths.settingsURL) == edited, "and the file is left as the user wrote it")
     }
 
-    @Test func aChangeWhoseRecordIsRefusedIsNotSavedAndOneThatCannotBeSavedIsNotRecorded() async throws {
+    @Test func aChangeWhoseRecordIsRefusedIsNotSaved() async throws {
         let env = try await TestEnvironment.make()
         defer { env.cleanup() }
         let history = HistoryStore(database: env.database, time: env.time)
@@ -161,7 +175,9 @@ import Testing
         }
         #expect(try Data(contentsOf: env.paths.settingsURL) == file, "so the setting is not saved")
         #expect(await env.settings.current.renameFiles, "and the settings in force are as they were")
+    }
 
+    @Test(.folderModesKeepOut) func aChangeWhoseSettingsCannotBeSavedIsNotRecorded() async throws {
         let recording = try await TestEnvironment.make()
         defer { recording.cleanup() }
         let recorded = SettingsActions(store: recording.settings, history: HistoryStore(database: recording.database, time: recording.time))
@@ -201,15 +217,64 @@ import Testing
         if !fileWasThere { try FileManager.default.removeItem(at: env.paths.settingsURL) }
         let store = try SettingsStore.opened(paths: env.paths)
         let (before, file) = (await store.current, try? Data(contentsOf: env.paths.settingsURL))
+        let heard = await Collected.reading(await store.changes())
+        let reading = Reading()
         await #expect(throws: CancellationError.self, "the change fails as its record does") {
             try await store.change({ $0.renameFiles = false }, recording: { _, save in
                 try save()
+                // A change another store said it saved is heard of now, while the file holds this one's, not recorded yet:
+                // it is read once the change is over, under the lock it holds (the reviews of the fix of QA 2026-10-05,
+                // SET-4).
+                await reading.begin { await store.readOthersChange() }
+                try #require(await Patience.until { await store.waitsToReadAnotherChange }, "the read waits for the change to be over")
                 throw CancellationError()
             })
         }
+        await reading.end()
         #expect((try? Data(contentsOf: env.paths.settingsURL)) == file,
                 "the file is as it was\(fileWasThere ? "" : ": none"), so no change is in force without its record")
         #expect(await store.current == before, "and the settings in force are as before")
+        let published = await heard.all
+        let neverInForce = published.allSatisfy { $0.renameFiles }
+        #expect(neverInForce, "and what was put back was never published as in force: \(published)")
+        await heard.stop()
+    }
+
+    /// The app hears of a change `arrumatorcli` is making while it is saved and not yet recorded, as a late notification
+    /// of an earlier one makes it read then: it reads the file once the change is over, so a change the command then
+    /// puts back, as its record failed, is never in force in the app (the second review of the fix of QA 2026-10-05,
+    /// SET-4).
+    @Test(.timeLimit(.minutes(1))) func aChangeAnotherProcessPutsBackIsNeverInForceHere() async throws {
+        let env = try await TestEnvironment.make()
+        defer { env.cleanup() }
+        let (app, cli) = (try SettingsStore.opened(paths: env.paths), try SettingsStore.opened(paths: env.paths))
+        let before = await app.current
+        let heard = await Collected.reading(await app.changes())
+        let reading = Reading()
+        await #expect(throws: CancellationError.self, "the command's change fails as its record does") {
+            try await cli.change({ $0.paused = true }, recording: { _, save in
+                try save()
+                await reading.begin { await app.readOthersChange() }
+                try #require(await Patience.until {
+                    let (waiting, current) = (await app.waitsToReadAnotherChange, await app.current)
+                    return waiting || current.paused
+                }, "the app reads, or waits to read, while the command's change is saved and not recorded")
+                throw CancellationError()
+            })
+        }
+        await reading.end()
+        let published = await heard.all
+        let neverInForce = published.allSatisfy { !$0.paused }
+        let now = await app.current
+        #expect(now == before && neverInForce, "the app goes on as before, and never published the change: \(published)")
+        await heard.stop()
+    }
+
+    /// A reading begun in a change's record, to be waited for once the change is over.
+    private actor Reading {
+        private var task: Task<Void, Never>?
+        func begin(_ work: @escaping @Sendable () async -> Void) { task = Task { await work() } }
+        func end() async { await task?.value }
     }
 
     /// The app and `arrumatorcli` each change the settings, one of them while its change waits to be recorded: the other

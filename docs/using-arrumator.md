@@ -27,8 +27,10 @@ after which the card says **Confirmed by you** and when, beside where it is, and
 is read again, corrected, or renamed or moved in Finder; **Read Again** has the model read it again, saying it waits to
 be read after the files already in Incoming (on Needs You, which the document then leaves for Incoming's queue, the page
 says so above the rest, with **Show Incoming**, until you go to another page), **Leave for Later** holds it, and **Undo
-Filing** moves it back to Incoming. A kind of file Arrumator cannot read says so, that the model saw only its name, and
-what would help.
+Filing** moves it back to Incoming; neither **Leave for Later** nor **Undo Filing** is offered while the document is
+still being read in, nor **Read Again** while a file you put into the archive is, and each is once that ends, on the
+card as it is. A kind of file Arrumator
+cannot read says so, that the model saw only its name, and what would help.
 
 - **Incoming**: under **In Progress**, the file being worked on now, with a spinner and what is being done to it
   (**Reading its text**, **Being read by qwen3.5:9b**, naming the model of the profile in use, …), and, once that has
@@ -36,16 +38,18 @@ what would help.
   **Being read by qwen3.5:9b… 1 min, 30 sec so far**; under **Queued**, every other file, in the order they arrived,
   which is the order they are filed in, each saying when it arrived, or, for a file stopped part way (as when you quit
   Arrumator), **Carries on where it stopped**, which it does first at the next start, or the error it had and when it is
-  tried again ([how](how-it-works.md#how-a-file-is-handled)). Beneath a file's name, after a grey tag symbol, are the
-  tags it will be given, as a document's labels are beneath its own: the name of the folder in Incoming it is in, such
-  as **Taxes 2024** for `Incoming/Taxes 2024/scan.pdf` ([folders in
+  tried again ([how](how-it-works.md#how-a-file-is-handled)); while a file waits for Ollama, which it found away, every
+  other says it waits for Ollama too, and when it is tried again, as none is read meanwhile; one that comes is still
+  looked at, so an exact copy goes to its original at once. Beneath a file's name,
+  after a grey tag symbol, are the tags it will be given, as a document's labels are beneath its own: the name of the
+  folder in Incoming it is in, such as **Taxes 2024** for `Incoming/Taxes 2024/scan.pdf` ([folders in
   Incoming](how-it-works.md#folders-in-incoming-and-tags)), and for a document read again the tags it keeps; nothing for
   a file directly in Incoming. An exact copy of a document in the archive leaves for the Trash once it is checked, and
   that document joins the queue to be read again, under its own name ([exact copies](how-it-works.md#exact-copies)).
   Documents read again all at once (**Read All Documents Again**) are not listed one by one: a line above says how many
-  are left, **Reading 120 documents of the archive again with the profile in use. New files still come first.**, and
-  the one being read shows under **In Progress**. Then comes what was just processed, grouped by day as on Processed,
-  each with its labels, its tags among them, with **Show More in Processed** for the rest.
+  are left, **Reading 120 documents of the archive again with the profile in use. New files still come first.**, and the
+  one being read shows under **In Progress**. Then comes what was just processed, grouped by day as on Processed, each
+  with its labels, its tags among them, with **Show More in Processed** for the rest.
 - **Needs You**: documents waiting for you, each with the reason: those the model could not read, or that are
   encrypted, damaged, blank or of a kind of file Arrumator cannot read, and those that could not be filed. The sidebar
   and the menu bar count them. Below them, under **Set Aside by You**, come the documents you left for later or undid
@@ -195,7 +199,8 @@ Settings › Filing: **Rename files** has the model name each document from what
 it is, and **Transliterate names to Latin letters** writes a name in another script, such as Cyrillic, in Latin
 letters. Under **Reading Again**, **Read All Documents Again…** reads every document of the archive again from its
 file, with the profile in use, as you would after choosing another profile: filed documents, those waiting for you and
-those set aside after failing, but not those you left for later. It asks first, naming the profile, and says that each
+those set aside after failing, but not those you left for later, nor a file you put into the archive whose first reading,
+which filed it where it is, has not ended. It asks first, naming the profile, and says that each
 document is renamed and given only the labels this reading finds, also in place of those you corrected, keeping its
 tags; then it says how many it queued. Each document is found as it was until it is read, and then its name, labels,
 text and meaning are replaced at once, but what you change of it after asking ([reading documents
@@ -257,9 +262,12 @@ by meaning**, documents embedded by another model are found by meaning only once
 ## Audit, logs and tuning
 
 - **History**: every arrival (with the tag its folder in Incoming gives it), file in Incoming that cannot be opened,
-  exact copy (under the document it has read again, with where the copy went and the tags it gave), every document read
-  again at once (under none, with the profile and the documents, `Read every document again with the profile
-  “Standard”: 120 documents`), extraction, reading
+  exact copy (under the document it has read again, with where the copy went and the tags it gave), a document you ask
+  to read again (under it, `Read again: <name>`, when your request queues its reading, as it does in place of its
+  turn in reading every document again, or of reading its text again after a rebuild of the index: not while an earlier
+  Read Again's, an exact copy's, or its reading in, before that has filed it, waits or is under way),
+  every document read again at once (under none, with the profile and the documents, `Read every document again with
+  the profile “Standard”: 120 documents`), extraction, reading
   (with the labels it gave, which of the model's labels were tidied and why, and what gave its tags, or that nothing
   could be read of it and why it waits for you), filing (from the name it had to the one it was given, or that it kept
   its name or waits where it is), correction of a name or labels, decision about labels (a merge, a label removed
@@ -368,11 +376,13 @@ No tunable lives in code. Defaults are bundled in `Sources/ArrumatorCore/Resourc
   `extraction.pdf.ocrHeadPages` and the last (a scanned page's text is what OCR reads of it, as its text layer may be
   glyphs named wrong, and its text layer only where OCR does not read it, fails or reads nothing), of how many pages of
   a PDF the text layer is read, the first `extraction.pdf.textLayerHeadPages` and the last
-  `extraction.pdf.textLayerTailPages` (the pages either leaves out are named in a warning), and what a ZIP file, an
-  archive or an Office document, may hold: at most `extraction.zipMaxEntries` entries, each read up to
-  `extraction.zipEntryCapBytes`; an archive, workbook or presentation that holds more, whose directory does not match
-  the file or whose entries share bytes of it, is read for its metadata alone, and a Word document is still converted by
-  `textutil`, without its title and author), `entities` (dates and identifiers: the words that label a document's date,
+  `extraction.pdf.textLayerTailPages` (the pages either leaves out are named in a warning), how wide a gap on a line of
+  a PDF's text layer parts what stands either side of it, as two columns or a table's cells do, in times the height of
+  its letters, `extraction.pdf.columnGap`, more than 0, and what a ZIP file, an archive or an Office document, may hold:
+  at most `extraction.zipMaxEntries` entries, each read up to `extraction.zipEntryCapBytes`; an archive, workbook or
+  presentation that holds more, whose directory does not match the file or whose entries share bytes of it, is read for
+  its metadata alone, and a Word document is still converted by `textutil`, without its title and author), `entities`
+  (dates and identifiers: the words that label a document's date,
   its due date and a date of birth, and those after which a number is an account or customer number,
   `entities.accountLabels`, or a policy or contract number, `entities.policyLabels`, with a number sign between as
   `entities.numberSigns` writes it; each is a phrase matched whatever its case, in which a space matches any white
@@ -386,13 +396,14 @@ No tunable lives in code. Defaults are bundled in `Sources/ArrumatorCore/Resourc
   document, a search request and an image are read with, `analysis.numCtx`, one so that a model that reads and
   describes images stays loaded once, what a model that can think is told before it reads a document or describes an image,
   `analysis.think`, `false`, and the identifiers a document's embedding lists, `analysis.embeddingIdentifiersLimit`),
-  `labels` (`labels.maxPerKind`, `labels.maxValueChars`, the letters a word needs to say on its own whether the
-  document writes a name or a title, `labels.groundingLetters`, the digits a word of an object needs to identify a
-  thing, `labels.objectIdentifierDigits`, and `labels.vocabulary`: for each kind kept one
-  vocabulary, never your tags, how alike labels must be written to be merged without asking or offered to merge and
-  how many in use the model is shown, and how many of your merges and unwanted labels it is shown), `naming` (how long
-  a file name may be, `naming.maxChars` and `naming.maxBytes`, what it may not hold, `naming.forbiddenCharacters`, the
-  suffix of a name already taken, `naming.collisionFormat`, and what a reading's name is made of, in order,
+  `labels` (`labels.maxPerKind`, `labels.maxValueChars`, the letters a word needs to say on its own whether the document
+  writes a name or a title, `labels.groundingLetters`, the digits a word of an object needs to identify a thing,
+  `labels.objectIdentifierDigits`, and `labels.vocabulary`: for each kind kept one vocabulary, never your tags, how
+  alike labels must be written to be merged without asking or offered to merge and
+  how many in use the model is shown, and how many of your merges and unwanted labels it is shown), `naming` (how long a
+  file name may be, `naming.maxChars`, which is also the longest title written as the document writes it when the model
+  gives it in capitals, and `naming.maxBytes`, what it may not hold, `naming.forbiddenCharacters`, the suffix of a name
+  already taken, `naming.collisionFormat`, and what a reading's name is made of, in order,
   `naming.parts`, of the title and, at most once each, the date and the sender, each but the last followed by its
   separator in `naming.separators`),
   `search`, `tasks` (search tasks: how much the model thinks at each effort, with the budget thinking needs,
@@ -453,8 +464,9 @@ saved, in the app and with `arrumatorcli` alike, and nothing changes.
 The app reads `pipeline.json` once, when it starts, and `arrumatorcli` each time it runs. `settings.json` is read again
 before every change to it, in the app and by `arrumatorcli` alike, and the change is saved over the file as it is
 then, one change at a time across processes (a lock on `settings.json.lock` beside it): a setting or profile changed
-with `arrumatorcli` or by hand while the app runs is kept, and the app goes on with it from its next change of the
-settings, or from when it starts again. A file it cannot read, as one with a key it does not know, is never saved over:
+with `arrumatorcli` or by hand while the app runs is kept, and the app goes on with it: with a change `arrumatorcli`
+saved as soon as it is saved, and with one made by hand from its next change of the settings, or from when it starts
+again. A file it cannot read, as one with a key it does not know, is never saved over:
 a change is refused, naming why, until the file is corrected. A change is saved with its event in History or not at
 all: one History cannot record is not saved, and one saved whose record then cannot be committed is put back. Only a
 crash in the moment between the file being saved and the record being committed leaves a change without its event.

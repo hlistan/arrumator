@@ -107,7 +107,7 @@ import Testing
         try await runtime.services.jobs.active().map { URL(fileURLWithPath: $0.sourcePath).lastPathComponent }.sorted()
     }
 
-    @Test func aSwitchThatFailsLeavesTheAppOnItsArchiveRunningWithItsQueueAndNothingRecorded() async throws {
+    @Test(.folderModesKeepOut) func aSwitchThatFailsLeavesTheAppOnItsArchiveRunningWithItsQueueAndNothingRecorded() async throws {
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }
         try home.watchQuickly()
@@ -153,7 +153,7 @@ import Testing
         await second.stop()
     }
 
-    @Test func anArchiveThatCannotBeWrittenToIsSwitchedAwayFromAndSaysSoOnceItCanBe() async throws {
+    @Test(.folderModesKeepOut) func anArchiveThatCannotBeWrittenToIsSwitchedAwayFromAndSaysSoOnceItCanBe() async throws {
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }
         let first = try await home.open()
@@ -176,7 +176,7 @@ import Testing
                 "the switch is written into the archive's history once it can be: it was kept in its index meanwhile")
     }
 
-    @Test func theRuntimeLeftWritesIntoItsOwnArchiveNeverTheOneSwitchedTo() async throws {
+    @Test(.folderModesKeepOut) func theRuntimeLeftWritesIntoItsOwnArchiveNeverTheOneSwitchedTo() async throws {
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }
         let first = try await home.open()
@@ -273,7 +273,7 @@ import Testing
     /// A server on this Mac where no Ollama answers, other than `RuntimeHome.nowhere`.
     static let anotherServer = "http://127.0.0.1:12345"
 
-    @Test func aSwitchWhoseSettingsCannotBeSavedOnceRecordedSaysTheAppStayedAndStartsItAgain() async throws {
+    @Test(.folderModesKeepOut) func aSwitchWhoseSettingsCannotBeSavedOnceRecordedSaysTheAppStayedAndStartsItAgain() async throws {
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }
         try home.watchQuickly()

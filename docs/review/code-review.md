@@ -40,8 +40,10 @@ whether the documents still tell the truth.
 
 **The standard.** A change is approved when it definitely improves the code and breaks no rule of
 [AGENTS.md §3 and §4](../../AGENTS.md#3-core-principles), "even if [it] isn't perfect"; a change that worsens the
-code's health is not approved. Technical facts and measurements overrule opinion; on style, the linters decide; where
-two designs are equally sound, the author chooses.
+code's health is not approved. Approval is not the merge: perfection is not asked of a change, but every finding its
+review makes is fixed before it is merged ([Findings](#findings)), so what is short of perfect and found does not
+stay. Technical facts and measurements overrule opinion; on style, the linters decide; where two designs are equally
+sound, the author chooses.
 
 ## Who reviews, and when
 
@@ -56,7 +58,8 @@ The repository has one maintainer and no required approval, so review is a disci
 A fresh context matters: the session that wrote the code is biased towards it
 ([Claude Code, *Best practices*](https://code.claude.com/docs/en/best-practices)). An agent's review is not an
 approval. Delivering a change is a person's decision ([AGENTS.md §4.8](../../AGENTS.md#4-hard-rules-non-negotiable)),
-and whoever then merges it, person or agent, merges with no finding rated Blocker or Major open.
+and whoever then merges it, person or agent, merges with no finding open, whatever its rating
+([AGENTS.md §2](../../AGENTS.md#2-start-of-every-task), Review: nothing found is left).
 
 ## Before a review starts
 
@@ -119,16 +122,17 @@ here: a review rates a breach of the other rules of §4 by what follows from it.
 | Severity | In a code review | Merge |
 |---|---|---|
 | 4 Blocker | Loses or exposes data, crashes on input from outside the code, or breaks one of the rules of AGENTS.md §4 that protect the user: §4.1 to §4.5. | Never with it open. |
-| 3 Major | A defect with a concrete failure, behaviour without a test, or a test that would pass without the code it names. | Fixed first. |
-| 2 Minor | Works, but harder to understand, change or test than it need be; a rule of §3 not kept where no failure follows yet; a missing boundary case of low consequence. | Fixed in this change, as the project carries no debt (§3), unless the author shows why not. |
-| 1 Nit | Polish no rule asks for. | The author's choice. |
+| 3 Major | A defect with a concrete failure, behaviour without a test, or a test that would pass without the code it names. | Never with it open. |
+| 2 Minor | Works, but harder to understand, change or test than it need be; a rule of §3 not kept where no failure follows yet; a missing boundary case of low consequence. | Never with it open: the project carries no debt (§3). |
+| 1 Nit | Polish no rule asks for, which the reviewer judges worth the author's time. | Never with it open: a reviewer reports no nit not worth fixing. |
 
 Frequency and whether the user can recover raise or lower a rating. A breach of another rule, such as a document left
 stale (§4.10), is rated by what follows from it, and is fixed in the change whatever its rating. A fault that could
 fail before the change is reported as **pre-existing**, also when it sits on lines the change moved; it is rated on
-the same scale and does not block the change. When the change gives an old fault a new way to happen, or carries it
-into new code, the finding is the change's, and names the old fault beside it. A loss the description admits is still
-a finding where a rule forbids it: saying so is not leave.
+the same scale and is fixed all the same, in the change or in a pull request of its own merged before it: debt found
+is debt kept until it is fixed. When the change gives an old fault a new way to happen, or carries it into new code, the
+finding is the change's, and names the old fault beside it. A loss the description admits is still a finding where a
+rule forbids it: saying so is not leave, and neither is a reason why a finding may stand.
 
 ### How a finding is written
 
@@ -243,7 +247,7 @@ A model's answer is untrusted input, and a document it reads can carry instructi
 
 | # | Ask |
 |---|---|
-| M1 | Is every field of an answer decoded into a typed schema and validated per kind before use? When code repairs a value instead of sending it back, is that a fact of the format or a guess about the document? |
+| M1 | Is every field of an answer decoded into a typed schema and validated per kind before use? When code repairs a value instead of sending it back, is that a fact of the format or a guess about the document? A value written in place of the model's comes from what the document itself shows, its layout or its own writing; try it on a strong model's right answer, on names and numbers in other scripts and languages, and on a word the document never writes in small letters: does it cut a name, drop what identifies a number, or misspell a word? |
 | M2 | Can anything in an answer become active where it lands: a link or image in rendered Markdown, a path, an escape sequence in a terminal, search syntax? |
 | M3 | Is document text marked as data in the prompt, and could text in a document forge the prompt's own markers? |
 | M4 | Does the model only choose values, with the application deciding every action ([LLM06 Excessive Agency](https://genai.owasp.org/llmrisk/llm062025-excessive-agency/))? |
@@ -256,7 +260,7 @@ A model's answer is untrusted input, and a document it reads can carry instructi
 
 | # | Ask | From |
 |---|---|---|
-| T1 | If the key line of the change were deleted, which test fails? | [Google, *What to look for*](https://google.github.io/eng-practices/review/reviewer/looking-for.html) |
+| T1 | If the key line of the change were deleted, which test fails? If one condition of a rule were deleted, a value of a set it treats alike (signs, separators, scripts), an operand of a compound condition, a case of a `switch`, which fails? Is a guard no input reaches deleted? | [Google, *What to look for*](https://google.github.io/eng-practices/review/reviewer/looking-for.html) |
 | T2 | Does each assertion check a specific value, with no `?? 0` or `?? []` that lets a missing value pass, and does "both" or "all" check each (ST2, ST3)? | §3, semantic assertions |
 | T3 | Is the outcome asserted on what is left in the database, on disk and in History, not only on what a call returned? | [*Software Engineering at Google*, ch. 13](https://abseil.io/resources/swe-book/html/ch13.html) |
 | T4 | Does the test wait for the very condition it needs, with a deadline, and does every `await` end if the feature is broken (ST4)? | §3, determinism |
@@ -487,7 +491,7 @@ A review of everything is too large for one reader to hold, so it is divided, me
    one is cheap. Where the behaviour is documented, the finding is rated again against the documents.
 5. **Report.** One report: the baseline, the findings by severity with how sure each is, what was not reproduced, and
    what the code does well. It goes into `docs/review/reports/<date>/`, which Git ignores, as a QA run's report does: a
-   report is the input of the changes that fix what it found, not part of the repository.
+   report is the input of the changes that fix everything it found, at once, not part of the repository.
 6. **Learn.** A question that found a fault and is not in this document is added to it; a rule the findings show to be
    unenforced is given a gate or a test ([AGENTS.md §2](../../AGENTS.md#2-start-of-every-task), Learn).
 

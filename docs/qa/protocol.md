@@ -4,7 +4,11 @@ How a person, or an agent, tests Arrumator end to end: the real app, built from 
 archive, driven through its window as a user drives it, with a real model. It finds what unit, integration and CLI tests
 cannot: what a page shows and says, what a user can and cannot do from it, how it behaves when things go wrong, and
 whether the model's work holds up. What a run finds goes into `docs/qa/reports/<date>/`, which Git ignores: a report is
-the input of the changes that fix what it found, not part of the repository.
+the input of the changes that fix what it found, not part of the repository. Every finding of a run, whatever its
+severity and whether the change under test brought it or not, is fixed, with the test, or where no test reaches it the
+protocol step, gate or evaluation, that keeps it fixed, before the change the run tested is merged, in it or in a pull
+request of its own merged before it ([AGENTS.md §2](../../AGENTS.md#2-start-of-every-task), Review): none waits in a
+report for a later run.
 
 ## Method
 
@@ -123,7 +127,8 @@ Support/Arrumator` or a running Arrumator of the user's.
    runs in needs Accessibility in System Settings › Privacy & Security. It never reads the system's Apple menu, which
    lists the user's own recent files.
    Its pointer events reach whatever window is under the pointer, so it refuses a click, hover or scroll at a point
-   where one of the process's windows is not the frontmost, and it refuses `shot` while a file panel is open. The
+   where one of the process's windows is not the frontmost, after looking again for a moment, as a help tag or a banner
+   passing over it goes, and names whose window is there; and it refuses `shot` while a file panel is open. The
    screen must be unlocked: while it is locked, the accessibility API gives every window, any app's, as the application
    itself, `windows` lists none and `shot` makes no image, so wait for the user rather than read anything into it.
    A file panel (Choose…, Export, Switch Archive…) may open on the user's own folders, and the driver never reads it,
@@ -171,7 +176,7 @@ change to this protocol says how the next run reaches it.
 |---|---|---|---|
 | C1 | First run and onboarding, step by step, forward and back | Welcome, folders, background and notifications, Ollama and its server, profile and models, Ready | Ollama unreachable or slow, a server off the local network refused, models missing and their Download, the menu bar full, keyboard only (Return, Escape, Tab), closing the window part way and opening the main window from the Window menu (⌘0) before setup is done: what it says and whether a file dropped then is taken |
 | C2 | Filing documents through Incoming and the queue | Drop files and folders, watch In Progress and Queued, a document filed and named | Every format of the corpus, non-Latin names, a folder in Incoming as a tag, nested folders, an exact copy, encrypted, blank, damaged and unsupported files, a large batch, pausing and resuming, quitting part way and starting again, and the queue's order after the restart |
-| C3 | Processed and a document's card | Open a card, rename, add and remove labels, read again, undo filing, open the file and show it in Finder | Empty and very long names, names with `/` or `:`, a label of every kind, removing every label, undo twice, a file moved, copied, or removed and put back in Finder meanwhile, a folder renamed in the archive, a package put into it, every action of the card pressed twice (what the card and History say the second time) |
+| C3 | Processed and a document's card | Open a card, rename, add and remove labels, read again, undo filing, open the file and show it in Finder | Empty and very long names, names with `/` or `:`, a label of every kind, removing every label, undo twice, a file moved, copied, or removed and put back in Finder meanwhile, a folder renamed in the archive, a package put into it, every action of the card pressed twice (what the card and History say the second time), a card opened while its document is still being read in: no **Undo Filing** or **Leave for Later**, nor **Read Again** for a file put into the archive, until its reading ends, then offered without reopening the card |
 | C4 | Needs You | Confirm, read again, leave for later, undo | Each reason a document waits, a document read again that still fails, counts on the sidebar |
 | C5 | The sidebar's labels | Choose labels to narrow down, Clear, Filter Labels, group by kind, fold a kind, Show More, all of it with the keyboard alone (Tab from Filter Labels, the arrows, Return, Escape) and VoiceOver | Labels in many scripts, filters that match nothing, accents and punctuation, choosing every label, a narrowed page with no documents, narrowing that replaces most labels while documents are filed (`app.log` holds no AppKit warning) |
 | C6 | The Labels page | Merge, keep apart, remove everywhere, forget a rule, suggestions of alike labels | Merging a label into itself, into one of another kind, a tag, undoing a rule, what a later reading does |
@@ -229,12 +234,15 @@ A run writes `docs/qa/reports/<date>/report.md`, with its screenshots beside it 
   - steps to reproduce, from a fresh scratch home where needed;
   - what was expected, and why: the document, rule or heuristic that says so;
   - what happened, with its evidence: screenshot, accessibility tree, log lines, record file, CLI output;
-  - where the fix likely lies (module, file), when it is known.
+  - where the fix likely lies (module, file), when it is known;
+  - its fix, filled in as it lands: the change, and the test or protocol step that keeps it fixed. The run is closed,
+    and the change it tested delivered, only once every finding has one.
 - **Session sheets**, one per session.
 - **What works**: what was checked and held, so the next run knows what was covered.
 - **The last run's findings**: each one it fixed, re-checked, and whether it held.
 - **The protocol**: what the run found the protocol, or its driver, got wrong or left out, and what was changed in it,
-  so the next run starts from what this one learned.
+  so the next run starts from what this one learned: a fault of the driver is a finding like any, fixed, never noted as
+  not reproduced and left.
 
 Never put a real document, a personal name or anything of the user's own into a report, nor anything read from outside
 the app under test.

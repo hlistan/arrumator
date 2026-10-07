@@ -1,6 +1,5 @@
 import ArrumatorCore
 import Foundation
-import NaturalLanguage
 
 /// The JSON schema sent as Ollama `format`: one list of signals per kind the model gives (`LabelKind.modelKinds`: every
 /// kind but the user's own tags, which it is never asked for), then the document's title, which its file name is made
@@ -127,6 +126,16 @@ struct Guess: Sendable {
     }
 }
 
+/// A value of an answer written otherwise than the prompt asks, whose writing the document itself tells
+/// (`AnswerValidator.toldByTheDocument`): a label of `kind`, or the title when `kind` is nil, written `from` by the model
+/// and `to` as the document tells; `note` says so.
+struct Mend: Sendable, Hashable {
+    let kind: LabelKind?
+    let from: String
+    let to: String
+    let note: String
+}
+
 /// Parses and checks the model's answer. An entry holding the list separator is as many entries as it holds
 /// (`DocumentLabel.entrySeparator`), as the prompt asks for one label per entry, each without the quotes the prompt
 /// lists labels in (`unquoted`). Each signal is kept as `DocumentLabel.normalized` keeps it, cut to `maxValueChars`, once
@@ -142,23 +151,52 @@ struct Guess: Sendable {
 /// as a job title or a product bought, goes back with the title, named, for the model to keep only what a number, a plate,
 /// an address or a name identifies, and stands when given again; so does a date given to a document that writes none,
 /// nor its year (`ReadingGrounds.writesADay`, `writesYear(of:)`), as a note, and a reading without a sender that names `partiesWithoutSender` parties or
-/// more, as a lease naming both its sides as parties. Each is told once in an exchange, when a repair sends it
-/// (`GuessSentBack.sent`).
+/// more, as a lease naming both its sides as parties. What the prompt asks to be written otherwise, told by form alone,
+/// is written as the document itself tells, at once, as a fact of the document rather than a guess, with a note
+/// (`toldByTheDocument`): a party that joins a sender's name to the party's the document prints beside it, as the
+/// document prints it (`DocumentLayout.joined`); a title of several words all in capitals (`inCapitals`), as a sentence
+/// of the document's own writing (`DocumentLayout.asSentence`); a reference whose words for what it is are not in English
+/// (`describedOtherwise`), as its number, where the document prints them as the field's name beside it (`numbered`).
+/// What the document does not tell the writing of goes back, as the guesses above do: a title in capitals whose words
+/// it writes only so, and a reference whose words it does not set apart. Each guess is told once in an exchange, when a
+/// repair sends it (`GuessSentBack.sent`).
 public struct AnswerValidator: Sendable {
     public let labels: LabelsConfig
     public let titleGroundedShare: Double
     public let partiesWithoutSender: Int
     public let grounds: ReadingGrounds
+    /// Tells the language a reference's words for what it is are in (`describedOtherwise`).
+    public let languages: LanguageDetector
 
     /// The kinds whose labels are names, as the document writes them.
     static let groundedKinds: Set<LabelKind> = [.sender, .party]
 
-    public init(labels: LabelsConfig, titleGroundedShare: Double, partiesWithoutSender: Int, grounds: ReadingGrounds) {
+    public init(labels: LabelsConfig, titleGroundedShare: Double, partiesWithoutSender: Int, grounds: ReadingGrounds,
+                languages: LanguageDetector, titleMaxChars: Int) {
         self.labels = labels
         self.titleGroundedShare = titleGroundedShare
         self.partiesWithoutSender = partiesWithoutSender
         self.grounds = grounds
+        self.languages = languages
+        self.titleMaxChars = titleMaxChars
     }
+
+    /// The longest title written as a sentence of the document's words (`sentence`): no file name holds a longer one
+    /// (`naming.maxChars`), whose name the file name builder cuts.
+    public let titleMaxChars: Int
+
+    /// `title`, written in capitals, as a sentence of the document's own writing (`DocumentLayout.asSentence`); nil for a
+    /// title longer than `titleMaxChars`, which no file name holds, so a title of hundreds of words is never looked for
+    /// across the document.
+    func sentence(_ title: String) -> String? {
+        title.count <= titleMaxChars ? grounds.layout.asSentence(title) : nil
+    }
+
+    /// The language the prompt asks the words of topics and of what a reference is to be written in, as ISO 639-1 writes
+    /// it (`labels-system.md`).
+    static let wordsLanguage = "en"
+    /// A letter of a script other than the Latin one English is written in.
+    static var otherScript: Regex<Substring> { #/[^\p{Latin}\P{L}]/# }
 
     /// The reading `text` gives. `sentBack` holds whether this exchange with the model already sent its title back, so
     /// the title it gives after that stands; nil sends a title back however often it comes.
@@ -176,23 +214,139 @@ public struct AnswerValidator: Sendable {
         let kept = ClassificationSchema.answerOrder.flatMap { labels(of: $0, in: raw, notes: &notes, unidentified: &unidentified) }
         // Kinds in their own order, as the rest of the app lists them.
         let ordered = LabelKind.allCases.flatMap { kind in kept.filter { $0.kind == kind } }
-        let title = DocumentLabel.oneLine(raw.title)
-        let guesses = guesses(title: title, unidentified: unidentified, date: ordered.first { $0.kind == .date }?.value,
-                              unissued: ordered.contains { $0.kind == .sender } ? [] : ordered.values(.party))
+        // What the document itself tells the writing of is written so before anything is checked further: telling the
+        // model would cost a call, and a weak one gives again what it is told of.
+        let written = DocumentLabel.oneLine(raw.title)
+        // Looked for once: a title in capitals the document does not write as a sentence goes back, below.
+        let sentence = Self.inCapitals(written) ? self.sentence(written) : nil
+        let told = toldByTheDocument(title: written, sentence: sentence, labels: ordered)
+        let mended = Self.mended(ordered, title: written, by: told)
+        notes += told.map(\.note)
+        let title = mended.title
+        let guesses = guesses(title: title, unidentified: unidentified, date: mended.labels.first { $0.kind == .date }?.value,
+                              unissued: mended.labels.contains { $0.kind == .sender } ? [] : mended.labels.values(.party))
+            + self.written(title: title, sentence: title == written ? sentence : nil, labels: mended.labels)
         let untold = guesses.filter { sentBack?.wasTold($0.subject) != true }
-        guard !untold.isEmpty else {
-            let kept = guesses.map { $0.kept(told: true, untold: Self.keptUnrepaired) }
-            return ValidatedAnalysis(labels: ordered, title: title.isEmpty ? nil : title, notes: notes + kept)
+        let reading = { (kept: [String]) in
+            ValidatedAnalysis(labels: mended.labels, title: title.isEmpty ? nil : title, notes: notes + kept)
         }
+        guard !untold.isEmpty else { return reading(guesses.map { $0.kept(told: true, untold: Self.keptUnrepaired) }) }
         let standing = guesses.map { guess in guess.kept(told: !untold.contains { $0.subject == guess.subject }, untold: Self.keptUnrepaired) }
         let subjects = untold.map(\.subject)
-        throw GuessSentBack(problems: untold.map { "\($0.found); \($0.asked)" },
-                            standing: ValidatedAnalysis(labels: ordered, title: title.isEmpty ? nil : title, notes: notes + standing),
+        throw GuessSentBack(problems: untold.map { "\($0.found); \($0.asked)" }, standing: reading(standing),
                             sent: { sentBack?.tell(subjects) })
+    }
+
+    /// `labels` and `title` with each value `mends` tells written as it tells, a label kept once however it comes to
+    /// be written.
+    static func mended(_ labels: [DocumentLabel], title: String, by mends: [Mend]) -> (labels: [DocumentLabel], title: String) {
+        var seen = Set<String>()
+        let written = labels.compactMap { label -> DocumentLabel? in
+            var label = label
+            if let mend = mends.first(where: { $0.kind == label.kind && $0.from == label.value }) { label.value = mend.to }
+            return seen.insert(label.kind.rawValue + "\u{1F}" + folded(label.value)).inserted ? label : nil
+        }
+        return (written, mends.first { $0.kind == nil && $0.from == title }?.to ?? title)
+    }
+
+    /// What the answer writes otherwise than the prompt asks, told by form, whose writing the document itself tells: a
+    /// party joined to the sender's name printed beside it, as printed; a title in capitals, as a sentence of the
+    /// document's own writing; a reference described in the document's words, which it prints as the field's name, as
+    /// its number. Each with the note that says so.
+    private func toldByTheDocument(title: String, sentence: String?, labels: [DocumentLabel]) -> [Mend] {
+        let parties = ClassificationSchema.labelsKey(.party)
+        let joined = labels.values(.party).compactMap { party -> Mend? in
+            guard let alone = grounds.layout.joined(party, senders: labels.values(.sender)),
+                  let label = DocumentLabel.normalized(alone, kind: .party) else { return nil }
+            return Mend(kind: .party, from: party, to: label.value,
+                        note: "\(parties): “\(party)” joins a sender's name to the party's the document prints beside it, \(Self.writtenAsTold)“\(label.value)”")
+        }
+        let titleKey = ClassificationSchema.titleKey
+        let titled = sentence.flatMap { sentence in
+            sentence == title ? nil : Mend(kind: nil, from: title, to: sentence,
+                                           note: "\(titleKey): “\(title)” is written in capitals, \(Self.writtenAsTold)“\(sentence)”")
+        }
+        return joined + [titled].compactMap(\.self) + labels.values(.reference).filter(describedOtherwise).compactMap(numbered)
+    }
+
+    /// What the answer writes otherwise than the prompt asks, told by form, whose writing the document does not tell, to
+    /// go back to the model: a title in capitals whose words it does not write in a sentence, unless it writes each of
+    /// them in capitals beside a word of a sentence, as abbreviations stand (`DocumentLayout.writesInCapitals`);
+    /// and references described in another language than English whose words it does not set apart
+    /// (`toldByTheDocument` writes the rest).
+    private func written(title: String, sentence: String?, labels: [DocumentLabel]) -> [Guess] {
+        var guesses: [Guess] = []
+        if Self.inCapitals(title), sentence == nil, !grounds.layout.writesInCapitals(title) {
+            guesses.append(Guess(subject: ClassificationSchema.titleKey,
+                                 found: "\(ClassificationSchema.titleKey): “\(title)” is written in capitals",
+                                 asked: "write it as a sentence is written, with names as the document writes them"))
+        }
+        let references = ClassificationSchema.labelsKey(.reference)
+        let otherwise = labels.values(.reference).filter(describedOtherwise)
+        if !otherwise.isEmpty {
+            guesses.append(Guess(subject: references, found: "\(references): \(Self.named(otherwise)) say what they are in another language",
+                                 asked: "write one or two English words for what each is, then its number as the document writes it"))
+        }
+        return guesses
+    }
+
+    /// Whether `title` is written in capitals: of more than one word with a letter that has a case, and every such letter
+    /// a capital, as a heading printed so ("TÍTULO DE RESIDÊNCIA"); one word, as an abbreviation, and words of a script
+    /// without case are not, beside it or alone ("NTT 請求書"). One the document writes so, as abbreviations ("IMI
+    /// AT"), is written as asked already (`DocumentLayout.writesInCapitals`).
+    static func inCapitals(_ title: String) -> Bool {
+        let worded = title.split(whereSeparator: \.isWhitespace).filter { $0.contains(where: \.isCased) }
+        let cased = title.filter { $0.isUppercase || $0.isLowercase }
+        return worded.count > 1 && !cased.isEmpty && cased.allSatisfy(\.isUppercase)
+    }
+
+    /// Whether `reference` says what it is otherwise than in English, as the prompt asks, by the words before what
+    /// identifies it (`described`): words of another script than the Latin one ("お客さま番号 03-3542-5545-25", "номер
+    /// договора 1234"); or, when one of them is no English word the system knows (`EnglishWords`), words more likely of
+    /// the document's language than of English, in a document not in English ("Fatura n.º FT EDPC2026/926804564"), or of
+    /// another language as surely as `LanguageDetector` names a short text's ("Zählernummer 1ESY 1160 4478 21"). Words
+    /// English and the document's language share ("Client", "Contract") are English.
+    func describedOtherwise(_ reference: String) -> Bool {
+        let words = Self.described(reference).joined(separator: " ")
+        guard words.contains(where: \.isLetter) else { return false }
+        if words.contains(Self.otherScript) { return true }
+        let telling = ReadingGrounds.tokens(words).map { $0.lowercased() }.filter { $0.count >= labels.groundingLetters }
+        let english = EnglishWords()
+        guard !telling.isEmpty, !telling.allSatisfy(english.knows) else { return false }
+        if let language = grounds.language, language != Self.wordsLanguage,
+           languages.prefers(language, over: Self.wordsLanguage, in: words) { return true }
+        return languages.code(of: words).map { $0 != Self.wordsLanguage } ?? false
+    }
+
+    /// The words of `reference` that say what it is: those before what identifies it, which begins at its first word
+    /// that holds a digit, is in capitals, as an abbreviation or a series' letters are ("NIF", "FT", "A", "ΙΚΤ", "СА"),
+    /// or is of another script than its first word ("Licence plate 品川 300 あ 12-34").
+    static func described(_ reference: String) -> [Substring] {
+        let words = reference.split(whereSeparator: \.isWhitespace)
+        let script = words.first?.contains(otherScript)
+        return Array(words.prefix { word in
+            !word.contains(where: \.isNumber) && !DocumentLayout.casedInCapitals(word) && word.contains(otherScript) == script
+        })
+    }
+
+    /// `reference` without the words that say what it is (`described`): only when the document writes them as the name of
+    /// the field the rest is the value of, that value beside it or below it (`DocumentLayout.writesAsLabel`), so what is
+    /// left is the number as the document writes it ("Fatura n.º FT EDPC2026/926804564" is "FT EDPC2026/926804564"). Nil
+    /// otherwise: words the document runs into the number, or writes elsewhere, may be part of what identifies it.
+    private func numbered(_ reference: String) -> Mend? {
+        let described = Self.described(reference)
+        let number = reference.split(whereSeparator: \.isWhitespace).dropFirst(described.count).joined(separator: " ")
+        guard grounds.layout.writesAsLabel(described.joined(separator: " "), of: number) else { return nil }
+        let references = ClassificationSchema.labelsKey(.reference)
+        return DocumentLabel.normalized(number, kind: .reference).map {
+            Mend(kind: .reference, from: reference, to: $0.value,
+                 note: "\(references): “\(reference)” says what it is in the document's words, its field's name, \(Self.writtenAsTold)“\($0.value)”")
+        }
     }
 
     static let keptGivenAgain = "kept as the model gives it again"
     static let keptUnrepaired = "kept as given, with no repair left"
+    static let writtenAsTold = "written as the document tells: "
 
     /// What the answer holds that the document may not bear out, each as what was found and what the model is asked to
     /// do: a title not of the document's words, objects nothing identifies, a date it does not write, and `unissued`,
@@ -277,203 +431,5 @@ public struct AnswerValidator: Sendable {
         let trimmed = entry.trimmingCharacters(in: .whitespaces)
         guard trimmed.count > 1, trimmed.hasPrefix("\""), trimmed.hasSuffix("\"") else { return String(entry) }
         return String(trimmed.dropFirst().dropLast())
-    }
-}
-
-/// What a reading is checked against: the document's own words, its text, the e-mail's sender and subject, and what the
-/// vision model saw in it, and how the archive's owner wants labels written. Words are told apart as NaturalLanguage
-/// tells them (`NLTokenizer`, AGENTS.md §4.5) and folded (`key`), and a word the document breaks is read whole: a run of
-/// letters it spaces out one by one ("E D P  C O M E R C I A L"), and one a soft hyphen or a hyphen at the end of a line
-/// ("Comer-\ncial") breaks. Words are never joined across the spaces between them, so a short name is not found across
-/// two words ("EDP" in "Estimated payment").
-///
-/// A name the document writes is in its words: each of its words of `letters` letters or more (each of them, when it has
-/// none that long), however it is cased, accented or written in width, as a word of the document or inside one, as a
-/// name declined or written without spaces is. Every such word, not only the longest: "EDP Comercial" is not written by
-/// "Banco Comercial Português". A name of several words the document writes as an abbreviation in capitals, the initials
-/// of its words, is in its words too (`initials`): "Социальный фонд России" on a card that prints СФР, "HM Passport
-/// Office" on a passport that prints HMPO, wherever it stands as a word of its own. Initials shorter than `letters`, so
-/// many words and legal forms in capitals ("SA" after "EDP Comercial"), ground only a name with a word for each letter,
-/// and only where the abbreviation begins a line, as a letterhead or heading writes it ("AT - Nota de cobrança"). A name
-/// that only the archive's labels, the file's name or the model's own knowledge give, such as the sender most of the
-/// archive's documents have, is not, unless it is how the owner wants a name the document writes written: any of the
-/// owner's merges (`LabelGuidance.preferred`), not only those the prompt shows.
-public struct ReadingGrounds: Sendable {
-    /// The document's words, folded (`key`), a run of single letters also as the word it spells.
-    let words: Set<String>
-    /// The abbreviations the document writes, folded: its words all in capitals of `letters` letters or more, and those
-    /// of two letters or more that begin a line.
-    let abbreviations: Set<String>
-    /// The letters a word needs to say on its own whether the document writes a name or a title (`labels.groundingLetters`).
-    let letters: Int
-    let preferred: [LabelPreference]
-    /// Whether the document writes a day with its year: one the extractor finds in its text (`Entities.dates`), one the
-    /// vision model saw in it, or an e-mail's own date; nil when it has neither text nor a date seen to tell by, as an
-    /// image nothing was read of, which is not checked. Only whether it writes one is told, never which: a date written
-    /// month first, or in another calendar, the extractor may read as another day.
-    let writesADay: Bool?
-    /// The runs of digits the document writes, which a date's year is told by (`writesYear(of:)`), however the day around
-    /// it is written.
-    let numbers: Set<Substring>
-
-    public init(content: ExtractedContent, guidance: LabelGuidance, letters: Int) {
-        let visual = content.visual.map { [$0.description] + $0.organisations } ?? []
-        let mail = [MetadataKey.emailFrom, MetadataKey.emailSubject].compactMap { content.metadata[$0] }
-        let written = !content.entities.dates.isEmpty || content.metadata[MetadataKey.emailDate] != nil
-            || content.visual?.dates.contains { DocumentLabel.normalized($0, kind: .date) != nil } == true
-        let blank = content.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        self.init(text: ([content.text] + mail + visual).joined(separator: "\n"), letters: letters, preferred: guidance.preferred,
-                  writesADay: blank && !written ? nil : written)
-    }
-
-    init(text: String, letters: Int, preferred: [LabelPreference] = [], writesADay: Bool? = nil) {
-        var words = Set<String>()
-        var abbreviations = Set<String>()
-        for tokens in Self.lines(Self.unbroken(text)) {
-            words.formUnion(Self.keys(tokens))
-            for (index, token) in tokens.enumerated() where token.count > 1 && token.allSatisfy(\.isUppercase) {
-                if token.count >= letters || index == 0 { abbreviations.insert(Self.key(token)) }
-            }
-        }
-        self.words = words
-        self.abbreviations = abbreviations
-        self.letters = letters
-        self.preferred = preferred
-        self.writesADay = writesADay
-        numbers = Set(text.split { !($0.isASCII && $0.isNumber) })
-    }
-
-    /// Whether the document writes the year of `day`, a `YYYY-MM-DD`: in four digits, alone or within a longer run
-    /// (`20250201`), or in two standing alone, as `01 MAR 22` writes it.
-    func writesYear(of day: String) -> Bool {
-        let year = day.prefix(Self.yearDigits)
-        return numbers.contains { $0.contains(year) } || numbers.contains(year.suffix(Self.shortYearDigits))
-    }
-
-    /// The digits of a year in full, and in short.
-    static let yearDigits = 4
-    static let shortYearDigits = 2
-
-    /// `text` with what breaks a word inside it taken out: a soft hyphen, and a hyphen at the end of a line with the line
-    /// break after it.
-    static func unbroken(_ text: String) -> String {
-        text.replacingOccurrences(of: softHyphen, with: "")
-            .replacingOccurrences(of: lineEndHyphen, with: "", options: .regularExpression)
-    }
-
-    static let softHyphen = "\u{00AD}"
-    /// A hyphen that ends a line, with the spaces around it and the line break.
-    static let lineEndHyphen = #"-[ \t]*\r?\n[ \t]*"#
-
-    /// The words of `text` as NaturalLanguage tells them apart, in one width, as `text` cases them.
-    static func tokens(_ text: String) -> [String] {
-        lines(text).flatMap(\.self)
-    }
-
-    /// The words of `text`, as `tokens` gives them, line by line: read in one pass, a line beginning at each word with a
-    /// line break between it and the word before.
-    static func lines(_ text: String) -> [[String]] {
-        let tokenizer = NLTokenizer(unit: .word)
-        tokenizer.string = text
-        var lines: [[String]] = []
-        var end = text.startIndex
-        for range in tokenizer.tokens(for: text.startIndex..<text.endIndex) {
-            if lines.isEmpty || text[end..<range.lowerBound].contains(where: \.isNewline) { lines.append([]) }
-            lines[lines.count - 1].append(String(text[range]).folding(options: .widthInsensitive, locale: nil))
-            end = range.upperBound
-        }
-        return lines
-    }
-
-    /// `tokens` folded (`key`), each run of two or more single letters also as the word it spells ("E D P" is edp).
-    static func keys(_ tokens: [String]) -> [String] {
-        var keys: [String] = []
-        var spelled = ""
-        var letters = 0
-        func spell() {
-            if letters > 1 { keys.append(spelled) }
-            (spelled, letters) = ("", 0)
-        }
-        for token in tokens {
-            let parts = key(token).split(separator: " ").map(String.init)
-            keys += parts
-            if parts.count == 1, let part = parts.first, part.count == 1, part.first?.isLetter == true {
-                spelled += part
-                letters += 1
-            } else {
-                spell()
-            }
-        }
-        spell()
-        return keys
-    }
-
-    /// The words of `value`, folded as the document's are (`keys`).
-    static func words(in value: String) -> [String] {
-        keys(tokens(unbroken(value)))
-    }
-
-    /// The words of `text` in one width, as it cases them: every run of letters and digits.
-    static func words(of text: String) -> [Substring] {
-        text.folding(options: .widthInsensitive, locale: nil).split { !($0.isLetter || $0.isNumber) }
-    }
-
-    /// What a name of several words is abbreviated as, folded (`key`): the first letter of each of its words, a word
-    /// written in capitals whole ("HM Passport Office" is HMPO, "Социальный фонд России" СФР), and the same of its words
-    /// that begin with a capital alone ("Banco de Portugal" is BP). Empty for a name of one word, which is written whole
-    /// or not at all.
-    static func initials(of value: String) -> [String] {
-        let words = Self.words(of: value)
-        guard words.count > 1 else { return [] }
-        func initials(_ words: [Substring]) -> String {
-            key(words.map { $0.allSatisfy(\.isUppercase) ? String($0) : String($0.prefix(1)) }.joined())
-        }
-        return [initials(words), initials(words.filter { $0.first?.isUppercase == true })].filter { $0.count > 1 }
-    }
-
-    /// The dotless i of Turkish and Azerbaijani, which no case folding but theirs makes an i, as their I and İ are made
-    /// one with it (Unicode `CaseFolding.txt`, the `T` mappings): the fold is locale-independent, so `IŞ BANKASI` and
-    /// `İş Bankası` are one name.
-    static let dotlessI: Character = "\u{0131}"
-
-    /// `text` folded for grounding: lowercase whatever the locale, without accents, in one width (`ＮＴＴ` is `ntt`), the
-    /// Turkish i's one letter (`dotlessI`), and every run of anything but letters and digits one space, so a soft hyphen
-    /// or a hyphen at the end of a line separates no more than a space does.
-    static func key(_ text: String) -> String {
-        String(text.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: nil)
-            .map { $0 == dotlessI ? "i" : $0 })
-            .split { !($0.isLetter || $0.isNumber) }.joined(separator: " ")
-    }
-
-    /// Whether `value` is a name the document writes, or how the owner wants one it writes written.
-    func holds(_ value: String) -> Bool {
-        written(value) || preferred.contains { LabelSimilarity.sameWriting($0.to, value) && written($0.from.value) }
-    }
-
-    private func written(_ value: String) -> Bool {
-        let parts = Self.words(in: value)
-        let distinctive = parts.filter { $0.count >= letters }
-        let needed = distinctive.isEmpty ? parts : distinctive
-        if !needed.isEmpty, needed.allSatisfy({ writes($0) }) { return true }
-        let named = Self.words(of: value).count
-        return Self.initials(of: value).contains { initials in
-            abbreviations.contains(initials) && (initials.count >= letters || initials.count == named)
-        }
-    }
-
-    /// Whether the document writes `word`, folded, as a word or inside one.
-    private func writes(_ word: String) -> Bool {
-        words.contains(word) || words.contains { $0.contains(word) }
-    }
-
-    /// The words of `title` of `letters` letters or more, and of letters alone, that the document does not write, when
-    /// it writes fewer than `share` of them; nil when it writes enough, when the title has no such words, or when the
-    /// document has no words to tell by. Numbers and short words say nothing of the language a title is in.
-    func unwritten(_ title: String, share: Double) -> [String]? {
-        guard !words.isEmpty else { return nil }
-        let counted = Self.tokens(Self.unbroken(title)).filter { $0.count >= letters && $0.allSatisfy(\.isLetter) }
-        guard !counted.isEmpty else { return nil }
-        let missing = counted.filter { !writes(Self.key($0)) }
-        return Double(counted.count - missing.count) < share * Double(counted.count) ? missing : nil
     }
 }

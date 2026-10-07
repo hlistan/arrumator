@@ -6,7 +6,7 @@ import Testing
 
 /// Two processes on one index, as the app and `arrumatorcli` beside it (docs/architecture.md, "How the app learns of a
 /// change"): what one commits, the other's observations see as soon as it is committed, told by a notification of the
-/// index's own (`IndexChangeSignal`), and its own commits are no change from another.
+/// index's own (`ChangeSignal`), and its own commits are no change from another.
 @Suite struct IndexChangeTests {
     /// The index at `url`, as a process opens it, complete: as one rebuilt from its archive.
     private func open(_ url: URL) async throws -> AppDatabase {
@@ -79,7 +79,7 @@ import Testing
         let spellings = [index.path, index.resolvingSymlinksInPath().path, "/private" + index.resolvingSymlinksInPath().path,
                          link.appendingPathComponent("index.sqlite").path,
                          folder.deletingLastPathComponent().appendingPathComponent(folder.lastPathComponent.uppercased()).appendingPathComponent("index.sqlite").path]
-        let names = Set(spellings.map { IndexChangeSignal(index: URL(fileURLWithPath: $0)).name })
+        let names = Set(spellings.map { ChangeSignal(index: URL(fileURLWithPath: $0)).name })
         #expect(names.count == 1, "a process that opens the index through a link, /private or another case tells and hears the same: \(spellings)")
     }
 }

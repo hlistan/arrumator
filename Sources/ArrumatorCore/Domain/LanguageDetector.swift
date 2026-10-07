@@ -38,10 +38,27 @@ public struct LanguageDetector: Sendable {
     /// tells them apart, must be guessed at `languageShortTextMinConfidence`: a name or two words ("Seguro auto", "EDP
     /// Comercial") look like several languages, and a prompt told a wrong one would insist on it.
     public func name(of text: String) -> String? {
+        code(of: text).flatMap { Self.names.localizedString(forLanguageCode: $0) }
+    }
+
+    /// The ISO 639-1 code of the language `text` is written in, as sure of it as `name(of:)` is; nil otherwise.
+    public func code(of text: String) -> String? {
         let guess = detect(text)
         guard guess.primary.count == DocumentLabel.languageCodeLength else { return nil }
         if LabelUsage.searchWords(text).count < shortTextWords, guess.confidence < shortTextMinConfidence { return nil }
-        return Self.names.localizedString(forLanguageCode: guess.primary)
+        return guess.primary
+    }
+
+    /// Whether `text` is more likely written in `language` than in `other`, of those two alone, however short it is: what
+    /// tells a document's own words for a field ("Fatura n.º", "Vertragskonto") from English ones, where no language
+    /// would be named for so few words (`code(of:)`). Each is an ISO 639-1 code.
+    public func prefers(_ language: String, over other: String, in text: String) -> Bool {
+        let (one, two) = (NLLanguage(rawValue: language), NLLanguage(rawValue: other))
+        let recognizer = NLLanguageRecognizer()
+        recognizer.languageConstraints = [one, two]
+        recognizer.processString(String(text.prefix(sampleChars)))
+        let hypotheses = recognizer.languageHypotheses(withMaximum: 2)
+        return (hypotheses[one] ?? 0) > (hypotheses[two] ?? 0)
     }
 
     /// The locale languages are named in for the model, whatever the Mac's own.

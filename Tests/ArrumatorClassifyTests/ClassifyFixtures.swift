@@ -24,11 +24,10 @@ enum Fixtures {
     Total a pagar: 54,21 €   Data limite de pagamento: 25/07/2026
     """
 
-    /// A model answer reading the document as an EDP electricity bill to Maria Exemplo; the kind `omitting` names is left
-    /// out of the answer, `overrides` replaces the signals of a kind, and `title` is what it is.
-    /// What `text` grounds a reading in, as the bundled settings tell words apart.
-    static func grounds(_ text: String, preferred: [LabelPreference] = []) throws -> ReadingGrounds {
-        ReadingGrounds(text: text, letters: try PipelineConfig.bundledDefaults().labels.groundingLetters, preferred: preferred)
+    /// What `text`, in `language` when it is known, grounds a reading in, as the bundled settings tell words apart.
+    static func grounds(_ text: String, preferred: [LabelPreference] = [], language: String? = nil) throws -> ReadingGrounds {
+        ReadingGrounds(text: text, letters: try PipelineConfig.bundledDefaults().labels.groundingLetters, preferred: preferred,
+                       language: language)
     }
 
     /// What `content` grounds a reading in, as the bundled settings tell words apart.
@@ -38,11 +37,14 @@ enum Fixtures {
 
     /// A validator of `labels`, checking a reading against `grounds` as the bundled settings check its title.
     static func validator(_ labels: LabelsConfig, grounds: ReadingGrounds) throws -> AnswerValidator {
-        let analysis = try PipelineConfig.bundledDefaults().analysis
-        return AnswerValidator(labels: labels, titleGroundedShare: analysis.titleGroundedShare, partiesWithoutSender: analysis.partiesWithoutSender,
-                               grounds: grounds)
+        let config = try PipelineConfig.bundledDefaults()
+        return AnswerValidator(labels: labels, titleGroundedShare: config.analysis.titleGroundedShare,
+                               partiesWithoutSender: config.analysis.partiesWithoutSender, grounds: grounds,
+                               languages: LanguageDetector(config: config.extraction), titleMaxChars: config.naming.maxChars)
     }
 
+    /// A model answer reading the document as an EDP electricity bill to Maria Exemplo; the kind `omitting` names is left
+    /// out of the answer, `overrides` replaces the signals of a kind, and `title` is what it is.
     static func answer(omitting omitted: LabelKind? = nil, _ overrides: [LabelKind: [String]] = [:],
                        title: String = "Fatura eletricidade julho") throws -> String {
         var fields: [String: JSONValue] = [ClassificationSchema.titleKey: .string(title)]

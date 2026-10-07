@@ -151,6 +151,33 @@ import Testing
 
     // MARK: Waiting, failing, stopping
 
+    /// A question the queue takes while Ollama is away waits for it; none asked behind it is put to the model meanwhile,
+    /// only to wait too, and both are said to wait until the first is tried again; so is one asked once the first is
+    /// stopped, before its time (QA 2026-10-05, RA-1; the review of its fix, which found this queue's status untested).
+    @Test func whileOllamaIsAwayNoOtherQuestionIsAnsweredUntilTheOneThatFoundItIsTriedAgain() async throws {
+        let w = try await world()
+        defer { w.h.env.cleanup() }
+        let answerer = StubAnswerer(error: OllamaError.unreachable("down"))
+        let (queue, talk) = w.h.conversations(answerer, interpreter: StubInterpreter(plans: [:]))
+        let first = try await talk.ask(w.task.id, question: Self.question)
+        await queue.drain()
+        let second = try await talk.ask(w.task.id, question: "And the other one?")
+        await queue.drain()
+        let retry = w.h.env.time.now().addingTimeInterval(w.h.env.config.ingest.retryDelays.last)
+        #expect(await answerer.calls.questions == [Self.question], "the question asked after Ollama was found away is not put to the model")
+        let status = await queue.status
+        #expect(status.answering == nil && status.queued == 2 && status.waitingForOllama && status.retryAt == retry,
+                "both are said to wait for Ollama, until the first is tried again: \(status)")
+        for turn in [first.id, second.id] { try await talk.stop(turn) }
+        await queue.drain()
+        #expect(await queue.status == .idle, "with nothing left to answer the queue waits for nothing, Ollama included")
+        _ = try await talk.ask(w.task.id, question: "And a third?")
+        await queue.drain()
+        let (third, asked) = (await queue.status, await answerer.calls.questions.count)
+        #expect(third.queued == 1 && third.waitingForOllama && third.retryAt == retry && asked == 1,
+                "a question asked before the first is tried again waits for Ollama too, unasked, until then: \(third)")
+    }
+
     @Test func aQuestionWaitsWhileOllamaIsAwayAndIsAnsweredOnceItIsBack() async throws {
         let w = try await world()
         defer { w.h.env.cleanup() }

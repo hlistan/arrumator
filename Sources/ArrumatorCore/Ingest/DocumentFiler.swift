@@ -85,6 +85,7 @@ public struct DocumentFiler: Sendable {
         let now = time.now()
         let updated: DocumentRecord = try await database.writer.write { db in
             guard var d = try DocumentRecord.fetchOne(db, key: docID) else { throw IngestError.documentNotFound(docID) }
+            let read = d
             d.path = finalPath
             d.status = status
             d.inode = FileFingerprint.inode(of: URL(fileURLWithPath: finalPath))
@@ -92,7 +93,16 @@ public struct DocumentFiler: Sendable {
             d.filedAt = now
             d.updatedAt = now
             try d.update(db)
-            try keeping?.recording(db, d)
+            if try keeping?.recording(db, d) == .movedOnly {
+                // The file is where it was moved; the rest is as the document was set aside meanwhile.
+                var moved = read
+                (moved.path, moved.inode, moved.updatedAt) = (finalPath, d.inode, now)
+                try moved.update(db)
+                try HistoryStore.insert(db, .filed, at: now, actor: actor, doc: docID, trace: trace.traceID,
+                                        summary: Self.summary(named: document.filename, filedAs: filedName, problems: []) + Self.setAside,
+                                        payload: FiledPayload(from: document.path, to: finalPath, problems: [], setAside: true))
+                return moved
+            }
             let kind = event ?? (status == .needsReview ? .needsReview : .filed)
             try HistoryStore.insert(db, kind, at: now, actor: actor, doc: docID, trace: trace.traceID,
                                     summary: Self.summary(named: document.filename, filedAs: filedName, problems: analysis.problems),
@@ -105,6 +115,9 @@ public struct DocumentFiler: Sendable {
 }
 
 extension DocumentFiler {
+    /// What History adds to a move recorded alone (`FilingKept.movedOnly`).
+    public static let setAside = "; set aside as it was renamed, it keeps the rest as it was"
+
     /// What History says of a filing: the name the file had when it was filed, as a document read again in the archive
     /// has its own, never the one it arrived under, and the name it was given, when that is another; that it kept its
     /// name, when it did; and why it waits for the user, when it does. Where it went is the event's payload
@@ -122,14 +135,24 @@ public struct FilingKeeper: Sendable {
     /// destination) is there to find it by should the move not be recorded, as after a crash.
     public var planning: @Sendable (String) async throws -> Void
     /// Runs in the transaction that records the filing, with the document as filed, before the filing's event, so what
-    /// the caller keeps of it (a job's destination, what a document read again was read as) commits with it or not at all.
-    public var recording: @Sendable (Database, DocumentRecord) throws -> Void
+    /// the caller keeps of it (a job's destination, what a document read again was read as) commits with it or not at all;
+    /// and says what of the filing stands (`FilingKept`).
+    public var recording: @Sendable (Database, DocumentRecord) throws -> FilingKept
 
     public init(planning: @escaping @Sendable (String) async throws -> Void,
-                recording: @escaping @Sendable (Database, DocumentRecord) throws -> Void) {
+                recording: @escaping @Sendable (Database, DocumentRecord) throws -> FilingKept) {
         self.planning = planning
         self.recording = recording
     }
+}
+
+/// What of a filing stands, as its caller decides in the transaction that records it (`FilingKeeper.recording`).
+public enum FilingKept: Sendable, Equatable {
+    /// The filing, whole.
+    case filed
+    /// Where the file was moved, alone: the document was set aside meanwhile, as left for later while the move that
+    /// filed it was made, and keeps the rest as the user left it.
+    case movedOnly
 }
 
 public struct FiledPayload: Sendable, Codable, Hashable {
@@ -137,4 +160,23 @@ public struct FiledPayload: Sendable, Codable, Hashable {
     public var to: String
     /// Why the document waits for the user, when it does.
     public var problems: [String]
+    /// Whether only the file's new place is recorded, the document set aside as its file was renamed, as when it was left
+    /// for later in that instant (`FilingKept.movedOnly`): no filing to announce. Nil for a filing, as before it was
+    /// written.
+    public var setAside: Bool?
+
+    public init(from: String, to: String, problems: [String], setAside: Bool? = nil) {
+        self.from = from
+        self.to = to
+        self.problems = problems
+        self.setAside = setAside
+    }
+}
+
+extension EventRecord {
+    /// Whether the event says a document was filed, to be announced as filed: a filing, not the new place of a file whose
+    /// document was set aside as it was renamed (`FiledPayload.setAside`).
+    public var announcesFiling: Bool {
+        kind == .filed && JSON.decode(FiledPayload.self, from: payloadJson)?.setAside != true
+    }
 }

@@ -60,15 +60,25 @@ import Testing
     }
 
     /// Ways a record file can be there and still not be read.
-    enum Unreadable: String, CaseIterable, Sendable {
+    enum Unreadable: Sendable {
         /// Saved again as UTF-16, as some editors do.
         case utf16
         /// Its permissions let nobody read it.
         case forbidden
     }
 
-    @Test(arguments: Unreadable.allCases)
-    func aRecordFileThatIsThereButCannotBeReadIsNeverTakenForAbsent(_ way: Unreadable) async throws {
+    @Test func aRecordFileSavedInAnotherEncodingIsNeverTakenForAbsent() async throws {
+        try await Self.neverTakenForAbsent(.utf16)
+    }
+
+    @Test(.fileModesKeepOut)
+    func aRecordFileNobodyMayReadIsNeverTakenForAbsent() async throws {
+        try await Self.neverTakenForAbsent(.forbidden)
+    }
+
+    /// A record file there, which cannot be read in `way`, is reported as such, and never written over as though it were
+    /// not there.
+    static func neverTakenForAbsent(_ way: Unreadable) async throws {
         let w = try await RecordsWorld.make()
         let url = w.topListing
         defer {
@@ -139,7 +149,7 @@ import Testing
         #expect(rules.map(\.summary) == ["sender “EDP Comercial” → “EDP”"], "it is read into the index instead, and kept: \(rules.map(\.summary))")
     }
 
-    @Test func aFolderOfRecordFilesThatCannotBeListedIsNeverTakenForAnEmptyOne() async throws {
+    @Test(.folderModesKeepOut) func aFolderOfRecordFilesThatCannotBeListedIsNeverTakenForAnEmptyOne() async throws {
         let w = try await RecordsWorld.make()
         let folder = w.h.env.layout.history
         defer {

@@ -74,8 +74,12 @@ struct Eval: AsyncParsableCommand {
                 if pass > 1 { data.append(contentsOf: [UInt8](repeating: 0x0A, count: pass - 1)) }
                 try data.write(to: target)
                 let started = Date()
-                await runtime.coordinator.enqueue(target)
-                await runtime.coordinator.drain()
+                // Read once Ollama is back, should it be away a while, rather than scored unread (`ollamaRetryAt`).
+                if let job = await runtime.coordinator.enqueue(target) {
+                    await runtime.coordinator.drain(waitingOutOllamaFor: job)
+                } else {
+                    await runtime.coordinator.drain()
+                }
                 try Task.checkCancellation()
                 let seconds = Date().timeIntervalSince(started)
                 let row = fixture.expected.status == .duplicate

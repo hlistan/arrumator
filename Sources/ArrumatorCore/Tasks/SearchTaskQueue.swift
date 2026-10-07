@@ -17,7 +17,8 @@ public struct SearchTaskQueueStatus: Sendable, Hashable {
     /// Ollama could not be reached for the last reading: the tasks waiting are tried again after the last of
     /// `ingest.retryDelays`. Until a reading reaches it, or nothing is left to read.
     public var waitingForOllama: Bool
-    /// When the tasks waiting for Ollama are tried again; nil while none waits for it.
+    /// When the tasks waiting for Ollama are tried again; nil while none waits for it, and while the one that found it away
+    /// is tried again, read now.
     public var retryAt: Date?
 
     public static let idle = SearchTaskQueueStatus(reading: nil, queued: 0, waitingForOllama: false)
@@ -75,6 +76,7 @@ public actor SearchTaskQueue: ModelQueue {
     var worker: Task<Void, Never>?
     let doorbell = Doorbell()
     var inHand: InHand?
+    var ollamaRetryAt: Date?
     nonisolated let name = "search tasks"
     private var statusContinuations: [UUID: AsyncStream<SearchTaskQueueStatus>.Continuation] = [:]
     public private(set) var status = SearchTaskQueueStatus.idle {
@@ -121,10 +123,8 @@ public actor SearchTaskQueue: ModelQueue {
             next.queued = queued
             countPublished = asked
         }
-        if next.reading == nil, next.queued == 0 {
-            next.waitingForOllama = false
-            next.retryAt = nil
-        }
+        (next.waitingForOllama, next.retryAt) = ollamaWait(inHand: next.reading != nil, queued: next.queued,
+                                                          saying: (next.waitingForOllama, next.retryAt))
         status = next
     }
 
@@ -235,14 +235,12 @@ public actor SearchTaskQueue: ModelQueue {
             // Stopping interrupts the task; that is no failure, and the next start takes it up again.
             outcome = Self.interrupted
             reached = nil
-        case let .away(error):
+        case let .away(error, until):
             outcome = TraceRecorder.waitingOutcome
             reached = false
-            let until = retryAt
             do { try await store.postpone(id, by: tag, until: until, trace: trace.traceID) } catch {
                 Log.error(.search, "Could not put a search task back in the queue", ["task": String(id), "error": error.localizedDescription])
             }
-            await publish { $0.retryAt = until }
             Log.warning(.search, "Ollama unavailable; the search task waits", ["task": String(id), "error": error.localizedDescription])
         case let .failed(error):
             outcome = SearchTaskState.failed.rawValue

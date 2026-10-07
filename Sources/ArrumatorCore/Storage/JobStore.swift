@@ -191,6 +191,27 @@ public struct JobStore: Sendable {
             .filter(activeStates.contains(Column("state"))).fetchOne(db)
     }
 
+    /// Whether document `docID` is still being read in, as its file has just come: an active job takes it in (`ingest`),
+    /// or one put into the archive (`adopt`), in a transaction of the caller's.
+    static func isReadIn(_ db: Database, docID: Int64) throws -> Bool {
+        try readingIn(docID).fetchCount(db) > 0
+    }
+
+    /// Whether document `docID`'s reading in is under way at `path`, so a request for that path is taken by its job
+    /// (`enqueue`), as for a file put into the archive, filed where it is, in a transaction of the caller's.
+    static func isReadIn(_ db: Database, docID: Int64, at path: String) throws -> Bool {
+        try readingIn(docID).filter(Column("source_path") == path).fetchCount(db) > 0
+    }
+
+    /// The active jobs reading document `docID` in (`isReadIn`).
+    private static func readingIn(_ docID: Int64) -> QueryInterfaceRequest<JobRecord> {
+        JobRecord.filter(Column("doc_id") == docID).filter(readingInKinds.map(\.rawValue).contains(Column("kind")))
+            .filter(activeStates.contains(Column("state")))
+    }
+
+    /// The jobs that read a document in, as its file came: into Incoming (`ingest`), or put into the archive (`adopt`).
+    private static let readingInKinds: [JobKind] = [.ingest, .adopt]
+
     /// Cancels the active job reading document `docID` again (`reanalyse`), in a transaction of the caller's that sets
     /// the document aside, as leaving it for later or undoing it: its worker loses its claim, and its reading changes
     /// nothing of the document (`IngestError.claimLost`).
@@ -211,24 +232,49 @@ public struct JobStore: Sendable {
     /// stopped part way, as when the app quit or crashed, keeps its stage and its place, so it carries on first at the
     /// next start, before anything queued after it. A job that gives way (`JobRecord.givesWay`: reading documents again
     /// after a rebuild, or the whole archive at once) waits until no other is due, so neither ever holds up filing.
-    private static func due(at now: Date, givingWay: Bool) -> QueryInterfaceRequest<JobRecord> {
-        let due = JobRecord.filter(activeStates.contains(Column("state")))
+    /// `beforeTheModel` keeps only the jobs whose next stage needs no model (`beforeTheModel`).
+    private static func due(at now: Date, givingWay: Bool, beforeTheModel: Bool = false) -> QueryInterfaceRequest<JobRecord> {
+        var due = JobRecord.filter(activeStates.contains(Column("state"))).filter(!waitsForItsReadingIn)
             .filter(Column("next_run_at") == nil || Column("next_run_at") <= now.unixSeconds)
             .order(Column("gives_way"), Column("id"))
+        if beforeTheModel {
+            due = due.filter(Self.beforeTheModel.kinds.map(\.rawValue).contains(Column("kind")))
+                .filter(Self.beforeTheModel.states.map(\.rawValue).contains(Column("state")))
+        }
         return givingWay ? due : due.filter(Column("gives_way") == false)
     }
+
+    /// A job reading a document again whose reading in has not ended, which waits for it, neither taken nor waited for
+    /// until then: taken before, it would be undone by what that reading does after its filing, its text and meaning
+    /// indexed, as when it waits to be tried again after a failure that came after its filing. Reading it for search
+    /// (`reindex`) indexes what that reading read, and need not wait.
+    private static var waitsForItsReadingIn: SQLExpression {
+        let (states, kinds) = (activeStates.map { "'\($0)'" }.joined(separator: ", "), readingInKinds.map { "'\($0.rawValue)'" }.joined(separator: ", "))
+        return SQL(sql: """
+            kind = '\(JobKind.reanalyse.rawValue)' AND EXISTS (SELECT 1 FROM jobs AS readingIn
+              WHERE readingIn.doc_id = jobs.doc_id AND readingIn.kind IN (\(kinds)) AND readingIn.state IN (\(states)))
+            """).sqlExpression
+    }
+
+    /// The jobs whose next stage needs no model, taken while Ollama is away (`IngestCoordinator.ollamaRetryAt`): a file
+    /// that came, in Incoming or put into the archive, and is not hashed yet, which may be a copy to hand over to its
+    /// original or a file gone to record as such; a document read again or indexed again needs the model next.
+    static let beforeTheModel: (kinds: [JobKind], states: [JobState]) = ([.ingest, .adopt], [.pending, .hashing])
 
     /// Takes the job to work on next for a worker of `claims`' process: of the jobs due (`due`), the first that no
     /// worker holds (`JobClaims.holds`), marked with a claim of its own in the write that finds it, so that no other
     /// worker, of this process or of another, as `arrumatorcli` beside the app, takes it until it ends or is let go
     /// (`release`). A job a process that has ended held is taken again. `excluding` are jobs this process may not start
-    /// yet (`IngestCoordinator`); without `givingWay`, none that gives way is taken (`IngestCoordinator.Draining`).
-    public func nextDue(claiming claims: JobClaims, excluding: Set<Int64> = [], givingWay: Bool = true) async throws -> JobRecord? {
+    /// yet (`IngestCoordinator`); without `givingWay`, none that gives way is taken (`IngestCoordinator.Draining`); with
+    /// `beforeTheModel`, only one whose next stage needs no model (`beforeTheModel`).
+    public func nextDue(claiming claims: JobClaims, excluding: Set<Int64> = [], givingWay: Bool = true,
+                        beforeTheModel: Bool = false) async throws -> JobRecord? {
         let now = time.now()
         let claim = claims.make()
         do {
             let taken: JobRecord? = try await database.writer.write { db in
-                let candidates = try Row.fetchAll(db, Self.due(at: now, givingWay: givingWay).select(Column("id"), Column("claim"), Column("claimed_by")))
+                let candidates = try Row.fetchAll(db, Self.due(at: now, givingWay: givingWay, beforeTheModel: beforeTheModel)
+                    .select(Column("id"), Column("claim"), Column("claimed_by")))
                 let free = candidates.first { row in
                     let id: Int64 = row["id"]
                     return !excluding.contains(id) && !claims.holds(row["claim"], by: row["claimed_by"])
@@ -259,14 +305,6 @@ public struct JobStore: Sendable {
         }
     }
 
-    /// Whether the claim `job` was taken with still holds it; a job taken with none is held by whoever has it. A queue
-    /// that cannot be read says it does not, so nothing is done on a claim that cannot be shown.
-    public func holds(_ job: JobRecord) async -> Bool {
-        guard let id = job.id, let claim = job.claim else { return true }
-        let stored = try? await database.reader.read { db in try String.fetchOne(db, sql: "SELECT claim FROM jobs WHERE id = ?", arguments: [id]) }
-        return stored == claim
-    }
-
     /// When the next active job that no worker holds is due, whatever stage it waits in: what the worker waits until
     /// when none is due now. A job a worker holds (`JobClaims.holds`, as `nextDue` asks) is not waited for; one whose
     /// claim holds no more, as that of a process that has ended, is, as `nextDue` takes it. `excluding` are jobs this
@@ -274,6 +312,7 @@ public struct JobStore: Sendable {
     public func earliestDue(claiming claims: JobClaims, excluding: Set<Int64> = []) async throws -> Date? {
         try await database.reader.read { db in
             let active = JobRecord.filter(Self.activeStates.contains(Column("state"))).filter(!excluding.contains(Column("id")))
+                .filter(!Self.waitsForItsReadingIn)
             let free = try active.filter(Column("claim") == nil)
                 .select(min(Column("next_run_at")), as: Double.self).fetchOne(db).map(Date.init(unixSeconds:))
             // Claimed jobs are few: one per worker in hand, and those a process that has ended left.
@@ -372,10 +411,29 @@ public struct JobStore: Sendable {
         let added = Self.lacking(stored.flatMap { Self.tags(ofPayload: $0["payload_json"], in: db) } ?? [], in: had)
         try saved.update(db)
         if !added.isEmpty { try Self.setTags(had + added, job: id, in: db) }
+        // A filing recorded (`targetPath`, kept in that filing's transaction) is never lost by a save that does not carry
+        // it, as a failure's after it, so the job finishes it and never files the document again.
+        if let storedPayload: String = stored?["payload_json"] {
+            try db.execute(sql: """
+                UPDATE jobs SET payload_json = json_set(payload_json, '$.targetPath', json_extract(?, '$.targetPath'))
+                WHERE id = ? AND json_valid(?) AND json_extract(?, '$.targetPath') IS NOT NULL
+                """, arguments: [storedPayload, id, storedPayload, storedPayload])
+        }
         if !saved.state.isActive { try db.execute(sql: "UPDATE jobs SET payload_json = \(Self.withoutText) WHERE id = ?", arguments: [id]) }
         guard !added.isEmpty || !saved.state.isActive else { return Saved(job: saved, tagsAdded: []) }
         saved = try JobRecord.fetchOne(db, key: id) ?? saved
         return Saved(job: saved, tagsAdded: added)
+    }
+
+    /// Whether job `id`, as it is stored, records its filing (`JobPayload.targetPath`), read by the database, as the
+    /// payload can hold a document's whole text: for a job its worker holds, whose payload its worker read when it took
+    /// it (`JobRecord.payload`), so is JSON (one that is not throws, as one an ended job may keep, `withoutText`); false
+    /// for a job no longer stored.
+    func recordsFiling(_ id: Int64) async throws -> Bool {
+        try await database.reader.read { db in
+            try Bool.fetchOne(db, sql: "SELECT json_extract(payload_json, '$.targetPath') IS NOT NULL FROM jobs WHERE id = ?",
+                              arguments: [id]) ?? false
+        }
     }
 
     /// A job's payload without its document's text and embedding, as SQL over `payload_json`: what an ended job keeps.

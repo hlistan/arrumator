@@ -137,7 +137,7 @@ import Testing
 
     static let meanwhile = "Paused meanwhile"
 
-    @Test func aFolderTheWatcherIgnoresIsNotLookedIntoByARebuild() async throws {
+    @Test(.folderModesKeepOut) func aFolderTheWatcherIgnoresIsNotLookedIntoByARebuild() async throws {
         let w = try await RecordsWorld.make()
         let ignored = w.h.env.archive.appendingPathComponent("~$Locked", isDirectory: true).standardizedFileURL
         defer {
@@ -154,7 +154,7 @@ import Testing
         #expect(await w.records.unreadableFiles().isEmpty, "and it is not reported as a record file that cannot be read")
     }
 
-    @Test func aFolderOfTheUsersThatCannotBeListedStopsTheRebuildNamingIt() async throws {
+    @Test(.folderModesKeepOut) func aFolderOfTheUsersThatCannotBeListedStopsTheRebuildNamingIt() async throws {
         let w = try await RecordsWorld.make()
         let folder = w.h.env.archive.appendingPathComponent("Kept", isDirectory: true).standardizedFileURL
         defer {

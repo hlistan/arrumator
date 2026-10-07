@@ -26,10 +26,15 @@ import Testing
         let first = try await command.searchTasks.create(prompt: "phone bills").id
         #expect(await Patience.until { await taken(first, by: app) }, "the app's queue takes up a task the command queued")
         // Taken up, however it was: by the app's first maintenance round, or by what the command committed. The next is
-        // queued after that round, which comes again only after `maintenance.interval`.
-        let second = try await command.searchTasks.create(prompt: "water bills").id
-        #expect(await Patience.until { await taken(second, by: app) },
-                "and the next one at once, not at its next maintenance round an hour later")
+        // queued after that round, which comes again only after `maintenance.interval`. No Ollama answers here, so the
+        // first waits for it, and no other is read until it is tried again (`ModelQueue.ollamaRetryAt`): the app knows
+        // of the next at once, and says it waits for Ollama too.
+        _ = try await command.searchTasks.create(prompt: "water bills").id
+        #expect(await Patience.until {
+                    let status = await app.taskQueue.status
+                    return status.queued == 2 && status.waitingForOllama
+                },
+                "and of the next one at once, not at its next maintenance round an hour later")
         let asked = try await app.services.history.events(limit: 1, kinds: [.taskCreated]).first?.id
         #expect(await Patience.until { await activity.all.last == asked },
                 "the app's pages, which follow History, see what the command recorded, as a forgotten rule or labels it changed")

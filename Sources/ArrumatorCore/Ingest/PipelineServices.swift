@@ -151,31 +151,96 @@ public struct PipelineServices: Sendable {
         return Reading(outcome: outcome, tags: kept, changes: consolidation.changes)
     }
 
-    /// Queues `document` to be read again from the start, as a file that arrives is read: its file hashed and its text
-    /// read again, then the model reads it, and it is filed under the name it gives: where it is in the archive, or, for
-    /// one outside it (back in Incoming), at the top of the archive. One in the archive (`reanalyse`) is found as it was
-    /// until it is filed, when what it reads takes the place of everything it had at once (`IndexStore.replaceReading`).
+    /// Queues document `docID` to be read again from the start, as the user asks it (**Read Again**), as a file that
+    /// arrives is read: its file hashed and its text read again, then the model reads it, and it is filed under the name
+    /// it gives: where it is in the archive, or, for one outside it (back in Incoming), at the top of the archive. One in
+    /// the archive (`reanalyse`) is found as it was until it is filed, when what it reads takes the place of everything it
+    /// had at once (`IndexStore.replaceReading`).
     /// It keeps its tags, which its row in the queue shows, and one in a folder in Incoming is given that folder's too.
     /// One outside the archive, as one left in Incoming, is read as an arrival, so an exact copy is handed over to its
     /// original (`IngestCoordinator`). One with no file to read where it is recorded, as one missing, or a copy an earlier
-    /// version filed, is refused before anything changes (`IngestError.cannotReadAgain`). The job, or the one already
-    /// queued for its file, which reads it as well.
+    /// version filed, is refused before anything changes (`IngestError.cannotReadAgain`), and so is one filed by its
+    /// reading in where it is, until that reading ends (`IngestError.beingReadIn`). All of it is decided on the
+    /// document as the write that queues it finds it, and recorded in History in that write, once: a request that queues
+    /// nothing new, as one asked again while the first waits, records nothing. The job, or the one already queued for its
+    /// file, which reads it as well.
     @discardableResult
-    public func queueReadingAgain(_ document: DocumentRecord, settings: AppSettings) async throws -> Int64? {
-        guard let docID = document.id else { throw IngestError.documentNotPersisted }
-        var doc = document
-        let inArchive = isInArchive(doc)
-        let readable: Set<DocumentStatus> = inArchive ? [.filed, .needsReview, .failed, .held, .processing]
-            : [.undone, .held, .failed, .arrived, .processing]
-        guard readable.contains(doc.status), FileManager.default.fileExists(atPath: doc.path) else {
-            throw IngestError.cannotReadAgain(docID)
+    public func queueReadingAgain(_ docID: Int64, settings: AppSettings) async throws -> Int64 {
+        let now = time.now()
+        // Its status, its job and its event written together, so a file arriving at its path meanwhile, or the document
+        // filed or ended, finds all of them, or none.
+        return try await database.writer.write { [self] db in
+            guard let read = try DocumentRecord.fetchOne(db, key: docID) else { throw IngestError.documentNotFound(docID) }
+            let inArchive = isInArchive(read)
+            let readable: Set<DocumentStatus> = inArchive ? [.filed, .needsReview, .failed, .held, .processing]
+                : [.undone, .held, .failed, .arrived, .processing]
+            guard readable.contains(read.status), FileManager.default.fileExists(atPath: read.path) else {
+                throw IngestError.cannotReadAgain(docID)
+            }
+            // Filed by its reading in, whose job has not ended and is at its path, as a file put into the archive filed
+            // where it is: that job would take the request and read nothing more, so it waits for it to end. One not
+            // filed yet is read by that reading, which the request is found to be; one filed from Incoming, its reading
+            // in's job left at the path it came at, is queued beside it.
+            if read.status != .processing, try JobStore.isReadIn(db, docID: docID, at: read.path) {
+                throw IngestError.beingReadIn(docID, name: read.filename)
+            }
+            var doc = read
+            if !inArchive || [.undone, .held].contains(read.status) {
+                doc.status = .processing
+                doc.updatedAt = now
+                try doc.updateChanges(db, from: read)
+            }
+            let folderTags = inArchive ? [] : tags(for: read.url, given: [], settings: settings)
+            let queued = try JobStore.enqueue(db, path: read.path, kind: inArchive ? .reanalyse : .ingest, docID: docID,
+                                              payload: Self.readingAgain(tags: Self.keptTags(read.labels) + folderTags, asked: inArchive ? doc : nil),
+                                              givesWay: false, at: now)
+            if queued.isNew { try HistoryStore.insert(db, .retry, at: now, actor: .user, doc: docID, summary: "Read again: \(read.filename)") }
+            return queued.id
         }
-        if !inArchive || [.undone, .held].contains(doc.status) {
-            doc = try await documents.update(docID) { $0.status = .processing }
+    }
+
+    /// Whether document `docID` is still the original an exact copy is handed over to (`takesCopy`).
+    public func takesCopy(of docID: Int64) async throws -> Bool {
+        try await database.reader.read { db in try DocumentRecord.fetchOne(db, key: docID) }.map(takesCopy) ?? false
+    }
+
+    /// Whether `document` is the original an exact copy is handed over to: in the archive as itself, read again or not,
+    /// its file there, as `queueReadingAgain` reads one in the archive; not one undone, or gone from the archive.
+    func takesCopy(_ document: DocumentRecord) -> Bool {
+        DocumentStatus.takesCopies.contains(document.status) && isInArchive(document)
+            && FileManager.default.fileExists(atPath: document.path)
+    }
+
+    /// What becomes of the original an exact copy is handed over to (`queueReadingAgain(forCopyOf:)`).
+    public enum CopysOriginal: Sendable, Equatable {
+        /// It is read again in the copy's place.
+        case readAgain
+        /// Its reading in, at its file, as a file put into the archive, reads it, or has just read it.
+        case beingReadIn
+        /// It is no longer in the archive as itself, undone or gone, and is not read again.
+        case left
+    }
+
+    /// Queues document `docID`, the original an exact copy came of, to be read again in its place, as `queueReadingAgain`
+    /// queues a document in the archive, in the write that finds it there still as itself, its file in the archive: one
+    /// undone, or gone from the archive, since the copy was handed over to it is not read again for it
+    /// (`IngestCoordinator.handOver`), and one whose reading in is at its file, which a request for that file would only
+    /// join, is left to it. What became of it.
+    public func queueReadingAgain(forCopyOf docID: Int64) async throws -> CopysOriginal {
+        let now = time.now()
+        return try await database.writer.write { [self] db in
+            guard let read = try DocumentRecord.fetchOne(db, key: docID), takesCopy(read) else { return .left }
+            if try JobStore.isReadIn(db, docID: docID, at: read.path) { return .beingReadIn }
+            var doc = read
+            if doc.status == .held {
+                doc.status = .processing
+                doc.updatedAt = now
+                try doc.updateChanges(db, from: read)
+            }
+            _ = try JobStore.enqueue(db, path: doc.path, kind: .reanalyse, docID: docID,
+                                     payload: Self.readingAgain(tags: Self.keptTags(doc.labels), asked: doc), givesWay: false, at: now)
+            return .readAgain
         }
-        let tags = Self.keptTags(doc.labels) + (inArchive ? [] : self.tags(for: doc.url, given: [], settings: settings))
-        return try await jobs.enqueue(path: doc.path, kind: inArchive ? .reanalyse : .ingest, docID: docID,
-                                      payload: Self.readingAgain(tags: tags, asked: inArchive ? doc : nil)).id
     }
 
     /// Queues every document of the archive that waits for nothing the user decided to be read again from the start, as

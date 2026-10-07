@@ -3,7 +3,7 @@ import Foundation
 import PDFKit
 import UniformTypeIdentifiers
 
-/// PDFs: per-page text layer, scanned-page detection, OCR of image pages (first `ocrHeadPages` and the last page,
+/// PDFs: per-page text layer, its columns kept apart (`PDFPageText`), scanned-page detection, OCR of image pages (first `ocrHeadPages` and the last page,
 /// or all when the document has at most `ocrAllIfAtMost` pages), info-dictionary metadata. An image page's text is what
 /// OCR read of it, unless OCR did not read it, failed or read nothing: then its text layer is kept. The pages left out,
 /// of the text layer or of OCR, are named in a warning. Encrypted documents are opened with an empty password when
@@ -12,7 +12,7 @@ struct PDFExtractor: FileExtractor {
     let ocr: OCRService
 
     let name = "pdf"
-    let version = 3
+    let version = 4
     var supportedTypes: [UTType] { [.pdf] }
 
     func extract(_ job: ExtractionJob) async throws -> ExtractionDraft {
@@ -211,7 +211,7 @@ struct PDFExtractor: FileExtractor {
             // What PDFKit autoreleases while a page's text is read goes with the page, however many pages are read.
             let scan = autoreleasepool { () -> PageScan? in
                 guard let page = document.page(at: index) else { return nil }
-                let text = page.string ?? ""
+                let text = PDFPageText.columned(page, gap: config.columnGap)
                 let quality = PageTextQuality(text)
                 let reason = quality.imagePageReason(config) {
                     page.pageRef.map(PDFImageCoverage.largestImageShare(of:)) ?? 0
