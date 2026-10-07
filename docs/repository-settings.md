@@ -27,13 +27,15 @@ Public repositories get secret scanning and push protection without charge.
 ### Turning them on from a terminal
 
 With the [GitHub CLI](https://cli.github.com), signed in as an admin of the repository, the same settings are
-two calls to the [REST API](https://docs.github.com/en/rest/repos/repos):
+two calls to the [REST API](https://docs.github.com/en/rest/repos/repos). Private vulnerability reporting:
 
 ```bash
-# Private vulnerability reporting
 gh api --method PUT repos/hlistan/arrumator/private-vulnerability-reporting
+```
 
-# Secret scanning and push protection
+Secret scanning and push protection:
+
+```bash
 gh api --method PATCH repos/hlistan/arrumator --input - <<'JSON'
 {"security_and_analysis": {"secret_scanning": {"status": "enabled"},
                            "secret_scanning_push_protection": {"status": "enabled"}}}
@@ -43,11 +45,12 @@ JSON
 ### Checking them
 
 ```bash
-gh api repos/hlistan/arrumator/private-vulnerability-reporting   # {"enabled":true}
+gh api repos/hlistan/arrumator/private-vulnerability-reporting
 gh api repos/hlistan/arrumator --jq '.security_and_analysis | {secret_scanning, secret_scanning_push_protection}'
 ```
 
-Both statuses read `enabled` when the repository is set up.
+When the repository is set up, the first prints `{"enabled":true}`, and both statuses the second prints read
+`enabled`.
 
 ## Pull requests and `main`
 
@@ -127,18 +130,11 @@ the environment admits `main` alone:
 | Variable `RELEASE_SIGNING` | `developer-id`, or `ad-hoc` while there is no Developer ID. Unset, every release stops. |
 | Secrets | The six that [Signing](releasing.md#signing) lists, when `RELEASE_SIGNING` is `developer-id`. |
 
-### Setting it from a terminal
+### Setting it
 
-```bash
-gh api --method PUT repos/hlistan/arrumator/environments/release --input - <<'JSON'
-{"deployment_branch_policy": {"protected_branches": false, "custom_branch_policies": true}}
-JSON
-gh api --method POST repos/hlistan/arrumator/environments/release/deployment-branch-policies -f name=main -f type=branch
-gh variable set RELEASE_SIGNING --env release --body ad-hoc --repo hlistan/arrumator
-```
-
-The secrets are set in the browser, under Settings › Environments › `release`, or with
-`gh secret set <name> --env release --repo hlistan/arrumator`, which reads the value from the terminal.
+[Set up Developer ID signing](releasing.md#set-up-developer-id-signing), parts E and F, sets it step by step: the
+branch rule first, then the secrets, then `RELEASE_SIGNING`. Without a Developer ID, set the branch rule as its steps E1
+and E2 say, and `RELEASE_SIGNING` to `ad-hoc`.
 
 ### Checking it
 

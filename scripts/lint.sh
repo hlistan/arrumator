@@ -1,6 +1,7 @@
 #!/bin/sh
-# Static checks, run by scripts/verify.sh and by CI: the guideline gates from AGENTS.md, sensitive information, and
-# the linters for Swift, shell, GitHub workflows and Markdown. It builds nothing but reads the package manifest.
+# Static checks, run by scripts/verify.sh and by CI: the guideline gates from AGENTS.md, sensitive information, the
+# linters for Swift, shell, GitHub workflows and Markdown, the commands the documents give and the variables of the
+# shell functions. It builds nothing but reads the package manifest.
 #
 # Usage: scripts/lint.sh
 # The tools are pinned in scripts/tools.sh, which installs them into .tools/bin, and they run from there alone.
@@ -11,6 +12,7 @@ set -u
 cd "$(dirname "$0")/.." || exit 1
 PATH=$PWD/.tools/bin:$PATH
 
+# Shared with its functions: failed
 failed=""
 
 # scan <allowed-regex> <pattern> <paths…>: prints each line of a Swift or shell source under <paths> that <pattern>
@@ -85,12 +87,24 @@ check() {
 # The documentation Git tracks or would track. Prompt templates are model input, not documentation: their wording is
 # measured by `arrumatorcli eval`, not by a style checker. The code of conduct is the Contributor Covenant's text as
 # published, so it keeps that text's layout.
-markdown_files() {
-  git ls-files -z --cached --others --exclude-standard -- '*.md' ':!:Sources/*/Prompts/*' ':!:CODE_OF_CONDUCT.md'
+# documents <command…>: runs the command with those documents as its arguments. It fails when Git cannot list them or
+# lists none, so a check of the documents never passes having read nothing.
+documents() {
+  documents_list=$(mktemp -t arrumator-documents) || return 2
+  if ! git ls-files -z --cached --others --exclude-standard -- '*.md' ':!:Sources/*/Prompts/*' ':!:CODE_OF_CONDUCT.md' \
+    > "$documents_list" || [ ! -s "$documents_list" ]; then
+    echo "Git lists no documents to check" >&2
+    rm -f "$documents_list"
+    return 2
+  fi
+  xargs -0 "$@" < "$documents_list"
+  documents_status=$?
+  rm -f "$documents_list"
+  return "$documents_status"
 }
 
-markdownlint() { markdown_files | xargs -0 markdownlint-cli2; }
-links() { markdown_files | xargs -0 lychee --offline --no-progress --include-fragments --root-dir "$PWD"; }
+markdownlint() { documents markdownlint-cli2; }
+links() { documents lychee --offline --no-progress --include-fragments --root-dir "$PWD"; }
 shell_scripts() { shellcheck scripts/*.sh .githooks/*; }
 swift_lint() {
   if [ "${GITHUB_ACTIONS:-}" = true ]; then
@@ -246,7 +260,146 @@ gate icon "the app icon is the project's own drawing, made of paths: no SF Symbo
   scripts/app-icon.swift 'let tray = NSImage(systemSymbolName: "tray", accessibilityDescription: nil)' \
   scripts/app-icon.sh scripts/app-icon.swift
 
+# The lines of the shell commands a document gives to paste, in a fence of backticks or tildes whose language is sh,
+# bash, zsh, shell or console, that hold a word starting with #: zsh on macOS, where interactive_comments is off,
+# passes such a comment on to the command as arguments.
+# shellcheck disable=SC2016 # an awk program, which the shell must not expand
+pasted_comments='
+  FNR == 1 { fence = 0 }
+  {
+    text = $0; sub(/^[[:space:]]*/, "", text)
+    mark = substr(text, 1, 1); run = 0
+    if (mark == "`" || mark == "~") { while (substr(text, run + 1, 1) == mark) run++ }
+    if (run >= 3 && !fence) {
+      fence = 1; fence_mark = mark; fence_run = run
+      info = substr(text, run + 1); sub(/^[[:space:]]+/, "", info); split(info, words, /[[:space:]{]/)
+      shell = words[1] ~ /^(sh|bash|zsh|shell|console)$/
+      next
+    }
+    if (run >= fence_run && fence && mark == fence_mark && substr(text, run + 1) ~ /^[[:space:]]*$/) { fence = 0; next }
+  }
+  fence && shell && /(^|[[:space:]])#/ { print FILENAME ":" FNR ": " $0 }
+'
+# commands: a command a document gives runs as written in Terminal. It first proves it refuses its samples.
+commands() {
+  commands_sample=$(mktemp -t arrumator-commands) || return 2
+  printf '%s\n' '```sh' 'gh secret set NAME   # the value' '# a whole line' 'echo done #' 'gh secret set A #note' \
+    "echo \"#\\(.n)\" a#b \${#v}" '```' '```text' 'not a command # kept' '```' '~~~zsh' 'ls # in tildes' '~~~' \
+    '````shell script' '```' 'echo # in a longer fence' '````' > "$commands_sample"
+  commands_caught=$(awk "$pasted_comments" "$commands_sample" | grep -c .)
+  rm -f "$commands_sample"
+  if [ "$commands_caught" -ne 6 ]; then
+    echo "reports $commands_caught of the 6 sample lines it must refuse"
+    return 1
+  fi
+  commands_found=$(documents awk "$pasted_comments") || return 2
+  [ -z "$commands_found" ] || { printf '%s\n' "$commands_found"; return 1; }
+}
+
+# The variables a shell function sets that are neither named after it nor named in its script's line
+# "# Shared with its functions: <names>": sh has no local variables, so any other is its caller's, which it
+# overwrites. A variable is set by an assignment that starts a command, or prefixes a special built-in or a function of
+# the script, whose prefix outlives it; a for loop; read; or ${name:=…}. A function may be defined at any depth, and a
+# function inside another sets its own. What is quoted, a heredoc, a comment and the rest of a continued line are
+# skipped. It reads each script twice, first for the names it shares and the functions it defines.
+# shellcheck disable=SC2016 # an awk program, which the shell must not expand
+function_variables='
+  FNR == 1 { pass++; depth = 0; heredoc = ""; single = 0; double = 0; continued = 0 }
+  heredoc != "" { line = $0; sub(/^[\t]*/, "", line); if (line == heredoc) heredoc = ""; next }
+  /^# Shared with its functions:/ {
+    if (pass == 1) {
+      line = $0; sub(/^# Shared with its functions:/, "", line); n = split(line, names, /[[:space:],.]+/)
+      for (k = 1; k <= n; k++) if (names[k] != "") shared[FILENAME, names[k]] = 1
+    }
+    next
+  }
+  {
+    code = ""; rest = $0; set = ""; next_continued = 0
+    for (i = 1; i <= length(rest); i++) {
+      c = substr(rest, i, 1)
+      if (single) { if (c == "\047") single = 0; code = code " "; continue }
+      if (c == "$" && match(substr(rest, i), /^\$\{[A-Za-z_][A-Za-z0-9_]*:?=/)) {
+        name = substr(rest, i + 2, RLENGTH - 2); sub(/:?=$/, "", name); set = set " " name
+      }
+      if (double) { if (c == "\\") { i++; code = code "  "; continue } if (c == "\"") double = 0; code = code " "; continue }
+      if (c == "\\" && i == length(rest)) { next_continued = 1; break }
+      if (c == "\\") { i++; code = code "  "; continue }
+      if (c == "\047") { single = 1; code = code " "; continue }
+      if (c == "\"") { double = 1; code = code " "; continue }
+      if (c == "#" && (i == 1 || substr(rest, i - 1, 1) ~ /[[:space:]]/)) break
+      if (substr(rest, i, 2) == "<<" && match(substr(rest, i), /^<<-?[[:space:]]*[\047"]?[A-Za-z_]+/)) {
+        heredoc = substr(rest, i, RLENGTH); sub(/^<<-?[[:space:]]*[\047"]?/, "", heredoc)
+      }
+      code = code c
+    }
+    first = continued ? 2 : 1; continued = next_continued
+    opened = ""; indent = code; sub(/[^[:space:]].*$/, "", indent)
+    if (match(code, /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*\(\)[[:space:]]*\{/)) {
+      opened = substr(code, 1, index(code, "(") - 1); gsub(/[[:space:]]/, "", opened)
+      if (pass == 1) defined[FILENAME, opened] = 1
+      depth++; stack[depth] = opened; stack_indent[depth] = indent; code = substr(code, RLENGTH + 1); first = 1
+    } else if (depth > 0 && indent == stack_indent[depth] && substr(code, length(indent) + 1, 1) == "}") {
+      depth--; next
+    }
+    function_name = depth > 0 ? stack[depth] : ""
+    closes = code ~ /\}[[:space:]]*$/
+    gsub(/\$\(/, ";", code); gsub(/&&|\|\||[;&|(){}`]/, ";", code)
+    segments = split(code, parts, ";")
+    for (s = first; s <= segments; s++) {
+      words = split(parts[s], word, /[[:space:]]+/)
+      w = 1; while (w <= words && word[w] == "") w++
+      while (w <= words && word[w] ~ /^(then|do|else|elif|if|while|until|!|export|readonly)$/) w++
+      if (word[w] == "for" && w < words) { set = set " " word[w + 1]; continue }
+      assigned = ""
+      for (; w <= words && word[w] ~ /^[A-Za-z_][A-Za-z0-9_]*=/; w++) { name = word[w]; sub(/=.*$/, "", name); assigned = assigned " " name }
+      while (w <= words && word[w] == "") w++
+      if (w > words) { set = set assigned; continue }
+      if (word[w] ~ /^(break|:|\.|continue|eval|exec|exit|return|set|shift|times|trap|unset)$/ || (FILENAME, word[w]) in defined)
+        set = set assigned
+      if (word[w] == "read") {
+        for (w++; w <= words; w++) {
+          if (word[w] ~ /[<>]/) break
+          if (word[w] ~ /^-[pdtnNuai]$/) { w++; continue }
+          if (word[w] ~ /^[A-Za-z_][A-Za-z0-9_]*$/) set = set " " word[w]
+        }
+      }
+    }
+    n = split(set, names, " ")
+    for (k = 1; k <= n; k++)
+      if (pass == 2 && function_name != "" && index(names[k], function_name "_") != 1 && !((FILENAME, names[k]) in shared))
+        print FILENAME ":" FNR ": " function_name "() sets " names[k]
+    if (opened != "" && closes) depth--
+  }
+'
+# functions: every shell function keeps its variables to itself. It first proves it refuses its samples.
+functions() {
+  functions_sample=$(mktemp -t arrumator-functions) || return 2
+  # shellcheck disable=SC2016,SC1003 # sample lines of a script, written as they are
+  printf '%s\n' '# Shared with its functions: failed' 'top=1' 'failed=""' 'p() { :; }' 'f() {' '  f_own=1' '  top=2' \
+    '  failed=1' '  other=3' '  for item in a; do :; done' '  read -r line' '  read -r c < /dev/null' \
+    '  while IFS= read -r f_line; do :; done' '  : "${h:=1}"' '  gh api -f name=main' '  gh api \' '    NAME=value' \
+    '  x=1 true' '  kept=1 :' '  passed=1 p' "  printf '%s' 'x=1'" "  python3 -c '" 'y = 1' 'z=2' "'" '  cat <<EOF' 'w=1' \
+    'EOF' '  echo "v=1; u=2" # t=1' '  f_inner() {' '    f_inner_own=1' '  }' '  f_after=1' '}' 'g() { g_x=1; }' \
+    'h() { bad=1; }' 'if true; then' '  k() {' '    leak=1' '  }' 'fi' \
+    > "$functions_sample"
+  functions_caught=$(awk "$function_variables" "$functions_sample" "$functions_sample" | grep -c .)
+  rm -f "$functions_sample"
+  if [ "$functions_caught" -ne 10 ]; then
+    echo "reports $functions_caught of the 10 sample variables it must refuse"
+    return 1
+  fi
+  functions_failed=0
+  for functions_script in scripts/*.sh .githooks/*; do
+    [ -f "$functions_script" ] || { echo "$functions_script: not there"; return 2; }
+    functions_hits=$(awk "$function_variables" "$functions_script" "$functions_script") || return 2
+    [ -z "$functions_hits" ] || { printf '%s\n' "$functions_hits"; functions_failed=1; }
+  done
+  return "$functions_failed"
+}
+
 check tools sh scripts/tools.sh check gitleaks swiftlint shellcheck actionlint zizmor markdownlint-cli2 lychee
+check commands awk commands
+check functions awk functions
 check secrets gitleaks scripts/check-secrets.sh
 check swiftlint swiftlint swift_lint
 check imports swift imports
