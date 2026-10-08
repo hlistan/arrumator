@@ -33,9 +33,9 @@ card as it is. A kind of file Arrumator
 cannot read says so, that the model saw only its name, and what would help.
 
 - **Incoming**: under **In Progress**, the file being worked on now, with a spinner and what is being done to it
-  (**Reading its text**, **Being read by qwen3.5:9b**, naming the model of the profile in use, …), and, once that has
+  (**Reading its text**, **Being read by qwen3.5:9b-q8_0**, naming the model of the profile in use, …), and, once that has
   taken more than a few seconds, for how long so far, as the first file after a start does while the model loads:
-  **Being read by qwen3.5:9b… 1 min, 30 sec so far**; under **Queued**, every other file, in the order they arrived,
+  **Being read by qwen3.5:9b-q8_0… 1 min, 30 sec so far**; under **Queued**, every other file, in the order they arrived,
   which is the order they are filed in, each saying when it arrived, or, for a file stopped part way (as when you quit
   Arrumator), **Carries on where it stopped**, which it does first at the next start, or the error it had and when it is
   tried again ([how](how-it-works.md#how-a-file-is-handled)); while a file waits for Ollama, which it found away, every
@@ -68,15 +68,15 @@ cannot read says so, that the model saw only its name, and what would help.
   ([profile and effort](how-it-works.md#profile-and-effort)): its effort, **Low**, **Medium** or **High**, how much the
   model thinks before it answers, from not at all to the most (the one chosen is what new tasks get, the `taskEffort`
   setting), and its profile, **Settings' Profile**, named after the one Settings uses, whichever that is when the
-  request is read, or any profile, each listed with the model that reads with it, such as **Smart (qwen3.5:9b)**. The
-  task waits in **In Progress** until the model has read it, its row saying what is happening: **Being read by
-  qwen3.5:9b**, with a spinner, **Waiting for its turn** while another request is read first, **Waiting for Ollama**
+  request is read, or any profile, each listed with the model that reads with it, such as **Smart (qwen3.5:9b-q8_0)**.
+  The task waits in **In Progress** until the model has read it, its row saying what is happening: **Being read by
+  qwen3.5:9b-q8_0**, with a spinner, **Waiting for its turn** while another request is read first, **Waiting for Ollama**
   while Ollama cannot be reached (it is tried again after the last of `ingest.retryDelays`), or **Waiting to be read**.
   The card that opens when you press **Find** says the same at its top, in place of the documents not found yet:
-  **Reading the request with qwen3.5:9b…** beside a spinner, and how long so far once that is more than a moment, as a
-  model that thinks can take minutes. While a request is read, or a question about a task's documents answered, Tasks
-  in the sidebar has a small spinner, and the menu bar's window says **Reading a request with qwen3.5:9b**, or
-  **Answering a question with qwen3.5:9b**, so it shows from any page. Then the task joins the tasks
+  **Reading the request with qwen3.5:9b-q8_0…** beside a spinner, and how long so far once that is more than a moment,
+  as a model that thinks can take minutes. While a request is read, or a question about a task's documents answered, Tasks
+  in the sidebar has a small spinner, and the menu bar's window says **Reading a request with qwen3.5:9b-q8_0**, or
+  **Answering a question with qwen3.5:9b-q8_0**, so it shows from any page. Then the task joins the tasks
   under **Earlier**, each with how many documents it found and how often it was exported. Open one as a card: its name,
   which you can change there; what you asked, which you can rewrite, and **Find Again**, which reads it again; the
   effort and profile it is **Read with**, either of which you can change, which reads it again (a profile the settings
@@ -96,8 +96,8 @@ cannot read says so, that the model saw only its name, and what would help.
   Task…** removes the task and its conversation, never what it exported. Under **Conversation**, ask about the documents
   in the field at the foot and press **Ask** ([talking with a task's
   documents](how-it-works.md#talking-with-a-tasks-documents)). Each question is set apart, its answer below it, as the
-  model writes it, with what the queue does with it meanwhile: **Answering with qwen3.5:9b…** beside a spinner and how
-  long so far, **Thinking…** while a model that thinks has written nothing yet, or what it waits for: the model to
+  model writes it, with what the queue does with it meanwhile: **Answering with qwen3.5:9b-q8_0…** beside a spinner and
+  how long so far, **Thinking…** while a model that thinks has written nothing yet, or what it waits for: the model to
   begin, its turn, or Ollama, with when it is tried again. Under an answer, **Drawn from** names the documents it drew
   on, one a line, each to open; when you asked for more documents, it lists those it found outside the task, each with
   a + to add it, and **Add All**; **Copy** puts the answer on the clipboard, **Ask Again** answers the question again from
@@ -282,8 +282,8 @@ by meaning**, documents embedded by another model are found by meaning only once
   change (`events` table; History view; `arrumatorcli history`). A settings change made in the app and one made with
   `arrumatorcli settings` are recorded alike, once, in words made of what changed (`Changed logLevel to debug,
   renameFiles to false`, with the settings and their new values), and each change to the profiles in its own words:
-  `Added the profile “Mine”, reading with qwen3.5:9b`, `The profile “Smart” reads with gpt-oss:20b instead of
-  qwen3.5:9b`, `Reset the profile “Smart”`, `Removed the profile “Mine”`, `Reading with the profile “Smart”`, which
+  `Added the profile “Mine”, reading with qwen3.5:9b-q8_0`, `The profile “Smart” reads with gpt-oss:20b instead of
+  qwen3.5:9b-q8_0`, `Reset the profile “Smart”`, `Removed the profile “Mine”`, `Reading with the profile “Smart”`, which
   comes first when other settings change with it (`Reading with the profile “Smart”; changed renameFiles to false`).
   Pausing, the Ollama server and switching archives have their own (`Processing paused`, `Ollama at …`, `Switched to the
   archive at …`).
