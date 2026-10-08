@@ -27,6 +27,25 @@ public enum OllamaState: Sendable, Hashable, Codable {
     }
 }
 
+/// The user's asking to check the server, or start it (`OllamaLifecycle.ask()`): whether one is under way, and what the
+/// last found and when, so a press is shown wherever it was made and however often the view showing it is made again,
+/// also when what it found is what the status already said.
+public struct OllamaAsking: Sendable, Hashable {
+    /// What an asking found, and when, by the lifecycle's clock.
+    public struct Found: Sendable, Hashable {
+        public let state: OllamaState
+        public let at: Date
+    }
+
+    public var underWay: Bool
+    public var last: Found?
+
+    public init(underWay: Bool = false, last: Found? = nil) {
+        self.underWay = underWay
+        self.last = last
+    }
+}
+
 public struct OllamaInstallation: Sendable, Hashable, Codable {
     public var appURL: URL?
     public var binaryURL: URL?
@@ -68,6 +87,14 @@ public actor OllamaLifecycle {
         }
     }
 
+    private var askingFollowers: [UUID: AsyncStream<OllamaAsking>.Continuation] = [:]
+    public private(set) var asking = OllamaAsking() {
+        didSet {
+            guard asking != oldValue else { return }
+            for c in askingFollowers.values { c.yield(asking) }
+        }
+    }
+
     public init(api: any OllamaAPI, config: OllamaConfig, management: OllamaManagement, binaryOverride: String?, address: URL,
                 time: any TimeSource) {
         self.api = api
@@ -78,10 +105,21 @@ public actor OllamaLifecycle {
         self.time = time
     }
 
+    /// Starts the server as `management` says, or never, at `address`: once that is another server, neither its state
+    /// nor what the user's last asking found is known until it is checked.
     public func configure(management: OllamaManagement, binaryOverride: String?, address: URL) {
         self.management = management
         self.binaryOverride = binaryOverride
+        guard !Self.isSameServer(address, self.address) else { return }
         self.address = address
+        state = .unknown
+        asking.last = nil
+    }
+
+    /// Whether two addresses are one server, however they are written: the same scheme, host and port.
+    static func isSameServer(_ one: URL, _ other: URL) -> Bool {
+        one.scheme?.lowercased() == other.scheme?.lowercased() && OllamaEndpoint.host(of: one) == OllamaEndpoint.host(of: other)
+            && one.port == other.port
     }
 
     /// The variable `ollama serve` reads the address it listens on from (Ollama's `envconfig`).
@@ -104,6 +142,30 @@ public actor OllamaLifecycle {
     }
 
     private func removeContinuation(_ id: UUID) { continuations[id] = nil }
+
+    /// The user's asking now, then each time it changes, for as long as the stream is read.
+    public func askings() -> AsyncStream<OllamaAsking> {
+        let id = UUID()
+        let (stream, c) = AsyncStream<OllamaAsking>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        c.yield(asking)
+        askingFollowers[id] = c
+        c.onTermination = { [weak self] _ in Task { await self?.removeAskingFollower(id) } }
+        return stream
+    }
+
+    private func removeAskingFollower(_ id: UUID) { askingFollowers[id] = nil }
+
+    /// Checks the server, and starts it as `ensureRunning()` does, as the user asked: that it is under way, and then what
+    /// it found and when, is published (`askings()`). Stopped meanwhile, it found nothing, and what was found before stays.
+    /// The runtime asks one at a time, a press while one is under way joining it (`ArrumatorRuntime.startOllama()`).
+    @discardableResult
+    public func ask() async -> OllamaState {
+        asking.underWay = true
+        let found = await ensureRunning()
+        let last = Task.isCancelled ? asking.last : OllamaAsking.Found(state: found, at: time.now())
+        asking = OllamaAsking(underWay: false, last: last)
+        return found
+    }
 
     // MARK: Discovery
 
@@ -141,13 +203,18 @@ public actor OllamaLifecycle {
     /// say back a minute later. One that cannot be reached otherwise (`OllamaError.isAway`), as a connection refused when
     /// it has crashed, is not running at once, so supervision starts it again without waiting out probes that could only
     /// say the same. One that answers with a failure runs, unhealthy, and is never started again beside itself. Stopped
-    /// meanwhile, it learns nothing, whatever failure the stop brought, and `state` stays as it was.
+    /// meanwhile, it learns nothing, whatever failure the stop brought, and `state` stays as it was; nor does one the app
+    /// turned to another server meanwhile (`configure`).
     @discardableResult
     public func check() async -> OllamaState {
+        let asked = address
         do {
-            state = .ready(version: try await api.version())
+            let version = try await api.version()
+            if Self.isSameServer(asked, address) { state = .ready(version: version) }
         } catch where Cancellation.stops(error) {
             // Stopped while it asked: nothing was learnt of the server, not even that it failed.
+        } catch where !Self.isSameServer(asked, address) {
+            // What the server before answered says nothing of the one the app talks to now.
         } catch let failure as OllamaError where !failure.isAway && !failure.timedOut {
             failedProbes = 0
             state = .unhealthy(failure.localizedDescription)

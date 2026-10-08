@@ -79,6 +79,48 @@ import Testing
         await runtime.stop()
     }
 
+    /// Onboarding's Start / check Ollama is pressed before the runtime starts its work, which is when it applies changed
+    /// settings (`begin`): the server is started as the settings in force say, a Management chosen on that step included,
+    /// never as they said at launch, when pressing it only checked again (2026-10-07).
+    @Test func ollamaIsStartedAsTheSettingsInForceSayBeforeTheRuntimeStarts() async throws {
+        let home = try await RuntimeHome.make()
+        defer { home.cleanup() }
+        let runtime = try await home.bootstrap()
+        let server = try home.standInServer()
+        defer { for pid in server.started { kill(pid, SIGKILL) } }
+        // The home's server is on this Mac, and the app never starts it until Management says otherwise.
+        _ = try await runtime.settingsActions.change {
+            $0.ollamaManagement = .spawnServe
+            $0.ollamaBinaryPath = server.executable.path
+        }
+        let starting = Task { await runtime.startOllama() }
+        defer { starting.cancel() }
+        #expect(await Patience.until { !server.started.isEmpty }, "the server is started as Management now says, not checked as it said at launch")
+        await runtime.stop()
+        if let process = server.started.first {
+            #expect(await Patience.until { !StandInServer.runs(process) }, "and the server the app started stops with it")
+        }
+    }
+
+    /// Start / check Ollama pressed while the app switches archives, or quits, reached the stopped runtime's lifecycle
+    /// after its stop, and spawned a server nothing stopped (review of 2026-10-08, finding 1): once a stop has begun,
+    /// nothing is started.
+    @Test func ollamaIsNeverStartedOnceTheRuntimeHasStopped() async throws {
+        let home = try await RuntimeHome.make()
+        defer { home.cleanup() }
+        let runtime = try await home.bootstrap()
+        let server = try home.standInServer()
+        defer { for pid in server.started { kill(pid, SIGKILL) } }
+        _ = try await runtime.settingsActions.change {
+            $0.ollamaManagement = .spawnServe
+            $0.ollamaBinaryPath = server.executable.path
+        }
+        await runtime.stop()
+        await runtime.startOllama()
+        #expect(server.started.isEmpty, "no server is started by a runtime that has stopped")
+        #expect(await runtime.lifecycle.asking == OllamaAsking(), "and nothing is said to have been asked")
+    }
+
     @Test func theAppStartsOllamaOnlyOnThisMac() throws {
         var settings = try AppSettings.bundledDefaults()
         settings.ollamaManagement = .launchApp

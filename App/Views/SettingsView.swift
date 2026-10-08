@@ -231,6 +231,9 @@ struct ModelSettingsView: View {
         model.runtime.map { ArrumatorRuntime.management(for: current, at: $0.ollama.baseURL) != .external } ?? false
     }
 
+    /// The user's asking to check the server or start it, as Core publishes it (`OllamaLifecycle.askings()`).
+    private var asking: OllamaAsking { model.session.ollamaAsking }
+
     private var serverSection: some View {
         Section(Wording.ollama) {
             LabeledContent(Wording.status, value: model.session.ollama.summary)
@@ -255,9 +258,18 @@ struct ModelSettingsView: View {
             .disabled(!onThisMac)
             .help(Wording.managementOnThisMacOnly)
             if !onThisMac { Text(Wording.managementOnThisMacOnly).font(.caption).foregroundStyle(.secondary) }
-            Button(startsOllama ? Wording.startOllama : Wording.checkOllama) {
-                Task { _ = await model.runtime?.lifecycle.ensureRunning(); await loadStatus() }
+            // What the press found is said even when the status above stays as it was, as a server that is ready stays
+            // ready, so a press is never met with nothing (`OllamaLifecycle.ask()`). The button stays enabled, keeping
+            // the keyboard's focus: pressed again, it joins the check under way.
+            HStack(spacing: Style.inlineControlSpacing) {
+                Button(startsOllama ? Wording.startOllama : Wording.checkOllama) { Task { await checkOllama() } }
+                if asking.underWay { ProgressView().controlSize(.small).accessibilityLabel(Wording.checkingOllama) }
             }
+            if let last = asking.last { Text(Wording.ollamaChecked(last.state, at: last.at)).font(.caption).foregroundStyle(.secondary) }
+        }
+        // Heard as well as seen: VoiceOver says what the press found, where focus stays on the button.
+        .onChange(of: asking.last) { _, last in
+            if let last { AccessibilityNotification.Announcement(Wording.ollamaChecked(last.state, at: last.at)).post() }
         }
     }
 
@@ -290,7 +302,7 @@ struct ModelSettingsView: View {
             guard let runtime = model.runtime else { return }
             do {
                 try await runtime.useOllama(at: address)
-                _ = await runtime.lifecycle.ensureRunning()
+                await runtime.startOllama()
                 serverError = nil
                 server = runtime.ollama.baseURL.absoluteString
                 model.settings = await runtime.settings.current
@@ -299,6 +311,14 @@ struct ModelSettingsView: View {
                 serverError = error.localizedDescription
             }
         }
+    }
+
+    /// Checks the server, and starts it when the app does, as the settings in force say (`ArrumatorRuntime.startOllama()`),
+    /// then the models of the profile in use.
+    private func checkOllama() async {
+        guard let runtime = model.runtime else { return }
+        await runtime.startOllama()
+        await loadStatus()
     }
 
     private func loadProfiles() async {
