@@ -141,8 +141,8 @@ enum Wording {
     }
 
     /// What is being done to a file (`JobWork`), while it is: "Reading its text", not the funnel's "Read"; the model
-    /// that reads it named, "Being read by qwen3.5:9b"; and how long so far once `elapsed` is given, as a search task's
-    /// reading says it: "Being read by qwen3.5:9b… 1 min, 30 sec so far".
+    /// that reads it named, "Being read by qwen3.5:9b-q8_0"; and how long so far once `elapsed` is given, as a search task's
+    /// reading says it: "Being read by qwen3.5:9b-q8_0… 1 min, 30 sec so far".
     static func doing(_ work: JobWork, elapsed: TimeInterval? = nil) -> String {
         let doing = switch work.stage {
         case .pending: "Waiting"

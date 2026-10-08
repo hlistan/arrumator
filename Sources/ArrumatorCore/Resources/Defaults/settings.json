@@ -24,8 +24,8 @@
     "smart": {
       "name": "Smart",
       "position": 3,
-      "chatModel": "qwen3.5:9b",
-      "visionModel": "qwen3.5:9b",
+      "chatModel": "qwen3.5:9b-q8_0",
+      "visionModel": "qwen3.5:9b-q8_0",
       "embedModel": "bge-m3"
     }
   },

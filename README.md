@@ -88,7 +88,7 @@ reporting or update check.
 |---|---|---|---|
 | Fast | `gemma4:e2b-it-qat` | `bge-m3` | ~5.5 GB |
 | Standard (default) | `ministral-3:14b` | `bge-m3` | ~10 GB |
-| Smart | `qwen3.5:9b` | `bge-m3` | not measured; `qwen3.5:9b` is a 6.6 GB download |
+| Smart | `qwen3.5:9b-q8_0` | `bge-m3` | ~10.4 GB, with the app's context, as Standard's ~10 GB is ~10.6 GB |
 
 A model profile is the models Arrumator reads with: in each of these, one model reads every document and search request,
 describes images and names files, and `bge-m3` finds documents by meaning. Choose one under [Settings ›
@@ -97,9 +97,10 @@ with Reset, or add profiles of your own. Smart's model thinks before it answers,
 documents are read without thinking. Documents already read keep their labels when you choose another profile: **Read
 All Documents Again**, under Settings › Filing, reads them with it, as putting one into Incoming again, as it is, does.
 Fast and Standard were chosen as the best for their memory on a 16 GB Mac mini (M5) when Arrumator still filed documents
-into folders, and larger models do not fit such a Mac's memory. How well Standard and Fast label documents is measured:
+into folders, and larger models do not fit such a Mac's memory. How well each profile labels documents is measured:
 Fast reads a document in about a quarter of Standard's time and finds fewer of the labels a document should get (69%
-against 96%). Smart has not been measured on the evaluation corpus at all, neither its labels, its speed nor its memory.
+against 96%). Smart reads with the model that scores highest on its benchmarks of those such a Mac holds whole, in 8
+bits: it reads a document's type as well as Standard and finds a little fewer of the labels it should get (94%).
 The measurements are in [docs/evaluation.md](docs/evaluation.md).
 
 ## Install

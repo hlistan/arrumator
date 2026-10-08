@@ -223,6 +223,49 @@ F/11104/06/2026"), goes back once, and Fast, asked again, gave the same referenc
 A booking confirmation got its sender, its title and its language right in pass 1, which version 11 had not. The
 medians, measured while the server read for other clients too, are not compared.
 
+### Smart
+
+Smart reads with the strongest model, by its benchmarks, that a 16 GB Mac holds whole, however long it takes. It was
+first measured on 2026-10-07 and
+2026-10-08, on the same server, a Mac mini (M5, 16 GB) through Ollama 0.34.4, with prompt version 12 and the `smart`
+profile: `qwen3.5:9b`, the model it came with, whose weights are stored in about 4 bits each (`Q4_K_M`), and
+`qwen3.5:9b-q8_0`, the same model in 8 bits, which it reads with since.
+
+| model | pass | status | type | sender | date | title | language | labels each | expected labels | median |
+|---|---|---|---|---|---|---|---|---|---|---|
+| qwen3.5:9b-q8_0 | 1 | 100% | 93% | 91% | 96% | 95% | 100% | 13.6 | 94% | 28.9 s |
+| qwen3.5:9b-q8_0 | 2 | 100% | 95% | 88% | 98% | 95% | 100% | 13.6 | 93% | 29.3 s |
+| qwen3.5:9b | 1 | 100% | 88% | 95% | 100% | 93% | 100% | 14.5 | 92% | 22.1 s |
+| qwen3.5:9b | 2 | 100% | 89% | 95% | 100% | 95% | 100% | 14.6 | 91% | 23.0 s |
+
+No model larger than Standard's fits such a Mac: Ollama gives a model about 10 GB of its memory to run on, and
+`ministral-3:14b` already runs 0.8 GB of its 10.6 GB on the processor. Of the models with vision and thinking that fit,
+one pass over the 21 international documents on 2026-10-07 (while the server also read for another client, so the
+medians are not compared) read so, with the memory Ollama gave each with the app's context and how much of it ran on
+the graphics processor (`/api/ps`), which counts the context too, so Standard's 10.6 GB is the ~10 GB measured
+[below](#earlier-measurements-filing-into-folders) with its context:
+
+| model | type | sender | date | title | expected labels | memory, all on the GPU |
+|---|---|---|---|---|---|---|
+| qwen3.5:9b-q8_0 | 95% | 95% | 100% | 100% | 93% | 10.4 GB, yes |
+| ministral-3:14b (Standard) | 90% | 95% | 100% | 100% | 96% | 10.6 GB, 9.8 GB of it |
+| gemma4:12b | 90% | 100% | 100% | 100% | 92% | 8.1 GB, yes |
+| qwen3.5:9b | 95% | 100% | 100% | 100% | 90% | not read |
+
+Qwen3.5 9B is the strongest of these on the benchmarks its makers and others report, GPQA Diamond 81.7 and MMLU-Pro
+82.5, against 78.8 and 77.2 for Gemma 4 12B and 71.2 on GPQA Diamond for Ministral 3 14B reasoning
+([XDA](https://www.xda-developers.com/qwen-3-5-9b-tops-ai-benchmarks-not-how-pick-model/),
+[LLM Stats](https://llm-stats.com/models/compare/gemma-4-12b-it-vs-qwen3.5-9b),
+[Ministral 3](https://arxiv.org/pdf/2601.08584)), and 8-bit weights (`Q8_0`) are the quantization closest to the
+model's own, far closer than 4 bits ([llama.cpp perplexity](https://qwen.readthedocs.io/en/stable/quantization/llama.cpp.html)).
+On the corpus, the two read alike within a few documents: in 8 bits, type rose from 88% and 89% to 93% and 95%, the
+expected labels from 92% and 91% to 94% and 93%, periods from 69% to 81%, with a quarter fewer objects and a tenth
+fewer references written; sender fell from 95% to 91% and 88%, date from 100% to 96% and 98%, and one sender was
+written two ways (1.12 writings each, from 1.00), as Standard writes one. Against Standard it reads type as well,
+sender and date within two documents, and finds a little fewer of the expected labels, 94% and 93% against 96% and 94%.
+The medians, measured while the server may also have read for other clients, are not compared. How well it reads a
+search task's request, which it thinks before answering, the corpus does not measure.
+
 ## Image descriptions and the model's context
 
 An image is described by the model only when OCR finds too little text in it: fewer than
@@ -272,15 +315,13 @@ scored how consistently documents of one kind were grouped into one folder (F1),
 Ollama 0.34.4, over three-instance corpora rendered with several seeds. They no longer measure what the app does, and
 are kept only because those two profiles still follow them. `ministral-3:8b` was a profile of its own then
 (`balanced`); the app no longer comes with it, and its row is kept only as a measurement, for a profile of your own.
-Smart came after these runs and has not been measured on the evaluation corpus: not how well it labels documents, nor
-its time per document, nor its memory.
+Smart came after these runs: it is measured [above](#smart).
 
 | profile | model | F1 three-instance / standard pass 1 | P three-instance / standard | s/doc three-instance / standard pass 1 | memory |
 |---|---|---|---|---|---|
 | Standard | ministral-3:14b | **0.71 / 0.55** | 0.90 / **0.89** | 25 / 39 | ~10 GB |
 | none (`balanced` before) | ministral-3:8b | 0.65 / 0.46 | **0.92** / 0.86 | 16 / 29 | ~7 GB |
 | Fast | gemma4:e2b-it-qat | 0.66 / 0.53 | 0.76 / 0.82 | **6 / 8.5** | ~5.5 GB |
-| Smart | qwen3.5:9b | not measured | not measured | not measured | not measured |
 
 `ministral-3:14b` grouped best at about 25 s per document, `ministral-3:8b` as precisely at 16 s, and
 `gemma4:e2b-it-qat` fastest at 6 s with more mixing. Larger models do not fit such a Mac's memory. Reading a document
@@ -290,7 +331,8 @@ now takes one model call instead of up to several, so these times are upper boun
 
 - **Synthetic documents.** The corpus is synthetic: 57 documents of 21 kinds in 18 languages and 8 scripts, and five
   edge cases. Real archives have more kinds and longer histories.
-- **Two profiles.** Labels are measured with Standard and Fast; Smart has not been measured at all.
+- **Not every prompt with every profile.** Standard is measured with every prompt version, Fast with versions 11 and
+  12, Smart with version 12 alone.
 - **Expected labels on a third of the corpus.** Parties, objects, references, periods, deadlines, amounts and
   jurisdictions are checked on the 21 international documents only; on the rest they are measured by coverage.
 - **No image descriptions.** Every image in the corpus has enough text for OCR, so the corpus never tests how well a

@@ -361,7 +361,7 @@ extension Wording {
             + (task.exports.isEmpty ? "" : labelSeparator + "exported \(task.exports.count == 1 ? "once" : "\(task.exports.count) times")")
     }
 
-    /// What the queue does with a task, at the end of its row: “Being read by qwen3.5:9b”.
+    /// What the queue does with a task, at the end of its row: “Being read by qwen3.5:9b-q8_0”.
     static func taskProgress(_ progress: SearchTaskProgress) -> String {
         switch progress {
         case let .reading(reading): reading.map { "Being read by \($0.model)" } ?? "Being read"
@@ -372,7 +372,7 @@ extension Wording {
     }
 
     /// What the queue does with a task, at the top of its card: by which model its request is being read, and for how
-    /// long once `elapsed` is given, or what it waits for. “Reading the request with qwen3.5:9b… 2 min, 14 sec so far”.
+    /// long once `elapsed` is given, or what it waits for. “Reading the request with qwen3.5:9b-q8_0… 2 min, 14 sec so far”.
     static func taskProgressLine(_ progress: SearchTaskProgress, elapsed: TimeInterval? = nil) -> String {
         switch progress {
         case let .reading(reading):
