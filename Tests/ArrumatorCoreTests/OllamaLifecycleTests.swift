@@ -10,15 +10,17 @@ import Testing
     /// A server whose version is answered as `answers` says, call by call: the first call is 0. From call `holdingAt` on,
     /// if given, it answers nothing until the request is cancelled, and says it got there (`held`): where a test that
     /// counts calls (`count`) stops what makes them, rather than leave it looking as fast as test time lets it while it
-    /// waits.
+    /// waits. With `late`, the first call answers only once the test opens it.
     final class ScriptedServer: OllamaAPI {
         private let calls = Mutex(0)
         private let answers: @Sendable (Int) -> Result<String, OllamaError>
         private let holdingAt: Int?
+        private let late: Hold?
         let held = Signal()
 
-        init(holdingAt: Int? = nil, _ answers: @escaping @Sendable (Int) -> Result<String, OllamaError>) {
+        init(holdingAt: Int? = nil, late: Hold? = nil, _ answers: @escaping @Sendable (Int) -> Result<String, OllamaError>) {
             self.holdingAt = holdingAt
+            self.late = late
             self.answers = answers
         }
 
@@ -33,6 +35,7 @@ import Testing
                 held.fire()
                 try await TestTime(.blocks).sleep(seconds: 0)
             }
+            await late?.arrive()
             return try answers(call).get()
         }
 
@@ -176,6 +179,31 @@ import Testing
         #expect(server.started.isEmpty, "no server was started, as each time it answered again before")
     }
 
+    /// Check Ollama pressed with the server ready changed nothing on screen, as the status stayed as it was (2026-10-07):
+    /// an asking is published while it runs and then what it found, at the lifecycle's own time, to every subscriber.
+    @Test func anAskingIsPublishedWhileItRunsThenWhatItFoundAndWhen() async throws {
+        let time = TestTime(.advances)
+        let server = ScriptedServer(holdingAt: 1) { _ in .success(ScriptedServer.version) }
+        let lifecycle = OllamaLifecycle(api: server, config: try PipelineConfig.bundledDefaults().ollama, management: .external,
+                                        binaryOverride: nil, address: MockOllama.server, time: time)
+        let seen = await Collected.reading(await lifecycle.askings())
+        let ready = OllamaState.ready(version: ScriptedServer.version)
+        #expect(await lifecycle.ask() == ready, "the server is found ready")
+        let found = OllamaAsking(last: OllamaAsking.Found(state: ready, at: time.now()))
+        #expect(await Patience.until { await seen.all.last == found },
+                "a subscriber is sent what it found, and when by the lifecycle's clock, though the status was already ready")
+
+        // Asked again a moment later, and stopped while it asks: it found nothing, and what the last found stays.
+        time.advance(by: 1)
+        let asking = Task { await lifecycle.ask() }
+        try #require(await Patience.until { server.held.fired }, "the second asking reaches the server")
+        #expect(await lifecycle.asking.underWay, "it is under way")
+        asking.cancel()
+        _ = await asking.value
+        #expect(await lifecycle.asking == found, "a stopped asking leaves what the last one found, and none under way")
+        await seen.stop()
+    }
+
     @Test func aReadyServerIsAwayOnlyOnceProbesInARowFindItSoNotAtOneSlowProbe() async throws {
         let late = OllamaError.timeout("api/version")
         let script: [Result<String, OllamaError>] = [.success(ScriptedServer.version), .failure(late), .success(ScriptedServer.version),
@@ -193,6 +221,63 @@ import Testing
         let first = OllamaLifecycle(api: ScriptedServer { _ in .failure(late) }, config: config, management: .external, binaryOverride: nil,
                                     address: lan, time: TestTime(.advances))
         #expect(await first.check() == .unreachable("192.168.1.239"), "one never seen ready is away at its first failed probe")
+    }
+
+    /// The grace a ready server is given is that server's: once the app talks to another, as when the user points it at
+    /// one that does not answer and presses Use, the first probe that finds it so says it cannot be reached, never that
+    /// the server before it is ready (QA of 2026-10-08).
+    @Test func aServerTurnedToIsNeverReadyAsTheOneBeforeItWas() async throws {
+        let script: [Result<String, OllamaError>] = [.success(ScriptedServer.version), .failure(.timeout("api/version"))]
+        var config = try PipelineConfig.bundledDefaults().ollama
+        config.failedProbesBeforeAway = 3
+        let before = try #require(URL(string: "http://192.168.1.239:11434"))
+        let after = try #require(URL(string: "http://192.168.1.250:11434"))
+        let lifecycle = OllamaLifecycle(api: ScriptedServer { script[$0] }, config: config, management: .external, binaryOverride: nil,
+                                        address: before, time: TestTime(.advances))
+        #expect(await lifecycle.ask() == .ready(version: ScriptedServer.version), "the server before is ready")
+        await lifecycle.configure(management: .external, binaryOverride: nil, address: after)
+        #expect(await lifecycle.state == .unknown, "what the server before was says nothing of this one")
+        #expect(await lifecycle.asking.last == nil, "nor does what the user's last asking found of it, shown under the button")
+        #expect(await lifecycle.check() == .unreachable("192.168.1.250"), "the one turned to does not answer, and is said so at once")
+        let sameServer = try #require(URL(string: "http://192.168.1.250:11434/"))
+        await lifecycle.configure(management: .external, binaryOverride: nil, address: sameServer)
+        #expect(await lifecycle.state == .unreachable("192.168.1.250"),
+                "the same server configured again, however its address is written, keeps what was found of it")
+    }
+
+    /// One server is told from another by its scheme, its host and its port, each on its own, and never by how its
+    /// address is written: a scheme's or host's case, or a slash at the end.
+    @Test func aServerIsToldFromAnotherByItsSchemeHostAndPortAlone() throws {
+        let server = try #require(URL(string: "http://nas.local:11434"))
+        let pairs: [(String, Bool, String)] = [
+            ("http://NAS.local:11434/", true, "a host's case and a slash at the end write the same server"),
+            ("HTTP://nas.local:11434", true, "and so does a scheme's case"),
+            ("https://nas.local:11434", false, "another scheme"),
+            ("http://nas2.local:11434", false, "another host"),
+            ("http://nas.local:11435", false, "another port"),
+        ]
+        for (address, same, why) in pairs {
+            let other = try #require(URL(string: address))
+            #expect(OllamaLifecycle.isSameServer(server, other) == same, "\(why): \(address)")
+        }
+    }
+
+    /// A probe sent to the server before, answered once the app talks to another, says nothing of the one it talks to now,
+    /// whether it found the server before ready or not answering (second review of 2026-10-08, finding 2).
+    @Test func aProbeOfTheServerBeforeAnsweredLateSaysNothingOfTheOneTurnedTo() async throws {
+        let before = try #require(URL(string: "http://192.168.1.239:11434"))
+        let after = try #require(URL(string: "http://192.168.1.250:11434"))
+        for answer: Result<String, OllamaError> in [.success(ScriptedServer.version), .failure(.timeout("api/version"))] {
+            let late = Hold()
+            let lifecycle = OllamaLifecycle(api: ScriptedServer(late: late) { _ in answer }, config: try PipelineConfig.bundledDefaults().ollama,
+                                            management: .external, binaryOverride: nil, address: before, time: TestTime(.advances))
+            let probe = Task { await lifecycle.check() }
+            #expect(await Patience.until { late.arrivals == 1 }, "the probe of the server before is under way")
+            await lifecycle.configure(management: .external, binaryOverride: nil, address: after)
+            late.open()
+            _ = await probe.value
+            #expect(await lifecycle.state == .unknown, "the server turned to is not known until it is asked itself: \(answer)")
+        }
     }
 
     /// Only a probe answered late, as by a server busy reading, waits for more: a connection refused, as to a managed

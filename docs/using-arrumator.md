@@ -212,8 +212,12 @@ none of them twice. `arrumatorcli review retry --all` does the same.
 Settings › Models says where the models run and which models read your documents; onboarding shows its first two
 sections, a step each (**Connect Ollama**, then **Choose the models**). **Ollama** is the server: its status, its
 address under **Server**, and, on this Mac, whether the app starts it (**Management**), with **Start / check Ollama**,
-or **Check Ollama** when the app never starts it: a server on another machine, or Management's **Never start it**. The
-server must be this Mac, a private or link-local address, or a `.local` name, such as
+or **Check Ollama** when the app never starts it: a server on another machine, or Management's **Never start it**. It
+starts or checks the server as the settings show them then, Management chosen on onboarding's step included, shows a
+spinner while it does, and then says, and VoiceOver reads out, when it checked and what it found (**Checked at
+20:41:07: Ollama 0.34.4 ready**), also when the status above stays as it was; pressed again meanwhile, it waits for the
+same check. **Use** checks the server it names the same way, and says what that server is, never what the one before
+it was. The server must be this Mac, a private or link-local address, or a `.local` name, such as
 `http://192.168.1.20:11434`; anything else is refused (`arrumatorcli settings --ollama-url`), as is an address with a
 user name or password, a query or a fragment. A `.local` name is looked up when you choose it, waiting at most
 `ollama.timeouts.resolve` seconds: one that stands for any address beyond the local network is refused, also beside

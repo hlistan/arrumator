@@ -437,6 +437,7 @@ Views never poll. `AppModel` holds one task per stream and mirrors the value:
 | `IngestCoordinator.statusUpdates()` | Which file is in hand, at which stage since when, by which model it is read, and how many wait. |
 | `SearchTaskQueue.statusUpdates()`, `TaskConversationQueue.statusUpdates()` | Which request is read or question answered, by which model, and the answer so far. |
 | `OllamaLifecycle.states()` | Whether Ollama is ready. |
+| `OllamaLifecycle.askings()` | Whether the user's check or start of Ollama runs, and what the last found and when. |
 | `ArrumatorRuntime.workUpdates()` | Whether the runtime's work runs, was refused as the index is not rebuilt from its archive, or waits as the archive is away. |
 | `SettingsStore.changes()` | Each change to the settings: one made through the store, one another process saved, told by its `ChangeSignal` as it is saved, and one made by hand, found when the file is read again before a change. The settings in force are read once, beside it. |
 | `LookAlikeMemo.suggestionCounts()` | How many pairs of labels look alike and wait for the user, each time they are worked out. |
@@ -571,6 +572,7 @@ evolutionary architecture, and what each protects.
 | A day or a moment Core and extraction read or write is in the time zone the runtime gives them (`ExtractorRegistry`, `ArchiveRecords`, `PipelineServices.timeZone`), and a day is Gregorian, never in the Mac's calendar. | `scripts/lint.sh`, calendar gate |
 | A test waits for the condition it needs, never a guessed time: nothing in `Tests/` sleeps but `Patience`'s pause between looks and the test clocks. | `scripts/lint.sh`, test-sleeps gate |
 | A runtime acts on its own archive: only `bootstrap` and a switch read the archive from the settings. | `scripts/lint.sh`, archive gate |
+| The app starts Ollama, or checks it when the user asks, only through `ArrumatorRuntime.startOllama()` (onboarding's step only looks as it opens, `lifecycle.check()`), which applies the settings in force, ends with the runtime's stop and publishes what it found. | `scripts/lint.sh`, ollama gate |
 | No `TODO`, `FIXME`, `HACK` or `XXX`. | `scripts/lint.sh`, debt gate |
 | The app icon is the project's own drawing. | `scripts/lint.sh`, icon gate |
 | No unused code. | `scripts/deadcode.sh` (Periphery) |

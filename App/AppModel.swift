@@ -25,6 +25,8 @@ final class ArchiveSession {
     /// What has come so far of the answer being written, which only the question it answers shows.
     var answerSoFar: AnswerProgress?
     var ollama = OllamaState.unknown
+    /// The user's asking to check Ollama, or start it, as the lifecycle says (`askings()`).
+    var ollamaAsking = OllamaAsking()
     /// Whether the runtime's work runs, the folder watchers among it, as the runtime says (`workUpdates()`): not while
     /// it opens the archive and Incoming folders, which macOS may hold until the user answers a permission prompt, nor
     /// when the archive's index could not be rebuilt from it, nor while its folder is away.
@@ -221,6 +223,9 @@ final class AppModel {
             },
             Task {
                 for await state in await runtime.lifecycle.states() { session.ollama = state }
+            },
+            Task {
+                for await asking in await runtime.lifecycle.askings() { session.ollamaAsking = asking }
             },
             Task {
                 for await count in runtime.services.lookAlikes.suggestionCounts() { session.labelSuggestionCount = count }

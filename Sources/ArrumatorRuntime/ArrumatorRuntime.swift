@@ -65,6 +65,8 @@ public final class ArrumatorRuntime: Sendable {
     /// What a `.local` name of the Ollama server stands for is looked up with (`useOllama(at:)`, the doctor).
     let resolver: any HostResolving
     let tasks = BackgroundTasks()
+    /// One at a time, the settings in force read and applied to the Ollama lifecycle (`configureOllama()`).
+    let ollamaConfiguring = AsyncSemaphore(permits: 1)
     /// Rung when a start is asked for again while the step that starts the runtime waits for the archive's folder, so
     /// that it looks for it at once rather than at its next poll (`waitForArchive()`).
     let archiveLook = Doorbell()
@@ -109,25 +111,6 @@ public final class ArrumatorRuntime: Sendable {
     private static func configuredOllama(environment: RuntimeEnvironment, settings: AppSettings, paths: AppPaths) throws -> URL {
         if let given = environment.ollamaURL { return try OllamaEndpoint.validated(given, from: .environment) }
         return try OllamaEndpoint.validated(settings.ollamaURL, from: .settings(paths.settingsURL))
-    }
-
-    /// Points the app at the Ollama server at `address` — this Mac or a machine on the local network — from now on,
-    /// and remembers it, recorded in History once. An address elsewhere is refused and nothing changes: a `.local` name
-    /// too, when it stands for an address beyond the local network now (`OllamaEndpoint.resolved(_:by:within:)`). Whether the
-    /// server answers is the caller's to check (`lifecycle.ensureRunning()`).
-    public func useOllama(at address: String) async throws {
-        let url = try OllamaEndpoint.validated(address)
-        _ = try await OllamaEndpoint.resolved(url, by: resolver, within: config.ollama.timeouts.resolve)
-        try ollama.connect(to: url)
-        let updated = try await settingsActions.change(summary: "Ollama at \(url.absoluteString)") { $0.ollamaURL = url.absoluteString }
-        await lifecycle.configure(management: Self.management(for: updated, at: url), binaryOverride: updated.ollamaBinaryPath,
-                                  address: url)
-        Log.info(.ollama, "Using Ollama", ["url": url.absoluteString])
-    }
-
-    /// A server on another machine is the user's to run: the app starts and stops only one on this Mac.
-    public static func management(for settings: AppSettings, at url: URL) -> OllamaManagement {
-        OllamaEndpoint.isThisMac(url) ? settings.ollamaManagement : .external
     }
 
     /// Stops this runtime and returns one open on the archive at `path`, with that archive's own index; the settings
@@ -586,8 +569,7 @@ extension ArrumatorRuntime {
     /// others from working; a watcher that cannot start is recorded in History, once until it fails otherwise or starts.
     /// Search that cannot be readied goes on by words (`prepareSearch`).
     public func apply(_ current: AppSettings) async {
-        await lifecycle.configure(management: Self.management(for: current, at: ollama.baseURL), binaryOverride: current.ollamaBinaryPath,
-                                  address: ollama.baseURL)
+        await configureOllama()
         Log.shared.setMinLevel(logLevelOverride ?? current.logLevel)
         await prepareSearch(current, loadingVectors: true)
         for step in ApplyStep.allCases {

@@ -68,6 +68,11 @@ extension Wording {
     static let startOllama = "Start / check Ollama"
     /// What the button does when the app never starts the server: on another machine, or Management says never.
     static let checkOllama = "Check Ollama"
+    static let checkingOllama = "Checking Ollama"
+    /// What the button's last check found, and when, to the second, so each press says it was made.
+    static func ollamaChecked(_ state: OllamaState, at date: Date) -> String {
+        "Checked at \(date.formatted(date: .omitted, time: .standard)): \(state.summary)"
+    }
     static let profile = "Profile"
     static let downloading = "Downloading…"
     static let download = "Download"

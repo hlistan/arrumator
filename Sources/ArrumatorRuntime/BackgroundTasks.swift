@@ -114,6 +114,26 @@ actor BackgroundTasks {
         tasks[name] = Task(priority: .utility) { await body() }
     }
 
+    /// The tasks begun by `joining(_:_:)` that have not ended.
+    private var underWay: Set<String> = []
+
+    /// The task named `name` under way, or `body` begun as it, unless the runtime is stopped: asked for again while it
+    /// runs, it is joined, never begun beside it or cancelled for a new one, as a button pressed twice asks
+    /// (`ArrumatorRuntime.startOllama()`). A stop cancels it and waits for it, as every task (`close`, `ended()`).
+    func joining(_ name: String, _ body: @escaping @Sendable () async -> Void) -> Task<Void, Never>? {
+        guard !closed else { return nil }
+        if underWay.contains(name), let task = tasks[name] { return task }
+        underWay.insert(name)
+        let task = Task(priority: .userInitiated) { [weak self] in
+            await body()
+            await self?.joinedEnded(name)
+        }
+        tasks[name] = task
+        return task
+    }
+
+    private func joinedEnded(_ name: String) { underWay.remove(name) }
+
     /// Stops, for good or until `reopen()`: cancels the step that starts the runtime, which is given back for the caller
     /// to wait for, with what was under way, and every task, which `ended()` waits for. A second stop meanwhile, as when
     /// the app quits while it switches archives, is given the same step, and waits for it too.

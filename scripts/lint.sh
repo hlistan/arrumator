@@ -247,6 +247,14 @@ gate archive "a runtime acts on its own archive, ArrumatorRuntime.archive, which
   Sources/ArrumatorRuntime/Sample.swift 'let archive = try await settings.load().archiveURL' \
   Sources
 
+gate ollama "the app starts Ollama, or checks it when the user asks, through ArrumatorRuntime.startOllama() (onboarding's step only looks as it opens, lifecycle.check()), which applies the settings in force first, ends with the runtime's stop and is published to every view (OllamaLifecycle.ask()); never through the lifecycle itself, whose management the runtime applies only while its work runs, and which a stopped runtime would still let start a server" \
+  '^App/[^:]+:[0-9]+: *//' \
+  'lifecycle\.(ensureRunning|ask|configure)\(' \
+  App/Sample.swift 'Button("Start") { Task { await model.runtime?.lifecycle.ensureRunning() } }
+_ = await runtime.lifecycle.ask()
+await runtime.lifecycle.configure(management: .launchApp, binaryOverride: nil, address: url)' \
+  App
+
 gate debt "no TODO, FIXME, HACK or XXX markers" \
   '^scripts/lint\.sh:' \
   '\b(TODO|FIXME|HACK|XXX)\b' \
