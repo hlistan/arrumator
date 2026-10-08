@@ -3,9 +3,11 @@ import Foundation
 
 /// The JSON schema sent as Ollama `format`: one list of signals per kind the model gives (`LabelKind.modelKinds`: every
 /// kind but the user's own tags, which it is never asked for), then the document's title, which its file name is made
-/// of with its date and its sender once the user's rules have kept them (`PipelineServices.read`). Under constrained
-/// decoding the model writes the properties in this order, so the facts come first and the title last, from what it has
-/// found. Only string, array and object types are used, which every grammar backend supports.
+/// of with its date and its sender once the user's rules have kept them (`PipelineServices.read`), then what the
+/// document is in a few sentences (`DocumentAnalysis.interpretation`). Under constrained decoding the model writes the
+/// properties in this order, so the facts come first, then the title, from what it has found, and the interpretation
+/// last, which therefore changes nothing written before it. Only string, array and object types are used, which every
+/// grammar backend supports.
 public enum ClassificationSchema {
     static func string(_ enumValues: [String]? = nil) -> JSONValue {
         var e: [JSONEntry] = [JSONEntry("type", "string")]
@@ -29,19 +31,20 @@ public enum ClassificationSchema {
     static let answerOrder: [LabelKind] = [.sender, .type, .date, .party, .topic, .object, .reference, .period, .deadline, .amount,
                                            .jurisdiction, .language]
 
-    /// The document's signals, the most significant first, and its title. A type is one of `DocumentType` other than
-    /// `other`: a document no type fits has none.
+    /// The document's signals, the most significant first, its title and its interpretation. A type is one of
+    /// `DocumentType` other than `other`: a document no type fits has none.
     public static func analysis(maxPerKind: Int) -> JSONValue {
         let types = DocumentType.allCases.filter { $0 != .other }.map(\.rawValue)
         return object(answerOrder.map { kind in
             JSONEntry(labelsKey(kind), stringArray(maxItems: kind.isSingle ? 1 : maxPerKind, enumValues: kind == .type ? types : nil))
-        } + [JSONEntry(titleKey, string())])
+        } + [JSONEntry(titleKey, string()), JSONEntry(interpretationKey, string())])
     }
 
     /// The answer's key for the labels of `kind`: "senders", "parties", "types", …
     static func labelsKey(_ kind: LabelKind) -> String { kind == .party ? "parties" : kind.rawValue + "s" }
 
     static let titleKey = "title"
+    static let interpretationKey = "interpretation"
 
     /// The labels `values` as a prompt lists them, each a JSON string, so a label that holds a comma, a semicolon or a
     /// quote reads as the one label it is: `"banking", "account statement"`.
@@ -50,11 +53,12 @@ public enum ClassificationSchema {
     }
 }
 
-/// Raw model answer: a list per kind the schema asks for (`ClassificationSchema.answerOrder`), and the title. Nothing
-/// else in it is read: a list of tags is none.
+/// Raw model answer: a list per kind the schema asks for (`ClassificationSchema.answerOrder`), the title and the
+/// interpretation. Nothing else in it is read: a list of tags is none.
 struct AnalysisAnswer: Decodable {
     var signals: [LabelKind: [String]]
     var title: String
+    var interpretation: String
 
     struct Key: CodingKey {
         var stringValue: String
@@ -71,14 +75,16 @@ struct AnalysisAnswer: Decodable {
         }
         self.signals = signals
         title = try container.decode(String.self, forKey: Key(stringValue: ClassificationSchema.titleKey))
+        interpretation = try container.decode(String.self, forKey: Key(stringValue: ClassificationSchema.interpretationKey))
     }
 }
 
-/// A validated answer: the labels, cleaned, the title on one line (nil when it gave none), and notes on what was
-/// changed or dropped.
+/// A validated answer: the labels, cleaned, the title on one line (nil when it gave none), the interpretation as one
+/// paragraph (nil when it gave none), and notes on what was changed or dropped.
 public struct ValidatedAnalysis: Sendable, Codable, Hashable {
     public var labels: [DocumentLabel]
     public var title: String?
+    public var interpretation: String?
     public var notes: [String]
 }
 
@@ -205,7 +211,7 @@ public struct AnswerValidator: Sendable {
         do {
             raw = try JSONDecoder().decode(AnalysisAnswer.self, from: Data(ModelOutput.jsonObject(text).utf8))
         } catch let DecodingError.keyNotFound(key, _) {
-            throw AnswerValidationError.invalid(["\(key.stringValue) is missing; give [] when the document shows none"])
+            throw AnswerValidationError.invalid([Self.missing(key.stringValue)])
         } catch {
             throw AnswerValidationError.notJSON(String(describing: error))
         }
@@ -227,14 +233,23 @@ public struct AnswerValidator: Sendable {
                               unissued: mended.labels.contains { $0.kind == .sender } ? [] : mended.labels.values(.party))
             + self.written(title: title, sentence: title == written ? sentence : nil, labels: mended.labels)
         let untold = guesses.filter { sentBack?.wasTold($0.subject) != true }
+        let interpretation = DocumentLabel.oneLine(raw.interpretation)
         let reading = { (kept: [String]) in
-            ValidatedAnalysis(labels: mended.labels, title: title.isEmpty ? nil : title, notes: notes + kept)
+            ValidatedAnalysis(labels: mended.labels, title: title.isEmpty ? nil : title,
+                              interpretation: interpretation.isEmpty ? nil : interpretation, notes: notes + kept)
         }
         guard !untold.isEmpty else { return reading(guesses.map { $0.kept(told: true, untold: Self.keptUnrepaired) }) }
         let standing = guesses.map { guess in guess.kept(told: !untold.contains { $0.subject == guess.subject }, untold: Self.keptUnrepaired) }
         let subjects = untold.map(\.subject)
         throw GuessSentBack(problems: untold.map { "\($0.found); \($0.asked)" }, standing: reading(standing),
                             sent: { sentBack?.tell(subjects) })
+    }
+
+    /// What the model is told of a key its answer leaves out: a list is given empty when the document shows nothing
+    /// of its kind; the title and the interpretation are always given.
+    static func missing(_ key: String) -> String {
+        [ClassificationSchema.titleKey, ClassificationSchema.interpretationKey].contains(key) ? "\(key) is missing; give it"
+            : "\(key) is missing; give [] when the document shows none"
     }
 
     /// `labels` and `title` with each value `mends` tells written as it tells, a label kept once however it comes to

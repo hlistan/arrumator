@@ -25,16 +25,17 @@ import Testing
         #expect(throws: ModelProfileError.unknown("lowMemory"), "a profile the settings do not list is refused, naming it") {
             try settings.modelProfile("lowMemory")
         }
-        let replay = try settings.reading(withChatModel: "gpt-oss:20b")
+        let replay = try settings.reading(withModel: "gpt-oss:20b")
         #expect(try replay.modelProfile() == ModelProfile(name: inUse.name, position: inUse.position, chatModel: "gpt-oss:20b",
-                                                          visionModel: inUse.visionModel, embedModel: inUse.embedModel)
+                                                          visionModel: "gpt-oss:20b", embedModel: inUse.embedModel)
                     && replay.profile == settings.profile,
-                "replay and eval read with another chat model in the profile in use, and change nothing else of it")
+                "replay and eval read, and describe images, with another model in the profile in use, as its own one model does, and change nothing else of it")
         let blank = #expect(throws: ConfigError.self, "and never with a blank one, which no model answers to") {
-            try settings.reading(withChatModel: " ")
+            try settings.reading(withModel: " ")
         }
-        #expect(blank?.localizedDescription == ConfigError.invalid(name: "settings", underlying: "modelProfiles.\(settings.profile).chatModel is empty")
-                    .localizedDescription, "saying which model is empty")
+        let empty = ["chatModel", "visionModel"].map { "modelProfiles.\(settings.profile).\($0) is empty" }.joined(separator: "; ")
+        #expect(blank?.localizedDescription == ConfigError.invalid(name: "settings", underlying: empty).localizedDescription,
+                "saying which models are empty")
     }
 
     @Test func everyKeyOfTheDefaultsIsNeededSoNoneIsMissing() throws {
@@ -527,6 +528,17 @@ extension ConfigTests {
         config.naming.parts = [.title]
         config.naming.separators = []
         #expect(config.problems.isEmpty, "a name of the title alone is a name: \(config.problems)")
+    }
+
+    @Test func aSidecarsSuffixIsRefusedWhereItWouldTakeOtherFiles() throws {
+        let defaults = try PipelineConfig.bundledDefaults()
+        #expect(defaults.watcher.sidecarSuffix == ".arrumator.md" && defaults.problems.isEmpty, "the bundled suffix names a sidecar after its document")
+        for suffix in [".md", ".MD", "arrumator.md", ".a/b.md", "."] {
+            var config = defaults
+            config.watcher.sidecarSuffix = suffix
+            #expect(config.problems.contains { $0.hasPrefix("watcher.sidecarSuffix must begin with a dot") },
+                    "“\(suffix)” would take every Markdown file, or no file, for a sidecar, or is no name: \(config.problems)")
+        }
     }
 }
 

@@ -149,12 +149,20 @@ public enum EventKind: String, Sendable, Codable, CaseIterable {
     /// A document was found in more than one place of the archive, and nothing told which is a copy
     /// (`DocumentInTwoPlaces`).
     case foundInTwoPlaces
-    /// The user merged a label into another, on every document and in every reading from then on.
+    /// A label was merged into another, or renamed, on every document and in every reading from then on: by the user, or
+    /// on its own when the model judged two labels that look alike the same (`LabelActions.decide`).
     case labelsMerged
     /// The user took a label off every document and does not want it given again.
     case labelIgnored
-    /// The user kept two alike labels apart.
+    /// Two alike labels were kept apart: by the user, or on their own when the model judged them different.
     case labelsKeptApart
+    /// The user added a tag of their own, which no document need have yet.
+    case labelAdded
+    /// The user took a label off every document, as a correction; a reading may give it again.
+    case labelRemoved
+    /// The user removed a document: its file went to the Trash and it left the index and its record file
+    /// (`ReviewActions.remove`).
+    case documentRemoved
     /// The user forgot a rule about labels; readings from then on no longer follow it.
     case labelRuleForgotten
     /// The user asked for documents in their own words: a search task joined the queue.

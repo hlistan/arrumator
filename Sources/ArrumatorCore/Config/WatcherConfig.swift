@@ -28,6 +28,10 @@ public struct WatcherConfig: Sendable, Codable, Hashable {
     /// earlier versions left, which are never read as documents.
     public var managedFilePrefix: String
     public var managedFileExtension: String
+    /// What a document's sidecar is named by: the document's file name with this after it, as
+    /// `2026-07-05 EDP - Fatura julho.pdf.arrumator.md` beside `2026-07-05 EDP - Fatura julho.pdf`. A file whose name ends
+    /// with it is the app's own, never taken in as a document, and no document is given such a name.
+    public var sidecarSuffix: String
     /// How long the archive watcher waits for the event of one of the app's own file operations, which it leaves out; the
     /// first event for the path uses the wait up (must exceed FSEvents latency).
     public var selfChangeTTLSeconds: Double

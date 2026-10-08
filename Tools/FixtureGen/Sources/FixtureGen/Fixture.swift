@@ -181,6 +181,8 @@ struct Manifest: Decodable, Sendable {
     /// Seed the corpus was generated with (used by `--verify` to re-render and compare bytes).
     let seed: UInt64
     let fixtures: [FixtureRecord]
+    /// Pairs of labels that look alike, for the model to judge (`LabelPairs`).
+    let labelPairs: [LabelPairCase]
 
     static let currentSchema = 1
     static let baselineVersion = 1
@@ -193,6 +195,7 @@ struct Manifest: Decodable, Sendable {
             ("baseline_version", .integer(UInt64(baselineVersion))),
             ("seed", .integer(seed)),
             ("fixtures", .array(fixtures.map(\.json))),
+            ("label_pairs", .array(labelPairs.map(\.json))),
         ])
         return Data((document.rendered() + "\n").utf8)
     }

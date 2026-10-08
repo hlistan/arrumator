@@ -74,11 +74,12 @@ public struct PipelineServices: Sendable {
 
     /// Starts a trace stamped with the prompt version and the models of the profile in use. Settings that name no profile
     /// they list leave it unstamped: reading with them fails, saying so, and the trace records that.
-    public func startTrace(docID: Int64?, jobID: Int64?, attempt: Int, source: TraceSource,
-                           settings: AppSettings) async throws -> TraceContext {
+    /// With `resuming`, a trace that ended waiting for Ollama is taken up (`TraceRecorder.start(_:resuming:)`).
+    public func startTrace(docID: Int64?, jobID: Int64?, attempt: Int, source: TraceSource, settings: AppSettings,
+                           resuming previous: Int64? = nil) async throws -> TraceContext {
         try await traces.start(TraceHeader(docID: docID, jobID: jobID, attempt: attempt, source: source,
                                            promptVersion: config.analysis.promptVersion,
-                                           models: try? settings.modelProfile(), settings: settings))
+                                           models: try? settings.modelProfile(), settings: settings), resuming: previous)
     }
 
     /// Whether `error` says Ollama is away, which work waits out spending nothing, as every queue decides it: it could not
@@ -340,7 +341,8 @@ public struct PipelineServices: Sendable {
                         rereading: Rereading, jobID: Int64?, traceID: Int64?, at now: Date) throws -> [DocumentLabel] {
         let embedding = outcome.embedding.flatMap { vector in
             outcome.embeddingModel.map {
-                TextEmbedding(model: $0, vector: vector, sourceText: embeddingText(content, senders: outcome.labels?.values(.sender) ?? []))
+                TextEmbedding(model: $0, vector: vector, sourceText: embeddingText(content, senders: outcome.labels?.values(.sender) ?? [],
+                                                                                   interpretation: outcome.analysis.interpretation))
             }
         }
         let labels = try IndexStore.replaceReading(db, docID: docID, filename: filename, content: content, read: outcome.labels,
@@ -351,8 +353,8 @@ public struct PipelineServices: Sendable {
     }
 
     /// The text a document's embedding is made of, as its job keeps it with the embedding (`IndexStore.upsertEmbedding`).
-    func embeddingText(_ content: ExtractedContent, senders: [String]) -> String {
-        content.embeddingSummary(senders: senders, maxChars: config.analysis.embeddingSummaryChars,
+    func embeddingText(_ content: ExtractedContent, senders: [String], interpretation: String?) -> String {
+        content.embeddingSummary(senders: senders, interpretation: interpretation, maxChars: config.analysis.embeddingSummaryChars,
                                  identifiersLimit: config.analysis.embeddingIdentifiersLimit)
     }
 }

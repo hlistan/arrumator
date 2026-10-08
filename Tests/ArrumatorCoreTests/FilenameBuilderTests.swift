@@ -82,13 +82,35 @@ import Testing
 
     @Test(arguments: [("_documents", "md", "a record file's name"), ("_Notes", "md", "the managed-file prefix on Markdown"),
                       ("~$Contract", "docx", "an Office lock file's prefix"), ("Thumbs", "db", "a name the watchers ignore"),
-                      ("Report.sb-2a1", "pdf", "a name a sandboxed save leaves in progress")])
+                      ("Report.sb-2a1", "pdf", "a name a sandboxed save leaves in progress"),
+                      ("Fatura.pdf.arrumator", "md", "a document's sidecar's name"), ("Notes.ARRUMATOR", "md", "a sidecar's name, in any case")])
     func aNameTheAppKeepsForItsOwnFilesIsNeverGiven(_ written: String, _ fileExtension: String, _ why: String) {
         let current = "scan_0001." + fileExtension
         let name = builder.name(for: decision(named: written), current: current, transliterate: false)
         #expect(name == current, "\(written).\(fileExtension) is \(why): the document keeps its own name instead")
         #expect(skip.ignoreReason(name: name) == nil, "so a filed document is never mistaken for one of the app's files, or ignored")
         #expect(builder.bounded(written, fileExtension: fileExtension) == nil, "and a name typed by the user is refused the same way")
+    }
+
+    @Test(arguments: [String(repeating: "한", count: 120), String(repeating: "ᾄ", count: 120), String(repeating: "é", count: 120),
+                      String(repeating: "Счёт ", count: 30)])
+    func aNameTheAppGivesLeavesRoomForItsSidecarWhateverItsScript(_ title: String) throws {
+        let name = try #require(builder.bounded(title, fileExtension: "pdf"), "a name is left of it")
+        let longest = String(format: builder.config.collisionFormat, FilenameBuilder.maxCollisionAttempts)
+        #expect(ArchiveLayout.fits(name + longest + skip.watcher.sidecarSuffix),
+                "decomposed, as a file's name may be written, the name a taken name's number makes of it has room for its sidecar's: \(name.count) characters")
+        #expect(name.hasSuffix(".pdf") && name.count > 40, "and it is cut no more than that needs")
+    }
+
+    @Test func aNameOfTheUsersWithoutRoomForItsSidecarHasNone() throws {
+        let config = try PipelineConfig.bundledDefaults()
+        let layout = ArchiveLayout(root: URL(fileURLWithPath: "/A"), records: config.records, watcher: config.watcher)
+        let ascii = String(repeating: "a", count: 255 - config.watcher.sidecarSuffix.count)
+        #expect(layout.sidecar(of: "/A/" + ascii)?.lastPathComponent == ascii + config.watcher.sidecarSuffix, "255 units in all is a name")
+        #expect(layout.sidecar(of: "/A/" + ascii + "b") == nil, "256 is none")
+        let accents = String(repeating: "é", count: 200)
+        #expect(accents.utf16.count + config.watcher.sidecarSuffix.count < 255 && layout.sidecar(of: "/A/" + accents) == nil,
+                "200 accented letters fit composed, but not as a file's name may be written, decomposed")
     }
 
     @Test func joinersAreKeptAndOtherInvisibleCharactersAreNot() {

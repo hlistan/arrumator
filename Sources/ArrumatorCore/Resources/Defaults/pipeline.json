@@ -79,6 +79,7 @@
     ],
     "managedFilePrefix": "_",
     "managedFileExtension": "md",
+    "sidecarSuffix": ".arrumator.md",
     "selfChangeTTLSeconds": 30
   },
   "records": {
@@ -143,9 +144,6 @@
       "ocrMaxPixel": 2048,
       "vlmMaxPixel": 1024,
       "jpegQuality": 0.8,
-      "sparseChars": 80,
-      "sparseWords": 8,
-      "lowConfidence": 0.35,
       "vlmTimeout": 90,
       "maxPixels": 200000000
     },
@@ -423,7 +421,7 @@
     "minTextDateScore": 1
   },
   "analysis": {
-    "promptVersion": 12,
+    "promptVersion": 13,
     "excerptChars": 12000,
     "excerptTailDivisor": 6,
     "embeddingSummaryChars": 2000,
@@ -485,7 +483,8 @@
       },
       "promptPreferred": 20,
       "promptUnwanted": 20,
-      "suggestionLimit": 50
+      "suggestionLimit": 50,
+      "judgeDocuments": 3
     }
   },
   "naming": {
@@ -529,7 +528,8 @@
       2,
       3,
       2,
-      4
+      4,
+      2
     ],
     "snippetTokens": 24,
     "vectorSnippetChars": 200

@@ -544,8 +544,8 @@ public actor IngestCoordinator {
         if payload.rereading != nil {
             await replaced(docID: docID, outcome: outcome, trace: trace)
         } else if let embedding = outcome.embedding, let model = outcome.embeddingModel {
-            try await index(docID: docID, content: content, senders: outcome.labels?.values(.sender) ?? [], vector: embedding,
-                            model: model, trace: trace)
+            try await index(docID: docID, content: content, senders: outcome.labels?.values(.sender) ?? [],
+                            interpretation: outcome.analysis.interpretation, vector: embedding, model: model, trace: trace)
         }
         try await save(&job, &payload, state: status == .needsReview ? .needsReview : .done, trace: trace)
         Log.info(.ingest, status == .needsReview ? "Filed; waiting for the user" : "Filed", ["doc": String(docID), "path": filedRecord.path])

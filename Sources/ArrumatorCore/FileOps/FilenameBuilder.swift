@@ -41,7 +41,13 @@ public struct FilenameBuilder: Sendable {
         return base + suffix
     }
 
-    private func fits(_ s: String) -> Bool { s.count <= config.maxChars && s.utf8.count <= config.maxBytes }
+    /// Whether `s` is within the name's limits, and leaves room for the longest number a name taken is given and the
+    /// sidecar's suffix after it, so a document the app names always has its sidecar (`ArchiveLayout.sidecar(of:)`).
+    private func fits(_ s: String) -> Bool {
+        let longest = config.collisionFormat.replacingOccurrences(of: "%d", with: String(Self.maxCollisionAttempts))
+        return s.count <= config.maxChars && s.utf8.count <= config.maxBytes
+            && ArchiveLayout.fits(s + longest + reserved.watcher.sidecarSuffix)
+    }
 
     /// What a title may not begin or end with besides the separators of the name it goes into (`naming.separators`):
     /// white space, the dashes and the colon a title copied from a whole name is left with.

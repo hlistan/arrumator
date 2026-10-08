@@ -38,12 +38,26 @@ public struct LabelRule: ArrumatorRecord, Identifiable, Hashable {
         return (x.isSameWriting(as: p) && y.isSameWriting(as: q)) || (x.isSameWriting(as: q) && y.isSameWriting(as: p))
     }
 
+    /// Whether the rule already decides labels `a` and `b` of one kind, so the model is not asked about them: it keeps the
+    /// two apart, or it rewrites how either is written, merged or dropped, written however (`concerns`). What the user
+    /// decided stands; the one check both the pairs judged (`LabelConsolidator`) and acting on a judgement
+    /// (`LabelActions.decide`) apply.
+    func decides(_ a: DocumentLabel, _ b: DocumentLabel) -> Bool {
+        keepsApart(a.value, b.value, kind: a.kind) || (action.rewrites && (concerns(a) || concerns(b)))
+    }
+
+    /// Whether the rule merges `from` into `into`, each written so.
+    func isMerge(of from: DocumentLabel, into: DocumentLabel) -> Bool {
+        action == .merge && kind == from.kind && value == from.value && target == into.value
+    }
+
     /// The rule as a line: “sender EDP Comercial → EDP”.
     public var summary: String {
         switch action {
         case .merge: "\(kind.rawValue) “\(value)” → “\(target ?? "")”"
         case .ignore: "\(kind.rawValue) “\(value)” ignored"
         case .keepApart: "\(kind.rawValue) “\(value)” and “\(target ?? "")” kept apart"
+        case .add: "\(kind.rawValue) “\(value)” added"
         }
     }
 }
@@ -86,6 +100,20 @@ public struct LabelStore: Sendable {
         return usage
     }
 
+    /// Every label in use, as `usage()` gives them, and after the tags in use each tag the user added that no document has
+    /// yet (`LabelActions.add`), the oldest added first: what the Labels page and `arrumatorcli labels list` show, and the
+    /// tags a card offers.
+    public func listing() async throws -> [LabelKind: [LabelUsage]] {
+        try await database.reader.read { db in
+            var listing = try Self.usage(db)
+            let added = try LabelRule.filter(Column("action") == LabelRuleAction.add.rawValue).order(Column("id")).fetchAll(db)
+            for rule in added where !(listing[rule.kind] ?? []).contains(where: { $0.label.value == rule.value }) {
+                listing[rule.kind, default: []].append(LabelUsage(label: DocumentLabel(kind: rule.kind, value: rule.value), documents: 0))
+            }
+            return listing
+        }
+    }
+
     /// The user's rules, oldest first.
     public func rules() async throws -> [LabelRule] {
         try await database.reader.read { db in try LabelRule.order(Column("id")).fetchAll(db) }
@@ -97,23 +125,31 @@ public struct LabelStore: Sendable {
         return LabelConsolidator(config: config.vocabulary, rules: rules, vocabulary: usage)
     }
 
-    /// Pairs of labels in use alike enough to be one, which the user has not decided about. Which labels of a kind look
-    /// alike is brought up to date from when it was last asked, comparing only the labels added since (`LookAlikeMemo`);
-    /// one asking while another works it out waits for it. Stopping is thrown, the work done kept. How many there are is
-    /// told to every subscriber of `LookAlikeMemo.suggestionCounts()`.
-    public func suggestions() async throws -> [LabelSuggestion] {
-        let found = try await consolidator().suggestions(by: lookAlikes, comparing: LabelSimilarity.lookAlike(_:_:atLeast:))
-        lookAlikes.publish(suggestions: found.count)
-        return found
+    /// Pairs of labels in use alike enough to be one, which no rule decides yet (`LabelRule.decides`), the most alike
+    /// first: what the model judges (`LabelJudge`). Which labels of a kind look alike is brought up to date from when it was last asked, comparing
+    /// only the labels added since (`LookAlikeMemo`); one asking while another works it out waits for it. Stopping is
+    /// thrown, the work done kept.
+    /// Pairs whose `pairID` is in `settingAside` are left out before the list is cut to `labels.vocabulary.suggestionLimit`, so
+    /// those the model gave no answer for never hold up the rest.
+    public func suggestions(settingAside: Set<String> = []) async throws -> [LabelSuggestion] {
+        try await consolidator().suggestions(by: lookAlikes, comparing: LabelSimilarity.lookAlike(_:_:atLeast:), settingAside: settingAside)
     }
 
-    /// Works out which labels look alike, as `suggestions()` does, so that the first to ask for them seldom waits and
-    /// how many there are is told to those who count them: what the runtime does once the archive is open, and at every
-    /// change to it after. Stopping ends it, keeping what it has done; a failure is logged.
-    public func workOutLookAlikes() async {
-        do { _ = try await suggestions() } catch {
-            guard !(error is CancellationError || Task.isCancelled) else { return }
-            Log.error(.db, "Could not work out which labels look alike", ["error": error.localizedDescription])
+    /// What each label of `pair` is used for, as the model is shown it when it judges them (`LabelPairJudging`): how many
+    /// documents have each, and the file names of the newest `names` of them, by when they were added.
+    public func use(of pair: LabelSuggestion, names: Int) async throws -> LabelPairUse {
+        try await database.reader.read { db in
+            let of = { (value: String) throws -> (Int, [String]) in
+                let arguments: StatementArguments = [pair.kind.rawValue, value]
+                let count = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM document_labels WHERE kind = ? AND value = ?", arguments: arguments) ?? 0
+                let paths = try String.fetchAll(db, sql: """
+                    SELECT d.path FROM document_labels l JOIN documents d ON d.id = l.doc_id WHERE l.kind = ? AND l.value = ?
+                    ORDER BY d.added_at DESC, d.id DESC LIMIT ?
+                    """, arguments: arguments + [names])
+                return (count, paths.map { URL(fileURLWithPath: $0).lastPathComponent })
+            }
+            let ((valueDocuments, valueNames), (intoDocuments, intoNames)) = (try of(pair.value), try of(pair.into))
+            return LabelPairUse(valueDocuments: valueDocuments, valueNames: valueNames, intoDocuments: intoDocuments, intoNames: intoNames)
         }
     }
 

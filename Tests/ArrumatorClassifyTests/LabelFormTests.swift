@@ -90,6 +90,21 @@ import Testing
                 "the title is in the document's own language whatever else the prompt is in")
     }
 
+    @Test func theInterpretationsExamplesAreInSeveralLanguagesAndItIsInTheDocuments() throws {
+        let examples = try Self.examples(of: ClassificationSchema.interpretationKey)
+        let languages = Set(examples.compactMap { example -> NLLanguage? in
+            let recognizer = NLLanguageRecognizer()
+            recognizer.processString(example)
+            return recognizer.dominantLanguage
+        })
+        #expect(examples.count > 2 && languages.count > 2,
+                "what the model says a document is copies an example's language, so there are examples in several: \(examples)")
+        #expect(try Self.systemPrompt().contains("- interpretation: what the document is and what it says, in two to four sentences, in the language its own text is written in"),
+                "it is said in the document's own language, as the title is")
+        #expect(try Self.systemPrompt().contains("For an image, as the VISUAL line describes one, first say what it shows"),
+                "and an image is said to be what it shows")
+    }
+
     @Test func theSenderOfAContractIsThePartyThatIssuesIt() throws {
         let system = try Self.systemPrompt()
         #expect(system.contains("A contract, a lease or an agreement is issued by the party that offers it, such as the landlord"),

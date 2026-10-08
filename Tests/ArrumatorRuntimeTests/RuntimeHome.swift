@@ -32,6 +32,8 @@ struct RuntimeHome {
         /// The bundled settings' own, as a fresh install has them: this Mac's Ollama, which the app starts. Only for a
         /// test of those settings that starts nothing (`ArrumatorRuntime.start()` never runs on it).
         case asBundled
+        /// A stand-in on this Mac at the address (`LoopbackOllama`), which the runtime never starts a server for.
+        case at(String)
     }
 
     static func make(ollama: Ollama = .nowhere) async throws -> RuntimeHome {
@@ -45,9 +47,14 @@ struct RuntimeHome {
         try await SettingsStore.opened(paths: home.paths).update {
             $0.archivePath = home.folder("First").path
             $0.incomingPath = home.folder("Incoming").path
-            if case .nowhere = ollama {
+            switch ollama {
+            case .nowhere:
                 $0.ollamaURL = Self.nowhere
                 $0.ollamaManagement = .external
+            case let .at(address):
+                $0.ollamaURL = address
+                $0.ollamaManagement = .external
+            case .asBundled: break
             }
         }
         // The archive the user has, set up as onboarding sets it up: the app never makes its folder at a later launch.
@@ -128,11 +135,4 @@ struct RuntimeHome {
 
     static let writableFolder = 0o755
     static let readOnlyFolder = 0o555
-}
-
-/// A subscriber to how many labels look alike (`LookAlikeMemo.suggestionCounts()`), as the app is one: every count it
-/// was sent, in order.
-actor SuggestionCounts {
-    private(set) var received: [Int] = []
-    func add(_ count: Int) { received.append(count) }
 }

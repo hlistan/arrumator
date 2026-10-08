@@ -1,5 +1,4 @@
 @testable import ArrumatorCore
-import ArrumatorTesting
 import Foundation
 import Synchronization
 import Testing
@@ -136,38 +135,5 @@ import Testing
         let rest = try await memo.alike(.sender, labels: senders, threshold: 0.85, comparing: comparisons.compare)
         #expect(comparisons.asked.count == all, "the next compares only what was left, so no pair is compared twice")
         #expect(rest.pairs == Self.fromNothing(senders, threshold: 0.85).pairs, "and has it all")
-    }
-
-    /// Everything a subscriber was sent, in order.
-    actor Counts {
-        private(set) var received: [Int] = []
-        func add(_ count: Int) { received.append(count) }
-    }
-
-    @Test func howManySuggestionsThereAreIsSentToEverySubscriberTheLastKnownFirstAndOnlyWhenItChanges() async throws {
-        let h = try await Harness.make()
-        defer { h.env.cleanup() }
-        // Filed with senders written alike, as the index holds them, past what a reading would merge.
-        for (place, sender) in ["EDP Comercial", "EDP Comercail"].enumerated() {
-            var bill = DocumentRecord.arrived(path: h.env.archive.appendingPathComponent("bill \(place).pdf").path, sha256: "bill \(place)",
-                                              size: 1, uttype: "com.adobe.pdf", inode: nil, modified: nil, now: h.env.time.now())
-            bill.status = .filed
-            bill.labelsJson = try JSON.string([DocumentLabel(kind: .sender, value: sender)])
-            _ = try await h.services.documents.save(bill)
-        }
-        let early = Counts()
-        let earlyStream = h.services.lookAlikes.suggestionCounts()
-        let following = Task { for await count in earlyStream { await early.add(count) } }
-        defer { following.cancel() }
-        let found = try await h.services.labels.suggestions()
-        _ = try await h.services.labels.suggestions()
-        #expect(found.count == 1, "the two senders written alike are one suggestion")
-        #expect(await Patience.until { await early.received == [1] }, "a subscriber is sent the count once, as asking again changed nothing")
-        let late = Counts()
-        let lateStream = h.services.lookAlikes.suggestionCounts()
-        let followingLate = Task { for await count in lateStream { await late.add(count) } }
-        defer { followingLate.cancel() }
-        #expect(await Patience.until { await late.received == [1] },
-                "and one that subscribes later is sent the last known count first, without asking")
     }
 }

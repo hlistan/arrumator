@@ -119,6 +119,6 @@ public struct PerFileAnalyzer: DocumentAnalyzing {
         return outcome
     }
 
-    public func embedding(for content: ExtractedContent, senders: [String], settings: AppSettings, config: PipelineConfig,
-                          trace: TraceContext) async throws -> (vector: [Float], model: String)? { nil }
+    public func embedding(for content: ExtractedContent, senders: [String], interpretation: String?, settings: AppSettings,
+                          config: PipelineConfig, trace: TraceContext) async throws -> (vector: [Float], model: String)? { nil }
 }

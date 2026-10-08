@@ -1,13 +1,14 @@
 import ArrumatorCore
 import Foundation
 import ImageIO
-import NaturalLanguage
 import UniformTypeIdentifiers
 
-/// Photos, scans and screenshots: EXIF `DateTimeOriginal`, OCR on an orientation-corrected, downscaled image,
-/// and — when the OCR text is sparse and a vision model is configured — a schema-constrained description from the
-/// local vision model. A TIFF's pages are each read, as many as a scanned PDF's (`pdf.ocrAllIfAtMost`, else the first
-/// `pdf.ocrHeadPages` and the last). An image that declares more than `image.maxPixels` pixels is not decoded.
+/// Photos, scans and screenshots: EXIF `DateTimeOriginal`, OCR on an orientation-corrected, downscaled image, and,
+/// when a vision model is configured, a schema-constrained description from the local vision model of what the image
+/// shows, whatever text OCR read on it: a screenshot or a photographed receipt is described too, its text staying the
+/// text OCR read. A TIFF's pages are each read, as many as a scanned PDF's (`pdf.ocrAllIfAtMost`, else the first
+/// `pdf.ocrHeadPages` and the last), and its first page described. An image that declares more than `image.maxPixels`
+/// pixels is not decoded.
 struct ImageExtractor: FileExtractor {
     let ocr: OCRService
     let vision: VisionDescriber?
@@ -65,7 +66,6 @@ struct ImageExtractor: FileExtractor {
                                            tables: read.tables.prefix(job.config.maxTables)
                                                .map { String($0.prefix(job.config.tableSnippetChars)) })
         draft.timings["ocr"] = pass.elapsedMs
-        guard Self.isSparse(text: text, confidence: pass.stats?.meanConfidence ?? 0, config: config) else { return draft }
         try await describe(page: first.index, of: source, into: &draft, job: job)
         return draft
     }
@@ -122,18 +122,18 @@ struct ImageExtractor: FileExtractor {
         return read
     }
 
-    /// Asks the vision model, when one is configured, to describe the page at `index` of an image whose text is too
-    /// sparse to identify it. A description the model fails to give is a warning; Ollama away is thrown, for the job to
-    /// wait for, or noted as a warning where the context says so (`WhenOllamaIsAway`).
+    /// Asks the vision model, when one is configured, to describe the page at `index` of an image, with the text OCR read
+    /// on it. A description the model fails to give is a warning; Ollama away is thrown, for the job to wait for, or noted
+    /// as a warning where the context says so (`WhenOllamaIsAway`).
     private func describe(page index: Int, of source: CGImageSource, into draft: inout ExtractionDraft,
                           job: ExtractionJob) async throws {
         let config = job.config.image
         guard let options = job.context.vision else {
-            draft.warnings.append(ExtractionWarning(.vlmSkipped, "sparse OCR text and no vision model configured"))
+            draft.warnings.append(ExtractionWarning(.vlmSkipped, "no vision model configured"))
             return
         }
         guard let vision else {
-            draft.warnings.append(ExtractionWarning(.vlmSkipped, "sparse OCR text and no Ollama client available"))
+            draft.warnings.append(ExtractionWarning(.vlmSkipped, "no Ollama client available"))
             return
         }
         try Task.checkCancellation()
@@ -170,25 +170,6 @@ struct ImageExtractor: FileExtractor {
     static func fits(_ size: (width: Int, height: Int), maxPixels: Int) -> Bool {
         let (pixels, overflowed) = size.width.multipliedReportingOverflow(by: size.height)
         return size.width > 0 && size.height > 0 && !overflowed && pixels <= maxPixels
-    }
-
-    /// Too little text for OCR alone to identify the image (thresholds from `ExtractionConfig.Image`).
-    static func isSparse(text: String, confidence: Double, config: ExtractionConfig.Image) -> Bool {
-        let characters = text.count { !$0.isWhitespace }
-        return characters < config.sparseChars || words(in: text) < config.sparseWords || confidence < config.lowConfidence
-    }
-
-    /// The words of `text` as NaturalLanguage tells them apart in every script, those written without spaces between
-    /// words (Chinese, Japanese, Thai) among them, in which splitting at spaces finds a whole line one word.
-    private static func words(in text: String) -> Int {
-        let tokenizer = NLTokenizer(unit: .word)
-        tokenizer.string = text
-        var count = 0
-        tokenizer.enumerateTokens(in: text.startIndex..<text.endIndex) { _, _ in
-            count += 1
-            return true
-        }
-        return count
     }
 
     // MARK: Trace

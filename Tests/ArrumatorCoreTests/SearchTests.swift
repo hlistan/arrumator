@@ -41,6 +41,26 @@ import Testing
         #expect(field.hits.map(\.id) == [edp], "a label is found under its kind")
     }
 
+    @Test func aDocumentIsFoundByWhatTheModelReadItAsWhateverItsTextSays() async throws {
+        let db = try AppDatabase.inMemory()
+        let photo = try await insert(db, title: "IMG_2041", body: "", sender: "Unknown")
+        let other = try await insert(db, title: "Recibo", body: "Farmácia Central recibo", sender: "Farmácia Central")
+        let store = DocumentStore(database: db, time: TestTime(.advances))
+        try await store.update(photo) { $0.analysisJson = try JSON.string(DocumentAnalysis(interpretation: "A photo of a grey cat asleep on a red sofa.")) }
+        let search = SearchService(database: db, vectors: VectorIndex(), embedder: nil, config: try PipelineConfig.bundledDefaults().search,
+                                   time: TestTime(.advances))
+        #expect(try await search.fullText(SearchQuery(text: "cat sofa")).hits.map(\.id) == [photo],
+                "a photo without a word on it is found by what the model said it shows, as soon as its reading is saved")
+        let (cat, recibo) = (try await search.fullText(SearchQuery(text: "interpretation:cat")),
+                             try await search.fullText(SearchQuery(text: "interpretation:recibo")))
+        #expect(cat.hits.map(\.id) == [photo] && recibo.hits.isEmpty, "and the interpretation is a field of its own, as a kind of label is")
+        try await IndexStore(database: db, time: TestTime(.advances)).upsertText(docID: photo, filename: "IMG_2041.pdf", body: "", summary: nil,
+                                                                                 metadata: [:], extractorVersion: "t", labels: [])
+        #expect(try await search.fullText(SearchQuery(text: "sofa")).hits.map(\.id) == [photo],
+                "its text indexed again keeps what the model read it as")
+        #expect(try await search.fullText(SearchQuery(text: "farmacia")).hits.map(\.id) == [other], "while the others are found as before")
+    }
+
     @Test func hybridSearchFusesSemanticHits() async throws {
         let db = try AppDatabase.inMemory()
         let a = try await insert(db, title: "Electricity bill", body: "electricity power invoice kilowatt", sender: "EDP")

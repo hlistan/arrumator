@@ -44,9 +44,14 @@ say what it is in one vocabulary, so a German electricity bill and a Japanese on
   to the Trash. **Read All Documents Again**, under Settings › Filing, does the same for the whole archive, after the
   files that arrive meanwhile: what a new profile, or a better Arrumator, is for.
 - **Keeps labels one vocabulary, and learns from you.** A label written the way the archive already writes it becomes
-  that label, and labels that merely look alike wait for you on the Labels page. Merge two labels or remove one
-  everywhere, and every document, and every one read from then on, follows: the model is shown your decisions and the
-  archive's labels each time it reads.
+  that label, and labels that merely look alike are judged by the local model: one label written two ways is merged
+  into the one more documents have, two different ones are kept apart, without asking you. On the Labels page, rename a
+  label, merge two, remove one from every document, once or for good, or add a tag of your own; every document, and
+  every one read from then on, follows: the model is shown your decisions and the archive's labels each time it reads.
+- **Keeps what it read beside each document.** Next to every document in the archive is a Markdown file named after it,
+  `….pdf.arrumator.md`, with what the model says the document is, in a few sentences in its own language, and its text
+  as it was recognised, by OCR or from the file. A photo is described by what it shows, its text kept as OCR read it.
+  Spotlight and any text editor read it without the app, and the app's search finds a document by those words too.
 - **Names every file** from its date, its sender and what it is, such as `2026-07-05 EDP Comercial - Fatura
   eletricidade julho.pdf`, and files it at the top of the archive. The app makes no folders.
 - **Finds documents you describe.** Ask in your own words, in any language, for the documents you need ("electricity
@@ -65,7 +70,8 @@ say what it is in one vocabulary, so a German electricity bill and a Japanese on
   blank, waits in Needs You, in the archive, instead of being guessed into shape.
 - **Everything can be audited**: the prompts, the model's answers, timings and a full history, with Statistics
   showing where documents stop and why.
-- **Nothing is lost.** No code path deletes a document. Every move is recorded and can be undone. Every document's labels
+- **Nothing is lost.** No code path deletes a document: one you remove goes to the Trash, from which you can take it
+  back. Every move is recorded and can be undone. Every document's labels
   live in Markdown files inside your archive, and its index can be rebuilt from them.
 - **A command line tool**, `arrumatorcli`, does everything the app does, with `--json` output for scripts.
 
@@ -129,8 +135,9 @@ together; [docs/cli.md](docs/cli.md) explains how to use it. To build from sourc
 1. Put a document in `~/Documents/Incoming` (Settings › General changes both folders), or a folder of them: its name
    becomes a tag of every document in it.
 2. Arrumator reads it, names it and files it at the top of `~/Documents/Archive`, and shows it in **Processed**.
-3. Open the document's row to see its labels and how it was read. Rename it, or take off or add a label, on its card
-   if something is wrong. On **Labels**, merge labels that mean the same, or remove one you never want.
+3. Open the document's row to see its labels, what it is and how it was read, and **Recognised Text** for its text.
+   Rename it, or take off or add a label, on its card if something is wrong, or move it to the Trash. On **Labels**,
+   rename a label, merge labels that mean the same, remove one, or add a tag of your own.
 4. Documents it could not read wait in **Needs You**. Confirm them as they are, or have them read again.
 5. Click a label in the sidebar, such as a sender, to see only its documents; the sidebar then lists only the labels
    those documents have, so a second click, such as a type, narrows them down further, and **Clear** at the top of the

@@ -13,10 +13,14 @@ public enum RecordKind: Hashable, Sendable {
     case searchTasks
     /// The questions about one search task's documents and their answers, by the task's number.
     case conversation(task: Int64)
+    /// The sidecar of one document, by its number: what the model read it as and its text, beside it
+    /// (`ArchiveRecords.renderSidecar`). Written from the index, never read back.
+    case sidecar(document: Int64)
 
     static let documentsPrefix = "documents:"
     static let historyPrefix = "history:"
     static let conversationPrefix = "conversation:"
+    static let sidecarPrefix = "sidecar:"
     static let labelRulesKey = "labels"
     static let searchTasksKey = "tasks"
 
@@ -28,6 +32,7 @@ public enum RecordKind: Hashable, Sendable {
         case .labelRules: Self.labelRulesKey
         case .searchTasks: Self.searchTasksKey
         case let .conversation(task): Self.conversationPrefix + String(task)
+        case let .sidecar(document): Self.sidecarPrefix + String(document)
         }
     }
 
@@ -45,6 +50,8 @@ public enum RecordKind: Hashable, Sendable {
             self = .history(month: String(key.dropFirst(Self.historyPrefix.count)))
         } else if key.hasPrefix(Self.conversationPrefix), let task = Int64(key.dropFirst(Self.conversationPrefix.count)) {
             self = .conversation(task: task)
+        } else if key.hasPrefix(Self.sidecarPrefix), let document = Int64(key.dropFirst(Self.sidecarPrefix.count)) {
+            self = .sidecar(document: document)
         } else {
             return nil
         }

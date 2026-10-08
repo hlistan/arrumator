@@ -51,6 +51,27 @@ public struct ArchiveLayout: Sendable, Hashable {
         return month.range(of: #"^\d{4}-\d{2}$"#, options: .regularExpression) == nil ? nil : month
     }
 
+    /// The longest name a file may have on the Mac's volumes (`NAME_MAX`), in UTF-16 units of the name as it is written:
+    /// so APFS counts it, and HFS+ in its decomposed form (measured on APFS: a name of 255 Cyrillic letters, 510 bytes of
+    /// UTF-8, is one; 256 ASCII letters, or 200 accented letters written decomposed, are none).
+    public static let nameMaxUnits = Int(NAME_MAX)
+
+    /// Whether `name` is one a file may have, however it is written (`nameMaxUnits`): counted decomposed, as Foundation
+    /// may write a name, which is never shorter.
+    public static func fits(_ name: String) -> Bool {
+        name.decomposedStringWithCanonicalMapping.utf16.count <= nameMaxUnits
+    }
+
+    /// Where the sidecar of the document at `path` is: beside it, named after it with `watcher.sidecarSuffix`. Nil when that
+    /// name would be longer than a file's name may be (`fits`), as for a name of the user's own near the limit; the app
+    /// gives none such (`FilenameBuilder.bounded`).
+    public func sidecar(of path: String) -> URL? {
+        let document = URL(fileURLWithPath: path)
+        let name = document.lastPathComponent + watcher.sidecarSuffix
+        guard Self.fits(name) else { return nil }
+        return document.deletingLastPathComponent().appendingPathComponent(name)
+    }
+
     /// Inside the system folder, which holds no documents.
     public func isSystem(_ url: URL) -> Bool {
         let path = url.standardizedFileURL.path

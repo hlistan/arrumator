@@ -48,14 +48,14 @@ import Testing
         defer { h.env.cleanup() }
         let filed = try await h.ingest("bill.txt", text: IngestTests.bill)
         let id = try #require(filed.id)
-        #expect(try await h.review.choices(for: filed) == DocumentChoices(actions: [.undo, .confirm], notFiled: false),
+        #expect(try await h.review.choices(for: filed) == DocumentChoices(actions: [.undo, .confirm, .remove], notFiled: false),
                 "a filed document not confirmed yet is offered Looks Right")
         try await h.review.confirm(id)
         try await h.review.confirm(id)
         let events = try await h.services.history.events(limit: 10, kinds: [.markedCorrect], docID: id)
         #expect(events.count == 1, "pressed twice, Looks Right records the confirmation once")
         let confirmed = try #require(try await h.services.documents.document(id: id))
-        #expect(try await h.review.choices(for: confirmed) == DocumentChoices(actions: [.undo], notFiled: false, confirmed: events.first?.at),
+        #expect(try await h.review.choices(for: confirmed) == DocumentChoices(actions: [.undo, .remove], notFiled: false, confirmed: events.first?.at),
                 "its card says when it was confirmed, and no longer offers to confirm it")
         try await h.review.edit(id, fileName: nil, labels: LabelEdit(adding: [DocumentLabel(kind: .topic, value: "utilities")]))
         let corrected = try #require(try await h.services.documents.document(id: id))

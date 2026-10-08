@@ -24,16 +24,24 @@ public struct SkipRules: Sendable {
 
     /// Reason a file of this name is ignored, whatever it is, or nil when its name lets it be processed. The app's own
     /// files are Markdown named with the managed-file prefix (`_documents.md`, history files), and so are those earlier
-    /// versions left in folders; no document is given a name this refuses (`FilenameBuilder`).
+    /// versions left in folders, or a document's sidecar, named after it with `watcher.sidecarSuffix`; no document is
+    /// given a name this refuses (`FilenameBuilder`).
     func ignoreReason(name: String) -> String? {
         if StagedRecordFile.isStaged(name, watcher: watcher) { return "staged record file" }
         let fileExtension = (name as NSString).pathExtension.lowercased()
         if name.hasPrefix(watcher.managedFilePrefix), fileExtension == watcher.managedFileExtension { return "managed file" }
+        if isSidecar(name) { return "sidecar" }
         if watcher.ignoredNames.contains(name) { return "ignored name" }
         if let p = watcher.ignoredNamePrefixes.first(where: { name.hasPrefix($0) }) { return "prefix \(p)" }
         if watcher.ignoredExtensions.contains(fileExtension) { return "temporary extension" }
         if let s = watcher.ignoredNameSubstrings.first(where: { name.contains($0) }) { return "contains \(s)" }
         return nil
+    }
+
+    /// Whether a file of this name is a document's sidecar: its name ends with `watcher.sidecarSuffix`, in any case, after
+    /// a name of its document's.
+    func isSidecar(_ name: String) -> Bool {
+        name.count > watcher.sidecarSuffix.count && name.lowercased().hasSuffix(watcher.sidecarSuffix.lowercased())
     }
 
     /// True if `url` is inside any path component below `root` that is itself ignored (e.g. a hidden directory). Both

@@ -22,8 +22,7 @@ public struct ExtractorRegistry: ContentExtracting {
     private let calendar: Calendar
 
     /// - Parameters:
-    ///   - ollama: the Ollama client images with sparse text are described with; without it such images get a
-    ///     `vlmSkipped` warning.
+    ///   - ollama: the Ollama client images are described with; without it an image gets a `vlmSkipped` warning.
     ///   - recognizer: reads text in images (`VisionTextRecognizer` in the app).
     ///   - shell: runs `textutil`.
     ///   - time: what every deadline of extraction is measured by.

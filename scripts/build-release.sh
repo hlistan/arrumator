@@ -61,11 +61,15 @@ xcodegen generate --quiet
 # it is given the package's, and -onlyUsePackageVersionsFromResolvedFile refuses to resolve anything else.
 mkdir -p Arrumator.xcodeproj/project.xcworkspace/xcshareddata/swiftpm
 cp Package.resolved Arrumator.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
-# Signed ad hoc here; scripts/release.sh signs it for distribution. The index store is for scripts/deadcode.sh.
+# Signed ad hoc here; scripts/release.sh signs it for distribution. The index store is for scripts/deadcode.sh, which
+# reads every unit in it: one an earlier build left, as a Debug build into the same folder (CONTRIBUTING.md) or a build
+# of a file since renamed or removed, reads as code nothing uses, or as a use that hides code nothing uses. So the store
+# is made anew, by a build that compiles everything again, and holds this build alone.
+rm -rf "$derived/Index.noindex"
 xcodebuild -project Arrumator.xcodeproj -scheme Arrumator -configuration Release -derivedDataPath "$derived" \
   -onlyUsePackageVersionsFromResolvedFile -quiet ARCHS="$universal" ONLY_ACTIVE_ARCH=NO \
   MARKETING_VERSION="$version" CURRENT_PROJECT_VERSION="$build" CODE_SIGN_IDENTITY=- COMPILER_INDEX_STORE_ENABLE=YES \
-  build
+  clean build
 app=$stage/universal/Arrumator.app
 ditto "$derived/Build/Products/Release/Arrumator.app" "$app"
 test "$(lipo -archs "$app/Contents/MacOS/Arrumator")" = "$universal"

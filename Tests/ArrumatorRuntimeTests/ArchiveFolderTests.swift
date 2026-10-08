@@ -195,36 +195,6 @@ import Testing
         await runtime.stop()
     }
 
-    @Test func whileTheArchiveIsAwayTheAppIsStillToldHowManyLabelsLookAlike() async throws {
-        let home = try await RuntimeHome.make()
-        defer { home.cleanup() }
-        do {
-            let first = try await home.open()
-            for (place, sender) in ["EDP Comercial", "EDP Comercail"].enumerated() {
-                var bill = DocumentRecord.arrived(path: home.folder("First").appendingPathComponent("bill \(place).pdf").path,
-                                                  sha256: "bill \(place)", size: 1, uttype: "com.adobe.pdf", inode: nil, modified: nil,
-                                                  now: first.time.now())
-                bill.status = .filed
-                bill.labelsJson = try JSON.string([DocumentLabel(kind: .sender, value: sender)])
-                _ = try await first.services.documents.save(bill)
-            }
-            try await first.records.flush()
-            await first.stop()
-        }
-        try FileManager.default.moveItem(at: home.folder("First"), to: home.folder("Away"))
-        let runtime = try await home.bootstrap()
-        let counts = SuggestionCounts()
-        let stream = runtime.services.lookAlikes.suggestionCounts()
-        let following = Task { for await count in stream { await counts.add(count) } }
-        defer { following.cancel() }
-        let starting = Task { try await runtime.openAndStart() }
-        #expect(await Patience.until { await counts.received.last == 1 },
-                "the labels its index holds are counted while the start waits for the archive, as the Labels page still lists them")
-        #expect(await !runtime.tasks.isWorking, "and nothing is filed into an archive that is not there")
-        await runtime.stop()
-        await #expect(throws: CancellationError.self, "the stop ends the start that waited") { try await starting.value }
-    }
-
     static let note = "note.txt"
 
     @Test func aNewIndexOfAnArchiveThatIsAwayIsNeitherMadeAnewNorTakenForEmpty() async throws {

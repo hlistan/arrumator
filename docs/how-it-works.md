@@ -10,11 +10,13 @@ covers the app and its settings. [Storage](storage.md) covers where everything i
 new file in Incoming ──► wait until it stops changing ──► tagged by the folder in Incoming it is in, if any
    ──► hash (an exact copy of a document in the archive has that document read again instead: below)
    ──► extract: PDFKit text, Apple Vision OCR, textutil (doc/docx/rtf/odt/html), XLSX, PPTX, e-mail,
-       archives, media metadata, Quick Look previews, local vision model for photos; language, dates, identifiers
+       archives, media metadata, Quick Look previews, local vision model for every image; language, dates, identifiers
    ──► analyse: the local model reads it once, with the app's own prompt and the archive's labels, picks out its
-       signals, which become its labels, and names the file; your rules and the archive's vocabulary tidy the labels
-   ──► file it at the top of the archive under that name, keeping the original name in an extended attribute, and
-       add it to the search index (its words, its labels and its meaning)
+       signals, which become its labels, names the file and says what it is; your rules and the archive's vocabulary
+       tidy the labels
+   ──► file it at the top of the archive under that name, keeping the original name in an extended attribute, write
+       its sidecar beside it (what the model read it as, and its text as it was recognised), and add it to the search
+       index (its words, what it is, its labels and its meaning)
 ```
 
 Files are handled one at a time, in the order they arrived. Each stage's result is kept as soon as the stage is done,
@@ -104,21 +106,23 @@ document's trace records which device read each page.
 
 ## Reading a document
 
-The model reads each document once: the reading model of the profile Settings uses
-([profile and effort](#profile-and-effort)), with a prompt of the app's own (`labels-system.md`), which you do not
-edit. A model that can stop thinking is told not to think first (`analysis.think`), as the one that describes images
-is, and it reads with a context of `analysis.numCtx` tokens, the one images are described with too, so a model that
-does both stays loaded once. It is
-given the document's text (an excerpt of `analysis.excerptChars` characters) and the dates and identifiers the
-extractor found, after what the archive's labels say ([below](#keeping-labels-one-vocabulary)), and it answers in a
+The model reads each document once: the reading model of the profile Settings uses ([profile and
+effort](#profile-and-effort)), with a prompt of the app's own (`labels-system.md`), which you do not edit. A model that
+can stop thinking is told not to think first (`analysis.think`), as the one that describes images is, and it reads with
+a context of `analysis.numCtx` tokens, the one images are described with too, so a model that does both stays loaded
+once. It is given the document's text (an excerpt of `analysis.excerptChars` characters) and the dates and identifiers
+the extractor found, after what the archive's labels say ([below](#keeping-labels-one-vocabulary)), and it answers in a
 fixed schema: one list of signals for each kind of label, then the document's title, what it is, in the document's
-language. Under constrained decoding the model writes the lists in the schema's order, the facts first and the title
-last. The prompt asks for labels only of what the document's own text states: never a sender, a party, a date or an
-amount taken from the archive's labels, the file's name or what the model knows of the world, and never a date it
-would have to complete, such as a day and a month without a year; the sender of a contract or a lease is the party that
-issues it, the landlord, the seller or the employer, whom it names. The prompt shows each kind by values in its form
-(`54.21 EUR`, `2026-06`), never by a pattern the model would copy, and the title by examples in several languages, as
-the title is in the language of the document's own text.
+language, then its interpretation: what the document is and what it says, in two to four sentences in the language of
+its own text, as the title is, an image first said to be what it shows. Under constrained decoding the model writes the
+lists in the schema's order, the facts first, then the title, and the interpretation last, so nothing written before it
+depends on it. A document that waits for you has none, as it has no title: what the model read of it is in doubt. The
+prompt asks for labels only of what the document's own text states: never a sender, a party, a date or an amount taken
+from the archive's labels, the file's name or what the model knows of the world, and never a date it would have to
+complete, such as a day and a month without a year; the sender of a contract or a lease is the party that issues it, the
+landlord, the seller or the employer, whom it names. The prompt shows each kind by values in its form (`54.21 EUR`,
+`2026-06`), never by a pattern the model would copy, and the title and the interpretation by examples in several
+languages, as each is in the language of the document's own text.
 
 The answer is untrusted input. It is decoded into typed values and checked, each label as described below; an answer
 that cannot be read, or leaves a list out, goes back to the model with what was wrong (`analysis.repairAttempts` times),
@@ -140,6 +144,41 @@ emoji are written with, bounded length, and, when Settings says so, transliterat
 of, as one of dots and dashes, is no name, and nor is one of the app's own files or one Incoming never takes in (a
 record file's `_….md`, a lock file's `~$…`): the document then keeps the name it has, the one it arrived with, or, read
 again in the archive, the one it has there.
+
+## What is kept beside a document
+
+Beside every document of the archive whose text was read is its sidecar, a Markdown file named after it with
+`.arrumator.md` after its name (`watcher.sidecarSuffix`): `2026-07-05 EDP Comercial - Fatura eletricidade julho.pdf`
+has `2026-07-05 EDP Comercial - Fatura eletricidade julho.pdf.arrumator.md` beside it. It holds what the model read the
+document as, its interpretation, under **What it is**, and the document's text as it was recognised, under
+**Recognised text**: from its text layer, by OCR or both, tabs and line breaks as they were read, at most
+`extraction.maxIndexChars` characters, and saying when it is not all of it. Its data at the top names the document, the
+model that read it and how its text was read. Spotlight finds a document by its sidecar's words, as any text editor
+opens it, without the app. The document's card shows the same (**About**, and **Recognised Text**), and so does
+`arrumatorcli show <document>`.
+
+An image is described by the vision model of the profile in use, however much text OCR read on it: a photo without a
+word, a screenshot and a photographed receipt alike. Its interpretation is asked to say first what it shows, its sidecar
+holds the vision model's own description too, in English, under **What it shows**, and its recognised text is what OCR
+read on it, never the vision model's words. `arrumatorcli settings --describe-images false`
+(`enableVLM`) reads an image by its text alone.
+
+The interpretation is a field of the search: words the document's text does not hold, such as what a photo shows, find
+it (`interpretation:cat`), and its meaning is part of what it is found by meaning with. It is kept with the rest of how
+the document was read, in its entry in `_documents.md`, so a rebuild of the index brings it back without asking the
+model again. A document read before there were interpretations has its text in its sidecar, and is given one when it is
+read again (**Read All Documents Again**, under Settings › Filing). A document that waits for you has none, as what the
+model read of it is in doubt, and one the model said nothing of and nothing was read of has no sidecar.
+
+The sidecar is the app's: it is written again whenever what it holds changes, follows the document when it is renamed or
+moved, and goes when the document leaves the archive, is set aside as missing or is read again from the start. One you
+changed by hand, or a file of yours under its name, is never written over: it goes to the Trash, from which you can take
+it back, before the app writes its own ([storage](storage.md#keeping-files-and-index-together)). The app never reads a
+sidecar back, nor takes one in as a document, in Incoming or in the archive, and no document is given a name that ends
+as a sidecar's does. Nothing in it becomes active where Markdown is shown: what would make a link, an image, HTML or a
+block of code of the models' words is escaped, and the text is code in a fence nothing in it closes. One the folder will
+not take, as a folder you made read-only, is said in History, holds up nothing else, and is written once its document
+changes.
 
 ## Labels
 
@@ -270,13 +309,31 @@ and writing its value; from a terminal, `arrumatorcli labels <document> --add se
 an amount a number and its currency, so `12,50 €` is kept as `12.50 EUR`. One that is not, such as the type `fatura`
 or the date `2026-13-45`, is refused, saying what its kind takes, and nothing of that correction is made: the card says
 so under the field as you write, and keeps what you wrote to correct. A label an earlier reading gave in a form its kind
-no longer keeps, such as `5.00% GBP`, is still taken off, merged or removed everywhere as it is written. A
+no longer keeps, such as `5.00% GBP`, is still taken off, renamed, merged or removed everywhere as it is written. A
 label of a kind the model gives labels a document the model has not labelled, so `labels unlabelled` no longer reads it;
 a tag does not. A document keeps one type and one
 date: a new one replaces the old, on the card and from a terminal alike (`--add type=receipt`). A correction is made to
 the labels the document has when it is made, so two made one after the other, such as two labels taken off in quick
 succession, both hold. Each correction is recorded in History. Renaming the document (on its card, or
-`review rename`) renames the file where it is.
+`review rename`) renames the file where it is. The card offers, beside the field, the labels the archive has of the kind
+chosen, the most alike to what you write first, the tags you added among them.
+
+### Removing a document
+
+**Move to Trash…** on a document's card, after you confirm, or `arrumatorcli review remove <document>`, removes it: its
+file goes to the Trash, never deleted, wherever it is, in the archive or back in Incoming, and the document leaves the
+archive's index with its labels, text and meaning, its place in tasks' sets, the work queued for it, and its entry in
+its folder's record file, so a rebuild does not bring it back. History records it, with where its file was and where the
+Trash put it; what History said of it before stays. All of it is decided and done in one step, so two removals at once,
+from the app and a terminal, move the file and record it once. Only the document's own file is moved: one at its path
+that carries another document's identifier stays, and the document, whose file is then not there, as one missing, only
+leaves the index. A file the Trash will not take stays where it is, and so does the document, saying why; one the
+Trash took whose removal could then not be recorded comes back from it, and the document stays. Only a crash between
+the two leaves the file in the Trash and the document in the archive, which the next start marks missing, as if you had
+taken its file away. A document still being read in is not offered to be removed until its reading has ended, nor one
+while reading it again is moving its file to its new name; one whose move failed, or was cut off, is removed with its
+file where the move left it. To have it back, put its file back into
+Incoming from the Trash: it is read again as a new document.
 
 ## Keeping labels one vocabulary
 
@@ -307,7 +364,7 @@ break: an identifier printed in groups is the one typed without them, so the IBA
 number. The same digits in the same order, where one label's numbers end only where the other's do, and the other's
 end at more places, set by punctuation (`V/2026/532774` and `V2026532774`, `123.456.789` and `123456789`, `FT 1/23`
 and `FT 123`), may be one number written two ways, or two numbers: that is no degree of likeness but a relation of its
-own, so such labels are never merged on their own, whatever `mergeSimilarity`, and are offered under Look Alike for
+own, so such labels are never merged as written alike, whatever `mergeSimilarity`, and are judged by the model for
 every kind, whatever its `suggestSimilarity`, as below. Numbers that end in different places, each where the other's
 does not (`FT 1/23` and `FT 12/3`), are neither merged nor offered. At 1, the default for names,
 objects and references, only labels written the same way but for case, accents, punctuation, spacing and word order
@@ -315,7 +372,7 @@ are one (`EDP-Comercial, S.A.` is `EDP Comercial SA`); for topics and jurisdicti
 (`electricty`). Words may change places, but only between two numbers, or between a number and the
 label's end, never across a number, nor may the letters and digits within a word: `EDP Comercial 12` is
 `Comercial EDP 12`, but `car AB12CD` is not `car CD12AB`, `car AA-12-BB` not `car BB-12-AA`, and `12 Rua das Flores`
-not the same writing as `Rua das Flores 12`, though it may look alike enough to be offered. A label without numbers
+not the same writing as `Rua das Flores 12`, though it may look alike enough to be judged. A label without numbers
 keeps its words in any order. These come together: `account Santander PT50 0002 0123` is
 `Santander account PT5000020123`. How alike two labels are written is their Jaro-Winkler similarity, the measure record
 linkage uses for names, over their words so ordered. A label the archive already uses stays itself, unless more
@@ -323,39 +380,69 @@ documents have it written another way. Only writing is compared, never meaning: 
 words is the model's judgment, or yours. What was changed, and by which rule, is in the document's trace (the
 `consolidate` step) and its History entry.
 
-**Your tags are your words.** A tag is never made another because one in use is written alike, nor offered under Look
-Alike: `Taxes-2024` stays `Taxes-2024` beside a `Taxes 2024` more documents have, until you merge the two. Only your
+**Your tags are your words.** A tag is never made another because one in use is written alike, nor judged alike:
+`Taxes-2024` stays `Taxes-2024` beside a `Taxes 2024` more documents have, until you merge the two. Only your
 rules apply to a tag, when its folder gives it (the `tag` step of the trace) and from then on, as to any label. So the
 vocabulary keeps no tags: the app refuses to start with a `tag` entry under `labels.vocabulary.kinds`, or among an
 effort's `promptLabels`, saying so.
 
-**What is merely alike waits for you.** Labels in use written alike enough to be one
-(`labels.vocabulary.kinds.<kind>.suggestSimilarity`), but not enough to merge without asking, such as two names a
-letter apart, are listed under **Look Alike** on the Labels page, and so are labels with the same digits grouped
-otherwise, for every kind and whatever its `suggestSimilarity`, references included. They come the most alike first,
-those with the same digits grouped otherwise as alike as their writing but for where their numbers end, at most
-`labels.vocabulary.suggestionLimit`; `arrumatorcli labels similar` says which are which. The sidebar shows how many
-wait.
+**What is merely alike is judged by the model.** Labels in use written alike enough to be one
+(`labels.vocabulary.kinds.<kind>.suggestSimilarity`), but not enough to merge as written, such as two names a letter
+apart, and labels with the same digits grouped otherwise, for every kind and whatever its `suggestSimilarity`,
+references included, look alike. Telling such a pair apart is a judgement of meaning that writing cannot make: record
+linkage leaves it to a person ([sources](organizing-principles-sources.md#sources-for-keeping-labels-one-vocabulary)),
+and Arrumator leaves it to the local model in your place. While its work runs, it takes the pairs one at a time, the
+most alike first, at most `labels.vocabulary.suggestionLimit` worked out at once, and asks the chat model of the
+profile in use, with its own prompt (`alike-system.md`), whether the two are one label written two ways or two,
+showing it how many documents have each and the names of the newest `labels.vocabulary.judgeDocuments` of them, and
+telling it that, when they could be two things, they are two: a wrong merge files documents that do not belong
+together under one label, a wrong "different" only leaves two labels side by side. It says why, then which.
+
+- **The same**: the label fewer documents have is merged into the one more have, on every document and in every
+  reading from then on, as if you had merged them; the one the pair was found with, when as many have each.
+- **Different**: the two are kept apart, so they are never merged as written alike nor judged again.
+
+Each is a rule like yours, recorded in History as Arrumator's, saying the model judged it, with the trace of the
+judgement (`arrumatorcli trace --id <n>`, the `traceId` of the event in `arrumatorcli history --json`), and listed under
+What You Decided, where forgetting it undoes nothing it changed but lets the pair be judged again. What you decided
+meanwhile wins: a pair one of whose labels a rule of yours already decides, or that is no longer on any document, is
+left as it is. Pairs are judged after the files that wait to be filed, and not while Arrumator is paused or the Mac's
+power holds filing back; while Ollama is away or the profile's model is missing, they wait, as a file does, a pair
+being the same whichever of its labels more documents have by then. A pair the model gives no valid answer for, even
+after being told what was wrong, waits until Arrumator starts again, and holds up none of the pairs after it. A pair a
+rule already decides, as when you renamed one of the two only in case, is never judged. `arrumatorcli labels similar`
+lists the pairs that wait to be judged, saying which have the same digits grouped otherwise.
 
 What you decide becomes a rule, recorded in History and kept in the archive (`System/_labels.md`,
 [Storage](storage.md)):
 
+- **Rename** a label: every document that has it, written however, gets the new writing instead, and so does every
+  document read from then on. A rename into a label in use is a merge.
 - **Merge** a label into another: every document that has it, written however, gets the other instead, and so does
   every document read from then on. Merging back the other way replaces the first merge, and labels merged into the one
-  you merge follow it.
-- **Remove everywhere** (ignore) a label: it is taken off every document, and the model's answers lose it from then on.
-- **Keep apart** two alike labels: they are never merged and never offered to merge again.
+  you merge follow it. A merge made already, made again, changes nothing and is not recorded again.
+- **Remove for good** (ignore) a label: it is taken off every document, and the model's answers lose it from then on.
+- **Keep apart** two alike labels: they are never merged and never judged again. Kept apart again, nothing changes and
+  nothing more is recorded.
+- **Add** a tag of your own: it is listed among the labels, with no document, and offered on a document's card, until
+  you remove it. Only a tag is added so: the model gives every other kind. A tag the archive has, on a document or
+  added before, however written, is refused. Renamed or merged, the tag added is the new one; removed for good, or its
+  rule forgotten, it is no longer listed once no document has it.
 - **Forget** a rule: documents read from then on no longer follow it. Documents it already changed keep their labels.
+
+**Remove from every document** takes a label off every document as a correction of each, without a rule, so a document
+read later may be given it again; a tag you added goes with it. Taking off a label no document has changes nothing.
 
 A rule is about a label however it is written, as above, so a rule made by an earlier version follows today's rule of
 sameness: one about `NIF 123 456 789` also covers `NIF 123456789`, and one about `car AA-12-BB` no longer covers
 `car BB-12-AA`, nor one about `V/2026/532774` the reference `V2026532774`.
 
-On the Labels page, open a label to merge it or remove it everywhere, open a pair under Look Alike to merge it either
-way or keep it apart, and forget a rule under What You Decided. A label's menu on a document's card opens it there, or
-removes it everywhere. From a terminal: `arrumatorcli labels merge`, `ignore`, `keep-apart`, `similar`, `rules` and
-`forget` ([command line](cli.md)). Rules are about writing, so they apply to labels of every kind; the page lists the
-kinds the vocabulary keeps, and your tags, as the others have one form each.
+On the Labels page, open a label to rename it, merge it, or remove it from every document, once or for good; add a tag
+at the head of the Tags; forget a rule under What You Decided. Each new name or label merged into is refused as you
+type it when it could not be, saying why. A label's menu on a document's card opens it there, or removes it from every
+document, once or for good. From a terminal: `arrumatorcli labels rename`, `merge`, `remove`, `ignore`, `add`,
+`keep-apart`, `similar`, `rules` and `forget` ([command line](cli.md)). Rules are about writing, so they apply to labels
+of every kind; the page lists the kinds the vocabulary keeps, and your tags, as the others have one form each.
 
 ## Folders in Incoming and tags
 
@@ -418,8 +505,8 @@ the archive either stays in Incoming, failed, saying why, and one that cannot be
 folder is not there waits for it to be. One already filed when what follows its filing keeps failing, as indexing its
 text, is marked failed where it is, under the name it was filed under or where you moved it since.
 
-While Ollama cannot be reached a document waits where it stopped, an image whose text is too sparse to tell what it is
-included, which is described when Ollama is back rather than filed without its description, and no other file is read
+While Ollama cannot be reached a document waits where it stopped, an image included, which is described when Ollama is
+back rather than filed without its description, and no other file is read
 for its text until it is tried again, as each would only wait for Ollama too: a file that comes meanwhile is still
 looked at, so an exact copy goes to its original and a file gone is recorded, and then waits unread, and a document read
 again waits as it is; a document whose model is not installed waits in the Incoming queue, saying which model to

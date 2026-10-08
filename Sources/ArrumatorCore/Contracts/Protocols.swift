@@ -26,9 +26,10 @@ public protocol DocumentAnalyzing: Sendable {
     /// missing throws, so the document waits.
     func analyse(_ content: ExtractedContent, guidance: LabelGuidance, settings: AppSettings, config: PipelineConfig,
                  trace: TraceContext) async throws -> AnalysisOutcome
-    /// The vector the document is searched by meaning with, and the model that made it; nil when none can be made.
-    func embedding(for content: ExtractedContent, senders: [String], settings: AppSettings, config: PipelineConfig,
-                   trace: TraceContext) async throws -> (vector: [Float], model: String)?
+    /// The vector the document is searched by meaning with, made of its text, its `senders` and what the model read it
+    /// as, `interpretation`, and the model that made it; nil when none can be made.
+    func embedding(for content: ExtractedContent, senders: [String], interpretation: String?, settings: AppSettings,
+                   config: PipelineConfig, trace: TraceContext) async throws -> (vector: [Float], model: String)?
 }
 
 /// The time of day and the passing of time. Everything that stamps a record, schedules work or waits takes one, so a

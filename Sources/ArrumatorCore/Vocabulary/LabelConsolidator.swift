@@ -4,8 +4,8 @@ import Foundation
 /// first: a label the user merged is written as the user wants it, one the user does not want is dropped. Then a label
 /// of a kind the configuration keeps consistent becomes the label the archive already uses when the two are written
 /// alike enough (`KindVocabularyConfig.mergeSimilarity`, 1 for written the same way), unless the user kept them apart.
-/// Labels that are alike, but not enough to be merged without asking, are offered to the user instead
-/// (`suggestions()`). The user's own labels, tags, follow the user's rules alone (`ruled`): nothing merges them unasked.
+/// Labels that are alike, but not enough to be merged as written, are judged by the model instead (`suggestions()`,
+/// `LabelJudge`). The user's own labels, tags, follow the user's rules alone (`ruled`): nothing merges them unasked.
 public struct LabelConsolidator: Sendable {
     public let config: LabelVocabularyConfig
     public let rules: [LabelRule]
@@ -54,12 +54,12 @@ public struct LabelConsolidator: Sendable {
     func resolve(_ label: DocumentLabel) -> (DocumentLabel?, [Int64]) {
         var current = label
         var applied: [Int64] = []
-        while let rule = rules.first(where: { $0.action != .keepApart && $0.concerns(current) && !applied.contains($0.id ?? 0) }) {
+        while let rule = rules.first(where: { $0.action.rewrites && $0.concerns(current) && !applied.contains($0.id ?? 0) }) {
             applied.append(rule.id ?? 0)
             switch rule.action {
             case .ignore: return (nil, applied)
             case .merge: current.value = rule.target ?? current.value
-            case .keepApart: break
+            case .keepApart, .add: break
             }
         }
         return (current, applied)
@@ -87,7 +87,13 @@ public struct LabelConsolidator: Sendable {
         rules.contains { $0.keepsApart(a, b, kind: kind) }
     }
 
-    /// Pairs of labels in use that the user has not kept apart and that are alike enough to be one
+    /// Whether a rule already decides the two labels of `kind`, so they are not offered to be judged.
+    private func decided(_ a: String, _ b: String, kind: LabelKind) -> Bool {
+        let (a, b) = (DocumentLabel(kind: kind, value: a), DocumentLabel(kind: kind, value: b))
+        return rules.contains { $0.decides(a, b) }
+    }
+
+    /// Pairs of labels in use that no rule decides (`LabelRule.decides`) and that are alike enough to be one
     /// (`KindVocabularyConfig.suggestSimilarity`), or that hold the same digits grouped otherwise, which every kind offers
     /// whatever its thresholds, each saying why (`LabelSuggestion.Reason`). The most alike come first, at most
     /// `suggestionLimit`; of pairs as alike, those written alike, then those of the kind listed first, then of the labels
@@ -102,12 +108,13 @@ public struct LabelConsolidator: Sendable {
 
     /// `suggestions()`, which labels of each kind look alike brought up to date by `memo` from what it last worked out
     /// (`LookAlikeMemo.alike`), comparing labels with `comparing`. Throws `CancellationError` when stopped part way.
-    func suggestions(by memo: LookAlikeMemo, comparing: @escaping AlikeLabels.Comparing) async throws -> [LabelSuggestion] {
+    func suggestions(by memo: LookAlikeMemo, comparing: @escaping AlikeLabels.Comparing,
+                     settingAside: Set<String> = []) async throws -> [LabelSuggestion] {
         var alike: [LabelKind: AlikeLabels] = [:]
         for (kind, policy) in config.kinds {
             alike[kind] = try await memo.alike(kind, labels: labels(of: kind), threshold: policy.suggestSimilarity, comparing: comparing)
         }
-        return suggestions(alike: alike)
+        return suggestions(alike: alike, settingAside: settingAside)
     }
 
     /// The labels of `kind` in use.
@@ -115,19 +122,21 @@ public struct LabelConsolidator: Sendable {
         (vocabulary[kind] ?? []).map(\.label.value)
     }
 
-    /// `suggestions()`, with which labels of each kind look alike given by `alike`, a kind it does not name offering none.
-    private func suggestions(alike: [LabelKind: AlikeLabels]) -> [LabelSuggestion] {
+    /// `suggestions()`, with which labels of each kind look alike given by `alike`, a kind it does not name offering none,
+    /// and the pairs whose `pairID` is in `settingAside` left out before the list is cut to `suggestionLimit`.
+    private func suggestions(alike: [LabelKind: AlikeLabels], settingAside: Set<String> = []) -> [LabelSuggestion] {
         var found: [(order: (reason: Int, kind: Int, first: Int, second: Int), suggestion: LabelSuggestion)] = []
         for (place, kind) in LabelKind.allCases.enumerated() {
             guard let pairs = alike[kind]?.pairs else { continue }
             let usages = vocabulary[kind] ?? []
             let rank = Dictionary(usages.enumerated().map { ($1.label.value, $0) }, uniquingKeysWith: min)
             for (pair, look) in pairs {
-                guard let a = rank[pair.first], let b = rank[pair.second], !keptApart(pair.first, pair.second, kind: kind) else { continue }
+                guard let a = rank[pair.first], let b = rank[pair.second], !decided(pair.first, pair.second, kind: kind) else { continue }
                 let (first, second) = (min(a, b), max(a, b))
-                found.append(((look.reason == .writtenAlike ? 0 : 1, place, first, second),
-                              LabelSuggestion(kind: kind, value: usages[second].label.value, into: usages[first].label.value,
-                                              similarity: look.similarity, reason: look.reason)))
+                let suggestion = LabelSuggestion(kind: kind, value: usages[second].label.value, into: usages[first].label.value,
+                                                 similarity: look.similarity, reason: look.reason)
+                guard !settingAside.contains(suggestion.pairID) else { continue }
+                found.append(((look.reason == .writtenAlike ? 0 : 1, place, first, second), suggestion))
             }
         }
         let ordered = found.sorted { a, b in

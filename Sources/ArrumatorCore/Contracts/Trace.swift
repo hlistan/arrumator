@@ -17,9 +17,11 @@ public enum TraceStage: String, Sendable, Codable, CaseIterable {
     case context
     /// The model answered a question about a task's documents.
     case answer
+    /// The model judged whether two labels that look alike are one (`LabelPairJudging`).
+    case judge
 
     /// The step talked to a model, and keeps the prompts and raw answers under `TraceStep.exchangeKey` of its output.
-    public var exchangesWithModel: Bool { [.analyse, .vlm, .interpret, .answer].contains(self) }
+    public var exchangesWithModel: Bool { [.analyse, .vlm, .interpret, .answer, .judge].contains(self) }
 }
 
 public enum TraceStatus: String, Sendable, Codable, Comparable {
@@ -38,6 +40,8 @@ public enum TraceSource: String, Sendable, Codable {
     case task
     /// A question about a search task's documents was answered.
     case conversation
+    /// Two labels that look alike were judged one or two (`LabelJudge`).
+    case labels
 }
 
 /// One recorded pipeline step. Payloads are JSON strings so any Encodable can be stored.

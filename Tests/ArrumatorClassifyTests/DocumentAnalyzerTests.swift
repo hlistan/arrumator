@@ -85,9 +85,11 @@ import Testing
         let config = try PipelineConfig.bundledDefaults()
         let schema = ClassificationSchema.analysis(maxPerKind: config.labels.maxPerKind)
         let body = OllamaChatRequest.sample(format: schema, think: nil).body.serialized()
-        let keys = ClassificationSchema.answerOrder.map(ClassificationSchema.labelsKey) + [ClassificationSchema.titleKey]
+        let keys = ClassificationSchema.answerOrder.map(ClassificationSchema.labelsKey) + [ClassificationSchema.titleKey,
+                                                                                        ClassificationSchema.interpretationKey]
         let positions = try keys.map { key in try #require(body.range(of: "\"\(key)\"")?.lowerBound, "\(key) is asked for") }
-        #expect(positions == positions.sorted(), "the model writes the sender, type and date before the rest, and the title last")
+        #expect(positions == positions.sorted(),
+                "the model writes the sender, type and date before the rest, then the title, and what the document is last, which changes nothing before it")
         #expect(Set(ClassificationSchema.answerOrder) == Set(LabelKind.modelKinds)
                     && ClassificationSchema.answerOrder.count == LabelKind.modelKinds.count,
                 "the schema asks for every kind the model gives, once")
@@ -138,16 +140,18 @@ import Testing
         defer { h.env.cleanup() }
         let outcome = try await h.analyse(Fixtures.content("fatura.pdf", text: Fixtures.edpText))
         #expect(outcome.labels == Fixtures.edpLabels, "the document is described by the labels the model gave")
-        #expect(outcome.analysis == DocumentAnalysis(model: ClassifyHarness.chatModel) && outcome.title == "Fatura eletricidade julho",
-                "with the title the model gave, which names it once the user's rules have kept its labels, and the model that read it")
+        #expect(outcome.analysis == DocumentAnalysis(interpretation: Fixtures.edpInterpretation, model: ClassifyHarness.chatModel)
+                    && outcome.title == "Fatura eletricidade julho",
+                "with the title the model gave, which names it once the user's rules have kept its labels, what it said the document is, and the model that read it")
         let embedded = try #require(await h.mock.embedRequests.first?.input.first)
+        #expect(embedded.contains("about: " + Fixtures.edpInterpretation), "what it is is part of what the document is found by meaning with")
         #expect(outcome.embedding == VectorCodec.normalized(MockOllama.hashEmbedding(embedded, dimension: 256)),
                 "and its embedding, of the text sent to the embedding model, is made for search by meaning")
 
         let request = try #require(await h.mock.chatRequests.first)
         #expect(await h.mock.chatCount == 1, "one model call per document")
         let system = request.messages[0].content
-        for key in ClassificationSchema.answerOrder.map(ClassificationSchema.labelsKey) + [ClassificationSchema.titleKey] {
+        for key in ClassificationSchema.answerOrder.map(ClassificationSchema.labelsKey) + [ClassificationSchema.titleKey, ClassificationSchema.interpretationKey] {
             #expect(system.contains("- \(key):"), "the prompt explains \(key)")
         }
         #expect(system.contains("no folders") && !system.contains("{{"), "written for labelling, every placeholder filled")
@@ -248,7 +252,7 @@ import Testing
     @Test func aChatModelThatIsNotInstalledHoldsTheDocumentUnread() async throws {
         let h = try await ClassifyHarness.make { _ in try Fixtures.answer() }
         defer { h.env.cleanup() }
-        let settings = try h.settings.reading(withChatModel: "llama-9:1t")
+        let settings = try h.settings.reading(withModel: "llama-9:1t")
         await #expect(throws: OllamaError.modelNotFound("llama-9:1t"), "the document waits for its model rather than another reading it unasked") {
             try await h.analyse(Fixtures.content("fatura.pdf", text: Fixtures.edpText), settings: settings)
         }
@@ -272,6 +276,23 @@ import Testing
         let outcome = try await h.analyse(Fixtures.content("blank.pdf", text: "  \n"))
         #expect(outcome.analysis.problems == ["no text could be read"] && outcome.analysis.fileName == nil && outcome.title == nil,
                 "a document that waits for the user is given no title, and keeps its own name")
+        #expect(outcome.analysis.interpretation == nil, "nor is it said to be what the model read of it, which is in doubt")
+    }
+
+    @Test func whatTheModelSaysADocumentIsIsKeptAsOneParagraphAndNothingSaidIsNone() async throws {
+        let said = "Fatura de eletricidade da EDP Comercial.\n\n  Referente a junho de 2026:\t54,21 EUR. "
+        let h = try await ClassifyHarness.make { _ in try Fixtures.answer(interpretation: said) }
+        defer { h.env.cleanup() }
+        let outcome = try await h.analyse(Fixtures.content("fatura.pdf", text: Fixtures.edpText))
+        #expect(outcome.analysis.interpretation == "Fatura de eletricidade da EDP Comercial. Referente a junho de 2026: 54,21 EUR.",
+                "on one line, its spaces and breaks one space each: \(outcome.analysis.interpretation ?? "none")")
+        let blank = try Fixtures.validator(try PipelineConfig.bundledDefaults().labels, grounds: Fixtures.grounds(Fixtures.edpText))
+            .validate(Fixtures.answer(interpretation: " \n "))
+        #expect(blank.interpretation == nil, "an interpretation of nothing but spaces is none")
+        let missing = try Fixtures.answer().replacingOccurrences(of: #""\#(ClassificationSchema.interpretationKey)""#, with: #""other""#)
+        #expect(throws: AnswerValidationError.invalid(["interpretation is missing; give it"]), "one left out goes back to the model, asked for") {
+            try Fixtures.validator(try PipelineConfig.bundledDefaults().labels, grounds: Fixtures.grounds(Fixtures.edpText)).validate(missing)
+        }
     }
 
     @Test func aKindOfFileNoExtractorReadsWaitsAsSuchNotAsABlankScan() async throws {

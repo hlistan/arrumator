@@ -65,46 +65,18 @@ struct AlikeLabels: Sendable {
     }
 }
 
-/// Which labels look alike, for each kind, as it was last worked out (`AlikeLabels`), so that asking again, as the app
-/// does to count the suggestions at every change it hears of, such as each document filed, compares only the labels
+/// Which labels look alike, for each kind, as it was last worked out (`AlikeLabels`), so that asking again, as the judge
+/// of labels that look alike does at every change it hears of, such as each document filed, compares only the labels
 /// added since, and nothing when there are none: how many documents have each label, which orders the suggestions, and
-/// the pairs the user kept apart, which leave some out, are applied when they are read. A kind is worked out from
-/// nothing the first time and when its threshold changes; the runtime does it once the archive is open, so the app
-/// seldom waits for it (`LabelStore.workOutLookAlikes`). `PipelineServices` keeps one, which every `LabelStore` it makes
-/// shares.
+/// the pairs kept apart, which leave some out, are applied when they are read. A kind is worked out from nothing the
+/// first time and when its threshold changes. `PipelineServices` keeps one, which every `LabelStore` it makes shares.
 public final class LookAlikeMemo: Sendable {
     private let memo = Mutex<[LabelKind: AlikeLabels]>([:])
     /// One update at a time: a caller that comes while another works a kind out waits for it, and then compares only
     /// what is left, never working the kind out from nothing beside it. A caller stopped while it waits stops at once.
     private let turn = AsyncSemaphore(permits: 1)
-    /// How many suggestions there were when they were last worked out, and the subscribers told of each new count.
-    private let counted = Mutex<(last: Int?, followers: [UUID: AsyncStream<Int>.Continuation])>((nil, [:]))
 
     public init() {}
-
-    /// How many pairs of labels look alike and wait for the user, each time that changes as they are worked out
-    /// (`LabelStore.suggestions()`), the last known first: what the app counts without waiting for them to be worked
-    /// out. A stream per subscriber, which ends when its consumer is cancelled.
-    public func suggestionCounts() -> AsyncStream<Int> {
-        let id = UUID()
-        let (stream, continuation) = AsyncStream<Int>.makeStream(bufferingPolicy: .bufferingNewest(1))
-        continuation.onTermination = { [weak self] _ in self?.counted.withLock { _ = $0.followers.removeValue(forKey: id) } }
-        counted.withLock { state in
-            state.followers[id] = continuation
-            if let last = state.last { continuation.yield(last) }
-        }
-        return stream
-    }
-
-    /// Tells every subscriber how many suggestions there are now, when that changed; told under the lock, so that no
-    /// subscriber is left with an older count than the last.
-    func publish(suggestions count: Int) {
-        counted.withLock { state in
-            guard state.last != count else { return }
-            state.last = count
-            for follower in state.followers.values { follower.yield(count) }
-        }
-    }
 
     /// What is known of `kind`, as it was last worked out, or as far as a stopped working out came.
     func known(_ kind: LabelKind) -> AlikeLabels? {

@@ -12,7 +12,7 @@ struct Arrumator: AsyncParsableCommand {
         commandName: "arrumatorcli",
         abstract: "Local-only document organiser: watches Incoming, labels files with local models, files them.",
         version: version,
-        subcommands: [Doctor.self, Run.self, Ingest.self, Extract.self, Search.self, Labels.self, Tasks.self, History.self, Trace.self, Replay.self,
+        subcommands: [Doctor.self, Run.self, Ingest.self, Extract.self, Show.self, Search.self, Labels.self, Tasks.self, History.self, Trace.self, Replay.self,
                       Review.self, Archive.self, Funnel.self, Stats.self, Rebuild.self, Logs.self,
                       Models.self, Profiles.self, Diagnostics.self, Eval.self, Settings.self])
 
@@ -270,9 +270,12 @@ enum Terminal {
         }.joined(separator: " · ")
     }
 
+    /// What a command that would change nothing says.
+    static let nothingToChange = "Nothing to change."
+
     /// What a decision about a label did.
     static func outcome(_ outcome: LabelActionOutcome) -> String {
-        "Rule #\(outcome.rule.id ?? 0): \(outcome.rule.summary)"
+        "Rule #\(outcome.rule?.id ?? 0): \(outcome.rule?.summary ?? "")"
             + (outcome.documents.isEmpty ? "" : "; changed \(Format.count(outcome.documents.count, "document"))")
     }
 

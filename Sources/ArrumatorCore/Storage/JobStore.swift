@@ -203,6 +203,20 @@ public struct JobStore: Sendable {
         try readingIn(docID).filter(Column("source_path") == path).fetchCount(db) > 0
     }
 
+    /// Where reading document `docID` again planned to move its file (`JobPayload.plannedPath`), its move not recorded
+    /// yet (`targetPath`), and whether a worker holds that reading now (`JobClaims.holds`), so may be moving the file;
+    /// nil when no move is planned. One no worker holds failed, or was cut off, at the move, the file left where it was
+    /// or moved there, as its next attempt finds it (`IngestCoordinator.movedBefore`). In a transaction of the caller's.
+    static func plannedMove(_ db: Database, docID: Int64, claims: JobClaims) throws -> (path: String, held: Bool)? {
+        let row = try JobRecord.filter(Column("doc_id") == docID).filter(Column("kind") == JobKind.reanalyse.rawValue)
+            .filter(activeStates.contains(Column("state")))
+            .filter(sql: "json_valid(payload_json) AND json_extract(payload_json, '$.plannedPath') IS NOT NULL "
+                + "AND json_extract(payload_json, '$.targetPath') IS NULL")
+            .select(sql: "json_extract(payload_json, '$.plannedPath') AS planned, claim, claimed_by").asRequest(of: Row.self).fetchOne(db)
+        guard let row, let path: String = row["planned"] else { return nil }
+        return (path, claims.holds(row["claim"], by: row["claimed_by"]))
+    }
+
     /// The active jobs reading document `docID` in (`isReadIn`).
     private static func readingIn(_ docID: Int64) -> QueryInterfaceRequest<JobRecord> {
         JobRecord.filter(Column("doc_id") == docID).filter(readingInKinds.map(\.rawValue).contains(Column("kind")))

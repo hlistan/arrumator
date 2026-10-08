@@ -81,7 +81,7 @@ import Testing
         #expect(try await h.services.documents.document(id: a)?.labels(.amount) == ["54.21 EUR"], "taken off its card as it is written")
 
         let ignored = try await h.labels.ignore(DocumentLabel(kind: .party, value: "999999990"))
-        #expect(ignored.documents == [a, b] && ignored.rule.value == "999999990", "and removed everywhere, as written")
+        #expect(ignored.documents == [a, b] && ignored.rule?.value == "999999990", "and removed everywhere, as written")
         #expect(try await h.services.documents.document(id: b)?.labels(.party) == ["Maria Exemplo"], "from every document that has it")
         await #expect(throws: LabelError.notALabel(.party, "123456789"), "a label no document has must still be one of its kind") {
             try await h.labels.ignore(DocumentLabel(kind: .party, value: "123456789"))

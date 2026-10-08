@@ -214,9 +214,6 @@ public struct ExtractionConfig: Sendable, Codable, Hashable {
         public var ocrMaxPixel: Int
         public var vlmMaxPixel: Int
         public var jpegQuality: Double
-        public var sparseChars: Int
-        public var sparseWords: Int
-        public var lowConfidence: Double
         public var vlmTimeout: Double
         /// Most pixels (width × height) an image may declare to be decoded; a larger one gives its metadata alone.
         public var maxPixels: Int
@@ -343,14 +340,18 @@ public struct LabelVocabularyConfig: Sendable, Codable, Hashable {
     public var promptPreferred: Int
     /// Labels the user does not want that the model is shown, newest first.
     public var promptUnwanted: Int
-    /// Pairs of alike labels offered to the user at once, the most alike first.
+    /// Pairs of alike labels worked out at once for the model to judge, the most alike first; and the labels a label's card
+    /// offers to merge into.
     public var suggestionLimit: Int
+    /// Documents of each of two alike labels the model is shown by name, the newest first, when it judges whether they are
+    /// one (`LabelPairJudging`); 0 shows none.
+    public var judgeDocuments: Int
 }
 
 public struct KindVocabularyConfig: Sendable, Codable, Hashable {
     /// `LabelSimilarity` from which a label the model gives becomes the archive's label: 1 only when written the same way.
     public var mergeSimilarity: Double
-    /// `LabelSimilarity` from which two labels in use are offered to the user to merge.
+    /// `LabelSimilarity` from which the model judges whether two labels in use are one (`LabelPairJudging`).
     public var suggestSimilarity: Double
     /// Labels of the kind in use that the model is shown, the most used first; 0 shows none.
     public var promptLimit: Int

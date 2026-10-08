@@ -157,7 +157,8 @@ actor VisionDescriber {
     }
 
     /// Parses the model reply (`ModelOutput.jsonObject`) and verifies organisations against the OCR text, case- and
-    /// diacritic-insensitively.
+    /// diacritic-insensitively. What it writes is kept on one line, without control characters (`DocumentLabel.oneLine`),
+    /// as it is shown where a control character would act, as a terminal (`arrumatorcli show`).
     static func parse(_ content: String, ocrText: String) throws -> VisualSummary {
         let object = ModelOutput.jsonObject(content)
         guard object.hasPrefix("{") else { throw ParseError.noJSONObject }
@@ -171,13 +172,13 @@ actor VisionDescriber {
         let haystack = fold(ocrText)
         var verified: [String] = []
         var unverified: [String] = []
-        for name in response.organisations.map({ $0.trimmingCharacters(in: .whitespacesAndNewlines) }).uniqued()
+        for name in response.organisations.map(DocumentLabel.oneLine).uniqued()
         where !name.isEmpty {
             let needle = fold(name)
             if !needle.isEmpty, haystack.contains(needle) { verified.append(name) } else { unverified.append(name) }
         }
-        return VisualSummary(imageKind: kind, description: response.description,
-                             visibleTextSummary: response.visibleTextSummary, organisations: verified,
+        return VisualSummary(imageKind: kind, description: DocumentLabel.oneLine(response.description),
+                             visibleTextSummary: DocumentLabel.oneLine(response.visibleTextSummary), organisations: verified,
                              unverifiedOrganisations: unverified,
                              dates: response.dates.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty })
     }

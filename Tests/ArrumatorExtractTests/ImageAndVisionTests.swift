@@ -8,7 +8,8 @@ import Testing
 
 @Suite("Images, OCR and the vision model")
 struct ImageAndVisionTests {
-    @Test("Image OCR with EXIF capture date as fallback document date", .enabled(VisionOCR.unavailable) { await VisionOCR.available.value })
+    @Test("Image OCR, described by the vision model too, with EXIF capture date as fallback document date",
+          .enabled(VisionOCR.unavailable) { await VisionOCR.available.value })
     func imageOCR() async throws {
         let scratch = try Scratch()
         defer { scratch.cleanup() }
@@ -19,23 +20,27 @@ struct ImageAndVisionTests {
         let url = try scratch.writeImage("recibo.jpg", image, type: .jpeg, properties: [
             kCGImagePropertyExifDictionary: [kCGImagePropertyExifDateTimeOriginal: "2023:07:14 10:31:00"],
         ])
-        let registry = try TestConfig.registry(ollama: MockOllama(capabilities: MockOllama.visionCapabilities) { _ in
-            throw OllamaError.unreachable("must not be called")
-        })
+        let reply = #"{"image_kind":"receipt","description":"A pharmacy receipt on white paper","visible_text_summary":"Recibo de pagamento","organisations":["Farmácia Central"],"dates":[]}"#
+        let ollama = MockOllama(capabilities: MockOllama.visionCapabilities) { _ in reply }
+        let registry = try TestConfig.registry(ollama: ollama)
         let content = try await registry.extract(url, sha256: "x", context: try TestConfig.context(vision: TestConfig.visionOptions()),
                                                  trace: .disabled)
         #expect(content.kind == .image, "a JPEG is read as an image")
         #expect(content.textOrigin == .ocr, "a photo with text is read by OCR (\(content.warningSummary))")
         #expect(content.text.contains("Farmácia Central"), "the shop name on the receipt is read by OCR")
+        #expect(!content.text.contains("pharmacy receipt"), "the text is what OCR read, never the vision model's words")
         #expect(content.language.primary == "pt", "OCR text in Portuguese is detected as Portuguese")
-        #expect(content.visual == nil, "an image with enough text is not sent to the vision model")
+        #expect(content.visual?.description == "A pharmacy receipt on white paper",
+                "an image is described by the vision model however much text OCR read on it, as what it shows is its own")
+        #expect(await ollama.chatRequests.count == 1, "once for the image")
+        #expect(content.visual?.organisations == ["Farmácia Central"], "and what it names is verified against the text OCR read")
         #expect(content.metadata["exif:DateTimeOriginal"] == "2023-07-14", "the EXIF capture date is kept, in ISO form")
         #expect(content.entities.documentDate?.date == "2023-07-14", "with no date in its text, a photo is dated when it was taken")
         #expect(content.entities.documentDate?.source == .exif, "the date is known to come from EXIF, not from the text")
         #expect(content.ocr?.pages == [1], "the OCR statistics cover the one image")
     }
 
-    @Test("Sparse OCR calls the vision model with the schema; organisations are verified against OCR text", .enabled(VisionOCR.unavailable) { await VisionOCR.available.value })
+    @Test("The vision model is asked with the schema; organisations are verified against OCR text", .enabled(VisionOCR.unavailable) { await VisionOCR.available.value })
     func vlmVerification() async throws {
         let scratch = try Scratch()
         defer { scratch.cleanup() }
@@ -56,7 +61,7 @@ struct ImageAndVisionTests {
         #expect(visual.organisations == ["Continente"], "an organisation the OCR text shows is verified")
         #expect(visual.unverifiedOrganisations == ["Acme Corp"], "an organisation the OCR text does not show is kept apart as unverified")
         #expect(visual.dates == ["2025-01-02"], "the model's ISO dates are kept")
-        #expect(content.textOrigin == .ocr, "sparse text is still read by OCR (\(content.warningSummary))")
+        #expect(content.textOrigin == .ocr, "the text on the image is still read by OCR (\(content.warningSummary))")
         #expect(!content.hasWarning(.vlmFailed), "a reply wrapped in thinking tags is still a valid answer")
 
         let requests = await ollama.chatRequests
@@ -87,6 +92,15 @@ struct ImageAndVisionTests {
         #expect(vlmOutput.contains("Acme Corp"), "the trace shows what the model answered, unverified names included")
         #expect(vlmInput.contains("image_kind"), "the trace shows the schema the model was asked with")
         #expect(vlmInput.contains(#""think":false"#), "and that the model was told not to think")
+    }
+
+    @Test("What the vision model writes is kept on one line without control characters, which a terminal would act on")
+    func visionWordsWithoutControlCharacters() throws {
+        let reply = #"{"image_kind":"photo","description":"A cat\u001b]8;;http://203.0.113.9/\u0007 on a\nsofa","visible_text_summary":"Hi\u001b[2J there","organisations":["Acme\u0007 Corp"],"dates":[]}"#
+        let summary = try VisionDescriber.parse(reply, ocrText: "Acme Corp")
+        #expect(summary.description == "A cat ]8;;http://203.0.113.9/ on a sofa" && summary.visibleTextSummary == "Hi [2J there",
+                "no escape or bell reaches a terminal that shows it, and a line break is a space: \(summary.description)")
+        #expect(summary.organisations == ["Acme Corp"], "an organisation is read and verified the same way")
     }
 
     @Test("An image without text becomes vlmOnly; thinking stays unset for models that cannot be told not to think")
@@ -257,28 +271,6 @@ struct ImageAndVisionTests {
         #expect(content.pagesOCRed == [1, 3], "and they are the pages OCR read")
         #expect(content.warnings.filter { $0.code == .textTruncated }.map(\.detail) == ["read 2 of 3 pages"],
                 "the page left out is noted, so the model knows it saw part of the document")
-    }
-
-    @Test("Words are counted in every script, so a receipt in Chinese or Japanese is no sparser than one in Portuguese")
-    func sparseInEveryScript() throws {
-        let config = try TestConfig.pipeline().extraction.image
-        let receipts = [
-            ("Chinese", "北京市朝阳区超市购物小票，商品名称：牛奶两盒，面包一袋，苹果三斤，鸡蛋一盒。合计金额人民币八十六元五角，现金支付一百元，找零十三元五角，欢迎再次光临本店，谢谢惠顾。"),
-            ("Japanese", "東京都渋谷区のスーパーマーケットの領収書です。牛乳二本、食パン一斤、りんご三個、卵一パックをお買い上げいただきました。合計金額は千二百八十円、お預かり二千円、お釣りは七百二十円です。"),
-            ("Portuguese", "Continente Bom Dia Lisboa, talão de compra: leite meio-gordo, pão de forma, maçãs e ovos. Total a pagar 12,80 euros."),
-        ]
-        for (script, text) in receipts {
-            #expect(!ImageExtractor.isSparse(text: text, confidence: 0.9, config: config),
-                    "a receipt in \(script) that OCR read whole is not sent to the vision model")
-        }
-        #expect(ImageExtractor.isSparse(text: "CONTINENTE", confidence: 0.9, config: config), "a logo alone is sparse")
-        #expect(ImageExtractor.isSparse(text: "東京電力", confidence: 0.9, config: config), "and so is a name alone, in any script")
-        // Ten runs between spaces, enough characters, and six words: rules and stars are no words.
-        let banner = "*** TOTAL A PAGAR *** 1.234,80 EUR " + String(repeating: "-", count: 40) + " OBRIGADO " + String(repeating: "=", count: 30)
-        #expect(banner.split(separator: " ").count >= config.sparseWords && banner.count { !$0.isWhitespace } >= config.sparseChars,
-                "counted at its spaces, the banner would not be sparse")
-        #expect(ImageExtractor.isSparse(text: banner, confidence: 0.9, config: config),
-                "a picture whose words are few, however many symbols stand between them, is described by the vision model")
     }
 
     @Test("A vision model's deadline of no time at all is refused by name, as it would wait for ever", arguments: [0.0, -1.0])

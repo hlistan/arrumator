@@ -1,6 +1,6 @@
 import Foundation
 
-/// Renders every fixture and writes expected.json.
+/// Renders every fixture and writes expected.json, with the pairs of labels the model is to judge.
 struct Generator {
     let settings: RenderSettings
     let seed: UInt64
@@ -32,7 +32,7 @@ struct Generator {
             try data.write(to: root.appending(path: fixture.record.file))
         }
         let manifest = Manifest(schema: Manifest.currentSchema, baselineVersion: Manifest.baselineVersion, seed: seed,
-                                fixtures: fixtures.map(\.record))
+                                fixtures: fixtures.map(\.record), labelPairs: LabelPairs.all)
         let json = manifest.data
         try json.write(to: root.appending(path: Manifest.fileName))
         return Summary(fileCount: fixtures.count, totalBytes: produced.values.reduce(json.count) { $0 + $1.count })

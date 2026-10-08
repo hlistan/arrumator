@@ -745,7 +745,10 @@ a later one could change its answer.
 
 `scripts/build-release.sh` compiles the app for both architectures in the Release configuration and the command in
 release mode, on every pull request that changes code, as the release does. Neither the Intel slice nor optimized code
-is first compiled after the merge; signing and notarization are the only steps a pull request does not run.
+is first compiled after the merge; signing and notarization are the only steps a pull request does not run. It compiles
+the app from scratch each time, its index store made anew, as the unused-code check (`scripts/deadcode.sh`) reads every
+unit in that store: one a Debug build left in the same folder (CONTRIBUTING.md builds one there), or a build of a file
+since renamed or removed, would read as code nothing uses, or as a use that hides code nothing uses.
 
 GitHub's runners are virtual Macs, and Vision cannot recognise text on them on any device
 (`TextRecognition.CRImageReaderError` 9, and an unknown error on the CPU). The tests that need real OCR, and the OCR

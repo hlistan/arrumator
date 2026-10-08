@@ -19,19 +19,25 @@ public enum DocumentType: String, Sendable, Codable, CaseIterable {
     }
 }
 
-/// How the local model read a document, besides the labels it gave it: the name its file is to have, which model
-/// read it, and why it waits for the user, if it does. Stored with the document and its trace.
+/// How the local model read a document, besides the labels it gave it: the name its file is to have, what the
+/// document is in the model's words, which model read it, and why it waits for the user, if it does. Stored with the
+/// document and its trace.
 public struct DocumentAnalysis: Sendable, Codable, Hashable {
     /// The file name the reading gave, without extension, made of the labels kept and the model's title
     /// (`FilenameBuilder.made`), or the name the user gave; nil when there is none, and the file keeps its own.
     public var fileName: String?
+    /// What the document is and what it says, in a few sentences in its own language, as the model read it; for an image,
+    /// what it shows. Nil when the model gave none, or when the document waits for the user, as what the model read of
+    /// it is then in doubt; absent from what was read before there were interpretations.
+    public var interpretation: String?
     /// The model that answered; nil when none did.
     public var model: String?
     /// Why the document waits for the user; empty when it does not.
     public var problems: [String]
 
-    public init(fileName: String? = nil, model: String? = nil, problems: [String] = []) {
+    public init(fileName: String? = nil, interpretation: String? = nil, model: String? = nil, problems: [String] = []) {
         self.fileName = fileName
+        self.interpretation = interpretation
         self.model = model
         self.problems = problems
     }

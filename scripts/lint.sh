@@ -203,8 +203,8 @@ gate trash "a file the app has no more use for goes to the Trash through Trashin
 let trash = SystemTrash()' \
   Sources App Tests
 
-gate delete "no code path deletes a document: what the app has no more use for goes to the Trash (gate trash); only a move's own temporary copy, the staging folders of an export, old log files, a record file that holds what the app last wrote and the staged text of one not used or left by a crash, a settings file a failed change itself created, and the folders a command made to throw away (eval's home) are removed" \
-  '^Sources/ArrumatorCore/FileOps/FileOperations\.swift:[0-9]+: +do \{ try FileManager\.default\.removeItem\(at: temporary\) \} catch \{$|^Sources/ArrumatorCore/Tasks/SearchTaskExporter\.swift:[0-9]+: +defer \{ try\? FileManager\.default\.removeItem\(at: staging\) \}$|^Sources/ArrumatorCore/Observability/DiagnosticsExporter\.swift:[0-9]+: +defer \{ try\? fm\.removeItem\(at: staging\.deletingLastPathComponent\(\)\) \}$|^Sources/ArrumatorCore/Logging/Log\.swift:[0-9]+: +try\? FileManager\.default\.removeItem\(at: file\)$|^Sources/ArrumatorCore/Records/ArchiveRecords\.swift:[0-9]+: +try FileManager\.default\.removeItem\(at: url\)$|^Sources/ArrumatorCore/Records/ArchiveRecords\.swift:[0-9]+: +defer \{ if let staged \{ try\? FileManager\.default\.removeItem\(at: staged\) \} \}$|^Sources/ArrumatorCore/Records/ArchiveRecords\+Walk\.swift:[0-9]+: +do \{ try FileManager\.default\.removeItem\(at: url\) \} catch \{$|^Sources/ArrumatorCLI/Arrumator\.swift:[0-9]+: +do \{ try FileManager\.default\.removeItem\(at: folder\) \} catch \{$|^Sources/ArrumatorCore/Config/AppSettings\.swift:[0-9]+: +try FileManager\.default\.removeItem\(at: url\)$' \
+gate delete "no code path deletes a document: what the app has no more use for goes to the Trash (gate trash); only a move's own temporary copy, the staging folders of an export, old log files, a record file or a document's sidecar that holds what the app last wrote and the staged text of one not used or left by a crash, a settings file a failed change itself created, and the folders a command made to throw away (eval's home) are removed" \
+  '^Sources/ArrumatorCore/FileOps/FileOperations\.swift:[0-9]+: +do \{ try FileManager\.default\.removeItem\(at: temporary\) \} catch \{$|^Sources/ArrumatorCore/Records/ArchiveRecords\+Sidecars\.swift:[0-9]+: +try FileManager\.default\.removeItem\(at: url\)$|^Sources/ArrumatorCore/Records/ArchiveRecords\+Sidecars\.swift:[0-9]+: +defer \{ if let staged \{ try\? FileManager\.default\.removeItem\(at: staged\) \} \}$|^Sources/ArrumatorCore/Tasks/SearchTaskExporter\.swift:[0-9]+: +defer \{ try\? FileManager\.default\.removeItem\(at: staging\) \}$|^Sources/ArrumatorCore/Observability/DiagnosticsExporter\.swift:[0-9]+: +defer \{ try\? fm\.removeItem\(at: staging\.deletingLastPathComponent\(\)\) \}$|^Sources/ArrumatorCore/Logging/Log\.swift:[0-9]+: +try\? FileManager\.default\.removeItem\(at: file\)$|^Sources/ArrumatorCore/Records/ArchiveRecords\.swift:[0-9]+: +try FileManager\.default\.removeItem\(at: url\)$|^Sources/ArrumatorCore/Records/ArchiveRecords\.swift:[0-9]+: +defer \{ if let staged \{ try\? FileManager\.default\.removeItem\(at: staged\) \} \}$|^Sources/ArrumatorCore/Records/ArchiveRecords\+Walk\.swift:[0-9]+: +do \{ try FileManager\.default\.removeItem\(at: url\) \} catch \{$|^Sources/ArrumatorCLI/Arrumator\.swift:[0-9]+: +do \{ try FileManager\.default\.removeItem\(at: folder\) \} catch \{$|^Sources/ArrumatorCore/Config/AppSettings\.swift:[0-9]+: +try FileManager\.default\.removeItem\(at: url\)$' \
   'removeItem\(|\bunlink\(|\brmdir\(|\bremove\(atPath' \
   Sources/ArrumatorCore/Sample.swift 'try FileManager.default.removeItem(at: document)
 unlink(path)' \
@@ -216,6 +216,16 @@ gate rows "what opens or acts on a click opens from the keyboard and VoiceOver t
   App/Sample.swift '.onTapGesture { open() }
 .onTapGesture(count: 2) { model.open(document.path) }
 .gesture(TapGesture(count: 2).onEnded { open() })' \
+  App
+
+gate load-fallback "a view shows what AppModel.load gives and keeps what it shows when it gives nothing, as when a reload is cut short: an else after it only returns, and nothing stands in for nil (?? []), which would empty a list or close a card each time" \
+  '^App/[^:]+:[0-9]+: *//|else \{ return \}$' \
+  'model\.load\(.*([)}] else \{|\?\? )' \
+  App/Sample.swift 'let listing = await model.load(Wording.loadLabelsAction, { runtime in try await runtime.services.labels.listing() }) else {
+guard let read = await model.load(Wording.loadTextAction, { runtime in try await runtime.services.documentText(id) }) else { shown = nil; return }
+guard let read = await model.load(Wording.loadLabelsAction, { runtime in try await runtime.services.labels.listing() }) else { rows = []; return }
+inUse = await model.load(Wording.loadLabelsAction, { runtime in try await runtime.services.labels.listing() })?.keys.map(String.init) ?? []
+if let read = await model.load(Wording.loadTasksAction, { runtime in try await runtime.searchTasks.store.tasks() }) { tasks = read } else { tasks = [] }' \
   App
 
 gate calendar "a day Core and extraction read or write is Gregorian, in a time zone the runtime gives them: no Calendar.current, autoupdatingCurrent, TimeZone.current or timeZone: .current, whose calendar on a Buddhist or Japanese Mac puts 2026 in 2569 or 8; only the date detector's own zone is read as the process's" \

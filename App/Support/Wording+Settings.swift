@@ -111,6 +111,7 @@ extension Wording {
         case .match: "Found the documents"
         case .context: "Chose what to show"
         case .answer: "Answered"
+        case .judge: "Judged two labels that look alike"
         }
     }
 
