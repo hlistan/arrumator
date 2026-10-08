@@ -71,14 +71,14 @@ struct RefusingUntil: Trashing {
         let base = try await Harness.make()
         defer { base.env.cleanup() }
         let filed = try await base.ingest("bill.txt", text: Self.bill)
-        #expect(try await base.review.choices(for: filed) == DocumentChoices(actions: [.undo, .confirm], notFiled: false),
+        #expect(try await base.review.choices(for: filed) == DocumentChoices(actions: [.undo, .confirm, .remove], notFiled: false),
                 "a filed document can be undone or confirmed")
         let h = pipeline(base, crossing: true, trash: RefusingTrash())
         let scan = try h.env.drop("scan.txt", text: "A scan of the boiler service")
         await h.coordinator.enqueue(scan)
         await drain(h)
         let left = try #require(try await documents(h).first { $0.id != filed.id })
-        #expect(try await h.review.choices(for: left) == DocumentChoices(actions: [.hold, .readAgain], notFiled: true),
+        #expect(try await h.review.choices(for: left) == DocumentChoices(actions: [.hold, .readAgain, .remove], notFiled: true),
                 "one left in Incoming can be read again or left for later, and its card says it was not filed; never Looks Right")
     }
 

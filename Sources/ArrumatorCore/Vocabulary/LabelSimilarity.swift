@@ -9,7 +9,7 @@ import Foundation
 /// alike, 0 (`FT 1/23` is not `FT 12/3`, nor `Rua das Flores 12, 3` the same as `Rua das Flores 3, 12`). The same digits
 /// in the same order, which punctuation bounds in one label where the other runs on (`V/2026/532774` and
 /// `V2026532774`), are no degree of likeness but a relation of their own: perhaps one number written two ways, perhaps
-/// two, which only the user can tell (`Key.isRegrouping(of:)`, `lookAlike`).
+/// two, which writing cannot tell, so the model judges them (`Key.isRegrouping(of:)`, `lookAlike`, `LabelJudge`).
 ///
 /// Labels with the same numbers written the same way but for case, accents, punctuation, spacing or the order of their
 /// words (`EDP-Comercial, S.A.` and `edp comercial SA`, `Silva, Maria` and `Maria Silva`) are the same label, 1. Words
@@ -66,13 +66,13 @@ public enum LabelSimilarity {
         return similarity >= threshold ? similarity : nil
     }
 
-    /// Why two labels look alike enough to be offered as one, and how alike they are written.
+    /// Why two labels look alike enough to be judged one, and how alike they are written.
     struct LookAlike: Sendable, Hashable {
         let similarity: Double
         let reason: LabelSuggestion.Reason
     }
 
-    /// Whether `a` and `b` are offered to the user as one: when they are written at least `threshold` alike, or, whatever
+    /// Whether `a` and `b` are judged by the model as perhaps one: when they are written at least `threshold` alike, or, whatever
     /// the threshold, when they hold the same digits grouped otherwise, with how alike they are written but for where
     /// their numbers end. Nil when neither.
     static func lookAlike(_ a: Key, _ b: Key, atLeast threshold: Double) -> LookAlike? {

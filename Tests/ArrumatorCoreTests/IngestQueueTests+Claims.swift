@@ -334,7 +334,7 @@ extension IngestQueueTests {
     /// whose job would take the request and read nothing more; one filed from Incoming is read again beside its reading
     /// in (the reviews of the fix of the final review of #17).
     @Test(arguments: [JobKind.ingest, .adopt])
-    func aDocumentWhoseReadingInHasNotEndedIsNotUndoneNorLeftForLater(_ kind: JobKind) async throws {
+    func aDocumentWhoseReadingInHasNotEndedIsNotUndoneLeftForLaterNorRemoved(_ kind: JobKind) async throws {
         let h = try await Harness.make()
         defer { h.env.cleanup() }
         let document = try await h.ingest("bill.txt", text: IngestTests.bill)
@@ -350,6 +350,9 @@ extension IngestQueueTests {
         #expect(try await h.review.choices(for: document).actions == [.confirm], "\(kind): the card offers no undo meanwhile")
         await #expect(throws: IngestError.beingReadIn(docID, name: document.filename), "\(kind): it is refused while its reading has not ended") {
             try await h.review.undo(docID)
+        }
+        await #expect(throws: IngestError.beingReadIn(docID, name: document.filename), "\(kind): and so is removing it") {
+            try await h.review.remove(docID)
         }
         let kept = try await h.services.documents.document(id: docID)
         #expect(kept?.status == .filed && FileManager.default.fileExists(atPath: document.path), "\(kind): and it stays filed where it is")
@@ -375,7 +378,7 @@ extension IngestQueueTests {
             try db.execute(sql: "UPDATE jobs SET state = 'done' WHERE doc_id = ? AND kind = ?", arguments: [docID, kind.rawValue])
         }
         if kind == .adopt {
-            #expect(try await h.review.choices(for: waiting).actions == [.hold, .readAgain, .confirm], "once its reading has ended")
+            #expect(try await h.review.choices(for: waiting).actions == [.hold, .readAgain, .confirm, .remove], "once its reading has ended")
             try await h.review.retry(docID)
             #expect(try await retried() == 1, "and Read Again then reads it again")
         }

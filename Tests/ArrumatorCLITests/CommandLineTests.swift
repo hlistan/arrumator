@@ -471,6 +471,14 @@ extension CommandLineTests {
         let exported = try JSON.decoder.decode(TraceExport.self, from: json.stdout)
         #expect(!exported.steps.isEmpty && exported.steps.allSatisfy { $0.inputJson == nil && $0.outputJson == nil && $0.error == nil },
                 "its JSON keeps each step's stage, status and timing alone: \(json.text)")
+        let traceID = try #require(exported.trace.id)
+        let byID = try JSON.decoder.decode(TraceExport.self, from: try run(home, ["trace", "--id", String(traceID), "--json"]).stdout)
+        #expect(byID.trace.id == traceID && byID.steps.map(\.stage) == exported.steps.map(\.stage),
+                "a trace is shown by its number too, as History links it to a decision no document has")
+        let neither = try run(home, ["trace"])
+        let unknown = try run(home, ["trace", "--id", "9999"])
+        #expect(neither.status != 0 && unknown.status != 0 && unknown.stderr.contains("No trace 9999"),
+                "a document or a trace's number, which must be there: \(neither.stderr) \(unknown.stderr)")
 
         for consent in [false, true] {
             let zip = home.root.appendingPathComponent("diagnostics-\(consent).zip")

@@ -6,8 +6,8 @@ import Foundation
 struct Labels: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         abstract: "Labels: a document's, the archive's, and the rules every reading follows.",
-        subcommands: [Show.self, Unlabelled.self, List.self, Browse.self, Similar.self, Merge.self, Ignore.self, KeepApart.self, Rules.self,
-                      Forget.self],
+        subcommands: [Show.self, Unlabelled.self, List.self, Browse.self, Similar.self, Add.self, Rename.self, Merge.self, Remove.self,
+                      Ignore.self, KeepApart.self, Rules.self, Forget.self],
         defaultSubcommand: Show.self)
 
     /// `kind=value` as a label.
@@ -92,13 +92,14 @@ struct Labels: AsyncParsableCommand {
     }
 
     struct List: AsyncParsableCommand {
-        static let configuration = CommandConfiguration(abstract: "Every label the archive's documents have, kind by kind, the most used first.")
+        static let configuration = CommandConfiguration(
+            abstract: "Every label the archive's documents have, kind by kind, the most used first, and the tags you added that none has yet.")
         @OptionGroup var options: GlobalOptions
         @Option(help: "Only labels of this kind.") var kind: LabelKind?
 
         func run() async throws {
             let runtime = try await options.runtime()
-            let usage = try await runtime.services.labels.usage()
+            let usage = try await runtime.services.labels.listing()
             let kinds = kind.map { [$0] } ?? LabelKind.allCases
             let listed = kinds.flatMap { usage[$0] ?? [] }
             try options.emit(listed) {
@@ -151,7 +152,8 @@ struct Labels: AsyncParsableCommand {
 
     struct Similar: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
-            abstract: "Labels written so alike, or with the same digits grouped otherwise, that they may be one, each with the label a merge would keep, the most alike first.")
+            abstract: "Labels written so alike, or with the same digits grouped otherwise, that they may be one, which the model judges "
+                + "next, each with the label a merge would keep, the most alike first.")
         @OptionGroup var options: GlobalOptions
 
         func run() async throws {
@@ -162,6 +164,35 @@ struct Labels: AsyncParsableCommand {
                      $0.reason == .sameDigitsGroupedOtherwise ? "same digits, grouped otherwise" : ""]
                 })
             }
+        }
+    }
+
+    struct Add: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            abstract: "Add a tag of your own, which no document need have yet, to give documents later.")
+        @OptionGroup var options: GlobalOptions
+        @Argument(help: "The tag, as tag=value, such as tag=\"Taxes 2025\".") var label: String
+
+        func validate() throws { _ = try Labels.label(label) }
+
+        func run() async throws {
+            let outcome = try await options.runtime().labels.add(try Labels.label(label))
+            try options.emit(outcome) { Terminal.outcome(outcome) }
+        }
+    }
+
+    struct Rename: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            abstract: "Rename a label on every document, and in every reading from now on.")
+        @OptionGroup var options: GlobalOptions
+        @Argument(help: "The label to rename, as kind=value, such as sender=\"EDP Comercial\".") var label: String
+        @Option(help: "Its new writing, of the same kind, such as \"EDP Comercial SA\".") var to: String
+
+        func validate() throws { _ = try Labels.label(label) }
+
+        func run() async throws {
+            let outcome = try await options.runtime().labels.rename(try Labels.label(label), to: to)
+            try options.emit(outcome) { Terminal.outcome(outcome) }
         }
     }
 
@@ -177,6 +208,25 @@ struct Labels: AsyncParsableCommand {
         func run() async throws {
             let outcome = try await options.runtime().labels.merge(try Labels.label(label), into: into)
             try options.emit(outcome) { Terminal.outcome(outcome) }
+        }
+    }
+
+    struct Remove: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            abstract: "Take a label off every document; a reading may give it again (`ignore` stops that).")
+        @OptionGroup var options: GlobalOptions
+        @Argument(help: "The label, as kind=value, such as topic=paperwork.") var label: String
+
+        func validate() throws { _ = try Labels.label(label) }
+
+        func run() async throws {
+            let removed = try Labels.label(label)
+            let outcome = try await options.runtime().labels.remove(removed)
+            try options.emit(outcome) {
+                outcome.rule == nil && outcome.documents.isEmpty ? Terminal.nothingToChange
+                    : "Removed \(removed.kind.rawValue) “\(DocumentLabel.oneLine(removed.value))”"
+                        + (outcome.documents.isEmpty ? "" : " from " + Format.count(outcome.documents.count, "document"))
+            }
         }
     }
 
@@ -229,7 +279,7 @@ struct Labels: AsyncParsableCommand {
 
         func run() async throws {
             let outcome = try await options.runtime().labels.forget(rule: rule)
-            try options.emit(outcome) { "Forgot rule #\(rule): \(outcome.rule.summary)" }
+            try options.emit(outcome) { "Forgot rule #\(rule): \(outcome.rule?.summary ?? "")" }
         }
     }
 }

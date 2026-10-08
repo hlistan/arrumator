@@ -1,5 +1,6 @@
 import Foundation
 import GRDB
+import Synchronization
 
 /// What the user changes of a document's labels: the labels added and those taken off, never the whole set as a card
 /// last showed it, so that a change made meanwhile, by the user or by a reading, is kept.
@@ -43,6 +44,16 @@ public struct LabelEdit: Sendable, Hashable {
 /// What the user can do with a document from its card, beside correcting its name and labels.
 public enum DocumentAction: String, Sendable, Hashable, CaseIterable {
     case undo, confirm, hold, readAgain
+    /// Move its file to the Trash and take it out of the archive (`ReviewActions.remove`).
+    case remove
+}
+
+/// What History keeps of a document removed (`ReviewActions.remove`): its number, which the index no longer has, where
+/// its file was, as the disk spells it, and where the Trash put it; nil when it had no file to move, as one missing.
+public struct RemovedPayload: Sendable, Codable, Hashable {
+    public var document: Int64
+    public var from: String
+    public var trashed: String?
 }
 
 /// What a document's card offers, decided where the document is: the actions in the order they are shown, whether it
@@ -63,7 +74,7 @@ public struct DocumentChoices: Sendable, Hashable {
 }
 
 /// What the user does with a document: confirm it, correct its name or labels, read it again, leave it for later,
-/// undo its filing. Every action is recorded in the history.
+/// undo its filing, remove it. Every action is recorded in the history.
 public struct ReviewActions: Sendable {
     public let services: PipelineServices
     public let coordinator: IngestCoordinator
@@ -93,15 +104,21 @@ public struct ReviewActions: Sendable {
         case .held, .undone: [.readAgain]
         case .arrived, .processing, .duplicate, .missing: []
         }
-        // Its reading in not ended, as in the instant between its filing and its job's end, it is neither undone nor left
-        // for later (`undo`, `hold`), nor read again where that reading's job is (`PipelineServices.queueReadingAgain`),
-        // so none of those is offered; the card asks again as the worker moves on.
+        // Any document can be removed, but one being read in, which its reading files.
+        if ![.arrived, .processing].contains(document.status) { actions.append(.remove) }
+        // Its reading in not ended, as in the instant between its filing and its job's end, it is neither undone, left
+        // for later nor removed (`undo`, `hold`, `remove`), nor read again where that reading's job is
+        // (`PipelineServices.queueReadingAgain`), so none of those is offered; nor removed while reading it again moves
+        // its file (`remove`). The card asks again as the worker moves on.
         if let id = document.id, !actions.isEmpty {
-            let (readIn, here) = try await services.database.reader.read { db in
-                (try JobStore.isReadIn(db, docID: id), try JobStore.isReadIn(db, docID: id, at: document.path))
+            let claims = services.claims
+            let (readIn, here, moving) = try await services.database.reader.read { db in
+                (try JobStore.isReadIn(db, docID: id), try JobStore.isReadIn(db, docID: id, at: document.path),
+                 try JobStore.plannedMove(db, docID: id, claims: claims)?.held == true)
             }
-            if readIn { actions.removeAll { [.undo, .hold].contains($0) } }
+            if readIn { actions.removeAll { [.undo, .hold, .remove].contains($0) } }
             if here { actions.removeAll { $0 == .readAgain } }
+            if moving { actions.removeAll { $0 == .remove } }
         }
         return DocumentChoices(actions: actions, notFiled: !inArchive && document.status == .failed, confirmed: confirmed)
     }
@@ -244,6 +261,85 @@ public struct ReviewActions: Sendable {
         await services.vectors.remove(docID: docID)
         try await services.history.record(.undone, actor: .user, doc: docID, summary: "\(from) → Incoming",
                                           payload: ["from": from, "to": destination.path])
+    }
+
+    /// Removes the document: its file goes to the Trash (`Trashing`), never deleted, wherever it is, in the archive or
+    /// back in Incoming, and the document leaves the index, its labels, text, meaning, place in tasks' sets and the work
+    /// queued for it with it, and its record file's entry (`documents_record_delete`), with the History event that says
+    /// where its file was and went (`RemovedPayload`). All of it is decided and done in one write, which holds the
+    /// index's lock, so two removals of one document, from the app and a command, move its file and record it once, and
+    /// the move and its record are made in a task of their own, which a stop does not cut between them. Only the file
+    /// that is the document's is moved: one at its path that carries another document's identifier is not, and the
+    /// document, whose file is then not there, as one missing, only leaves the index. A file the Trash refuses stays
+    /// where it is, and so does the document: nothing is removed (`IngestError.notTrashed`); and a file in the Trash
+    /// whose removal then fails to be recorded or committed comes back, so the document is as it was. Only a crash
+    /// between the two leaves the file in the Trash and the document in the index, which the next start marks missing,
+    /// as one whose file the user took away. A document whose reading in has not ended is refused
+    /// (`IngestError.beingReadIn`), as that reading would file it again, and so is one a worker reading it again holds
+    /// while it may be moving its file (`IngestError.beingMoved`), as the file would be filed with no document; one whose
+    /// move failed or was cut off, and waits to be tried again, is removed with its file where the move left it
+    /// (`JobStore.plannedMove`). A reading of it again otherwise under way loses its claim with its job, which goes with
+    /// the document, so it keeps nothing and moves nothing. What History keeps of it.
+    @discardableResult
+    public func remove(_ docID: Int64) async throws -> RemovedPayload {
+        let known = try await document(docID)
+        let claims = services.claims
+        let planned = try await services.database.reader.read { db in try JobStore.plannedMove(db, docID: docID, claims: claims)?.path }
+        // The archive's watcher is told, so the file leaving is no change of the user's to follow.
+        await services.filer.registry.expect([known.path] + [planned].compactMap { $0 })
+        let (database, trash, now) = (services.database, services.trash, services.time.now())
+        let moved = TrashedFile()
+        let removed: RemovedPayload
+        do {
+            removed = try await Task {
+                try await database.writer.write { db in
+                    guard let doc = try DocumentRecord.fetchOne(db, key: docID) else { throw IngestError.documentNotFound(docID) }
+                    guard try !JobStore.isReadIn(db, docID: docID) else { throw IngestError.beingReadIn(docID, name: doc.filename) }
+                    let move = try JobStore.plannedMove(db, docID: docID, claims: claims)
+                    guard move?.held != true else { throw IngestError.beingMoved(docID, name: doc.filename) }
+                    let file = Self.ownFile(of: doc, movedTo: move?.path)
+                    let from = file?.spelledOnDisk.path ?? doc.path
+                    var trashed: URL?
+                    if let file {
+                        do { trashed = try trash.trash(file) } catch { throw IngestError.notTrashed(from, reason: error.localizedDescription) }
+                        moved.keep(trashed.map { (trashed: $0, from: file) })
+                    }
+                    _ = try DocumentRecord.deleteOne(db, key: docID)
+                    let removed = RemovedPayload(document: docID, from: from, trashed: trashed?.spelledOnDisk.path)
+                    try HistoryStore.insert(db, .documentRemoved, at: now, actor: .user,
+                                            summary: "Removed “\(doc.filename)”" + (file != nil ? "; its file is in the Trash" : "; its file was not there"),
+                                            payload: removed)
+                    return removed
+                }
+            }.value
+        } catch {
+            // Not removed after all, as its record failed or did not commit: its file comes back from the Trash.
+            if let (trashed, from) = moved.kept {
+                do { try FileManager.default.moveItem(at: trashed, to: from) } catch let back {
+                    Log.error(.fileops, "Could not bring a file back from the Trash", ["path": trashed.path, "error": back.localizedDescription])
+                }
+            }
+            throw error
+        }
+        await services.vectors.remove(docID: docID)
+        return removed
+    }
+
+    /// The document's own file: at its path, unless the file there carries another document's identifier, or else where
+    /// reading it again moved it before recording the move (`movedTo`), carrying its identifier; nil when neither.
+    private static func ownFile(of doc: DocumentRecord, movedTo planned: String?) -> URL? {
+        if FileManager.default.fileExists(atPath: doc.path), (Xattr.get(Xattr.documentID, from: doc.url) ?? doc.uid) == doc.uid { return doc.url }
+        guard let planned, FileManager.default.fileExists(atPath: planned) else { return nil }
+        let url = URL(fileURLWithPath: planned)
+        return Xattr.get(Xattr.documentID, from: url) == doc.uid ? url : nil
+    }
+
+    /// The file a removal put in the Trash, and where it was, kept past the transaction, so it is put back should the
+    /// transaction then fail, at its commit too.
+    private final class TrashedFile: Sendable {
+        private let file = Mutex<(trashed: URL, from: URL)?>(nil)
+        var kept: (trashed: URL, from: URL)? { file.withLock { $0 } }
+        func keep(_ moved: (trashed: URL, from: URL)?) { file.withLock { $0 = moved } }
     }
 
     /// Applies the user's corrections: a new file name renames the file where it is, and `labels`, when given, are

@@ -10,9 +10,38 @@ extension Wording {
     static let labelKindPicker = "Kind"
     static let add = "Add"
     static let readHeading = "Read"
+    /// What the model read the document as (`DocumentAnalysis.interpretation`): its row on the card, and its part of the
+    /// sheet that shows its text, as its sidecar heads it.
+    static let aboutHeading = "About"
+    static let interpretationHeading = "What it is"
+    /// What the vision model saw in an image, as its sidecar heads it.
+    static let imageHeading = "What it shows"
     static let open = "Open"
     static let showInFinder = "Show in Finder"
     static let howWasThisRead = "How Was This Read?"
+    static let recognisedText = "Recognised Text"
+    /// The part of that sheet that holds the text, headed as its sidecar heads it.
+    static let recognisedTextHeading = "Recognised text"
+    static let loadTextAction = "Load text"
+    static let showSidecarInFinder = "Show Sidecar in Finder"
+    static let noRecognisedText = "No text was recognised in it."
+    static let notSaidWhatItIs = "The model has not said what it is."
+
+    /// The heading of the sheet that shows a document's text as it was recognised.
+    static func recognisedText(of name: String?) -> String { name.map { "Recognised text of “\($0)”" } ?? "Recognised text" }
+
+    /// How a document's text was read, above it: from its text layer, by OCR, or both, and that it is not all of it,
+    /// when it is not.
+    static func textRead(_ text: DocumentText) -> [String] {
+        let origin: String? = switch text.textOrigin {
+        case .textLayer: "Read from its text layer."
+        case .ocr: "Read by OCR."
+        case .mixed: "Read from its text layer and by OCR."
+        // `TextOrigin.none` written out, as `.none` alone is the optional's.
+        case .some(.vlmOnly), .some(.metadataOnly), .some(TextOrigin.none), nil: nil
+        }
+        return [origin, text.truncated ? "Not all of it: its text was cut to the length kept, or not every page was read." : nil].compactMap(\.self)
+    }
     static let undoFiling = "Undo Filing"
     static let undoFilingHelp = "Move it back to Incoming"
     static let confirmFiledHelp = "Confirm its name and labels"
@@ -25,7 +54,15 @@ extension Wording {
     static func removeLabelNamed(_ label: String) -> String { "Remove “\(label)”" }
     static let showInLabels = "Show in Labels"
     static let removeFromEveryDocument = "Remove from Every Document…"
+    static let removeForGoodEllipsis = "Remove for Good…"
     static let removedForGoodFromCard = "Arrumator will not give this label again. You can forget this decision on the Labels page."
+    /// Offered a label in use of the kind being added, as the field fills it in.
+    static let chooseLabelToAdd = "Choose a label the archive has"
+    static let moveToTrashEllipsis = "Move to Trash…"
+    static let moveToTrashHelp = "Take it out of the archive; its file goes to the Trash"
+    static let moveToTrash = "Move to Trash"
+    static func moveToTrashQuestion(_ name: String) -> String { "Move “\(name)” to the Trash?" }
+    static let movedToTrashMessage = "It leaves the archive with its labels and what was read of it. Its file stays in the Trash until you empty it."
 }
 
 // MARK: Incoming
@@ -76,42 +113,29 @@ extension Wording {
 // MARK: Labels page
 
 extension Wording {
-    static let labelsNotes = "Merge labels that mean the same, or remove one you never want. Arrumator does the same for "
-        + "every document it reads from then on, and tells the model how you want labels written."
-    static let lookAlike = "Look Alike"
+    static let labelsNotes = "Rename, merge or remove labels, and add tags of your own. Labels written alike are judged by the "
+        + "model and merged or kept apart on their own. Every decision is followed for every document read from then on, "
+        + "and can be forgotten under What You Decided."
     static let noLabelsYet = "No document has labels yet."
     static let whatYouDecided = "What You Decided"
-    static let keepApart = "Keep Apart"
-    static let keepApartHelp = "They mean different things: never merge them, and never ask again"
     static let mergeInto = "Merge into"
+    static let renameTo = "Rename to"
 
     /// The field the label a label is merged into is written in, as VoiceOver names it, whatever example it shows.
     static func mergeIntoField(_ label: String) -> String { "Label to merge “\(label)” into" }
+    /// The field a label's new writing is typed in, as VoiceOver names it.
+    static func renameField(_ label: String) -> String { "New name of “\(label)”" }
     static let chooseLabelInUse = "Choose a label in use"
     static let merge = "Merge"
-    static let removeEverywhereEllipsis = "Remove Everywhere…"
-    static let removeEverywhereHelp = "Take it off every document, and never give it again"
+    static let rename = "Rename"
+    static let removeHelp = "Take it off every document; a document read later may be given it again"
+    static let removeForGoodHelp = "Take it off every document, and never give it again"
     static let removedForGoodFromLabels = "Arrumator will not give this label again. You can forget this decision under What You Decided."
     static let forget = "Forget"
     static let forgetHelp = "Read documents without this rule from now on; documents keep their labels"
-
-    /// Two labels that look alike.
-    static func alike(_ value: String, _ other: String) -> String { "“\(value)” and “\(other)”" }
-
-    /// Why two labels are offered to be merged (`LabelSuggestion.Reason`), on their card.
-    static func alikeBecause(_ reason: LabelSuggestion.Reason, kind: LabelKind) -> String {
-        switch reason {
-        case .writtenAlike: "Two \(labelKinds(kind).lowercased()) written alike. Are they one?"
-        case .sameDigitsGroupedOtherwise: "Two \(labelKinds(kind).lowercased()) with the same digits, grouped otherwise. Are they one number?"
-        }
-    }
-
-    /// Keeps one of two alike labels.
-    static func use(_ value: String) -> String { "Use “\(value)”" }
-
-    static func mergeHelp(_ value: String, into other: String) -> String {
-        "Every document with “\(value)” gets “\(other)” instead"
-    }
+    static let addTag = "Add Tag"
+    /// The field a new tag is typed in, as VoiceOver names it.
+    static let newTagField = "New tag"
 }
 
 // MARK: Sidebar and menu bar

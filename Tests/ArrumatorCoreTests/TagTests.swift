@@ -38,7 +38,7 @@ import Testing
         #expect(LabelKind.tag.isUsersOwn && !LabelKind.modelKinds.contains(.tag), "the model is never asked for a tag")
         #expect(LabelKind.modelKinds == LabelKind.allCases.filter { $0 != .tag } && !LabelKind.sender.isUsersOwn,
                 "every other kind is the model's, in their order")
-        #expect(SearchService.columns.last == LabelKind.tag.rawValue, "a tag is a field of the search, tag:…")
+        #expect(SearchService.columns.contains(LabelKind.tag.rawValue), "a tag is a field of the search, tag:…")
         let labels = try PipelineConfig.bundledDefaults().labels
         #expect(labels.vocabulary.kinds[.tag] == nil && labels.isWrittenFreely(.tag) && labels.isWrittenFreely(.sender)
                     && !labels.isWrittenFreely(.date),

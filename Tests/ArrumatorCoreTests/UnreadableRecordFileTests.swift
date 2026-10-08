@@ -141,7 +141,7 @@ import Testing
         // An index that has not read the rules yet, such as one whose archive another Mac has just synchronised.
         let (database, records) = try w.freshIndex()
         let actions = LabelActions(database: database, time: TestTime(.advances))
-        let mine = try #require(try await actions.ignore(DocumentLabel(kind: .topic, value: "electricity")).rule.id)
+        let mine = try #require(try await actions.ignore(DocumentLabel(kind: .topic, value: "electricity")).rule?.id)
         _ = try await actions.forget(rule: mine)
         try await records.flush()
         #expect(FileManager.default.fileExists(atPath: url.path), "a file the index never wrote is not removed for holding nothing the index has")

@@ -40,7 +40,7 @@ import Testing
         try await w.records.flush()
         let url = w.h.env.layout.labelRules
         let edited = try String(contentsOf: url, encoding: .utf8).replacingOccurrences(of: "target: EDP\n", with: "target: EDP Energia\n")
-        try await w.h.labels.forget(rule: try #require(rule.rule.id))
+        try await w.h.labels.forget(rule: try #require(rule.rule?.id))
         // With no rule left, the flush removes the file, which the user edits just then.
         await w.records.setBeforeWriting(once(at: url) { try edited.write(to: url, atomically: true, encoding: .utf8) })
         try await w.records.flush()
@@ -154,6 +154,11 @@ import Testing
         let skip = SkipRules(watcher: config.watcher)
         let name = ".2F1C6C1E-8D4B-4C2A-9E57-3B1D2A6F0C11.\(config.records.documentsFileName)"
         #expect(skip.ignoreReason(name: name) != nil, "a record file's staged text is never taken for a document")
+        let sidecar = StagedRecordFile.sidecarURL(for: URL(fileURLWithPath: "/A/fatura.pdf\(config.watcher.sidecarSuffix)"), watcher: config.watcher)
+        #expect(StagedRecordFile.isStaged(sidecar.lastPathComponent, watcher: config.watcher) && skip.ignoreReason(name: sidecar.lastPathComponent) != nil,
+                "nor is a sidecar's, named without its document's so a long name leaves it room, and removed once a crash has left it long enough")
+        #expect(!StagedRecordFile.isStaged(".2F1C6C1E-8D4B-4C2A-9E57-3B1D2A6F0C11.notes.md", watcher: config.watcher),
+                "while a hidden file of the user's that only looks like one is not")
         #expect(skip.ignoreReason(name: ".notes.txt") == nil, "while a hidden file of the user's is read as the settings say")
     }
 

@@ -85,12 +85,14 @@ public struct AppSettings: Sendable, Codable, Hashable {
         return chosen
     }
 
-    /// The same settings, with the profile in use reading documents and requests with `model`: how `replay --model` and
-    /// `eval --model` read with another chat model and leave everything else as it is. A blank model is refused.
-    public func reading(withChatModel model: String) throws -> AppSettings {
+    /// The same settings, with the profile in use reading documents and requests, and describing images, with `model`, as
+    /// each profile the app comes with reads and describes with one model: how `replay --model` and `eval --model` read
+    /// with another model and leave everything else as it is, the embedding model among it. A blank model is refused.
+    public func reading(withModel model: String) throws -> AppSettings {
         var settings = self
         var inUse = try modelProfile()
         inUse.chatModel = model
+        inUse.visionModel = model
         settings.modelProfiles[profile] = inUse
         try ConfigLoader.refuse(settings.problems, name: Self.configurationName)
         return settings

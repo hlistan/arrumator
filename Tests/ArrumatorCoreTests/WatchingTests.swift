@@ -14,12 +14,16 @@ import Testing
         let root = env.root
         for (name, why) in [(".DS_Store", "a system file"), ("~$Contract.docx", "Office's lock file"), ("report.pdf.crdownload", "a download"),
                             ("._scan.pdf", "a resource fork"), ("x.arrumator-tmp-1", "the app's own copy in progress"),
-                            ("_documents.md", "a record file")] {
+                            ("_documents.md", "a record file"), ("bill.pdf.arrumator.md", "a document's sidecar"),
+                            ("Bill.PDF.Arrumator.MD", "a sidecar named in another case")] {
             #expect(skip.ignoreReason(root.appendingPathComponent(name)) != nil, "\(name) is \(why)")
         }
         let bill = root.appendingPathComponent("bill.pdf")
         try Data("pdf".utf8).write(to: bill)
         #expect(skip.ignoreReason(bill) == nil, "a document is taken in")
+        for name in ["notes.md", "notes.arrumator.txt", "arrumator.md"] {
+            #expect(skip.ignoreReason(name: name) == nil, "\(name) is a file of the user's, not a sidecar, which is named after its document")
+        }
         #expect(skip.isInsideIgnoredDirectory(root.appendingPathComponent(".hidden/bill.pdf"), root: root), "and nothing inside a hidden folder")
         #expect(!skip.isInsideIgnoredDirectory(root.appendingPathComponent("Scans/bill.pdf"), root: root), "but a folder of the user's is read")
     }

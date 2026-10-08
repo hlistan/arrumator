@@ -132,6 +132,8 @@ enum Style {
     static let labelCardTitleSpacing: CGFloat = 3
     /// Width of the field where the label to merge into is written on a label's card.
     static let mergeFieldWidth: CGFloat = 240
+    /// Above and below the field a tag is added in, at the head of the Tags.
+    static let addTagRowPadding: CGFloat = 4
     /// Between a decision about labels and the button that forgets it.
     static let ruleForgetSpacing: CGFloat = 8
 
@@ -271,6 +273,10 @@ enum Style {
     static let sidebarBarInsets = EdgeInsets(top: 9, leading: 12, bottom: 9, trailing: 12)
     /// The sheet that shows how a document was read.
     static let traceSheetMinimum = CGSize(width: 760, height: 560)
+    /// The sheet that shows what a document is and its text as it was recognised.
+    static let textSheetMinimum = CGSize(width: 640, height: 520)
+    /// Between the parts of that sheet: what it is, and its text.
+    static let textSheetSpacing: CGFloat = 12
 
     // MARK: Menu bar
 
@@ -502,6 +508,9 @@ enum EventStyle {
         case .labelIgnored: Wording.ruleSymbol(.ignore)
         case .labelsKeptApart: Wording.ruleSymbol(.keepApart)
         case .labelRuleForgotten: "arrow.uturn.backward"
+        case .labelAdded: Wording.ruleSymbol(.add)
+        case .labelRemoved: "minus.circle"
+        case .documentRemoved: "trash"
         default: taskSymbols[kind] ?? "circle"
         }
     }

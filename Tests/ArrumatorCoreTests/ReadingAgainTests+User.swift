@@ -213,6 +213,6 @@ struct WithoutMeaning: DocumentAnalyzing {
         return outcome
     }
 
-    func embedding(for content: ExtractedContent, senders: [String], settings: AppSettings, config: PipelineConfig,
-                   trace: TraceContext) async throws -> (vector: [Float], model: String)? { nil }
+    func embedding(for content: ExtractedContent, senders: [String], interpretation: String?, settings: AppSettings,
+                   config: PipelineConfig, trace: TraceContext) async throws -> (vector: [Float], model: String)? { nil }
 }

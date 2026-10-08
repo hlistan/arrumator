@@ -1,7 +1,8 @@
 import Foundation
 
-/// The text of a record file written beside it before it takes the file's place (`ArchiveRecords.write`): a hidden file
-/// named `.<UUID>.<record file's name>`, as `.2F1C….._documents.md`. Not `._…`, which macOS keeps for AppleDouble files
+/// The text of a record file, or of a document's sidecar, written beside it before it takes the file's place
+/// (`ArchiveRecords.write`, `ArchiveRecords.renderSidecar`): a hidden file named `.<UUID>.<record file's name>`, as
+/// `.2F1C….._documents.md`, or `.<UUID>.arrumator.md` for a sidecar (`sidecarURL`). Not `._…`, which macOS keeps for AppleDouble files
 /// and leaves out of a folder's listing (`FileManager.enumerator`), so a staged file so named would never be found. One
 /// a crash left between its writing and the rename holds nothing the index lacks, and is removed when the archive is
 /// read (`ArchiveRecords.reconcile`, a rebuild) once older than `records.stagedLeftoverMinutes`, as a younger one may
@@ -13,12 +14,20 @@ enum StagedRecordFile {
         url.deletingLastPathComponent().appendingPathComponent(".\(UUID().uuidString).\(url.lastPathComponent)")
     }
 
+    /// Where the new text of the sidecar at `url` is written before it takes its place: a dot and a UUID, then
+    /// `watcher.sidecarSuffix`, as `.2F1C….arrumator.md`, without the document's name, which may leave no room for both
+    /// (`ArchiveLayout.sidecar(of:)`).
+    static func sidecarURL(for url: URL, watcher: WatcherConfig) -> URL {
+        url.deletingLastPathComponent().appendingPathComponent(".\(UUID().uuidString)\(watcher.sidecarSuffix)")
+    }
+
     /// Whether `name` is the name of a staged record file: a dot, a UUID, a dot, and the name of a record file (the
-    /// managed prefix and extension, as `_documents.md`).
+    /// managed prefix and extension, as `_documents.md`); or a sidecar's (`sidecarURL`).
     static func isStaged(_ name: String, watcher: WatcherConfig) -> Bool {
         let parts = name.split(separator: ".", maxSplits: 2, omittingEmptySubsequences: false)
         guard parts.count == 3, parts[0].isEmpty, UUID(uuidString: String(parts[1])) != nil else { return false }
         let record = String(parts[2])
         return record.hasPrefix(watcher.managedFilePrefix) && (record as NSString).pathExtension.lowercased() == watcher.managedFileExtension
+            || ("." + record).lowercased() == watcher.sidecarSuffix.lowercased()
     }
 }

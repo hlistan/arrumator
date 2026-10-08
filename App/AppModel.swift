@@ -37,8 +37,6 @@ final class ArchiveSession {
     var reviewCount = 0
     /// The record files History last said cannot be read, by their paths (`ArchiveRecords.unreadableRecorded`).
     var unreadableRecords: [String] = []
-    /// Pairs of alike labels waiting for the user to merge them or keep them apart, as the runtime last counted them.
-    var labelSuggestionCount = 0
     var destination: Destination = .incoming
     /// The document opened in place as a card. One at a time, as in Things.
     var openDocument: Int64?
@@ -226,9 +224,6 @@ final class AppModel {
             },
             Task {
                 for await asking in await runtime.lifecycle.askings() { session.ollamaAsking = asking }
-            },
-            Task {
-                for await count in runtime.services.lookAlikes.suggestionCounts() { session.labelSuggestionCount = count }
             },
             Task { [weak self] in
                 var refused = false

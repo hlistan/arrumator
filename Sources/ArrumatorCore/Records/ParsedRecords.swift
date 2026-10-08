@@ -43,6 +43,8 @@ struct ParsedRecords: Sendable {
         case .labelRules: labelRules = try list(LabelRuleEntry.self)
         case .searchTasks: searchTasks = try list(SearchTaskEntry.self)
         case let .conversation(task): conversations = [(task, url, try list(ConversationTurnEntry.self))]
+        // Never read back: what a sidecar holds is the index's (`ArchiveRecords.renderSidecar`).
+        case .sidecar: break
         }
         hashes[url.path] = FrontMatter.sha256(text)
     }

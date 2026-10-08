@@ -13,7 +13,10 @@ public actor ArchiveRecords {
     /// archive meanwhile, as at the end of a switch, and this one's record files never go into it.
     let archive: URL
     let config: PipelineConfig
-    private let registry: SelfChangeRegistry?
+    let registry: SelfChangeRegistry?
+    /// Where a sidecar that does not hold what the app last wrote goes, rather than being written over
+    /// (`renderSidecar`).
+    let trash: any Trashing
     let time: any TimeSource
     private let timeZone: TimeZone
     /// Why each record file that cannot be read cannot, by its path, as it was last found (`noteUnreadable`).
@@ -25,7 +28,7 @@ public actor ArchiveRecords {
     private var waiting: [CheckedContinuation<Void, Never>] = []
     /// Called with each record file's URL between reading it and writing or removing it: what a test does there is what
     /// another process or the user could do at that moment. Set by tests only.
-    private var beforeWriting: (@Sendable (URL) async -> Void)?
+    private(set) var beforeWriting: (@Sendable (URL) async -> Void)?
     /// Called with each record file's URL between reading it and applying what it holds to the index, as `beforeWriting`
     /// is. Set by tests only.
     private var beforeApplying: (@Sendable (URL) async -> Void)?
@@ -38,18 +41,19 @@ public actor ArchiveRecords {
     private var afterStaging: (@Sendable (URL) async -> Void)?
 
     /// - Parameter timeZone: the Mac's, which the moments and days written for people browsing the archive are in.
-    public init(database: AppDatabase, archive: URL, config: PipelineConfig, registry: SelfChangeRegistry?,
+    public init(database: AppDatabase, archive: URL, config: PipelineConfig, registry: SelfChangeRegistry?, trash: any Trashing,
                 time: any TimeSource, timeZone: TimeZone) {
         self.timeZone = timeZone
         self.database = database
         self.archive = archive.standardizedFileURL
         self.config = config
         self.registry = registry
+        self.trash = trash
         self.time = time
     }
 
     /// Where things are in this archive.
-    var layout: ArchiveLayout {
+    nonisolated var layout: ArchiveLayout {
         ArchiveLayout(root: archive, records: config.records, watcher: config.watcher)
     }
 
@@ -187,7 +191,7 @@ public actor ArchiveRecords {
     }
 
     /// What writing one record file came to.
-    private enum Rendering {
+    enum Rendering {
         /// The file was written or removed.
         case written
         /// It already held what the index has.
@@ -199,6 +203,7 @@ public actor ArchiveRecords {
     /// Writes one record file from the index. A file that does not hold what the app last wrote or read, an edit by hand
     /// or one the index has never read, is read first, so it is never written over unread.
     private func render(_ kind: RecordKind) async throws -> Rendering {
+        if case let .sidecar(document) = kind { return try await renderSidecar(document) }
         guard let url = recordURL(of: kind) else { return .unchanged }
         let held = try await readUnlessKnown(kind, url: url)
         let text = try await composed(kind, at: url)
@@ -223,6 +228,8 @@ public actor ArchiveRecords {
         case .labelRules: return layout.labelRules
         case .searchTasks: return layout.searchTasks
         case let .conversation(task): return layout.conversationFile(task: task)
+        // Beside its document, wherever it is (`renderSidecar`).
+        case .sidecar: return nil
         }
     }
 
@@ -270,6 +277,7 @@ public actor ArchiveRecords {
             }
             guard let name, !entries.isEmpty else { return nil }
             return try FrontMatter.compose(RecordList(entries), body: RecordText.conversation(entries, task: name, documents: documents, in: timeZone))
+        case .sidecar: return nil
         }
     }
 
@@ -422,6 +430,7 @@ public actor ArchiveRecords {
                 if let kind { try Self.mark(db, kind) }
             }
         }
+        try await markGoneSidecars(hiddenBy: walk)
         if reread > 0 { Log.info(.db, "Record files read again", ["files": String(reread)]) }
         // Read merged: what is marked for a file that could not be read keeps it merged once it can be.
         if merging { try await database.writer.write { db in try AppDatabase.setMeta(db, Self.mergeOwedKey, nil) } }
@@ -519,12 +528,13 @@ public actor ArchiveRecords {
     private func forgetFiles() async throws {
         try await database.writer.write { db in
             try db.execute(sql: "DELETE FROM record_files")
+            try db.execute(sql: "DELETE FROM sidecar_files")
             try Self.markEvery(db)
         }
         Log.info(.db, "Record files of another archive folder are merged with the index", ["archive": archive.path])
     }
 
-    /// Marks every record file the index has anything for.
+    /// Marks every record file the index has anything for, and the sidecar of every document whose text was read.
     static func markEvery(_ db: Database) throws {
         let upsert = " ON CONFLICT(key) DO UPDATE SET version = version + 1"
         try db.execute(sql: "INSERT INTO record_dirty(key, version) SELECT DISTINCT ? || rtrim(path, replace(path, '/', '')), 1 FROM documents WHERE 1"
@@ -533,6 +543,8 @@ public actor ArchiveRecords {
                            + upsert, arguments: [RecordKind.historyPrefix])
         try db.execute(sql: "INSERT INTO record_dirty(key, version) SELECT DISTINCT ? || task_id, 1 FROM search_task_turns WHERE 1" + upsert,
                        arguments: [RecordKind.conversationPrefix])
+        try db.execute(sql: "INSERT INTO record_dirty(key, version) SELECT ? || id, 1 FROM documents WHERE extracted_at IS NOT NULL" + upsert,
+                       arguments: [RecordKind.sidecarPrefix])
         if try LabelRule.fetchCount(db) > 0 { try mark(db, .labelRules) }
         if try SearchTaskRecord.fetchCount(db) > 0 { try mark(db, .searchTasks) }
     }

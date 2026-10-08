@@ -161,17 +161,23 @@ import Testing
         let actions = w.h.labels
         try await actions.merge(DocumentLabel(kind: .sender, value: "EDP Comercial"), into: "EDP")
         try await actions.ignore(DocumentLabel(kind: .topic, value: "electricity"))
+        try await actions.add(DocumentLabel(kind: .tag, value: "Taxes 2025"))
         try await w.records.flush()
         let url = w.h.env.layout.labelRules
         let text = try String(contentsOf: url, encoding: .utf8)
-        #expect(text.contains("action: merge") && text.contains("target: EDP") && text.contains("| topic | electricity | not wanted |"),
-                "the rules are the user's, kept in the archive's system folder with a table for people")
+        #expect(text.contains("action: merge") && text.contains("target: EDP") && text.contains("| topic | electricity | not wanted |")
+                    && text.contains("action: add") && text.contains("| tag | Taxes 2025 | added |"),
+                "the rules and the tags the user added are the user's, kept in the archive's system folder with a table for people")
 
         let (database, records) = try w.freshIndex()
         let summary = try await records.rebuild()
-        #expect(summary.labelRules == 2, "both rules are read from the archive")
-        let rebuilt = try await LabelStore(database: database, config: w.h.env.config.labels, lookAlikes: LookAlikeMemo()).rules()
-        #expect(rebuilt.map(\.summary) == ["sender “EDP Comercial” → “EDP”", "topic “electricity” ignored"], "they come back with a lost index")
+        #expect(summary.labelRules == 3, "every rule is read from the archive")
+        let store = LabelStore(database: database, config: w.h.env.config.labels, lookAlikes: LookAlikeMemo())
+        let rebuilt = try await store.rules()
+        #expect(rebuilt.map(\.summary) == ["sender “EDP Comercial” → “EDP”", "topic “electricity” ignored", "tag “Taxes 2025” added"],
+                "they come back with a lost index")
+        #expect(try await store.listing()[.tag] == [LabelUsage(label: DocumentLabel(kind: .tag, value: "Taxes 2025"), documents: 0)],
+                "and the tag added is listed again, though no document has it")
         #expect(try await DocumentStore(database: database, time: TestTime(.advances)).list(DocumentFilter(), limit: 5).allSatisfy { $0.labels(.sender) == ["EDP"] },
                 "as do the labels they changed")
 

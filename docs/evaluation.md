@@ -37,6 +37,25 @@ The 21 documents of the international set (`intl/`) record the labels they shoul
 date. The others record only sender, type, date, title words and language, and their other labels are measured by
 coverage alone.
 
+The corpus also holds 35 pairs of labels that look alike (`label_pairs` in `expected.json`), each with how many
+documents have each label, the names of some, and whether the two are one label written two ways: typos, an accent
+written out, a legal form, a plural, the same number grouped otherwise, in Latin and Cyrillic scripts; and two people a
+letter apart, a woman's surname beside a man's, a son beside his father, two tax offices, two banks, two
+municipalities, two plates, two countries, a narrow topic beside a broad one. Five of them are held out
+(`held_out`): kinds of difference the judge's prompt neither names nor shows (a word abbreviated, a small word written
+otherwise, a roman numeral, a Russian name transliterated two ways), so their score says how the model judges what it
+was not told of. No label of a pair, nor a word of one, is a value the prompt quotes, and no word of a pair held out is
+a word of one (`LabelPairJudgeTests`). No pair is two labels written alike, which the archive keeps as one whatever its
+thresholds (`Evaluation.PairCase.problem`). With the default thresholds the app would not ask about all of them: seven
+are less alike than their kind's `suggestSimilarity`, which a lower one offers, and five typos of topics and countries
+are as alike as their kind's `mergeSimilarity`, so a reading makes them one, which a higher one leaves to the model.
+After the documents of each pass, the reading model judges every pair as the app would
+([how](how-it-works.md#keeping-labels-one-vocabulary)), and the run reports the share judged right, of all and of
+those held out, how many pairs it would have merged that are two labels, the costly error, how many it would have kept
+apart that are one, how many it gave no valid answer for, and the median time of a judgement.
+`--pairs` judges the pairs alone, reading no document. Every label of a pair is one the archive could hold, in its
+kind's form, of a kind the vocabulary keeps, which `EvaluationTests` checks of the corpus.
+
 ## Results
 
 Measured on 2026-09-30 with the `standard` profile (`ministral-3:14b`, `bge-m3`) on an Ollama server on the local
@@ -191,11 +210,45 @@ What the runs showed about telling the model of the archive:
   fields.
 - **Objects are not shown.** Almost every document has objects of its own, and listing those in use gave the model
   nothing to reuse.
-- **Look Alike's thresholds.** On the labels the corpus got, every pair offered at `suggestSimilarity` was the same
-  thing written two ways for objects (the same account, meter, plate or policy), parties (`M. EXEMPLE JULIEN` and
-  `Julien Exemple`) and senders (`ACME LTD` and `ACME`). Topics at 0.85 offered only different subjects sharing a word
-  (`property tax` and `property sale`, 0.92) or a narrower topic beside a broad one (`plumbing repair`, 0.91), which
-  the prompt asks for; typos and plurals score 0.97 and above, so topics are offered from 0.94.
+- **The thresholds of what looks alike.** On the labels the corpus got, every pair offered at `suggestSimilarity` was
+  the same thing written two ways for objects (the same account, meter, plate or policy), parties (`M. EXEMPLE JULIEN`
+  and `Julien Exemple`) and senders (`ACME LTD` and `ACME`). Topics at 0.85 offered only different subjects sharing a
+  word (`property tax` and `property sale`, 0.92) or a narrower topic beside a broad one (`plumbing repair`, 0.91),
+  which the prompt asks for; typos and plurals score 0.97 and above, so topics are offered from 0.94.
+
+### Labels that look alike, judged by the model
+
+The judgement was measured on 2026-10-08 with `arrumatorcli eval Tests/Fixtures --pairs --passes 2 --model <model>`,
+on the 35 pairs of the corpus, 5 of them held out. None of the three profiles' reading models was installed on the Mac
+the measurement ran on, and none was downloaded for it, so the models at hand were measured: one larger than
+Standard's of the same family, one of Smart's family, and one as small as Fast's; and `gemma4:latest`, of Fast's family,
+with the documents of the run that measured interpretations ([below](#what-the-model-says-a-document-is)). Both passes
+judged every pair alike.
+
+| Model | Judged right | Held out right | Merged wrongly | Kept apart wrongly | Median |
+|---|---|---|---|---|---|
+| `qwen3:8b` | 97% | 5 of 5 | 0 | 1 | 2.9 s |
+| `gemma3:4b` | 91% | 5 of 5 | 0 | 3 | 2.3 s |
+| `mistral-small3.2:24b` | 94% | 4 of 5 | 2 | 0 | 7.1 s |
+| `gemma4:latest` | 91% | 5 of 5 | 2 | 1 | 1.8 s |
+
+Every model judged the Russian name transliterated two ways, held out, one person (`Aleksandr Volkov` and
+`Alexandr Volkov`). The medians were measured while the Mac also built and tested, and are not compared.
+
+What was learned on the way to the prompt:
+
+- **Describe a difference by what it is, not how it looks.** The first prompt said that two people may differ by a
+  letter; `qwen3:8b` then judged every typo two labels ("they differ by a single letter, indicating two different
+  people"), 57% right with no wrong merge and no merge at all. Asking it first to find what differs, and then whether
+  that is a slip in writing one name or another name spelt right in both, took it to 93%.
+- **A rule the model reads as one sentence it misreads.** The rules of "different" written as one long sentence led
+  `mistral-small3.2:24b` to call `Maria` a misspelling of `Mario` and merge six pairs wrongly (80%); the same rules as
+  short lists, one kind of difference to a line, gave 91%.
+- **What it gets wrong is a first name that is a name of its own.** `mistral-small3.2:24b` merged `Julie Exemple`
+  into `Julien Exemple` with every prompt, calling it "likely a gender difference" though the prompt names a man's and
+  a woman's form of a name two people, and, of the held-out pairs, a roman numeral (`Canal de Isabel III` and
+  `Canal de Isabel II`). Smaller models rather keep a pair apart that is one: a legal form, a misspelt word beside a
+  number, the same number grouped otherwise.
 
 ### Fast
 
@@ -268,18 +321,52 @@ search task's request, which it thinks before answering, the corpus does not mea
 
 ## Image descriptions and the model's context
 
-An image is described by the model only when OCR finds too little text in it: fewer than
-`extraction.image.sparseChars` characters or `extraction.image.sparseWords` words, the words told apart by
-NaturalLanguage in any script, Chinese and Japanese, written without spaces, among them. Rules and runs of symbols are
-no words, so a picture of a few words between them (`*** TOTAL *** --- OBRIGADO ---`) is described, where counting
-what stands between spaces once took it for text enough. Image descriptions used to be
-requested without a context size, so Ollama applied its own default. Measured on the server with `gemma4:e2b`, a
+Every image is described by the vision model, however much text OCR finds in it, since each document's sidecar says
+what an image shows ([what is kept beside a document](how-it-works.md#what-is-kept-beside-a-document)). Earlier
+versions described one only when OCR found too little text to tell what it was, so a screenshot or a photographed
+receipt was read by its text alone; describing it costs one request to the vision model more for each such image, as
+long as a photo without text took already. Image descriptions used to be requested without a context size, so Ollama
+applied its own default. Measured on the server with `gemma4:e2b`, a
 description request without `num_ctx` reloaded the model at 131,072 tokens (1.9 s). The next request to read a
 document, asked with 12,288, reloaded it again (1.4 s). That is about 3 s spent on reloading per described image,
 and more for larger models. Every vision request now sends the context documents are read with, `analysis.numCtx`
 (12,288), so a model that reads documents and describes images stays loaded once.
 
-The corpora don't show this: OCR found enough text in each of their images, so no run described one.
+Until every image was described, the corpora did not show this: OCR found enough text in each of their images, so no
+run described one.
+
+## What the model says a document is
+
+Each reading ends with what the model says the document is, its interpretation, which its sidecar holds beside it, and
+every image is described by the vision model, not only one whose text is too sparse to tell what it is
+([what is kept beside a document](how-it-works.md#what-is-kept-beside-a-document)). Measured on 2026-10-08 with
+`arrumatorcli eval Tests/Fixtures --passes 2 --model gemma4:latest`, as the server at hand had none of the profiles'
+models, against the same command on `main` before the change (cca2dc2), with `--model` describing images too, as it
+now does. The run after the change was made on the branch that also carries the editing of labels and documents, which
+changes no prompt the reading uses.
+
+| | Before, pass 1 / 2 | After, pass 1 / 2 |
+|---|---|---|
+| Type | 81% / 84% | 86% / 86% |
+| Sender | 88% / 88% | 86% / 86% |
+| Date | 96% / 96% | 98% / 98% |
+| Title | 93% / 91% | 93% / 91% |
+| Language label | 100% / 100% | 100% / 98% |
+| Type, sender, date and title together | 89.5% / 90.0% | 90.8% / 90.4% |
+| Expected labels found | 93% / 93% | 93% / 91% |
+| Labels per document | 14.1 / 14.3 | 13.7 / 13.9 |
+| Said what it is | — | 100% / 100% |
+| … in the document's own language | — | 95% / 98% |
+
+Every document to be filed was given an interpretation, in its own language but for three of the first pass and one of
+the second, whose interpretation was in no language the corpus gives them: a photo of a Russian pension certificate,
+said in English, an appointment e-mail written in Portuguese and English, and a Korean hospital receipt, in both passes.
+The images described now that were not before read better: the photo of a residence permit got its type and its date,
+and the photo of the pension certificate its type, in both passes. What read worse is one document each: a contract of
+sale gave its seller as a party rather than as its sender in both passes, so its name lost its sender; and in the second
+pass alone, a passport scan was dated by its expiry, and one period, one deadline and one language label were missed, as
+two passes of one build differ by (type 81% and 84% before). The medians, measured while the Mac also built and tested,
+are not compared; describing every image costs one request to the vision model more for each image with text.
 
 ## Search
 

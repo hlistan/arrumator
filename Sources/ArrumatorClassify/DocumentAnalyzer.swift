@@ -3,8 +3,9 @@ import Foundation
 
 /// The production `DocumentAnalyzing`. The chat model of the profile in use reads the document once, with the app's own
 /// prompt (`labels-system.md`) and what the archive's labels and the user's decisions about them say
-/// (`archive-labels.md`), picks out its signals, which become its labels and all it is described by, and its title, which
-/// its file is named by with its date and sender once the user's rules have kept them (`AnswerValidator`, checked against
+/// (`archive-labels.md`), picks out its signals, which become its labels and all it is described by, its title, which
+/// its file is named by with its date and sender once the user's rules have kept them, and what it is in a few sentences
+/// (`DocumentAnalysis.interpretation`), which its sidecar and the search keep (`AnswerValidator`, checked against
 /// the document's own words: `ReadingGrounds`; `PipelineServices.read`); an invalid answer goes back to it `analysis.repairAttempts` times. Its embedding model makes the
 /// vector the document is found by meaning with. Every model call is recorded in the trace.
 public struct DocumentAnalyzer: DocumentAnalyzing {
@@ -44,20 +45,22 @@ public struct DocumentAnalyzer: DocumentAnalyzing {
         }
 
         let labels = answer?.answer.labels
-        let embedding = try await embedding(for: content, senders: labels?.values(.sender) ?? [], settings: settings, config: config,
-                                            trace: trace)
         let problems = DocumentAnalysis.problems(answered: answer != nil, content: content)
-        // A document that waits for the user keeps its own name: what the model read of it is in doubt.
-        let analysis = DocumentAnalysis(model: answer?.model, problems: problems)
+        // A document that waits for the user keeps its own name and has no interpretation: what the model read of it is
+        // in doubt.
+        let interpretation = problems.isEmpty ? answer?.answer.interpretation : nil
+        let embedding = try await embedding(for: content, senders: labels?.values(.sender) ?? [], interpretation: interpretation,
+                                            settings: settings, config: config, trace: trace)
+        let analysis = DocumentAnalysis(interpretation: interpretation, model: answer?.model, problems: problems)
         return AnalysisOutcome(analysis: analysis, labels: labels, title: problems.isEmpty ? answer?.answer.title : nil,
                                embedding: embedding?.vector, embeddingModel: embedding?.model)
     }
 
-    public func embedding(for content: ExtractedContent, senders: [String], settings: AppSettings, config: PipelineConfig,
-                          trace: TraceContext) async throws -> (vector: [Float], model: String)? {
+    public func embedding(for content: ExtractedContent, senders: [String], interpretation: String?, settings: AppSettings,
+                          config: PipelineConfig, trace: TraceContext) async throws -> (vector: [Float], model: String)? {
         let embedder = OllamaEmbedder(gate: gate, model: try settings.modelProfile().embedModel, keepAlive: config.ollama.keepAlive.embed,
                                       numCtx: config.analysis.embeddingNumCtx)
-        let summary = content.embeddingSummary(senders: senders, maxChars: config.analysis.embeddingSummaryChars,
+        let summary = content.embeddingSummary(senders: senders, interpretation: interpretation, maxChars: config.analysis.embeddingSummaryChars,
                                                identifiersLimit: config.analysis.embeddingIdentifiersLimit)
         let started = Date()
         do {

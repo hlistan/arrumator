@@ -67,7 +67,7 @@ import Testing
         let next = try await actions.ignore(DocumentLabel(kind: .topic, value: "electricity"))
         try await records.flush()
         let written = try String(contentsOf: url, encoding: .utf8)
-        #expect(next.rule.id == 2 && written.contains("target: EDP") && written.contains("value: electricity"),
+        #expect(next.rule?.id == 2 && written.contains("target: EDP") && written.contains("value: electricity"),
                 "and a rule decided afterwards takes the next number, and joins them in the file")
     }
 

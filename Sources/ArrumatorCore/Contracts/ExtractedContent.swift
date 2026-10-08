@@ -279,6 +279,13 @@ public struct ExtractedContent: Sendable, Codable {
 
     public func hasWarning(_ code: WarningCode) -> Bool { warnings.contains { $0.code == code } }
 
+    /// Whether its text is not all of it: cut to `extraction.maxIndexChars`, or not every page read.
+    public var isPartial: Bool { textTruncated || hasWarning(.textTruncated) }
+
+    /// How its text was recognised: from its text layer, by OCR, or both; nil when it has none, as an image only the
+    /// vision model described, whose words are no text of its own.
+    public var recognition: TextOrigin? { [.textLayer, .ocr, .mixed].contains(textOrigin) ? textOrigin : nil }
+
     /// Excerpt for the prompt: the head and the tail of the text, at most `maxChars`, of which the tail gets
     /// `1 / tailDivisor`; the head alone when `maxChars` leaves no room for it beside the tail and the separator. The
     /// configuration gives only a `maxChars` that holds a head (`excerptHasHead`).
@@ -304,9 +311,10 @@ public struct ExtractedContent: Sendable, Codable {
         tailDivisor > 0 && maxChars - maxChars / tailDivisor - excerptSeparator.count >= 0
     }
 
-    /// The text a document's embedding is made from: what it is, who sent it, its first `identifiersLimit` identifiers
-    /// and date, then its text, at most `maxChars` in all.
-    public func embeddingSummary(senders: [String], maxChars: Int, identifiersLimit: Int) -> String {
+    /// The text a document's embedding is made from: what it is, who sent it, what the model read it as
+    /// (`DocumentAnalysis.interpretation`), its first `identifiersLimit` identifiers and date, then its text, at most
+    /// `maxChars` in all.
+    public func embeddingSummary(senders: [String], interpretation: String?, maxChars: Int, identifiersLimit: Int) -> String {
         var lines: [String] = []
         lines.append("filename: \(source.originalFilename)")
         var typeLine = "type: \(source.fileExtension.isEmpty ? kind.rawValue : source.fileExtension)"
@@ -314,6 +322,7 @@ public struct ExtractedContent: Sendable, Codable {
         typeLine += ", language: \(language.primary)"
         lines.append(typeLine)
         if !senders.isEmpty { lines.append("from: " + senders.joined(separator: "; ")) }
+        if let interpretation { lines.append("about: " + interpretation) }
         if !entities.stableKeys.isEmpty {
             lines.append("identifiers: " + entities.stableKeys.prefix(identifiersLimit).map(\.token).joined(separator: "; "))
         }
@@ -354,7 +363,7 @@ public struct ExtractionContext: Sendable {
     }
 }
 
-/// What extraction does when Ollama cannot be reached to describe an image whose text is too sparse to tell what it is.
+/// What extraction does when Ollama cannot be reached to describe an image.
 public enum WhenOllamaIsAway: Sendable {
     /// Throw Ollama's error, so the document's job waits for Ollama, as it does to be read, rather than being filed
     /// without the description for good: the ingest pipeline.

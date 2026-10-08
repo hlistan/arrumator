@@ -15,7 +15,7 @@ import ArrumatorTesting
                           "v16_taskProfile", "v17_tags", "v18_taskConversations", "v19_unreadIndexRefusesRecords",
                           "v20_queueWorkers", "v21_jobClaims", "v22_jobsWaitForTheirModel", "v23_endedJobsKeepNoText",
                           "v24_documentLabels", "v25_documentsInTwoPlaces", "v26_storedLabelsInTheirForm",
-                          "v27_readingAgain"]
+                          "v27_readingAgain", "v28_sidecars"]
 
     /// An index as a release before this one made it, migrated up to `identifier`: its first migration ran before that
     /// one marked a new index as still to be rebuilt from its archive, so it is not.
@@ -197,8 +197,9 @@ import ArrumatorTesting
         try AppDatabase.migrator(time: TestTime(.advances)).migrate(queue)
 
         try queue.write { db in
-            #expect(try db.columns(in: "document_fts").map(\.name) == SearchService.columns && SearchService.columns.last == "tag",
-                    "a tag is a field of the search, the full-text index's last column, where search.bm25Weights gives it its weight")
+            #expect(try db.columns(in: "document_fts").map(\.name) == SearchService.columns
+                        && SearchService.columns.firstIndex(of: "tag") == LabelKind.allCases.count + 1,
+                    "a tag is a field of the search, the column after every other kind of label, where search.bm25Weights gives it its weight")
             let match = "SELECT rowid FROM document_fts WHERE document_fts MATCH ? ORDER BY rowid"
             #expect(try Int64.fetchAll(db, sql: match, arguments: ["eletricidade OR recibo OR lembrete"]) == [1, 2, 3],
                     "every document indexed before is still found by its words")

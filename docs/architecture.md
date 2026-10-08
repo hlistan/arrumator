@@ -172,14 +172,14 @@ flowchart TD
 *Module graph, drawn from `Package.swift` and `project.yml`, which decide; the same for the app and the command line.
 Every arrow points inward, towards Core; none points back.*
 
-The dependency rule is the one of the [clean architecture](https://blog.cleancoder.com/uncle-bob/2012/08/13/the-clean-architecture.html):
-source dependencies point inward, and "nothing in an inner circle can know anything at all about something in an outer
-circle". Core defines the ports (`ContentExtracting`, `DocumentAnalyzing`, `SearchPromptInterpreting`,
-`TaskQuestionAnswering`, `Embedder`, `OllamaAPI`, `TimeSource`, `Trashing`, `TraceSink`, `FolderArchiving`); Extract
-and Classify
-implement them; Runtime is the one place that builds the concrete services and hands them over, a
-[composition root](https://blog.ploeh.dk/2011/07/28/CompositionRoot/). What each module owns and may import is the
-table in [AGENTS.md §5](../AGENTS.md#5-boundaries).
+The dependency rule is the one of the [clean
+architecture](https://blog.cleancoder.com/uncle-bob/2012/08/13/the-clean-architecture.html): source dependencies point
+inward, and "nothing in an inner circle can know anything at all about something in an outer circle". Core defines the
+ports (`ContentExtracting`, `DocumentAnalyzing`, `SearchPromptInterpreting`, `TaskQuestionAnswering`,
+`LabelPairJudging`, `Embedder`, `OllamaAPI`, `TimeSource`, `Trashing`, `TraceSink`, `FolderArchiving`); Extract and
+Classify implement them; Runtime is the one place that builds the concrete services and hands them over, a [composition
+root](https://blog.ploeh.dk/2011/07/28/CompositionRoot/). What each module owns and may import is the table in
+[AGENTS.md §5](../AGENTS.md#5-boundaries).
 
 ### Inside Core
 
@@ -188,14 +188,14 @@ table in [AGENTS.md §5](../AGENTS.md#5-boundaries).
 | `Contracts/` | The types and protocols modules exchange: extracted content, labels and their kinds, analysis, search plans, conversations, traces, prompt templates. | `ExtractedContent`, `LabelKind`, `DocumentLabel`, `SearchPlan`, `TraceContext`, `PromptTemplates` |
 | `Config/` | Settings and tunables, loaded strictly; process environment; where app state lives. | `PipelineConfig`, `AppSettings`, `SettingsStore`, `ConfigLoader`, `RuntimeEnvironment`, `AppPaths` |
 | `Storage/` | The index: schema and migrations, record types, one store per concern, and the notification that tells other processes it changed. | `AppDatabase`, `ChangeSignal`, `DocumentStore`, `JobStore`, `IndexStore`, `HistoryStore`, `TraceRecorder`, `LabelStore`, `SearchTaskStore`, `TaskConversationStore` |
-| `Records/` | The archive's record files: rendering, reading back, rebuilding the index. | `ArchiveRecords`, `ArchiveLayout`, `RecordKind`, `FrontMatter` |
+| `Records/` | The archive's record files: rendering, reading back, rebuilding the index; and each document's sidecar, written from the index and never read back. | `ArchiveRecords`, `ArchiveLayout`, `RecordKind`, `FrontMatter`, `DocumentText` |
 | `Ingest/` | The pipeline's state machine, filing, and what the user does with a document or a label. | `IngestCoordinator`, `PipelineServices`, `DocumentFiler`, `ReviewActions`, `LabelActions`, `ArchiveReconciler` |
 | `FileOps/` | Names, moves, identity on disk (a package is one document), the Trash. | `FilenameBuilder`, `Placer`, `FileOperations`, `HashService`, `Packages`, `Xattr`, `SystemTrash`, `FolderTrash` |
 | `Watching/` | FSEvents on Incoming and on the archive; when a file has stopped changing; a file and a folder as the disk knows them. | `IncomingWatcher`, `ArchiveWatcher`, `SelfChangeRegistry`, `FSEventStream`, `SkipRules`, `Settling`, `FileOnDisk`, `FolderIdentity` |
 | `Ollama/` | The only network client, its guard, the server's lifecycle, one model call at a time. | `OllamaClient`, `OllamaConnection`, `OllamaEndpoint`, `SystemHostResolver`, `NetworkGuardProtocol`, `OllamaLifecycle`, `ModelManager`, `InferenceGate` |
 | `Tasks/` | Search tasks and conversations: two queues and the machinery they share, their actions, what an answer is shown, exports. | `ModelQueue`, `SearchTaskQueue`, `SearchTaskActions`, `TaskConversationQueue`, `TaskConversationActions`, `TaskContextBuilder`, `SearchTaskExporter` |
 | `Search/` | Full-text search fused with search by meaning. | `SearchService`, `VectorIndex`, `SearchPlanMatcher` |
-| `Vocabulary/` | Keeping labels one vocabulary. | `LabelConsolidator`, `LabelSimilarity` |
+| `Vocabulary/` | Keeping labels one vocabulary: tidying what a reading gives, finding labels that look alike, and the worker that has the model judge them. | `LabelConsolidator`, `LabelSimilarity`, `LookAlikeMemo`, `LabelJudge` |
 | `Observability/` | What the pipeline did, in numbers; how an eval run read its corpus; the doctor; the diagnostics export. | `StatsService`, `ProcessingFunnel`, `Evaluation`, `Doctor`, `DiagnosticsExporter` |
 | `Domain/`, `System/`, `Logging/` | Deadlines, retries, the worker's doorbell, identifiers and the words that label them, the language a text is written in (a document's, a request's, a question's); power state; structured logs. | `Deadline`, `Retry`, `Doorbell`, `AsyncSemaphore`, `LanguageDetector`, `PowerState`, `Log` |
 
@@ -204,7 +204,7 @@ table in [AGENTS.md §5](../AGENTS.md#5-boundaries).
 | Module | Shape |
 |---|---|
 | `ArrumatorExtract` | `ExtractorRegistry` resolves a file's type and hands it to one `FileExtractor` (PDF, image, plain text, `textutil`, XLSX, PPTX, e-mail, archive, media, Quick Look, metadata only) under a deadline, then normalises the text and finds the language, dates and identifiers. An extractor's own failure becomes a warning and a metadata-only result; a file that cannot be read, and the deadline, fail the stage. `ZipFolderArchiver` packs a search task's export into a ZIP archive (`FolderArchiving`). |
-| `ArrumatorClassify` | `PromptBuilder` fills templates from `Prompts/*.md`; `LLMClassifier` asks the model with a JSON schema and repairs an invalid answer a bounded number of times; `DocumentAnalyzer`, `SearchPromptInterpreter` and `TaskAnswerer` are the three callers, each with a validator of its own. |
+| `ArrumatorClassify` | `PromptBuilder` fills templates from `Prompts/*.md`; `LLMClassifier` asks the model with a JSON schema and repairs an invalid answer a bounded number of times; `DocumentAnalyzer`, `SearchPromptInterpreter`, `TaskAnswerer` and `LabelPairJudge` are the four callers, each with a validator of its own. |
 | `ArrumatorRuntime` | `ArrumatorRuntime` builds every service from configuration, starts and stops the background work, and switches archives. The app and the command line hand it the environment and the Trash, and build no other service. |
 | `ArrumatorCLI` | One `AsyncParsableCommand` per action; `GlobalOptions.runtime()` bootstraps the same runtime the app uses. |
 | `App/` | `AppDelegate` owns the status item, the windows and one `AppModel`, which owns the runtime and mirrors Core's streams. Pages reload on those streams. `Style`, `Palette` and `Wording` hold every layout value, colour and string. |
@@ -221,15 +221,12 @@ the archive may not show its records yet. Then it sets the query embedder of the
 command compares by meaning as the app does, reading the documents' vectors into the vector index only when a search
 or a question first needs them (`SearchService.loadVectors`). The app loads them as it applies its settings, before it
 files anything. Vectors that cannot be read stop nothing: they are logged, and search goes on by words, saying why.
-`start()` then starts the three queue workers and, as named background tasks, the Ollama supervision and the audit of
+`start()` then starts the three queue workers, the judge of labels that look alike (`LabelJudge`), which the runtime
+wakes at every change recorded in History, and, as named background tasks, the Ollama supervision and the audit of
 its state, the two watcher pumps, the record-file writer, the settings subscription and hourly maintenance; on an
 index still to be rebuilt, as when a record file that cannot be read refused its rebuild, it starts nothing until
-the index is rebuilt (`rebuildIndex()`). Before anything else, and before it waits for an archive that is away, the
-step that starts the runtime starts the working out of which labels look alike (`LabelStore.workOutLookAlikes`), once
-and at every change recorded after, which publishes how many there are (`LookAlikeMemo.suggestionCounts()`): it reads
-the index alone, so the app counts them without waiting, also while the rest cannot start. The app does both as one
-step the runtime owns, `openAndStart()`, off the main actor, as macOS may hold the first read of the archive behind its
-prompt for access.
+the index is rebuilt (`rebuildIndex()`). The app does both as one step the runtime owns, `openAndStart()`, off the main
+actor, as macOS may hold the first read of the archive behind its prompt for access.
 
 A runtime runs once. `stop()` cancels the step that starts it and every task, then waits: for the step, so nothing
 it goes on to start is left running; for the three queues, stopped together, as one worker may wait for another, as
@@ -396,7 +393,11 @@ that does it. An index that has read nothing of its archive yet refuses every ch
 hold, by triggers, in any process, until its rebuild replaces it; `AppDatabase.explained` turns that refusal into the
 error the user sees. An event about nothing the index holds, such as a setting changed, is held in its `meta` table
 instead, decided in the transaction that records it (`HistoryStore.insert`), and recorded once the index is rebuilt.
-The four steps and their guarantees are in [Storage](storage.md#keeping-files-and-index-together).
+A document's sidecar takes the same way out, never the way back: triggers on `documents` and `document_text` mark it
+(`RecordKind.sidecar`), the flush writes it beside the document where the index has it now and removes, or sends to the
+Trash when it was changed by hand, the one it wrote elsewhere (`ArchiveRecords.renderSidecar`), keeping its path and
+checksum in `sidecar_files`; a read of the archive never takes it in, as `SkipRules` tells it by its name. The four
+steps and their guarantees are in [Storage](storage.md#keeping-files-and-index-together).
 
 ### A search task and a conversation
 
@@ -426,6 +427,27 @@ copy to hand over or a file gone, and holds it before its text is read (`IngestC
 All three workers share `InferenceGate`: one generation at a time for the whole process, and a lane of its own for
 embeddings so search stays responsive.
 
+### Labels that look alike
+
+`LabelJudge` is a fourth worker, without a queue of its own: what it works through is derived, the pairs of labels in
+use that look alike and no rule decides yet (`LabelStore.suggestions()`, brought up to date from what `LookAlikeMemo`
+last worked out). The runtime rings its doorbell at every change recorded in History, its own or another process's,
+and the ingest queue at each of its changes, as a job that ends records nothing; it gives way while files wait to be
+filed, while the user has paused and while the Mac's power holds the queues back (`PowerState.pauseReason`, looked
+at again after `power.recheckSeconds`), and takes the most alike pair, which
+`LabelPairJudging` (`LabelPairJudge`, the profile's chat model, through `InferenceGate`) judges one label or two, under
+a trace of its own (source `labels`, step `judge`). `LabelActions.decide` acts on the judgement in one write with its
+History event, which links the trace: it checks there that both labels are still on documents and that no rule decides
+either, so what the user decided meanwhile stands, and counts there which label more documents have, which a merge
+keeps. Ollama away, or the model missing, the pair waits as a queue's item does, its trace left to its next attempt; a
+pair is one whichever of its labels more documents have (`LabelSuggestion.pairID`), as that may turn while it waits, and
+its trace ends as decided meanwhile once `decide` would no longer act on it, or as stopped at a stop. The settings ring
+the doorbell too at each of their changes, as a pause ended from another process reaches the app after what it
+recorded in History. A pair without a valid answer, or whose judging failed otherwise, is set aside until the next
+start. Several processes
+may judge at once, as the app and `arrumatorcli run`: the second to decide a pair finds a rule deciding it and does
+nothing.
+
 ### How the app learns of a change
 
 Views never poll. `AppModel` holds one task per stream and mirrors the value:
@@ -433,14 +455,13 @@ Views never poll. `AppModel` holds one task per stream and mirrors the value:
 | Stream | Says |
 |---|---|
 | `AppDatabase.activity()` | Something was recorded in History: pages reload. |
-| `AppDatabase.othersCommits()` | Another process, such as `arrumatorcli`, committed to the index, and once as it begins to listen, so a commit made while it began is not missed: every observation of it looks again, the ones above among them, and the runtime wakes its three queues (`ArrumatorRuntime.followOtherProcesses`). |
+| `AppDatabase.othersCommits()` | Another process, such as `arrumatorcli`, committed to the index, and once as it begins to listen, so a commit made while it began is not missed: every observation of it looks again, the ones above among them, and the runtime wakes its three queues and the judge of labels that look alike (`ArrumatorRuntime.followOtherProcesses`). |
 | `IngestCoordinator.statusUpdates()` | Which file is in hand, at which stage since when, by which model it is read, and how many wait. |
 | `SearchTaskQueue.statusUpdates()`, `TaskConversationQueue.statusUpdates()` | Which request is read or question answered, by which model, and the answer so far. |
 | `OllamaLifecycle.states()` | Whether Ollama is ready. |
 | `OllamaLifecycle.askings()` | Whether the user's check or start of Ollama runs, and what the last found and when. |
 | `ArrumatorRuntime.workUpdates()` | Whether the runtime's work runs, was refused as the index is not rebuilt from its archive, or waits as the archive is away. |
 | `SettingsStore.changes()` | Each change to the settings: one made through the store, one another process saved, told by its `ChangeSignal` as it is saved, and one made by hand, found when the file is read again before a change. The settings in force are read once, beside it. |
-| `LookAlikeMemo.suggestionCounts()` | How many pairs of labels look alike and wait for the user, each time they are worked out. |
 
 What the app shows of the archive it is on, the values these streams last gave among it, is one `ArchiveSession`, which
 a switch of archives replaces whole; each stream writes into the session it was subscribed for. Which of these states
@@ -525,6 +546,7 @@ change that replaces it; the earlier one stays in Git's history, as superseded c
 | 19 | A search task's ZIP export is written by ZIPFoundation, behind `FolderArchiving` in Extract, its names composed and marked UTF-8 (general purpose bit 11), not by Finder's Compress (`NSFileCoordinator.ReadingOptions.forUploading`). | Finder's archives leave the flag unset, so `unzip`, Python and Windows read every name outside ASCII as code page 437; Core imports no ZIP library (§5), and writing an archive of the app's own copies parses nothing untrusted. | `ArrumatorExtract/Support/ZipFolderArchiver.swift`; [APPNOTE](https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT) 4.4.4 |
 | 20 | A process tells the others with an index open that it committed by a Darwin notification named after the index, and each checks SQLite's `PRAGMA data_version` before it has its observations look again (`Database.notifyChanges(in:)`). | GRDB's observations see only their own pool's commits, and polling the index would wake every process for nothing; `data_version` tells another connection's commit from its own, so a process's own posts change nothing. | `Storage/ChangeSignal.swift`, `AppDatabase.othersCommits()`; `man 3 notify`; [SQLite](https://sqlite.org/pragma.html#pragma_data_version) |
 | 21 | A document read again changes nothing until it is filed, and then what it reads takes the place of everything it had, in the transaction that records its filing. | The index holds one reading of a document or the other, never parts of both, and a document is found as it was while it is read, or when a stop or a failure cuts the reading off. | `Storage/IndexStore.swift` (`replaceReading`), `Ingest/IngestCoordinator.swift` |
+| 22 | Beside each document is its sidecar, `<name>.arrumator.md`: what the model read it as, asked for last in the one reading, and its text as recognised, written from the index as a record file is, marked by triggers, never read back; one that does not hold what the app wrote goes to the Trash rather than being written over. A file named so is the app's, by its name alone. | The user asked for the text and the interpretation beside the document, to read and find without the app (Spotlight); the interpretation is in `_documents.md`, as the reading it belongs to, so the sidecar holds nothing a rebuild needs and can stay derived. A name the watchers and `FilenameBuilder` tell by itself, as `_…md`, keeps it from being taken in even when its document is gone; darktable names its XMP sidecars after the whole file name for the same reason, so `x.jpg` and `x.raw` never share one. | `Records/ArchiveRecords+Sidecars.swift`, `Storage/AppDatabase+Sidecars.swift`; [Storage](storage.md#keeping-files-and-index-together); [darktable: sidecar files](https://docs.darktable.org/usermanual/4.6/en/overview/sidecar-files/sidecar/) |
 
 Record a decision here when it changes the module graph, a contract in `Contracts/`, what is stored and where, the
 concurrency model, a trust boundary or a durability setting: decisions "that affect the structure, non-functional
@@ -567,7 +589,7 @@ evolutionary architecture, and what each protects.
 | No `fatalError` or `try!` in shipped code. | `scripts/lint.sh`, crash gate; SwiftLint `force_unwrapping` |
 | Quitting has one path: work at quit runs before AppKit lets the app end, and nothing else in the app stops the runtime. | `scripts/lint.sh`, quit gate |
 | Only `SystemTrash` calls `trashItem`; everything else, a move across volumes among it, goes through `Trashing`. | `scripts/lint.sh`, trash gate |
-| Nothing is removed but a move's temporary copy, export staging, old logs, a record file the app wrote and a command's own throw-away folder. | `scripts/lint.sh`, delete gate |
+| Nothing is removed but a move's temporary copy, export staging, old logs, a record file or a sidecar the app wrote and a command's own throw-away folder. | `scripts/lint.sh`, delete gate |
 | What opens on a click or a double click opens from the keyboard. | `scripts/lint.sh`, rows gate |
 | A day or a moment Core and extraction read or write is in the time zone the runtime gives them (`ExtractorRegistry`, `ArchiveRecords`, `PipelineServices.timeZone`), and a day is Gregorian, never in the Mac's calendar. | `scripts/lint.sh`, calendar gate |
 | A test waits for the condition it needs, never a guessed time: nothing in `Tests/` sleeps but `Patience`'s pause between looks and the test clocks. | `scripts/lint.sh`, test-sleeps gate |
@@ -642,8 +664,9 @@ or a record file, a queue or other background work, or what crosses a trust boun
 | Archive | The folder documents are filed into, with the record files that describe them. |
 | Index | The SQLite database of one archive: an index over the record files and a cache of what can be recomputed. |
 | Record file | A Markdown file in the archive with YAML front matter: `_documents.md` and the files in `System`. |
+| Sidecar | The Markdown file beside a document, named after it, with what the model read it as and its text as recognised: written from the index, never read back. |
 | Label, kind | What describes a document: a value of one of thirteen kinds. The model gives twelve; `tag` is the user's own. |
-| Vocabulary, rule | The labels the archive uses, and the user's decisions about them: merge, ignore, keep apart. |
+| Vocabulary, rule | The labels the archive uses, and the decisions about them, the user's and those of the model's judgements of labels that look alike: merge (a rename among them), ignore, keep apart, a tag added. |
 | Profile, effort | The three models that read, and how much the reading model thinks before answering a task. |
 | Job | One file's way through the pipeline, a row in the queue. |
 | Search task, set | A request for documents in the user's words, and the documents it found, as the user left them. |

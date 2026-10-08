@@ -118,8 +118,8 @@ struct RefusingTrash: Trashing {
         #expect(event.summary == "bill copy.txt is a copy of \(original.filename), which is read again; the copy is in the Trash",
                 "History says, under the original, what became of the copy")
         let payload = try #require(JSON.decode(CopyPayload.self, from: event.payloadJson))
-        #expect(payload.copy == copy.spelledOnDisk.path && payload.trashed.map { URL(fileURLWithPath: $0).lastPathComponent } == "bill copy.txt"
-                    && payload.tags == nil, "and where the copy was and went: \(event.payloadJson)")
+        #expect(payload.copy == copy.spelledOnDisk.path && payload.trashed == trashed.first?.spelledOnDisk.path && payload.tags == nil,
+                "and where the copy was and went, both as the disk spells them: \(event.payloadJson)")
         #expect(try await h.jobs().map(\.state) == [.done, .duplicate, .done],
                 "the copy's job ends as a copy's, and reading its original is a job of its own")
     }

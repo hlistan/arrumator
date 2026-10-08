@@ -229,7 +229,6 @@ private struct SidebarLists: View {
         switch destination {
         case .incoming: model.session.ingest.queued
         case .review: model.session.reviewCount
-        case .labels: model.session.labelSuggestionCount
         default: 0
         }
     }

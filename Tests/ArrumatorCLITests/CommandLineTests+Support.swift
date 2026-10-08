@@ -51,11 +51,12 @@ extension CommandLineTests {
         var text: String { String(decoding: stdout, as: UTF8.self) }
     }
 
-    func run(_ home: Home, _ arguments: [String]) throws -> Result {
+    func run(_ home: Home, _ arguments: [String], environment: [String: String] = [:]) throws -> Result {
         let command = Bundle(for: Marker.self).bundleURL.deletingLastPathComponent().appendingPathComponent("arrumatorcli")
         guard FileManager.default.isExecutableFile(atPath: command.path) else { throw CocoaError(.fileNoSuchFile) }
-        // Only what the command needs: its scratch home and Trash, and a home folder for the disk-space check.
-        let outcome = try ChildProcess.run(command, arguments, environment: home.environment)
+        // Only what the command needs: its scratch home and Trash, and a home folder for the disk-space check, and what
+        // the test gives besides.
+        let outcome = try ChildProcess.run(command, arguments, environment: home.environment.merging(environment) { _, given in given })
         return Result(status: outcome.status, stdout: outcome.stdout, stderr: String(decoding: outcome.stderr, as: UTF8.self))
     }
 
@@ -69,9 +70,10 @@ extension CommandLineTests {
     }
 
     /// Puts documents into the scratch archive as an earlier run filed them, one a minute after the other, each labelled
-    /// as given: the files, each with the identifier Arrumator keeps on it, and the archive's record of them, which the
-    /// command's new index is rebuilt from. Returns their numbers, in the order given.
-    func file(_ home: Home, _ documents: [(name: String, labels: [DocumentLabel])]) throws -> [Int64] {
+    /// as given, and read as `analyses` gives by its name: the files, each with the identifier Arrumator keeps on it, and
+    /// the archive's record of them, which the command's new index is rebuilt from. Returns their numbers, in the order
+    /// given.
+    func file(_ home: Home, _ documents: [(name: String, labels: [DocumentLabel])], analyses: [String: DocumentAnalysis] = [:]) throws -> [Int64] {
         try FileManager.default.createDirectory(at: home.archive, withIntermediateDirectories: true)
         var entries: [DocumentEntry] = []
         for (offset, document) in documents.enumerated() {
@@ -84,6 +86,7 @@ extension CommandLineTests {
             record.status = .filed
             record.filedAt = record.addedAt.addingTimeInterval(Double(offset) * 60)
             record.labelsJson = try JSON.string(document.labels)
+            record.analysisJson = try analyses[document.name].map { try JSON.string($0) }
             try Xattr.set(Xattr.documentID, record.uid, on: url)
             entries.append(try #require(DocumentEntry(record)))
         }

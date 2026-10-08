@@ -181,6 +181,26 @@ struct Extract: AsyncParsableCommand {
     }
 }
 
+struct Show: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Show what the model read a document as, what an image shows, and its text as it was recognised, as its sidecar holds them.")
+    @OptionGroup var options: GlobalOptions
+    @Argument(help: "Document id or file path.") var document: String
+
+    func run() async throws {
+        let runtime = try await options.runtime()
+        let docID = try await resolveDocument(document, runtime: runtime)
+        guard let shown = try await runtime.services.documentText(docID) else { throw ValidationError("No document \(docID)") }
+        try options.emit(shown) {
+            let read = [shown.textOrigin.map { "read from \($0.rawValue)" }, shown.truncated ? "not all of it" : nil].compactMap { $0 }
+            let image = shown.imageDescription.map { ["What it shows", $0, ""] } ?? []
+            return ([shown.file, "sidecar \(shown.sidecar ?? "—")", "", "What it is", shown.interpretation ?? "—", ""] + image
+                + ["Recognised text" + (read.isEmpty ? "" : " (\(read.joined(separator: ", ")))"), shown.text.isEmpty ? "—" : shown.text])
+                .joined(separator: "\n")
+        }
+    }
+}
+
 struct Search: AsyncParsableCommand {
     static let configuration = CommandConfiguration(abstract: "Search the archive (full text + semantic).")
     @OptionGroup var options: GlobalOptions
@@ -233,18 +253,33 @@ struct History: AsyncParsableCommand {
 
 struct Trace: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
-        abstract: "Show how a document was processed: every stage, its status and timing, and with --full its inputs and outputs.")
+        abstract: "Show how a document was processed, or how a decision History links a trace to was made, such as two labels the "
+            + "model judged: every stage, its status and timing, and with --full its inputs and outputs.")
     @OptionGroup var options: GlobalOptions
     @Flag(help: "Include each stage's inputs, outputs and errors (the document's text, prompts, raw model responses).") var full = false
-    @Argument(help: "Document id or file path.") var document: String
+    @Argument(help: "Document id or file path; none with --id.") var document: String?
+    @Option(help: "The trace's number, as an event of `history --json` gives it (traceId).") var id: Int64?
+
+    func validate() throws {
+        if document != nil && id != nil { throw ValidationError("Name a document, or give --id for a trace by its number, not both.") }
+    }
 
     func run() async throws {
         let runtime = try await options.runtime()
-        let docID = try await resolveDocument(document, runtime: runtime)
-        guard let latest = try await runtime.traces.traces(docID: docID).first, let id = latest.id,
-              let (trace, steps) = try await runtime.traces.trace(id: id) else {
-            throw ValidationError("No trace recorded for document \(docID)")
+        let id: Int64
+        switch (document, self.id) {
+        case let (_, given?):
+            id = given
+        case let (document?, nil):
+            let docID = try await resolveDocument(document, runtime: runtime)
+            guard let latest = try await runtime.traces.traces(docID: docID).first?.id else {
+                throw ValidationError("No trace recorded for document \(docID)")
+            }
+            id = latest
+        case (nil, nil):
+            throw ValidationError("Name a document, or give --id for a trace by its number.")
         }
+        guard let (trace, steps) = try await runtime.traces.trace(id: id) else { throw ValidationError("No trace \(id)") }
         // Without --full nothing of the document is shown, so the output can go into a bug report.
         let shown = DiagnosticsExporter.shareable(steps, includeDocumentText: full)
         try options.emit(TraceExport(trace: full ? trace : DiagnosticsExporter.shareable(trace), steps: shown)) {
@@ -262,7 +297,7 @@ struct Replay: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         abstract: "Read a stored document again with the model, optionally another one, and compare, without touching files.")
     @OptionGroup var options: GlobalOptions
-    @Option(help: "Chat model to read with instead of the profile's.") var model: String?
+    @Option(help: "Model to read with instead of the profile's.") var model: String?
     @Argument(help: "Document id or file path.") var document: String
 
     func run() async throws {
@@ -273,7 +308,7 @@ struct Replay: AsyncParsableCommand {
             throw ValidationError("Document \(docID) has no stored content")
         }
         var settings = await runtime.settings.current
-        if let model { settings = try settings.reading(withChatModel: model) }
+        if let model { settings = try settings.reading(withModel: model) }
         _ = await runtime.lifecycle.ensureRunning()
         let trace = try await runtime.services.startTrace(docID: docID, jobID: nil, attempt: 0, source: .replay, settings: settings)
         // Read with the tags the document has, which a reading keeps, so what differs is what the model gives.

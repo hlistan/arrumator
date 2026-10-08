@@ -15,17 +15,18 @@ extension IngestCoordinator {
         let context = try services.config.extractionContext(settings: settings, whenOllamaIsAway: .wait)
         let content = try await services.extractor.extract(document.url, sha256: document.sha256, context: context, trace: trace)
         try await storeExtraction(docID: docID, content: content)
-        let senders = document.labels(.sender)
-        if let (vector, model) = try await services.analyzer.embedding(for: content, senders: senders, settings: settings,
-                                                                        config: services.config, trace: trace) {
-            try await index(docID: docID, content: content, senders: senders, vector: vector, model: model, trace: trace)
+        let (senders, interpretation) = (document.labels(.sender), document.analysis?.interpretation)
+        if let (vector, model) = try await services.analyzer.embedding(for: content, senders: senders, interpretation: interpretation,
+                                                                        settings: settings, config: services.config, trace: trace) {
+            try await index(docID: docID, content: content, senders: senders, interpretation: interpretation, vector: vector,
+                            model: model, trace: trace)
         }
         try await save(&job, &payload, state: .done, trace: trace)
     }
 
-    func index(docID: Int64, content: ExtractedContent, senders: [String], vector: [Float], model: String,
+    func index(docID: Int64, content: ExtractedContent, senders: [String], interpretation: String?, vector: [Float], model: String,
                trace: TraceContext) async throws {
-        let text = services.embeddingText(content, senders: senders)
+        let text = services.embeddingText(content, senders: senders, interpretation: interpretation)
         try await trace.measure(.index, input: ["model": model]) {
             try await services.index.upsertEmbedding(docID: docID, model: model, vector: vector, sourceText: text)
             await services.vectors.upsert(docID: docID, vector: vector, model: model)

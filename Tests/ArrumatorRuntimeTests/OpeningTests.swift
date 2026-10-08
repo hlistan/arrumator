@@ -2,6 +2,7 @@
 @testable import ArrumatorRuntime
 import ArrumatorTesting
 import Foundation
+import GRDB
 import Testing
 
 /// Opening an archive whose index is to be rebuilt (docs/storage.md): the runtime works on no index that has not been
@@ -125,29 +126,28 @@ import Testing
         await runtime.stop()
     }
 
-    @Test func aRuntimeStartedTellsTheAppHowManyLabelsLookAlikeAtEveryChangeWithoutBeingAsked() async throws {
+    @Test func aRuntimeStartedJudgesLabelsThatLookAlikeAndAPairWaitsWhileOllamaIsAway() async throws {
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }
         let runtime = try await home.open()
-        var ids: [Int64] = []
         for (place, sender) in ["EDP Comercial", "EDP Comercail"].enumerated() {
             var bill = DocumentRecord.arrived(path: home.folder("First").appendingPathComponent("bill \(place).pdf").path, sha256: "bill \(place)",
                                               size: 1, uttype: "com.adobe.pdf", inode: nil, modified: nil, now: runtime.time.now())
             bill.status = .filed
             bill.labelsJson = try JSON.string([DocumentLabel(kind: .sender, value: sender)])
-            ids.append(try #require(try await runtime.services.documents.save(bill).id))
+            _ = try await runtime.services.documents.save(bill)
         }
-        let counts = SuggestionCounts()
-        let stream = runtime.services.lookAlikes.suggestionCounts()
-        let following = Task { for await count in stream { await counts.add(count) } }
-        defer { following.cancel() }
+        let judged = {
+            try await runtime.database.reader.read { db in
+                try TraceRecord.filter(Column("source") == TraceSource.labels.rawValue).fetchAll(db)
+            }
+        }
         await runtime.start()
-        #expect(await Patience.until { await counts.received.last == 1 }, "once started, it says how many pairs look alike, unasked")
-        // The user gives a third sender written alike, which History records.
-        try await runtime.review.edit(ids[0], fileName: nil, labels: LabelEdit(adding: [DocumentLabel(kind: .sender, value: "EDP Comerciall")]))
-        #expect(await Patience.until { (await counts.received.last ?? 0) > 1 },
-                "and at the change, says how many there are now, without the app asking")
+        #expect(await Patience.until { (try? await judged())?.first?.outcome == TraceRecorder.waitingOutcome },
+                "once started, the pair is judged unasked, and waits for the Ollama no one answers at, its trace says")
+        #expect(try await runtime.services.labels.rules().isEmpty, "nothing is decided without the model's judgement")
         await runtime.stop()
+        #expect(try await judged().count == 1, "one trace, which the next attempt takes up")
     }
 
     @Test func anArchiveWhoseVectorsCannotBeReadIsOpenedAndSearchedByWords() async throws {

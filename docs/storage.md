@@ -5,19 +5,20 @@ has a SQLite database of its own, an index over those files plus caches of thing
 corrupting an index costs time, never information: the app rebuilds it from the archive.
 
 This is the pattern of plain-text vaults such as Obsidian, whose notes are the source of truth and whose metadata cache
-is disposable and rebuilt from the files ([Obsidian help: how Obsidian stores data](https://help.obsidian.md/Files+and+folders/How+Obsidian+stores+data)).
-Documents are filed at the top of the archive, each directory holding documents lists them beside them, and the
-history, your rules for labels, your search tasks and the conversations about their documents sit in one `System`
-folder at the top of the archive. The app makes
-no other folders in the archive.
+is disposable and rebuilt from the files ([Obsidian help: how Obsidian stores
+data](https://help.obsidian.md/Files+and+folders/How+Obsidian+stores+data)). Documents are filed at the top of the
+archive, each directory holding documents lists them beside them, each document has its sidecar beside it, and the
+history, your rules for labels, your search tasks and the conversations about their documents sit in one `System` folder
+at the top of the archive. The app makes no other folders in the archive.
 
 ## What lives where
 
 | What | File | Contents |
 |---|---|---|
-| The documents in a directory | `<directory>/_documents.md` | One entry per file in that directory: identity, original name, checksum, size, content type, pages, status, the labels that describe it (each a kind and a value, your tags among them; absent while it has none and the model has not labelled it), `tags_only: true` while those labels are only its tags because the model has not labelled it yet, and how it was read: the file name its reading gave it, the model, and why it waits for you, if it does. The table below the data shows each file's date, sender, type and other labels. |
+| The documents in a directory | `<directory>/_documents.md` | One entry per file in that directory: identity, original name, checksum, size, content type, pages, status, the labels that describe it (each a kind and a value, your tags among them; absent while it has none and the model has not labelled it), `tags_only: true` while those labels are only its tags because the model has not labelled it yet, and how it was read: the file name its reading gave it, what the model read it as (`interpretation`; absent before a reading gave one), the model, and why it waits for you, if it does. The table below the data shows each file's date, sender, type and other labels. |
+| A document's sidecar | `<document's file name>.arrumator.md`, beside it (`watcher.sidecarSuffix`) | What the model read the document as, its interpretation, and its text as it was recognised, for you to read and Spotlight to find it by, without the app ([how](how-it-works.md#what-is-kept-beside-a-document)). Its data names the document's identity and file, the model that read it, how its text was recognised (`textLayer`, `ocr` or `mixed`; absent when it has none, as a photo only the vision model described), its language, pages, the pages OCR read and whether the text is not all of it; below, the interpretation, what the vision model saw in an image, then the text as code, as it was recognised. Written from the index, never read back: there is none for a document whose text has not been read, nor for one the model said nothing of and nothing was read of, and none for a document whose own name leaves no room for its sidecar's within the 255 UTF-16 units of a file's name, which the app never gives one. A sidecar the folder refuses for good, without permission to write or on a read-only volume, is said in History and written once its document changes. |
 | History | `System/History/_<year>-<month>.md` | One line per event, newest last. |
-| Rules for labels | `System/_labels.md` | Your decisions about labels ([how](how-it-works.md#keeping-labels-one-vocabulary)): each rule's number, kind, label, what it decides (`merge`, `ignore` or `keepApart`), the other label of a merge or of a pair kept apart, and when it was made. There is no file while there are no rules. |
+| Rules for labels | `System/_labels.md` | The decisions about labels ([how](how-it-works.md#keeping-labels-one-vocabulary)), yours and those the model's judgements of labels that look alike made: each rule's number, kind, label, what it decides (`merge`, a rename among them, `ignore`, `keepApart`, or `add` for a tag of yours added before any document has it), the other label of a merge or of a pair kept apart, and when it was made. There is no file while there are no rules. A version before `add` cannot read a file that holds one. |
 | Conversations | `System/Conversations/_<task>.md` | The questions about one search task's documents ([how](how-it-works.md#talking-with-a-tasks-documents)), by the task's number: each question's number, when it was asked, the question, its state (`queued`, `answered` or `failed`; one being answered is written as `answering` and waits again after a rebuild), the model that answered, why the answer is incomplete or missing, when it was answered, the answer, the documents it draws on by number, and what it found outside the set when asked for more: the request it wrote, what that was read as, the documents found and why none could be, if so. Below the data, each question with its answer and the documents by name, for people. There is no file while the task has no questions; removing the task removes it. |
 | Search tasks | `System/_tasks.md` | Your search tasks ([how](how-it-works.md#search-tasks)): each task's number, what you asked, the name and arrangement you gave it, its state, the effort it is read with and the model profile you gave it, by its id (none when it follows the one Settings uses), what the model read the request as and which model, why it failed if it did, the documents of its set by number, each `matched`, `added` or `removed` (taken out by you), and every export: its number, when, as a `folder` or a `zip`, where it was put, where each document went inside it and which could not be copied and why. There is no file while there are no tasks. |
 
@@ -80,8 +81,9 @@ first, so the database file alone holds everything when it is moved.
 ## What the database only indexes or caches
 
 - **Text and search**: extracted text and the full-text index are extracted again from the documents; the labels'
-  columns of the full-text index, one per kind and the last for tags, are filled from the entries, without asking the
-  model again.
+  columns of the full-text index, one per kind and then one for tags, and its last column, what the model read the
+  document as, are filled from the entries, without asking the model again: a document's interpretation is in its entry,
+  under `analysis`, as the rest of how it was read is.
 - **Which documents have each label**, by its kind and value, kept with each document's labels in the transaction that
   changes them: how many documents have each label, what the sidebar and the model are shown, and which documents a
   chosen label narrows the list to are counted from it, not by reading every document's labels. A rebuild fills it as
@@ -130,31 +132,47 @@ Some working state is deliberately not kept in files, so a lost index loses it:
    record file whose checksum differs from the one the index holds is read back. That covers edits made by hand,
    files synchronised from another Mac, and anything else that changed the files behind the app's back.
 4. A file edited by hand is never overwritten. If the index has changes of its own for the same file, the edit is merged
-   in: what the file changes wins, and what the index added is kept. Otherwise the file replaces what the index held
-   for it. Which of the two is decided in the transaction that applies the file, so a change committed while the file
-   was read is merged with it, never replaced. Removing a document's entry never removes the document; its entry is
-   written back. An entry in the list of another folder than the one its document is in, while the document's file is
-   still where the index has it, is a copy's, as in a folder copied in Finder with its `_documents.md`: it moves no
-   document, and the list is written again without it; the copies themselves are taken in as new files. That is so
-   only while where the index has the document tells it, which it does not when it was itself read from a list, as
-   after the index was lost: see [documents in two places](#documents-in-two-places). A rule for
-   labels changed by hand is followed by readings from then on; the documents it concerns keep the labels they have.
-   A file is written over or removed only when it holds what the app last wrote or has just read: one the index has
-   no checksum for, such as a file another Mac synchronised, is read first.
-   A file that is there but cannot be read, such as one edited into broken YAML, saved again as UTF-16 by an editor or
-   whose permissions keep the app out, is never taken for a missing or empty one and never written over or removed,
-   nor are the files in a folder of the archive whose contents cannot be listed, nor any while the archive's own
-   folder is not there, where no folder is made:
-   the app logs which file or folder and why (the line and column where the YAML breaks, or the field whose value it
-   does not read, never what the file says there), `arrumatorcli doctor` names it, History says so once, whichever
-   process finds it, and once more when it reads again (the index keeps which it said, under `records_unreadable` in
-   its `meta`), the app says so at the foot of its window while filing goes on, every other file is still read, and
-   the index keeps what it holds and writes the file's changes once it reads again. That is so for an index that holds
-   the archive; a new one is not rebuilt without the file (see [Rebuilding](#rebuilding)).
+   in: what the file changes wins, and what the index added is kept. Otherwise the file replaces what the index held for
+   it. Which of the two is decided in the transaction that applies the file, so a change committed while the file was
+   read is merged with it, never replaced. Removing a document's entry by hand never removes the document; its entry is
+   written back. A document is removed only by moving it to the Trash (`review remove`, or **Move to Trash…** on its
+   card), whose write takes its entry out of its folder's list. An entry in the list of another folder than the one its
+   document is in, while the document's file is still where the index has it, is a copy's, as in a folder copied in
+   Finder with its `_documents.md`: it moves no document, and the list is written again without it; the copies
+   themselves are taken in as new files. That is so only while where the index has the document tells it, which it does
+   not when it was itself read from a list, as after the index was lost: see [documents in two
+   places](#documents-in-two-places). A rule for labels changed by hand is followed by readings from then on; the
+   documents it concerns keep the labels they have. A file is written over or removed only when it holds what the app
+   last wrote or has just read: one the index has no checksum for, such as a file another Mac synchronised, is read
+   first. A file that is there but cannot be read, such as one edited into broken YAML, saved again as UTF-16 by an
+   editor or whose permissions keep the app out, is never taken for a missing or empty one and never written over or
+   removed, nor are the files in a folder of the archive whose contents cannot be listed, nor any while the archive's
+   own folder is not there, where no folder is made: the app logs which file or folder and why (the line and column
+   where the YAML breaks, or the field whose value it does not read, never what the file says there), `arrumatorcli
+   doctor` names it, History says so once, whichever process finds it, and once more when it reads again (the index
+   keeps which it said, under `records_unreadable` in its `meta`), the app says so at the foot of its window while
+   filing goes on, every other file is still read, and the index keeps what it holds and writes the file's changes once
+   it reads again. That is so for an index that holds the archive; a new one is not rebuilt without the file (see
+   [Rebuilding](#rebuilding)).
 
 The window in which a change exists only in the database is the time it takes to write one file, and a mark left by a
 crash in that window is written at the next start. A mark that could not be written as the app switched away from the
 archive stays in that archive's index until it is next opened ([One index per archive](#one-index-per-archive)).
+
+A document's sidecar is written the same way, marked by triggers in the transaction of every change to what it holds,
+its text and its interpretation, or to where its document is and how it stands, and written atomically once that
+commits, with its checksum kept in the index (`sidecar_files`), one path to one document. It is never read back: what it
+holds is the index's. It follows its document: renamed or moved, in the app or in Finder, the document has it written
+where it now is and removed from where it was; moved to the Trash, undone back into Incoming, set aside as missing, or
+read again from the start as a file that changed, the document leaves none. One the index wrote is removed only while it
+holds what was written. One that holds anything else, changed by hand or a file of yours under its name, is yours: it is
+never written over or removed, but goes to the Trash, from which you can take it back, before the app writes its own in
+its place; one the Trash refuses, as on a volume without one, stays as it is, and no sidecar is written there until its
+document changes again. A sidecar the folder refuses for good, as one without permission to write or on a volume that is
+read-only, is said in History, holds up no other file nor any command, and is written once its document changes; one a
+retry may mend, as on a full disk, stays marked and is written once it can be, as a record file is. A sidecar removed by
+hand is written again when the archive is next read, as a record file is. While the archive's folder is not there, none
+is written.
 
 ## Rebuilding
 
@@ -199,6 +217,11 @@ what the app did next would be written over the file once it read again. The ind
 starts no work on it, and every `arrumatorcli` command stops with the same message. Correct the file, or move it out of
 the archive, then rebuild the index in Settings › Advanced, which starts the work once it succeeds, open Arrumator
 again, or run the command again.
+
+A rebuild reads no sidecar, and takes none in as a document. A document's sidecar is left as it is until its text is
+read again for search, when it is written again from what was read: the same text and interpretation give the same
+file, which stays as it is, and the index keeps its checksum again; one that differs, as one changed by hand, goes to
+the Trash first.
 
 A rebuild reads every `_documents.md`, the history, the rules for labels, the search tasks and their conversations; a
 task's set keeps only the documents the archive still has entries for, and a conversation of a task `_tasks.md` does not
@@ -259,6 +282,12 @@ model is not a profile, so it is not read as one: such a task follows the profil
 model when it is migrated, `_tasks.md` is written again without it, and a rebuild that reads an older `_tasks.md`
 leaves it out too. Give the task a profile to read it with another model. A task in a `_tasks.md` of the versions before
 efforts, which has no `effort`, is read with `medium`, as it was read then and as migrating the index gave it.
+
+Sidecars came after tags. The first start of the version that brought them makes the full-text index again with a
+column for what the model read a document as, from the text the index already holds, so nothing is read again or lost,
+and writes a sidecar beside every document of the archive whose text was read, with its text; documents read before
+have no interpretation until they are read again (**Read All Documents Again**, under Settings › Filing). A
+`_documents.md` entry without `interpretation` under `analysis` is read as it always was.
 
 Tags came after labels. The first start of the version that brought them makes the full-text index again with a column
 for tags, from the text the index already holds, so nothing is read again or lost, and adds to each document whether

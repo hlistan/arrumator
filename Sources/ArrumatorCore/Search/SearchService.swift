@@ -148,8 +148,11 @@ public enum FTSQueryBuilder {
 /// Hybrid search: FTS5 BM25 (instant) fused with embedding similarity via Reciprocal Rank Fusion.
 public actor SearchService {
     /// The columns of the full-text index, in its order (`AppDatabase.migrator`): each can be searched on its own as
-    /// `column:term`, and `SearchConfig.bm25Weights` weighs them in this order.
-    public static let columns = ["filename", "body"] + LabelKind.allCases.map(\.rawValue)
+    /// `column:term`, and `SearchConfig.bm25Weights` weighs them in this order. The last is what the model read the
+    /// document as (`DocumentAnalysis.interpretation`).
+    public static let columns = ["filename", "body"] + LabelKind.allCases.map(\.rawValue) + [interpretationColumn]
+    /// The column of the full-text index that holds what the model read a document as.
+    static let interpretationColumn = "interpretation"
     /// The column snippets are cut from: the document's text.
     static let bodyColumn = 1
 

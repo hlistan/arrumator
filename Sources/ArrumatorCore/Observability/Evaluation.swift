@@ -3,8 +3,9 @@ import Foundation
 /// How `arrumatorcli eval` scores the reading of a fixture corpus against `expected.json` (docs/evaluation.md): whether
 /// each document was filed, waited for the user or was taken for a copy, whose original is read again in its place; its
 /// type, sender, date and language labels and its file name; whether it got the other labels the corpus expects of it
-/// (parties, objects, references, periods, deadlines, amounts, jurisdictions); and how many labels of each kind
-/// documents got. Every number of an eval run comes from here, from what the run recorded, without a model.
+/// (parties, objects, references, periods, deadlines, amounts, jurisdictions); how many labels of each kind documents
+/// got; and how the model judged the corpus's pairs of labels that look alike. Every number of an eval run comes from
+/// here, from what the run recorded, without a model.
 public enum Evaluation {
     public struct Expected: Decodable, Sendable {
         public var status: DocumentStatus
@@ -35,8 +36,109 @@ public enum Evaluation {
         enum CodingKeys: String, CodingKey { case file, lang, expected, acceptAlso = "accept_also", duplicateOf = "duplicate_of" }
     }
 
+    /// Two labels that look alike, as the corpus writes them, and whether they are one label written two ways: what the
+    /// model judges (`LabelPairJudging`), shown how many documents have each and the names of some, as the archive would
+    /// show it them.
+    public struct PairCase: Decodable, Sendable {
+        public var kind: LabelKind
+        public var value: String
+        public var into: String
+        public var valueDocuments: Int
+        public var valueNames: [String]
+        public var intoDocuments: Int
+        public var intoNames: [String]
+        public var same: Bool
+        public var why: String
+        /// Of a kind of difference the judge's prompt neither names nor shows.
+        public var heldOut: Bool
+        enum CodingKeys: String, CodingKey {
+            case kind, value, into, valueDocuments = "value_documents", valueNames = "value_names", intoDocuments = "into_documents",
+                 intoNames = "into_names", same, why, heldOut = "held_out"
+        }
+
+        /// The pair as the archive would offer it to be judged.
+        public var suggestion: LabelSuggestion {
+            LabelSuggestion(kind: kind, value: value, into: into, similarity: LabelSimilarity.similarity(value, into), reason: .writtenAlike)
+        }
+
+        /// What each label is used for, as the model is shown it.
+        public var use: LabelPairUse {
+            LabelPairUse(valueDocuments: valueDocuments, valueNames: valueNames, intoDocuments: intoDocuments, intoNames: intoNames)
+        }
+
+        public var expected: LabelJudgement { same ? .same : .different }
+
+        /// Why the pair cannot be asked as it is, as the archive could never offer it to be judged: a label not in its
+        /// kind's form, a kind the vocabulary keeps no pairs of, or two labels written alike, which a reading makes one
+        /// whatever the thresholds (`LabelSimilarity.sameWriting`); nil when it can. A pair less alike than its kind's
+        /// `suggestSimilarity` can be asked: a lower threshold, which a user may set, offers it.
+        public func problem(vocabulary: LabelVocabularyConfig) -> String? {
+            guard vocabulary.kinds[kind] != nil else { return "\(kind.rawValue) is no kind the vocabulary keeps" }
+            for label in [value, into] where DocumentLabel.normalized(label, kind: kind)?.value != label {
+                return "“\(label)” is no \(kind.rawValue) as the archive keeps one"
+            }
+            if LabelSimilarity.sameWriting(value, into) { return "“\(value)” and “\(into)” are written alike, so the archive keeps them as one" }
+            return nil
+        }
+    }
+
     public struct Corpus: Decodable, Sendable {
         public var fixtures: [Fixture]
+        public var labelPairs: [PairCase]
+        enum CodingKeys: String, CodingKey { case fixtures, labelPairs = "label_pairs" }
+    }
+
+    /// How the model judged one pair in one pass.
+    public struct PairRow: Encodable, Sendable {
+        public var pass: Int
+        public var kind: LabelKind
+        public var value: String
+        public var into: String
+        public var expected: LabelJudgement
+        public var heldOut: Bool
+        /// Nil when it gave no valid answer.
+        public var judged: LabelJudgement?
+        public var reason: String?
+        public var seconds: Double
+
+        public init(pass: Int, pair: PairCase, verdict: LabelVerdict, seconds: Double) {
+            self.pass = pass
+            kind = pair.kind
+            value = pair.value
+            into = pair.into
+            expected = pair.expected
+            heldOut = pair.heldOut
+            judged = verdict.judgement
+            reason = verdict.reason ?? verdict.problem
+            self.seconds = seconds
+        }
+    }
+
+    /// How one pass judged the pairs: the share judged right, and the wrong ones by what they would do. A pair merged that
+    /// is two labels files documents together that do not belong so, which only the user can undo; one kept apart that
+    /// is one leaves two labels side by side.
+    public struct PairSummary: Encodable, Sendable {
+        public var pass: Int
+        public var pairs: Int
+        public var accuracy: Double
+        public var wronglyMerged: Int
+        public var wronglyKeptApart: Int
+        public var unanswered: Int
+        /// Of the pairs held out from what the prompt names and shows, how many there are and the share judged right.
+        public var heldOut: Int
+        public var heldOutAccuracy: Double
+        public var medianSeconds: Double
+    }
+
+    public static func summarize(pass: Int, pairs rows: [PairRow]) -> PairSummary {
+        let seconds = rows.map(\.seconds).sorted()
+        let right = { (rows: [PairRow]) in rows.isEmpty ? 0 : Double(rows.count { $0.judged == $0.expected }) / Double(rows.count) }
+        let heldOut = rows.filter(\.heldOut)
+        return PairSummary(pass: pass, pairs: rows.count, accuracy: right(rows),
+                           wronglyMerged: rows.count { $0.judged == .same && $0.expected == .different },
+                           wronglyKeptApart: rows.count { $0.judged == .different && $0.expected == .same },
+                           unanswered: rows.count { $0.judged == nil }, heldOut: heldOut.count, heldOutAccuracy: right(heldOut),
+                           medianSeconds: seconds.isEmpty ? 0 : seconds[seconds.count / 2])
     }
 
     /// How one fixture was read in one pass.
@@ -55,6 +157,11 @@ public enum Evaluation {
         public var languageOK: Bool?
         /// For each expected label, as `kind: value`, whether the document got it.
         public var expectedLabels: [String: Bool]?
+        /// Whether the model said what the document is (`DocumentAnalysis.interpretation`).
+        public var interpreted: Bool?
+        /// Whether what it said is in the language the corpus wrote the document in, as the prompt asks; nil when it said
+        /// nothing, or the corpus names no language.
+        public var interpretationLanguageOK: Bool?
         public var seconds: Double
     }
 
@@ -80,6 +187,10 @@ public enum Evaluation {
         public var senderWritings: Double
         /// How many different labels of each kind the documents got in all, as a label list would show them.
         public var distinctByKind: [String: Int]
+        /// Of the documents that should be filed, those the model said what they are of; and of those whose language the
+        /// corpus names, the share it said it in that language.
+        public var interpreted: Double
+        public var interpretationLanguage: Double
         public var medianSeconds: Double
 
         /// The share of details read right: type, sender, date and title together.
@@ -104,7 +215,9 @@ public enum Evaluation {
     }
 
     /// How `document`, the newest the run filed, read the fixture dropped as `dropped`: missing when it is another file's.
-    public static func score(_ fixture: Fixture, pass: Int, document: DocumentRecord?, dropped: URL, seconds: Double) -> Row {
+    /// `languages` tells the language the model said what it is in.
+    public static func score(_ fixture: Fixture, pass: Int, document: DocumentRecord?, dropped: URL, languages: LanguageDetector,
+                             seconds: Double) -> Row {
         let e = fixture.expected
         guard let doc = document, doc.originalFilename == dropped.lastPathComponent else {
             return Row(pass: pass, file: fixture.file, status: missing, statusOK: false, fileName: "", seconds: seconds)
@@ -117,15 +230,19 @@ public enum Evaluation {
         let ordinary = e.status == .filed
         let senders = (e.correspondent.map { [$0] } ?? []) + (fixture.acceptAlso?.correspondent ?? [])
         let types = (e.docType.map { [$0] } ?? []) + (fixture.acceptAlso?.docType ?? [])
-        let languages = doc.labels?.filter { $0.kind == .language }.map(\.value)
+        let written = doc.labels?.filter { $0.kind == .language }.map(\.value)
+        let interpretation = doc.analysis?.interpretation
+        let known = DocumentLabel.languageCode(fixture.lang) != nil
         return Row(pass: pass, file: fixture.file, status: doc.status.rawValue, statusOK: doc.status == e.status, fileName: doc.filename,
                    labels: doc.labels,
                    docTypeOK: ordinary && !types.isEmpty ? doc.labels(.type).first.map(types.contains) ?? false : nil,
                    correspondentOK: ordinary && !senders.isEmpty ? doc.labels(.sender).contains { contains($0, anyOf: senders) == true } : nil,
                    dateOK: ordinary ? e.date.map { $0 == doc.labels(.date).first } : nil,
                    titleOK: ordinary && !e.titleContains.isEmpty ? e.titleContains.contains { folded(doc.filename).contains(folded($0)) } : nil,
-                   languageOK: ordinary && DocumentLabel.languageCode(fixture.lang) != nil ? languages?.contains(fixture.lang) ?? false : nil,
+                   languageOK: ordinary && known ? written?.contains(fixture.lang) ?? false : nil,
                    expectedLabels: ordinary ? e.labels.map { found($0, in: doc.labels ?? []) } : nil,
+                   interpreted: ordinary ? interpretation != nil : nil,
+                   interpretationLanguageOK: ordinary && known ? interpretation.map { languages.code(of: $0) == fixture.lang } : nil,
                    seconds: seconds)
     }
 
@@ -196,6 +313,7 @@ public enum Evaluation {
                        labelsPerDocument: labelled.isEmpty ? 0 : Double(labelled.compactMap(\.labels?.count).reduce(0, +)) / Double(labelled.count),
                        coverage: coverage, expectedFound: rate(checks.map(\.value)), expectedFoundByKind: byKind,
                        senderWritings: writings.isEmpty ? 0 : writings.reduce(0, +) / Double(writings.count), distinctByKind: distinct,
+                       interpreted: rate(filed.map(\.interpreted)), interpretationLanguage: rate(filed.map(\.interpretationLanguageOK)),
                        medianSeconds: seconds.isEmpty ? 0 : seconds[seconds.count / 2])
     }
 }

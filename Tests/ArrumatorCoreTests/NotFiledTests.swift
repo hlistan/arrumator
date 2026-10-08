@@ -24,8 +24,8 @@ struct Readings: DocumentAnalyzing {
         return try await readings[turn].analyse(content, guidance: guidance, settings: settings, config: config, trace: trace)
     }
 
-    func embedding(for content: ExtractedContent, senders: [String], settings: AppSettings, config: PipelineConfig,
-                   trace: TraceContext) async throws -> (vector: [Float], model: String)? { nil }
+    func embedding(for content: ExtractedContent, senders: [String], interpretation: String?, settings: AppSettings,
+                   config: PipelineConfig, trace: TraceContext) async throws -> (vector: [Float], model: String)? { nil }
 }
 
 /// A Trash that refuses one file, as one on a share without a Trash refuses what is there, and takes the rest into

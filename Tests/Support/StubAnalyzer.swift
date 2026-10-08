@@ -20,15 +20,18 @@ public struct StubAnalyzer: DocumentAnalyzing {
 
     public let labels: [DocumentLabel]?
     public let title: String?
+    /// What it says every document is, as the model says (`DocumentAnalysis.interpretation`); none unless a test gives one.
+    public let interpretation: String?
     public let error: (any Error & Sendable)?
     public let during: (@Sendable (String) async throws -> Void)?
     public let problems: [String]
     public let calls = Calls()
 
-    public init(labels: [DocumentLabel]? = StubAnalyzer.edpBill, title: String? = StubAnalyzer.edpTitle,
+    public init(labels: [DocumentLabel]? = StubAnalyzer.edpBill, title: String? = StubAnalyzer.edpTitle, interpretation: String? = nil,
                 error: (any Error & Sendable)? = nil, problems: [String] = [], during: (@Sendable (String) async throws -> Void)? = nil) {
         self.labels = labels
         self.title = title
+        self.interpretation = interpretation
         self.error = error
         self.problems = problems
         self.during = during
@@ -40,14 +43,14 @@ public struct StubAnalyzer: DocumentAnalyzing {
         try await during?(content.source.originalFilename)
         if let error { throw error }
         await trace.record(.analyse, status: labels == nil ? .error : .ok, startedAt: TestTime.start, output: labels)
-        let analysis = DocumentAnalysis(model: labels == nil ? nil : "stub",
+        let analysis = DocumentAnalysis(interpretation: problems.isEmpty && labels != nil ? interpretation : nil, model: labels == nil ? nil : "stub",
                                         problems: (labels == nil ? [DocumentAnalysis.Problem.noAnswer] : []) + problems)
         return AnalysisOutcome(analysis: analysis, labels: labels, title: problems.isEmpty && labels != nil ? title : nil,
                                embedding: Self.embedding, embeddingModel: Self.embeddingModel)
     }
 
-    public func embedding(for content: ExtractedContent, senders: [String], settings: AppSettings, config: PipelineConfig,
-                          trace: TraceContext) async throws -> (vector: [Float], model: String)? {
+    public func embedding(for content: ExtractedContent, senders: [String], interpretation: String?, settings: AppSettings,
+                          config: PipelineConfig, trace: TraceContext) async throws -> (vector: [Float], model: String)? {
         (Self.embedding, Self.embeddingModel)
     }
 
@@ -55,6 +58,8 @@ public struct StubAnalyzer: DocumentAnalyzing {
     /// What every document is embedded as.
     public static let embedding: [Float] = [1, 0, 0]
     public static let edpTitle = "Fatura eletricidade julho"
+    /// What the EDP bill is, as a model says it.
+    public static let edpInterpretation = "Fatura de eletricidade da EDP Comercial para Maria Exemplo, referente a junho de 2026."
     /// What the EDP bill is named: its date, its sender and its title.
     public static let edpFileName = "2026-07-05 EDP Comercial - Fatura eletricidade julho"
 

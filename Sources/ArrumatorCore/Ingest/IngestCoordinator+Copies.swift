@@ -66,7 +66,7 @@ extension IngestCoordinator {
                        + Self.said(reading),
                        trashed.map { _ in "the copy is in the Trash" }, GivenTag.note(tags)].compactMap { $0 }.joined(separator: "; ")
         try await services.history.record(.duplicate, doc: originalID, job: job.id, trace: trace.traceID, summary: summary,
-                                          payload: CopyPayload(copy: copy.path, trashed: trashed?.path, tags: tags.isEmpty ? nil : tags))
+                                          payload: CopyPayload(copy: copy.path, trashed: trashed?.spelledOnDisk.path, tags: tags.isEmpty ? nil : tags))
         try await save(&job, &payload, state: .duplicate, trace: trace)
         Log.info(.ingest, "A copy of a document in the archive, handed over to it",
                  ["copy": copy.path, "doc": String(originalID), "trashed": trashed?.path ?? "-", "original": Self.said(reading)])

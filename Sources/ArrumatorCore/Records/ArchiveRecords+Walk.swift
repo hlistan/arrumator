@@ -120,6 +120,8 @@ extension ArchiveRecords {
         case .labelRules: 2
         case .searchTasks: 3
         case .conversation: 4
+        // Never read back: a sidecar is not one of the record files a walk finds (`kind(of:)`).
+        case .sidecar: 5
         }
     }
 

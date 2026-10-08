@@ -47,7 +47,7 @@ extension CommandLineTests {
         let corpus = run.appendingPathComponent("Corpus", isDirectory: true)
         try FileManager.default.createDirectory(at: corpus, withIntermediateDirectories: true)
         try Data("A note".utf8).write(to: corpus.appendingPathComponent("note.txt"))
-        try Data(#"{"fixtures": [{"file": "note.txt", "lang": "en", "expected": {"status": "filed", "title_contains": []}}]}"#.utf8)
+        try Data(#"{"fixtures": [{"file": "note.txt", "lang": "en", "expected": {"status": "filed", "title_contains": []}}], "label_pairs": []}"#.utf8)
             .write(to: corpus.appendingPathComponent("expected.json"))
         // The Ollama app is looked for by an identifier no app has, and `ollama serve` only where the stand-in is.
         let pipeline = run.appendingPathComponent("pipeline.json")
@@ -81,7 +81,8 @@ extension CommandLineTests {
         try #require(await Patience.until { !failed.isRunning }, "eval ends, as Ollama never answers")
         let said = (try? String(contentsOf: home.root.appendingPathComponent(Self.standardError), encoding: .utf8)) ?? ""
         #expect(failed.terminationStatus != 0, "and fails, as Ollama never answered: \(said)")
-        let first = try #require(evalHome(home), "eval says where it runs")
+        let printed = (try? String(contentsOf: home.root.appendingPathComponent(Self.standardOutput), encoding: .utf8)) ?? ""
+        let first = try #require(evalHome(home), "eval says where it runs: \(printed) \(said)")
         #expect(!FileManager.default.fileExists(atPath: first.path), "its throw-away home is removed when it fails: \(first.path)")
 
         let waiting = try evaluating(home, startTimeout: Self.longStart)

@@ -33,6 +33,7 @@ enum RecordText {
             case .merge: "written as \(e.target ?? "")"
             case .ignore: "not wanted"
             case .keepApart: "kept apart from \(e.target ?? "")"
+            case .add: "added"
             }
             lines.append("| \(e.kind.rawValue) | \(cell(e.value)) | \(cell(decision)) | "
                 + "\(e.created.formatted(Date.ISO8601FormatStyle(timeZone: zone).year().month().day())) |")
@@ -69,6 +70,58 @@ enum RecordText {
             if let problem = e.problem { lines += ["", "_\(e.state == .failed ? "Not answered" : "Incomplete"): \(problem)_"] }
         }
         return lines.joined(separator: "\n") + "\n"
+    }
+
+    static let sidecarNote = "Written by Arrumator beside the document it is named after: what the model read it as, and its text as it "
+        + "was recognised. It is written again whenever either changes, and a copy changed by hand goes to the Trash then."
+    /// The headings of a sidecar's parts.
+    static let interpretationHeading = "What it is"
+    static let imageHeading = "What it shows"
+    static let textHeading = "Recognised text"
+
+    /// A document's sidecar below its data: its name, what the model read it as, what the vision model saw in an image
+    /// (`imageDescription`, in English, as it describes every image), and its text as it was recognised, in a fence that
+    /// keeps it as it is. Nothing in it becomes active where Markdown is shown, as the models' words and the document's are
+    /// untrusted (AGENTS.md §4.5): what would make a link, an image or HTML of the name, the interpretation and the image's
+    /// description is escaped (`inert`), and the text is code.
+    static func sidecar(file: String, interpretation: String?, imageDescription: String?, text: String) -> String {
+        var lines = ["# \(inert(file))", "", sidecarNote, "", "## \(interpretationHeading)", ""]
+        lines.append(interpretation.map(inert) ?? "_The model has not said what it is._")
+        if let imageDescription { lines += ["", "## \(imageHeading)", "", inert(imageDescription)] }
+        lines += ["", "## \(textHeading)", ""]
+        if text.isEmpty {
+            lines.append("_No text was recognised in it._")
+        } else {
+            let fence = String(repeating: "`", count: max(3, longestRun(of: "`", in: text) + 1))
+            lines += [fence + "text", text, fence]
+        }
+        return lines.joined(separator: "\n") + "\n"
+    }
+
+    /// The characters that open a link, an image, an autolink or HTML in Markdown (CommonMark 0.31, §§ 6.3–6.6), and a
+    /// code span or fence (§§ 4.5, 6.1), which one line that begins with three of them would open, and a fence in the text
+    /// below close, leaving what follows it to be read as Markdown.
+    static let active: Set<Character> = ["\\", "[", "]", "<", ">", "`", "~"]
+
+    /// `text` with each character that would make it active in Markdown escaped by a backslash, as CommonMark escapes any
+    /// ASCII punctuation (§ 2.4), so it shows as written: those that open a link, an image or HTML (`active`), and the
+    /// colon of a scheme's `://` and the dot after `www`, by which GitHub's Markdown, and Apple's, link a web address
+    /// written alone (GFM 0.29, § 6.9). Nothing then loads by itself or hides where it goes. An e-mail address, which they
+    /// link however it is escaped, shows as it is written, and opens nothing but a message to it.
+    static func inert(_ text: String) -> String {
+        String(text.flatMap { active.contains($0) ? ["\\", $0] : [$0] })
+            .replacingOccurrences(of: "://", with: "\\://")
+            .replacing(#/(?i)\b(www)\./#) { "\($0.output.1)\\." }
+    }
+
+    /// The longest run of `character` in `text`, which a code fence must be longer than to hold it (CommonMark 0.31, § 4.5).
+    static func longestRun(of character: Character, in text: String) -> Int {
+        var (longest, run) = (0, 0)
+        for c in text {
+            run = c == character ? run + 1 : 0
+            longest = max(longest, run)
+        }
+        return longest
     }
 
     /// A moment as the Mac showed it, in its time zone `zone`, with its offset from UTC ("2026-10-02T11:40:58+01:00"):

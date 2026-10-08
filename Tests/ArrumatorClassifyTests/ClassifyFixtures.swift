@@ -46,14 +46,18 @@ enum Fixtures {
     /// A model answer reading the document as an EDP electricity bill to Maria Exemplo; the kind `omitting` names is left
     /// out of the answer, `overrides` replaces the signals of a kind, and `title` is what it is.
     static func answer(omitting omitted: LabelKind? = nil, _ overrides: [LabelKind: [String]] = [:],
-                       title: String = "Fatura eletricidade julho") throws -> String {
-        var fields: [String: JSONValue] = [ClassificationSchema.titleKey: .string(title)]
+                       title: String = "Fatura eletricidade julho", interpretation: String = edpInterpretation) throws -> String {
+        var fields: [String: JSONValue] = [ClassificationSchema.titleKey: .string(title),
+                                           ClassificationSchema.interpretationKey: .string(interpretation)]
         for kind in ClassificationSchema.answerOrder where kind != omitted {
             let values = overrides[kind] ?? edpSignals[kind] ?? []
             fields[ClassificationSchema.labelsKey(kind)] = .array(values.map(JSONValue.string))
         }
         return try JSON.string(fields)
     }
+
+    /// What the model says the EDP bill is.
+    static let edpInterpretation = "Fatura de eletricidade da EDP Comercial para Maria Exemplo, referente a junho de 2026: 54,21 EUR a pagar até 25 de julho."
 
     /// What the model finds in the EDP bill, as it writes it.
     static let edpSignals: [LabelKind: [String]] = [

@@ -188,8 +188,9 @@ import Testing
 
     // MARK: The user's decisions
 
-    /// Two documents from EDP, one written otherwise, and one from MEO.
-    private func archive() async throws -> (Harness, [String: Int64]) {
+    /// Two documents from EDP, one written otherwise, and one from MEO: what the suites about the user's decisions about
+    /// labels act on.
+    static func archive() async throws -> (Harness, [String: Int64]) {
         let edp = StubAnalyzer.edpBill
         let edpVariant = edp.map { $0.kind == .sender ? Self.label(.sender, "EDP-Comercial") : $0 }
         let h = try await Harness.make(analyzer: PerFileAnalyzer(labels: [
@@ -206,14 +207,14 @@ import Testing
     }
 
     @Test func aMergeRelabelsEveryDocumentAndIsRecorded() async throws {
-        let (h, ids) = try await archive()
+        let (h, ids) = try await Self.archive()
         defer { h.env.cleanup() }
         let edp = try [#require(ids["edp_july.txt"]), #require(ids["edp_august.txt"])].sorted()
         #expect(try await h.services.labels.usage()[.sender]?.map(\.label.value) == ["EDP Comercial", "MEO"],
                 "the second writing was already made the first when the document was read")
 
         let outcome = try await h.labels.merge(Self.label(.sender, "EDP Comercial"), into: "EDP")
-        #expect(outcome.documents == edp && outcome.rule.action == .merge && outcome.rule.target == "EDP",
+        #expect(outcome.documents == edp && outcome.rule?.action == .merge && outcome.rule?.target == "EDP",
                 "both EDP documents are relabelled and the merge is kept as a rule")
         for id in edp {
             let labels = try #require(try await h.services.documents.document(id: id)?.labels)
@@ -224,11 +225,11 @@ import Testing
         let event = try #require(try await h.services.history.events(limit: 5, kinds: [.labelsMerged]).first)
         #expect(event.actor == .user && event.summary == "Merged sender “EDP Comercial” into “EDP” on 2 documents",
                 "History says who merged what, on how many documents")
-        #expect(try await h.services.labels.rules().map(\.id) == [outcome.rule.id], "the decision is kept as a rule")
+        #expect(try await h.services.labels.rules().map(\.id) == [outcome.rule?.id], "the decision is kept as a rule")
     }
 
     @Test func everyReadingFromThenOnFollowsTheDecisionsAndIsToldOfThem() async throws {
-        let (h, _) = try await archive()
+        let (h, _) = try await Self.archive()
         defer { h.env.cleanup() }
         let actions = h.labels
         try await actions.merge(Self.label(.sender, "EDP Comercial"), into: "EDP")
@@ -300,7 +301,7 @@ import Testing
     }
 
     @Test func theLabelsInUseAreCountedFromAnIndexOfThemKeptInStepWithEveryChange() async throws {
-        let (h, ids) = try await archive()
+        let (h, ids) = try await Self.archive()
         defer { h.env.cleanup() }
         let indexed = { try await h.env.database.reader.read { db in try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM document_labels") } }
         #expect(try await h.services.labels.usage() == counted(h), "the labels documents were read with are counted as they have them")
@@ -318,11 +319,11 @@ import Testing
     }
 
     @Test func ignoringALabelTakesItOffEveryDocument() async throws {
-        let (h, ids) = try await archive()
+        let (h, ids) = try await Self.archive()
         defer { h.env.cleanup() }
         let outcome = try await h.labels.ignore(Self.label(.jurisdiction, "portugal"))
         let edp = try [#require(ids["edp_july.txt"]), #require(ids["edp_august.txt"])].sorted()
-        #expect(outcome.documents == edp && outcome.rule.value == "portugal", "both EDP documents lose the label, however the user wrote it")
+        #expect(outcome.documents == edp && outcome.rule?.value == "portugal", "both EDP documents lose the label, however the user wrote it")
         for id in ids.values {
             #expect(try await h.services.documents.document(id: id)?.labels?.values(.jurisdiction).contains("Portugal") == false,
                     "no document keeps the ignored label")
@@ -333,7 +334,7 @@ import Testing
     }
 
     @Test func aNewDecisionReplacesTheOnesItContradicts() async throws {
-        let (h, _) = try await archive()
+        let (h, _) = try await Self.archive()
         defer { h.env.cleanup() }
         let actions = h.labels
         try await actions.merge(Self.label(.topic, "power"), into: "electricity")
@@ -356,7 +357,7 @@ import Testing
     }
 
     @Test func aLabelWhoseWritingTheUserChoseCanBeMergedIntoAnother() async throws {
-        let (h, ids) = try await archive()
+        let (h, ids) = try await Self.archive()
         defer { h.env.cleanup() }
         let actions = h.labels
         // A rule both about the label merged and merged into it: one writing of it made another.
@@ -369,12 +370,12 @@ import Testing
     }
 
     @Test func forgettingARuleStopsReadingsFollowingItAndLeavesDocumentsAsTheyAre() async throws {
-        let (h, ids) = try await archive()
+        let (h, ids) = try await Self.archive()
         defer { h.env.cleanup() }
         let actions = h.labels
         let merge = try await actions.merge(Self.label(.sender, "EDP Comercial"), into: "EDP")
-        let forgotten = try await actions.forget(rule: try #require(merge.rule.id))
-        #expect(forgotten.rule.id == merge.rule.id && forgotten.rule.summary == merge.rule.summary, "the rule forgotten is the one asked for")
+        let forgotten = try await actions.forget(rule: try #require(merge.rule?.id))
+        #expect(forgotten.rule?.id == merge.rule?.id && forgotten.rule?.summary == merge.rule?.summary, "the rule forgotten is the one asked for")
         #expect(try await h.services.labels.rules().isEmpty, "no rule is left for readings to follow")
         #expect(try await h.services.documents.document(id: try #require(ids["edp_july.txt"]))?.labels?.values(.sender) == ["EDP"],
                 "documents keep the labels the rule gave them")
@@ -384,7 +385,7 @@ import Testing
     }
 
     @Test func aDecisionMustBeAboutLabelsOfTheirKind() async throws {
-        let (h, _) = try await archive()
+        let (h, _) = try await Self.archive()
         defer { h.env.cleanup() }
         let actions = h.labels
         await #expect(throws: LabelError.notALabel(.date, "yesterday"), "no date") {
@@ -407,7 +408,7 @@ import Testing
     }
 
     @Test func theAppRefreshesOnEveryRecordedChange() async throws {
-        let (h, _) = try await archive()
+        let (h, _) = try await Self.archive()
         defer { h.env.cleanup() }
         let changes = await Collected.reading(h.env.database.activity())
         try #require(await Patience.until { await changes.all.count >= 1 }, "the stream reports the history's state instead of ending")

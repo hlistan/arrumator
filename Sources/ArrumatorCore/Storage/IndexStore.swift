@@ -21,18 +21,29 @@ public struct IndexStore: Sendable {
         }
     }
 
-    /// `upsertText`, in a transaction of the caller's.
+    /// `upsertText`, in a transaction of the caller's. What the model read the document as is what its row holds as the
+    /// transaction writes this (`DocumentAnalysis.interpretation`), which a trigger keeps it equal to from then on
+    /// (`AppDatabase.sidecarsMigration`).
     static func writeText(_ db: Database, docID: Int64, filename: String, body: String, summary: String?, metadata: [String: String],
                           extractorVersion: String, labels: [DocumentLabel]) throws {
         let kinds = LabelKind.allCases.map(\.rawValue)
         let columns = ["doc_id", "filename", "body", "summary", "metadata_json", "extractor_version"] + kinds
         let values: [(any DatabaseValueConvertible)?] = [docID, filename, body, summary, try JSON.string(metadata), extractorVersion]
-            + LabelKind.allCases.map { DocumentLabel.searchText(labels, kind: $0) }
+            + LabelKind.allCases.map { DocumentLabel.searchText(labels, kind: $0) } + [docID]
+        let interpretation = SearchService.interpretationColumn
         try db.execute(sql: """
-            INSERT INTO document_text (\(columns.joined(separator: ", "))) VALUES (\(databaseQuestionMarks(count: columns.count)))
-            ON CONFLICT(doc_id) DO UPDATE SET \(columns.dropFirst().map { "\($0) = excluded.\($0)" }.joined(separator: ", "))
+            INSERT INTO document_text (\(columns.joined(separator: ", ")), \(interpretation))
+            VALUES (\(databaseQuestionMarks(count: columns.count)), \(Self.interpretationOfDocument))
+            ON CONFLICT(doc_id) DO UPDATE SET \((columns.dropFirst() + [interpretation]).map { "\($0) = excluded.\($0)" }.joined(separator: ", "))
             """, arguments: StatementArguments(values))
     }
+
+    /// What the model read the document whose number is the statement's argument as, from its analysis; empty when it
+    /// has none.
+    static let interpretationOfDocument = """
+        COALESCE((SELECT CASE WHEN json_valid(analysis_json) THEN json_extract(analysis_json, '$.interpretation') END
+                  FROM documents WHERE id = ?), '')
+        """
 
     /// Saves what the model read of a document, `read`, where the user has not changed it since the reading began: the
     /// labels the document had then, `before`, are compared kind by kind with those it has when it is saved, read in the

@@ -202,8 +202,10 @@ enum Wording {
     static let changeLabelsAction = "Change labels"
     static let renameAction = "Rename"
     static let removeLabelAction = "Remove label"
-    static let keepApartAction = "Keep apart"
     static let mergeLabelsAction = "Merge labels"
+    static let renameLabelAction = "Rename label"
+    static let addTagAction = "Add tag"
+    static let moveToTrashAction = "Move to Trash"
     static let forgetRuleAction = "Forget rule"
     static let checkModelsAction = "Check models"
     static let saveSettingsAction = "Save settings"
@@ -247,7 +249,8 @@ enum Wording {
     static let openIncomingFolder = "Open Incoming Folder"
     static let openArchiveFolder = "Open Archive Folder"
     static let openLogsFolder = "Open logs folder"
-    static let removeEverywhere = "Remove Everywhere"
+    static let removeForGood = "Remove for Good"
+    static let remove = "Remove"
     static let looksRight = "Looks Right"
     static let readAgain = "Read Again"
     static let showWithoutLabel = "Show documents without this label too"
@@ -260,6 +263,9 @@ enum Wording {
 
     /// Asks before a label is taken off every document.
     static func removeEverywhereQuestion(_ label: String) -> String { "Remove “\(label)” from every document?" }
+    /// Asks before a label is taken off every document, and not given again.
+    static func removeForGoodQuestion(_ label: String) -> String { "Remove “\(label)” for good?" }
+    static let removedMayComeBack = "A document read later may be given it again. Remove for Good stops that."
 
     // MARK: Documents
 
@@ -465,6 +471,7 @@ enum Wording {
         case .merge: "“\(value)” is written “\(target)”"
         case .ignore: "“\(value)” is not wanted"
         case .keepApart: "“\(value)” and “\(target)” are kept apart"
+        case .add: "“\(value)” was added"
         }
     }
 
@@ -473,6 +480,7 @@ enum Wording {
         case .merge: "arrow.triangle.merge"
         case .ignore: "tag.slash"
         case .keepApart: "arrow.left.and.right"
+        case .add: "plus.circle"
         }
     }
 

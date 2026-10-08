@@ -57,6 +57,10 @@ public final class ArrumatorRuntime: Sendable {
     public let conversationQueue: TaskConversationQueue
     /// What the user does with the conversations about tasks' documents: asks, asks again, stops, clears them.
     public let conversations: TaskConversationActions
+    /// Judges labels that look alike with the model, which `labelJudge` asks.
+    public let pairJudge: LabelPairJudge
+    /// Judges each pair of labels that look alike while the work runs, and merges them or keeps them apart.
+    public let labelJudge: LabelJudge
     public let reconciler: ArchiveReconciler
     public let incomingWatcher: IncomingWatcher
     public let archiveWatcher: ArchiveWatcher
@@ -242,7 +246,7 @@ public final class ArrumatorRuntime: Sendable {
             try ArchiveRecords.mayHoldRecords(archive: archive, config: config)
         }
         registry = SelfChangeRegistry(ttl: config.watcher.selfChangeTTLSeconds, time: time)
-        records = ArchiveRecords(database: database, archive: archive, config: config, registry: registry, time: time,
+        records = ArchiveRecords(database: database, archive: archive, config: config, registry: registry, trash: trash, time: time,
                                  timeZone: .autoupdatingCurrent)
         self.ollama = ollama
         gate = InferenceGate(api: ollama, retryDelays: config.ollama.retryDelays, time: time)
@@ -279,6 +283,8 @@ public final class ArrumatorRuntime: Sendable {
                                                   processes: processes)
         searchTasks = SearchTaskActions(services: services, queue: taskQueue, conversations: conversationQueue, archiver: ZipFolderArchiver())
         conversations = TaskConversationActions(services: services, queue: conversationQueue)
+        pairJudge = LabelPairJudge(gate: gate, models: models, library: prompts.library)
+        labelJudge = LabelJudge(services: services, judging: pairJudge)
         reconciler = ArchiveReconciler(services: services, coordinator: coordinator)
         incomingWatcher = IncomingWatcher(config: config.watcher, skip: skip, time: time)
         archiveWatcher = ArchiveWatcher(config: config.watcher, skip: skip, registry: registry, database: database, time: time)
@@ -309,8 +315,6 @@ public final class ArrumatorRuntime: Sendable {
     /// `openAndStart()`, reading the archive with `opening`: what a test holds to stop the runtime while it reads.
     func openAndStart(opening: @escaping @Sendable () async throws -> Void) async throws {
         guard let step = await tasks.starting(reading: true, { [self] in
-            // Counted from the index alone, so also while the archive is away and its start waits for it.
-            await countLookAlikes()
             await followOtherProcesses()
             try await waitForArchive()
             var unread: (any Error)?
@@ -330,17 +334,15 @@ public final class ArrumatorRuntime: Sendable {
         try await step.value
     }
 
-    /// Starts Ollama supervision, the ingest worker, the search task queue, the conversation queue, both watchers and
-    /// maintenance, once the runtime works out which labels look alike, which it does even when the rest cannot start
-    /// (`countLookAlikes()`); returns once they have started, saying whether they have, after waiting for the archive's
-    /// folder while it is away (`waitForArchive()`). A runtime starts once: a second start does nothing more, and one
+    /// Starts Ollama supervision, the ingest worker, the search task queue, the conversation queue, the judging of labels
+    /// that look alike, both watchers and maintenance; returns once they have started, saying whether they have, after
+    /// waiting for the archive's folder while it is away (`waitForArchive()`). A runtime starts once: a second start does nothing more, and one
     /// after `stop()` nothing at all. An index not rebuilt from its archive, as when its rebuild was refused for a record
     /// file that cannot be read (`openArchive`), starts nothing, until it is rebuilt (`rebuildIndex()`): what the workers
     /// did would be filed over the user's records.
     @discardableResult
     public func start() async -> Bool {
         guard let step = await tasks.starting(reading: false, { [self] in
-            await countLookAlikes()
             await followOtherProcesses()
             try await beginOnRebuiltIndex()
         }) else { return false }
@@ -398,6 +400,12 @@ public final class ArrumatorRuntime: Sendable {
         await coordinator.start()
         await taskQueue.start()
         await conversationQueue.start()
+        // Subscribed before the judge starts, so a change made as it starts is judged too.
+        let recorded = database.activity()
+        await labelJudge.start(following: coordinator)
+        await tasks.run("label-judge") { [labelJudge] in
+            for await _ in recorded { labelJudge.wake() }
+        }
         await tasks.run("incoming-pump") { [coordinator] in
             for await arrival in arrivals { await coordinator.receive(arrival) }
         }
@@ -443,17 +451,6 @@ public final class ArrumatorRuntime: Sendable {
         }
     }
 
-    /// Works out which labels look alike now, and again at each change recorded after, as a document filed or labels
-    /// merged, so the app counts the suggestions from what this publishes (`LookAlikeMemo.suggestionCounts()`) and never
-    /// waits for them. It reads the index alone, so it runs whether or not the work starts, as while the archive is away
-    /// or its index is not rebuilt from it, until the runtime stops. Changes that come while it works are one more pass.
-    private func countLookAlikes() async {
-        let recorded = database.activity()
-        await tasks.run("look-alikes") { [services] in
-            for await _ in recorded { await services.labels.workOutLookAlikes() }
-        }
-    }
-
     /// Stops everything `start()` started, for good, and waits until it has. Everything is told to stop before anything
     /// is waited for, as one worker may wait for another, as for the generation lane; what was starting ends first, so
     /// nothing it goes on to start is left running. The queues stop so that the document in hand, the request being read
@@ -476,7 +473,10 @@ public final class ArrumatorRuntime: Sendable {
     private func halt(forGood: Bool) async -> Halted {
         let (starting, halted) = await tasks.close(forGood: forGood)
         _ = await starting?.result
+        // Told to stop beside the queues, as it may wait for the generation lane one of them holds.
+        async let judging: Void = labelJudge.stop()
         await Self.stopTogether(coordinator, taskQueue, conversationQueue)
+        await judging
         await tasks.ended()
         await incomingWatcher.stop()
         await archiveWatcher.stop()

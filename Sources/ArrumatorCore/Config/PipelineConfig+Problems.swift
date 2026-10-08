@@ -81,6 +81,11 @@ extension WatcherConfig {
             || managedFileExtension != managedFileExtension.lowercased() {
             problems.append("watcher.managedFileExtension must be written in lowercase, without a dot or /, as a file's extension is compared")
         }
+        if !sidecarSuffix.hasPrefix(".") || sidecarSuffix.contains("/") || sidecarSuffix.lowercased() == "." + managedFileExtension
+            || sidecarSuffix.count < 2 {
+            problems.append("watcher.sidecarSuffix must begin with a dot, hold no / and be more than the extension of the archive's own files, "
+                + "or every such file would be taken for a sidecar")
+        }
         return problems
     }
 }
@@ -148,7 +153,8 @@ extension LabelsConfig {
         if groundingLetters < 2 { problems.append("labels.groundingLetters must be at least 2: a word of one letter says nothing on its own") }
         problems += Limits.atLeastOne("labels.vocabulary", ["suggestionLimit": vocabulary.suggestionLimit])
         problems += Limits.notNegative("labels.vocabulary", ["promptPreferred": vocabulary.promptPreferred,
-                                                             "promptUnwanted": vocabulary.promptUnwanted], zero: "shows none")
+                                                             "promptUnwanted": vocabulary.promptUnwanted,
+                                                             "judgeDocuments": vocabulary.judgeDocuments], zero: "shows none")
         for (kind, policy) in vocabulary.kinds.sorted(by: { $0.key.rawValue < $1.key.rawValue }) {
             let key = "labels.vocabulary.kinds.\(kind.rawValue)"
             for (name, similarity) in [("mergeSimilarity", policy.mergeSimilarity), ("suggestSimilarity", policy.suggestSimilarity)]

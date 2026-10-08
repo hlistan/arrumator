@@ -9,6 +9,12 @@ public enum LabelRuleAction: String, Sendable, Codable, CaseIterable {
     case ignore
     /// The label and its target mean different things, however alike they are written: never merged, never suggested.
     case keepApart
+    /// A tag the user added: listed among the archive's labels and offered on a card, whether or not a document has it.
+    /// Only a tag, the user's own, is added so; the model gives every other kind.
+    case add
+
+    /// Whether the rule decides how a reading writes its label: merged into another, or dropped.
+    public var rewrites: Bool { self == .merge || self == .ignore }
 }
 
 /// A label as the archive uses it: how many documents have it.
@@ -68,16 +74,16 @@ extension LabelUsage {
     }
 }
 
-/// Two labels of one kind that look alike enough to be one, waiting for the user to merge them or keep them apart.
-/// `into` is the one more documents have, which a merge keeps.
+/// Two labels of one kind that look alike enough to be one, waiting for the model to judge them one, and merge them, or
+/// two, and keep them apart (`LabelJudge`). `into` is the one more documents have, which a merge keeps.
 public struct LabelSuggestion: Sendable, Codable, Hashable, Identifiable {
-    /// Why two labels are offered to be merged.
+    /// Why two labels look alike, and are judged.
     public enum Reason: String, Sendable, Codable, Hashable {
         /// They are written alike enough (`KindVocabularyConfig.suggestSimilarity`).
         case writtenAlike
         /// They hold the same digits in the same order, which punctuation groups otherwise
-        /// (`LabelSimilarity.Key.isRegrouping(of:)`): perhaps one number written two ways, which only the user can tell,
-        /// so they are offered whatever the kind's thresholds, and never merged on their own.
+        /// (`LabelSimilarity.Key.isRegrouping(of:)`): perhaps one number written two ways, which only reading them can tell,
+        /// so they are judged whatever the kind's thresholds, and never merged as written alike.
         case sameDigitsGroupedOtherwise
     }
 
@@ -90,6 +96,9 @@ public struct LabelSuggestion: Sendable, Codable, Hashable, Identifiable {
     public var reason: Reason
 
     public var id: String { "\(kind.rawValue):\(value)→\(into)" }
+    /// The pair whichever way it is written: which label is `value` follows which more documents have, and so may turn as
+    /// documents are filed.
+    public var pairID: String { "\(kind.rawValue):" + [value, into].sorted().joined(separator: "\u{1F}") }
 
     public init(kind: LabelKind, value: String, into: String, similarity: Double, reason: Reason) {
         self.kind = kind
@@ -98,6 +107,55 @@ public struct LabelSuggestion: Sendable, Codable, Hashable, Identifiable {
         self.similarity = similarity
         self.reason = reason
     }
+}
+
+/// What the model judged of two labels that look alike (`LabelPairJudging`): one label written two ways, or two.
+public enum LabelJudgement: String, Sendable, Codable, Hashable, CaseIterable {
+    case same, different
+}
+
+/// What each of two labels that look alike is used for: how many documents have it, and the names of the newest of them
+/// (`labels.vocabulary.judgeDocuments` of each), as the model is shown them when it judges the pair.
+public struct LabelPairUse: Sendable, Codable, Hashable {
+    /// How many documents have the suggestion's `value`, and the names of the newest.
+    public var valueDocuments: Int
+    public var valueNames: [String]
+    /// How many documents have the suggestion's `into`, and the names of the newest.
+    public var intoDocuments: Int
+    public var intoNames: [String]
+
+    public init(valueDocuments: Int, valueNames: [String], intoDocuments: Int, intoNames: [String]) {
+        self.valueDocuments = valueDocuments
+        self.valueNames = valueNames
+        self.intoDocuments = intoDocuments
+        self.intoNames = intoNames
+    }
+}
+
+/// What the model judged of two labels that look alike, why in its own words, and which model judged; without a valid
+/// answer, no judgement, and why there is none.
+public struct LabelVerdict: Sendable, Codable, Hashable {
+    public var judgement: LabelJudgement?
+    public var reason: String?
+    public var model: String?
+    public var problem: String?
+
+    public init(judgement: LabelJudgement?, reason: String?, model: String?, problem: String?) {
+        self.judgement = judgement
+        self.reason = reason
+        self.model = model
+        self.problem = problem
+    }
+}
+
+/// Judges whether two labels of one kind that look alike (`LabelSuggestion`) are one label written two ways or two, so
+/// the archive's labels are kept one vocabulary without asking the user (`LabelJudge`). Implemented by
+/// `ArrumatorClassify.LabelPairJudge`.
+public protocol LabelPairJudging: Sendable {
+    /// The chat model of `profile` judges `pair`, shown what each label is used for (`use`). Without a valid answer the
+    /// verdict has no judgement and says why; a model that cannot be reached or is missing throws, so the pair waits.
+    func judge(_ pair: LabelSuggestion, use: LabelPairUse, profile: ModelProfile, config: PipelineConfig,
+               trace: TraceContext) async throws -> LabelVerdict
 }
 
 /// Why a label the model gave was changed before it became the document's.

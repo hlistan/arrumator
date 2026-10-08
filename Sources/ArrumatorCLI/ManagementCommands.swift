@@ -6,7 +6,7 @@ import Foundation
 struct Review: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         abstract: "Documents waiting for you, those you set aside, and what you can do with any document.",
-        subcommands: [List.self, Confirm.self, Rename.self, Retry.self, Hold.self, Undo.self],
+        subcommands: [List.self, Confirm.self, Rename.self, Retry.self, Hold.self, Undo.self, Remove.self],
         defaultSubcommand: List.self)
 
     struct List: AsyncParsableCommand {
@@ -115,6 +115,21 @@ struct Review: AsyncParsableCommand {
             let id = try await resolveDocument(document, runtime: runtime)
             try await runtime.review.undo(id)
             try await report(id, runtime: runtime, options: options)
+        }
+    }
+
+    struct Remove: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            abstract: "Remove a document: its file goes to the Trash, and it leaves the archive and its index.")
+        @OptionGroup var options: GlobalOptions
+        @Argument var document: String
+        func run() async throws {
+            let runtime = try await options.runtime()
+            let id = try await resolveDocument(document, runtime: runtime)
+            let removed = try await runtime.review.remove(id)
+            try options.emit(removed) {
+                "Removed #\(id): \(removed.from)" + (removed.trashed.map { " is in the Trash, at \($0)" } ?? " was not there; it left the index")
+            }
         }
     }
 }

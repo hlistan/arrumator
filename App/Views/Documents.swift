@@ -55,10 +55,17 @@ struct DocumentCard: View {
     /// is typed rather than as the card is drawn.
     @State private var newLabelRefusal: String?
     @State private var showingTrace = false
+    @State private var showingText = false
     /// Read Again was pressed: the card says the document waits to be read, until it is.
     @State private var readAgainAsked = false
     /// What the card offers, as Core decides it from where the document is (`ReviewActions.choices`).
     @State private var choices = DocumentChoices(actions: [], notFiled: false)
+    /// The labels the archive has of the kind being added, the most used first, tags the user added among them
+    /// (`LabelStore.listing()`), and those of them offered, the most alike to what is typed first, worked out as the kind
+    /// or the text changes, never as the card is drawn.
+    @State private var inUse: [String] = []
+    @State private var offered: [String] = []
+    @State private var confirmingTrash = false
     @FocusState private var editingName: Bool
 
     var body: some View {
@@ -80,6 +87,10 @@ struct DocumentCard: View {
         }
         .sheet(isPresented: $showingTrace) {
             TraceView(documentID: documentID, name: document?.filename).environment(model).frame(minWidth: Style.traceSheetMinimum.width, minHeight: Style.traceSheetMinimum.height)
+        }
+        .sheet(isPresented: $showingText) {
+            RecognisedTextView(documentID: documentID, name: document?.filename).environment(model)
+                .frame(minWidth: Style.textSheetMinimum.width, minHeight: Style.textSheetMinimum.height)
         }
     }
 
@@ -148,6 +159,15 @@ struct DocumentCard: View {
                             .accessibilityLabel(Wording.newLabelField(newKind))
                             .textFieldStyle(.roundedBorder)
                             .onSubmit { add() }
+                        if !offered.isEmpty {
+                            Menu {
+                                ForEach(offered, id: \.self) { value in Button(value) { newValue = value } }
+                            } label: {
+                                Image(systemName: "chevron.down")
+                            }
+                            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help(Wording.chooseLabelToAdd)
+                            .accessibilityLabel(Wording.chooseLabelToAdd)
+                        }
                         Button(Wording.add) { add() }
                             .disabled(typedLabel == nil || newLabelRefusal != nil)
                     }
@@ -159,6 +179,12 @@ struct DocumentCard: View {
                 .onChange(of: typedLabel, initial: true) { _, typed in
                     newLabelRefusal = typed.flatMap(LabelError.refusal(of:))?.localizedDescription
                 }
+                .task(id: [newKind.rawValue, model.activity.description]) { await loadInUse() }
+                .task(id: [newValue] + inUse) {
+                    guard let limit = model.runtime?.config.labels.vocabulary.suggestionLimit else { return }
+                    let typed = newValue.trimmingCharacters(in: .whitespaces)
+                    offered = typed.isEmpty ? Array(inUse.prefix(limit)) : LabelSimilarity.mostAlike(to: typed, among: inUse, limit: limit)
+                }
             }
         }
     }
@@ -169,10 +195,16 @@ struct DocumentCard: View {
         return value.isEmpty ? nil : DocumentLabel(kind: newKind, value: value)
     }
 
-    /// Who read the document, and anything that keeps it waiting for the user.
+    /// What the model read the document as, who read it, and anything that keeps it waiting for the user.
     @ViewBuilder private func reading(_ d: DocumentRecord) -> some View {
         if let analysis = d.analysis {
             Grid(alignment: .leading, horizontalSpacing: Style.cardGridColumnSpacing, verticalSpacing: Style.cardReadingRowSpacing) {
+                if let interpretation = analysis.interpretation {
+                    GridRow(alignment: .firstTextBaseline) {
+                        label(Wording.aboutHeading)
+                        Text(interpretation).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                    }
+                }
                 GridRow(alignment: .firstTextBaseline) {
                     label(Wording.readHeading)
                     VStack(alignment: .leading, spacing: Style.readingLineSpacing) {
@@ -197,6 +229,7 @@ struct DocumentCard: View {
         HStack(spacing: Style.actionSpacing) {
             Button(Wording.open) { model.open(d.path) }
             Button(Wording.showInFinder) { model.reveal(d.path) }
+            Button(Wording.recognisedText) { showingText = true }
             Button(Wording.howWasThisRead) { showingTrace = true }
             Spacer()
             ForEach(choices.actions, id: \.self) { action in
@@ -211,11 +244,28 @@ struct DocumentCard: View {
                     Button(Wording.leaveForLater) { run(Wording.holdAction) { try await $0.review.hold(documentID) } }
                 case .readAgain:
                     readAgain
+                case .remove:
+                    Button(Wording.moveToTrashEllipsis) { confirmingTrash = true }
+                        .help(Wording.moveToTrashHelp)
+                        .confirmationDialog(Wording.moveToTrashQuestion(d.filename), isPresented: $confirmingTrash) {
+                            Button(Wording.moveToTrash, role: .destructive) { moveToTrash() }
+                        } message: {
+                            Text(Wording.movedToTrashMessage)
+                        }
                 }
             }
         }
         .buttonStyle(.borderless)
         .font(.callout)
+    }
+
+    /// Moves the document's file to the Trash and takes it out of the archive (`ReviewActions.remove`); the card closes
+    /// once it has, as the document is no more.
+    private func moveToTrash() {
+        Task<Void, Never> {
+            guard await model.perform(Wording.moveToTrashAction, { try await $0.review.remove(documentID) }) != nil else { return }
+            close()
+        }
     }
 
     /// Read Again, or, once pressed, that the document waits to be read again.
@@ -274,6 +324,19 @@ struct DocumentCard: View {
         withAnimation(.snappy) { onClose() }
     }
 
+    /// The labels the archive has of the kind being added, of the kinds written freely; none of a kind with one form. A
+    /// load cut short, as by what the app is doing changing while it read, leaves those offered as they were
+    /// (`AppModel.load`).
+    private func loadInUse() async {
+        let kind = newKind
+        guard model.runtime?.config.labels.isWrittenFreely(kind) == true else {
+            inUse = []
+            return
+        }
+        guard let listing = await model.load(Wording.loadLabelsAction, { try await $0.services.labels.listing() }) else { return }
+        inUse = (listing[kind] ?? []).map(\.label.value)
+    }
+
     private func load() async {
         let readBefore = document?.updatedAt
         guard let read = await model.load(Wording.loadDocumentAction, { try await $0.services.documents.document(id: documentID) }) else { return }
@@ -291,13 +354,14 @@ struct DocumentCard: View {
 }
 
 /// One label on a card; under the pointer, a × takes it off the document. Its menu opens it among the archive's labels,
-/// or removes it from every document for good.
+/// or takes it off every document, once or for good.
 struct LabelChip: View {
     @Environment(AppModel.self) private var model
     let label: DocumentLabel
     let remove: () -> Void
     @State private var hovering = false
     @State private var confirmingRemoval = false
+    @State private var confirmingRemovalForGood = false
 
     var body: some View {
         HStack(spacing: Style.chipContentSpacing) {
@@ -323,14 +387,23 @@ struct LabelChip: View {
             Button(Wording.showDocuments) { model.browse(label) }
             Divider()
             Button(Wording.removeFromEveryDocument) { confirmingRemoval = true }
+            Button(Wording.removeForGoodEllipsis) { confirmingRemovalForGood = true }
         }
         .confirmationDialog(Wording.removeEverywhereQuestion(Wording.label(label)), isPresented: $confirmingRemoval) {
-            Button(Wording.removeEverywhere, role: .destructive) {
-                let label = label
-                Task<Void, Never> { await model.perform(Wording.removeLabelAction) { try await $0.labels.ignore(label) } }
-            }
+            Button(Wording.remove, role: .destructive) { everywhere { try await $0.labels.remove($1) } }
+        } message: {
+            Text(Wording.removedMayComeBack)
+        }
+        .confirmationDialog(Wording.removeForGoodQuestion(Wording.label(label)), isPresented: $confirmingRemovalForGood) {
+            Button(Wording.removeForGood, role: .destructive) { everywhere { try await $0.labels.ignore($1) } }
         } message: {
             Text(Wording.removedForGoodFromCard)
         }
+    }
+
+    /// Does `action` to the label on every document.
+    private func everywhere(_ action: @escaping @Sendable (ArrumatorRuntime, DocumentLabel) async throws -> LabelActionOutcome) {
+        let label = label
+        Task<Void, Never> { await model.perform(Wording.removeLabelAction) { try await action($0, label) } }
     }
 }
