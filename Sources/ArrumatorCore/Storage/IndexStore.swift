@@ -48,32 +48,40 @@ public struct IndexStore: Sendable {
     /// Saves what the model read of a document, `read`, where the user has not changed it since the reading began: the
     /// labels the document had then, `before`, are compared kind by kind with those it has when it is saved, read in the
     /// same transaction, and a kind the user changed meanwhile, as a sender corrected or a tag given or taken away, stays
-    /// as the user left it. The user's own labels (tags) are always as the document has them. The reading fills in the
-    /// rest. The labels saved.
+    /// as the user left it. The user's own labels, its tags and those it was given by hand, are always as the document
+    /// has them (`kept`). The reading fills in the rest. The labels saved.
     @discardableResult
     public func saveReading(_ read: [DocumentLabel], before: [DocumentLabel], docID: Int64) async throws -> [DocumentLabel] {
         let now = time.now()
         return try await database.writer.write { db in
             guard let document = try DocumentRecord.fetchOne(db, key: docID) else { throw IngestError.documentNotFound(docID) }
-            let labels = Self.kept(read, before: before, current: document.labels ?? [])
-            try Self.saveLabels(db, labels, docID: docID, labelled: true, at: now)
+            let labels = Self.kept(read, before: before, current: document.labels ?? [], byHand: document.byHand)
+            try Self.saveLabels(db, labels, byHand: document.byHand, docID: docID, labelled: true, at: now)
             return labels
         }
     }
 
     /// The labels a reading leaves a document: those it read, `read`, but of the kinds the user changed since it began,
-    /// the labels it had then, `before`, compared kind by kind with those it has now, `current`, and of the user's own
-    /// (tags), which stay as the document has them now.
-    static func kept(_ read: [DocumentLabel], before: [DocumentLabel], current: [DocumentLabel]) -> [DocumentLabel] {
+    /// the labels it had then, `before`, compared kind by kind with those it has now, `current`, and the user's own, its
+    /// tags and those of `current` it was given by hand, `byHand`, which stay as the document has them now: whatever the
+    /// reading gives, it never takes their place. Of what the reading gives, a label the user's own already are, however
+    /// cased, and a label of a kind a document has one of that the user's own have (`LabelKind.isSingle`), as a date
+    /// given by hand, are left out.
+    static func kept(_ read: [DocumentLabel], before: [DocumentLabel], current: [DocumentLabel], byHand: [DocumentLabel]) -> [DocumentLabel] {
         let ofKind = { (labels: [DocumentLabel], kind: LabelKind) in Set(labels.filter { $0.kind == kind }) }
         let users = Set(LabelKind.allCases.filter { $0.isUsersOwn || ofKind(before, $0) != ofKind(current, $0) })
-        return (read.filter { !users.contains($0.kind) } + current.filter { users.contains($0.kind) }).distinct()
+        let yours = current.filter { users.contains($0.kind) || byHand.contains($0) }
+        let model = read.filter { label in
+            !users.contains(label.kind)
+                && !yours.contains { $0.distinctKey == label.distinctKey || ($0.kind == label.kind && label.kind.isSingle) }
+        }
+        return (model + yours).distinct()
     }
 
     /// Puts what reading a document again gave it in the place of everything an earlier reading had, in the transaction
     /// of `db` that records its filing (`IngestCoordinator`), so the index holds one reading of it or the other, never
     /// parts of both, and a document read again is found as it was until then. Its labels are those the reading gave,
-    /// `read`, but of the kinds the user changed since it was asked for and of the user's own (`kept`); a reading that
+    /// `read`, but of the kinds the user changed since it was asked for, and the user's own (`kept`); a reading that
     /// gave none, as when the model gave no valid answer, made none to put in their place, and the document keeps those
     /// it had, as it keeps its embeddings when none was made. Its text
     /// and what it was read from are `content`; its row of the full-text index is deleted and written again, under
@@ -84,11 +92,11 @@ public struct IndexStore: Sendable {
                                before: [DocumentLabel], embedding: TextEmbedding?, at now: Date) throws -> [DocumentLabel] {
         guard let document = try DocumentRecord.fetchOne(db, key: docID) else { throw IngestError.documentNotFound(docID) }
         let current = document.labels ?? []
-        let labels = read.map { kept($0, before: before, current: current) } ?? current
+        let labels = read.map { kept($0, before: before, current: current, byHand: document.byHand) } ?? current
         try db.execute(sql: "DELETE FROM document_text WHERE doc_id = ?", arguments: [docID])
         try writeText(db, docID: docID, filename: filename, body: content.text, summary: content.visual?.description,
                       metadata: content.metadata, extractorVersion: content.extractedBy, labels: labels)
-        try saveLabels(db, labels, docID: docID, labelled: read != nil || document.isLabelled, at: now)
+        try saveLabels(db, labels, byHand: document.byHand, docID: docID, labelled: read != nil || document.isLabelled, at: now)
         try db.execute(sql: "UPDATE documents SET content_json = ?, page_count = ?, extracted_at = ? WHERE id = ?",
                        arguments: [try DocumentStore.storedContentJSON(content), content.pageCount, now.unixSeconds, docID])
         if let embedding {
@@ -107,25 +115,30 @@ public struct IndexStore: Sendable {
             let current = document.labels ?? []
             let new = added.filter { !current.contains($0) }
             guard !new.isEmpty else { return }
-            try Self.saveLabels(db, current + new, docID: docID, labelled: document.isLabelled, at: now)
+            try Self.saveLabels(db, current + new, byHand: document.byHand, docID: docID, labelled: document.isLabelled, at: now)
         }
     }
 
     /// Makes a document's labels its own, inside a transaction of the caller's that reads what it changes: on its row,
     /// which writes them into its record file, and in the full-text index. `labelled` says whether they label it, as when
-    /// the model read it; a document's tags alone do not (`DocumentLabel.stored`).
-    static func saveLabels(_ db: Database, _ labels: [DocumentLabel], docID: Int64, labelled: Bool, at now: Date) throws {
+    /// the model read it; a document's tags alone do not (`DocumentLabel.stored`). Of `byHand`, the labels the user gave
+    /// it by hand, those it has are kept as given by hand (`DocumentLabel.storedByHand`), so one taken off, or renamed
+    /// away, is no longer.
+    static func saveLabels(_ db: Database, _ labels: [DocumentLabel], byHand: [DocumentLabel], docID: Int64, labelled: Bool,
+                           at now: Date) throws {
         let stored = DocumentLabel.stored(labels, labelled: labelled)
         let assignments = LabelKind.allCases.map { "\($0.rawValue) = ?" }.joined(separator: ", ")
         let values: [(any DatabaseValueConvertible)?] = LabelKind.allCases.map { DocumentLabel.searchText(labels, kind: $0) } + [docID]
-        try db.execute(sql: "UPDATE documents SET labels_json = ?, tags_only = ?, updated_at = ? WHERE id = ?",
-                       arguments: [try stored.labels.map { try JSON.string($0) }, stored.tagsOnly, now.unixSeconds, docID])
+        try db.execute(sql: "UPDATE documents SET labels_json = ?, tags_only = ?, by_hand_json = ?, updated_at = ? WHERE id = ?",
+                       arguments: [try stored.labels.map { try JSON.string($0) }, stored.tagsOnly,
+                                   try DocumentLabel.storedByHand(byHand, with: labels).map { try JSON.string($0) }, now.unixSeconds, docID])
         try db.execute(sql: "UPDATE document_text SET \(assignments) WHERE doc_id = ?", arguments: StatementArguments(values))
     }
 
     /// Takes back everything a reading of a document gave it, as when its file changed after it was read and it is read
-    /// again as a new arrival: the model's labels (its tags, the user's, stay), what the model said of it, its stored
-    /// text and its entries in the full-text and meaning indexes, in one transaction. It is being processed again.
+    /// again as a new arrival: the model's labels (the user's own, its tags and those it was given by hand, stay), what
+    /// the model said of it, its stored text and its entries in the full-text and meaning indexes, in one transaction. It
+    /// is being processed again.
     public func forgetReading(docID: Int64) async throws {
         let now = time.now()
         try await database.writer.write { db in
@@ -137,7 +150,7 @@ public struct IndexStore: Sendable {
     /// `forgetReading`, of `document` as the caller's transaction read it.
     static func forgetReading(_ db: Database, of document: DocumentRecord, at now: Date) throws {
         guard let docID = document.id else { throw IngestError.documentNotPersisted }
-        try saveLabels(db, (document.labels ?? []).filter(\.kind.isUsersOwn), docID: docID, labelled: false, at: now)
+        try saveLabels(db, document.yours, byHand: document.byHand, docID: docID, labelled: false, at: now)
         try db.execute(sql: """
             UPDATE documents SET analysis_json = NULL, content_json = NULL, page_count = NULL, extracted_at = NULL,
             embedded_at = NULL, status = ?, updated_at = ? WHERE id = ?

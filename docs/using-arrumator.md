@@ -20,9 +20,11 @@ label taken off with its × or its menu's **Remove from This Document**, and a l
 writing its value. A value that is no label of its kind, such as the type `fatura`, the date `2026-13-45` or the
 language `klingon`, is said under the field as you write it, with what the kind takes, and **Add** waits until it is
 one; Return keeps what you wrote, to correct it. Each change is recorded in History, in words: "Renamed to …; added
-sender “EDP”; removed type “invoice”". Beside the value's field, a menu offers the labels the archive has of the kind
-chosen, of the kinds written freely, the most alike to what you write first, and the tags you added on the Labels page
-among them. Dates, deadlines and periods show as dates, in your Mac's style, a period by its first and last day or month
+sender “EDP”; removed type “invoice”". A label you add is yours: reading the document again never takes it off ([reading
+documents again](how-it-works.md#reading-documents-again)). Beside the value's field, a menu offers the labels the
+archive has of the kind chosen, of the kinds written freely, the most alike to what you write first, and the tags you
+added on the Labels page among them. Dates, deadlines and periods show as dates, in your Mac's style, a period by its
+first and last day or month
 (**1 Jul 2026 – 31 Jul 2026**), on the card and in the sidebar alike. A label's menu opens it on the Labels page, shows
 the documents that have it, or takes it off every document: **Remove from Every Document…**, after which a document read
 later may be given it again, or **Remove for Good…**, which the model's readings follow too. The card's actions follow
@@ -210,13 +212,13 @@ the log says why, rather than nothing being shown without a word.
 
 Settings › Filing: **Rename files** has the model name each document from what it reads, its date, its sender and what
 it is, and **Transliterate names to Latin letters** writes a name in another script, such as Cyrillic, in Latin
-letters. Under **Reading Again**, **Read All Documents Again…** reads every document of the archive again from its
-file, with the profile in use, as you would after choosing another profile: filed documents, those waiting for you and
-those set aside after failing, but not those you left for later, nor a file you put into the archive whose first reading,
-which filed it where it is, has not ended. It asks first, naming the profile, and says that each
-document is renamed and given only the labels this reading finds, also in place of those you corrected, keeping its
-tags; then it says how many it queued. Each document is found as it was until it is read, and then its name, labels,
-text and meaning are replaced at once, but what you change of it after asking ([reading documents
+letters. Under **Reading Again**, **Read All Documents Again…** reads every document of the archive again from its file,
+with the profile in use, as you would after choosing another profile: filed documents, those waiting for you and those
+set aside after failing, but not those you left for later, nor a file you put into the archive whose first reading,
+which filed it where it is, has not ended. It asks first, naming the profile, and says that each document is renamed and
+given the labels this reading finds in place of those the model gave before, keeping its tags and the labels you gave it
+by hand; then it says how many it queued. Each document is found as it was until it is read, and then its name, labels,
+text and meaning are replaced at once, but your own labels and what you change of it after asking ([reading documents
 again](how-it-works.md#reading-documents-again)). New files still come first. Asked again while they wait, it queues
 none of them twice. `arrumatorcli review retry --all` does the same.
 
@@ -422,6 +424,8 @@ No tunable lives in code. Defaults are bundled in `Sources/ArrumatorCore/Resourc
   the identifiers a document's embedding lists, `analysis.embeddingIdentifiersLimit`), `labels` (`labels.maxPerKind`,
   `labels.maxValueChars`, the letters a word needs to say on its own whether the document writes a name or a title,
   `labels.groundingLetters`, the digits a word of an object needs to identify a thing, `labels.objectIdentifierDigits`,
+  the most words one after another on a line that a document writes one number or identifier over, as an IBAN in
+  groups of four, `labels.numberWords`,
   and `labels.vocabulary`: for each kind kept one vocabulary, never your tags, how alike labels must be written to be
   merged as written or judged by the model, and how many in use the model is shown, how many of your merges and unwanted
   labels it is shown, how many pairs that look alike are worked out at once, `labels.vocabulary.suggestionLimit`, and

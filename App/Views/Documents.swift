@@ -31,11 +31,15 @@ struct DocumentList: View {
 /// (Processed, and what was just processed on Incoming, read the same way), and the documents the sidebar's labels choose
 /// under the month of their own date, the newest first and those without a date last.
 struct DocumentSections: View {
+    @Environment(AppModel.self) private var model
     let sections: [DocumentSection]
 
     var body: some View {
         ForEach(sections) { section in
-            PageSection(section.title) { DocumentList(documents: section.documents) }
+            // Built at once while it holds the open card, of any height (`PageSection`).
+            PageSection(section.title, lazily: !section.documents.contains { $0.id == model.session.openDocument }) {
+                DocumentList(documents: section.documents)
+            }
         }
     }
 }

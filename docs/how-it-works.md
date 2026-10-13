@@ -68,9 +68,10 @@ app-managed file.
   document is in the archive is told by where its file is, however the archive's folder is named, through a link or in
   another case.
 - **A file changed after it was read**, between its hashing and its filing, is not filed as what was read of it: it is
-  read again from the start, as a new arrival, and History says it changed. What was read of it, its labels but its
-  tags, its text and its place in the search, goes; a file gone meanwhile ends its document as missing, and one that
-  changed into an exact copy of a document in the archive ends it as a copy does. That counts as one of its attempts
+  read again from the start, as a new arrival, and History says it changed. What was read of it, the labels the model
+  gave, its text and its place in the search, goes, and your own labels, its tags and those you gave it by hand, stay;
+  a file gone meanwhile ends its document as missing, and one that changed into an exact copy of a document in the
+  archive ends it as a copy does. That counts as one of its attempts
   (`ingest.maxAttempts`), so a file that changes at every reading ends as any file that keeps failing does.
 - **When the archive's folder is not there**, as when it was renamed away or its disk is not attached, a file waits
   to be filed, spending no attempt, and History says so once. The app never makes the archive's folder again where it
@@ -233,8 +234,19 @@ not written so is dropped, unless it is how one of your merges, however old, ask
 written ([below](#keeping-labels-one-vocabulary)). The words are compared however they are cased (the Turkish `I`, `İ`
 and `ı` alike), accented or written in width (`ＮＴＴ` is `NTT`), and however the document spaces or breaks them: `E D P  C
 O M E R C I A L`, a soft hyphen or a word broken at the end of a line with a hyphen still write `EDP Comercial`. So a
-note that names no one is not given the archive's most used sender. This is a check of the answer, not of the prompt,
-which is unchanged (`analysis.promptVersion` stays).
+note that names no one is not given the archive's most used sender. An object or a reference is made of a number the
+document writes, in the same places, the text the vision model read in an image among them: in whole words, up to
+`labels.numberWords` of them (nine, as an IBAN prints its up to 34 characters in groups of four) with digits one after
+another on a line, compared by their digits' values in any script or width and without the zeros that begin them, so
+`customer 0123456789` is written by `Cliente: 0123 456 789` and `invoice FT 2026/926804564` by `FT
+EDPC2026/926804564`, but `car AA-12-BB` not by `DE 812871812`; or each of its words with digits written so, wherever,
+as `cloud server CPX31 #42368634` is by a line naming the server and another its number, or written by its letters and
+digits over words that follow one another on a line, as an IBAN printed in groups, `NL91 ABNA 0417 1643 00`, writes
+`account NL91ABNA0417164300`; or as one of your merges asks one the document writes to be written. One not written so,
+as a number the prompt gives as an example or one the model makes up, is dropped, noted in the trace; a document of
+which nothing was read, as an image with nothing seen in it, is not checked. An amount is not checked, as it is
+written in its kind's form, which a scale (`12万円`) or a total may make otherwise than the document writes it. These
+are checks of the answer, not of the prompt, which is unchanged (`analysis.promptVersion` stays).
 
 The title is made of the document's own words, in its own language, as the prompt asks, and that is checked the same
 way: when the document writes fewer than `analysis.titleGroundedShare` of the title's words of `labels.groundingLetters`
@@ -314,7 +326,12 @@ label of a kind the model gives labels a document the model has not labelled, so
 a tag does not. A document keeps one type and one
 date: a new one replaces the old, on the card and from a terminal alike (`--add type=receipt`). A correction is made to
 the labels the document has when it is made, so two made one after the other, such as two labels taken off in quick
-succession, both hold. Each correction is recorded in History. Renaming the document (on its card, or
+succession, both hold. Each correction is recorded in History. A label you add by hand, of any kind, is yours, as a tag
+is: reading the document again replaces what the model gave it and never takes yours off; of a type and a date, a
+document's one each, yours stays in place of the model's, and the document is named by the date and sender you gave it
+before the model's ([reading documents again](#reading-documents-again)). A label you take off may be given again when
+the document is read again, as the model reads it anew, unless you remove it for good, from every document.
+`arrumatorcli labels <document>` says which labels you gave by hand. Renaming the document (on its card, or
 `review rename`) renames the file where it is. The card offers, beside the field, the labels the archive has of the kind
 chosen, the most alike to what you write first, the tags you added among them.
 
@@ -420,7 +437,9 @@ What you decide becomes a rule, recorded in History and kept in the archive (`Sy
   document read from then on. A rename into a label in use is a merge.
 - **Merge** a label into another: every document that has it, written however, gets the other instead, and so does
   every document read from then on. Merging back the other way replaces the first merge, and labels merged into the one
-  you merge follow it. A merge made already, made again, changes nothing and is not recorded again.
+  you merge follow it. A merge made already, made again, changes nothing and is not recorded again. A label you gave a
+  document by hand is merged as any label of its kind, by you or by the model's judgement of two labels alike, and
+  stays yours under the label it is merged into, as reading the document again keeps it.
 - **Remove for good** (ignore) a label: it is taken off every document, and the model's answers lose it from then on.
 - **Keep apart** two alike labels: they are never merged and never judged again. Kept apart again, nothing changes and
   nothing more is recorded.
@@ -470,8 +489,8 @@ change.
   labelled, as a tag labels nothing: `arrumatorcli labels unlabelled` and Statistics count it so, and reading it again
   labels it, keeping the tag. `arrumatorcli ingest <file> --tag <tag>` gives a file a tag of your choosing too, besides
   its folder's.
-- **Reading a document again keeps its tags**, the folder's and those you gave it, while what the model gives replaces
-  what it gave before (and the labels of other kinds you gave it by hand with them) once it is read ([reading documents
+- **Reading a document again keeps its tags**, the folder's and those you gave it, as it keeps every label you gave it
+  by hand, while what the model gives replaces what it gave before once it is read ([reading documents
   again](#reading-documents-again)).
 - **An exact copy** of a document in the archive, put into the folder, gives that document the folder's tag and has it
   read again ([exact copies](#exact-copies)), so the document itself is found under the tag, by the sidebar, a search
@@ -487,7 +506,8 @@ tag`), a folder per tag. A task's request is never read as asking for one: add t
 A document is filed however it was read, but some wait for you in **Needs You**, in the archive, with the reason on
 their card:
 
-- the model gave no valid answer, even after being told what was wrong (the document has no labels but its tags);
+- the model gave no valid answer, even after being told what was wrong (the document has no labels but your own, its
+  tags and those you gave it by hand);
 - the file is encrypted or damaged;
 - it is a kind of file Arrumator cannot read, as one of a format no extractor and no Quick Look preview reads, so the
   model saw only its name: reading it again cannot change that, and its card says to save or export it as a PDF and put
@@ -532,8 +552,9 @@ another profile ([profile and effort](#profile-and-effort)): choose it, and put 
   the place of having only its text read again after a rebuild of the index. A document whose first reading has not
   ended and is still at its file, as a file you put into the archive and have not renamed or moved since, is left to that
   reading, and History says it is being read in; one whose first reading is elsewhere is read again once it has ended.
-- **It keeps its tags**, the folders' and those you gave it, and a copy put into a folder in Incoming, or given `--tag`,
-  gives it those tags at once, before it is read; what the model gives replaces what it gave before.
+- **It keeps its tags**, the folders' and those you gave it, and every label you gave it by hand, and a copy put into a
+  folder in Incoming, or given `--tag`, gives it those tags at once, before it is read; what the model gives replaces
+  what it gave before.
 - **The copy goes to the Trash**, never deleted, as the archive holds the same bytes; take it back from there. A copy
   the Trash will not take, as on a volume without one, is not tried again: it stays in Incoming, waiting for you in
   Needs You as not filed, saying why, a rescan leaves it alone, and the document is not read again. **Read Again** on
@@ -570,13 +591,14 @@ an earlier version filed, cannot be read again, which is said at once.
 - **Found as it was until it is read.** Nothing of the document changes while it waits or is read but the tags it is
   given, and what is recorded of its file, should the file have changed: its labels, its name, its text and its meaning
   stay as they were, and search, the sidebar and search tasks find it by them.
-- **Then replaced at once.** Once it is read, its file is renamed where it is, under the name the model gives, and with
-  the record of that, in one step, what it reads takes the place of everything it had: its labels, those the model
-  gave and those you corrected alike, but its tags; its text in the index; its meaning, every embedding it had, of
-  whatever model, replaced by the profile's, or, when the reading makes none, as when the embedding model fails, those
-  it had kept. Nothing of the earlier reading is left beside the new one, and a stop or a failure before that step
-  leaves the document as it was, to be recorded whole at the next attempt. Its trace's `index` step says so, naming the
-  embedding model, or that the earlier embeddings were kept.
+- **Then replaced at once.** Once it is read, its file is renamed where it is, under the name the model gives, by the
+  date and sender you gave it by hand, if you did, before the model's, and with the record of that, in one step, what it
+  reads takes the place of everything it had: the labels the model gave, but never yours, its tags and every label you
+  gave it by hand, which stay, a type or date you gave in place of the model's; its text in the index; its meaning,
+  every embedding it had, of whatever model, replaced by the profile's, or, when the reading makes none, as when the
+  embedding model fails, those it had kept. Nothing of the earlier reading is left beside the new one, and a stop or a
+  failure before that step leaves the document as it was, to be recorded whole at the next attempt. Its trace's `index`
+  step says so, naming the embedding model, or that the earlier embeddings were kept.
 - **What you do after asking wins.** A label you change once it is asked for, while it waits or is read, stays as you
   left it, and so does a name you give it ([your own changes](#your-own-changes)); leave it for later or undo it
   meanwhile, and the reading is dropped, changing nothing of it but, should you do so in the instant its file is
@@ -635,14 +657,14 @@ folder back is said to be back. Either way, what its record files hold is merged
 taken over it.
 
 Reading a document again (`review retry`, **Read Again**, **Read All Documents Again**, an exact copy of it put into
-Incoming) labels and names it again where it is, from its file, keeping its tags ([reading documents
-again](#reading-documents-again)). You win over a reading under way: a label you change until it is filed, from when
-the model begins to read a file, or from when you asked for a document to be read again, of any kind, as a sender
-corrected or a tag given or taken away, stays as you left it, and the reading fills in only the kinds you did not
-touch. A reading that gives no name leaves it
-the name it has, and one that names it as it is named, but for case or the collision suffix (`naming.collisionFormat`) a
-taken name gave it, moves nothing. Only a document in the archive can be undone: one already undone, or left in
-Incoming, is refused, and its file keeps its name. A document you undid is back in Incoming, held, and a rescan leaves
+Incoming) labels and names it again where it is, from its file, keeping its tags and the labels you gave it by hand
+([reading documents again](#reading-documents-again)). You win over a reading under way: a label you change until it is
+filed, from when the model begins to read a file, or from when you asked for a document to be read again, of any kind,
+as a sender corrected or a tag given or taken away, stays as you left it, and the reading fills in only the kinds you
+did not touch. A reading that gives no name leaves it the name it has, and one that names it as it is named, but for
+case or the collision suffix (`naming.collisionFormat`) a taken name gave it, moves nothing. Only a document in the
+archive can be undone: one already undone, or left in Incoming, is refused, and its file keeps its name. A document you
+undid is back in Incoming, held, and a rescan leaves
 it there while the file is that document; read again, it is filed at the top of the archive. History records where its
 file was and went as the disk spells both paths. Another file put in its place, as a scanner saving under the same name,
 is taken as a new arrival, and the one undone is missing. This is unlike a document left in Incoming as failed, whose

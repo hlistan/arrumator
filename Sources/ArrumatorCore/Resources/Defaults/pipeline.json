@@ -448,6 +448,7 @@
     "maxValueChars": 80,
     "groundingLetters": 3,
     "objectIdentifierDigits": 2,
+    "numberWords": 9,
     "vocabulary": {
       "kinds": {
         "sender": {

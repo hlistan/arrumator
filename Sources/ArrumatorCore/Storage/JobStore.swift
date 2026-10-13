@@ -24,7 +24,7 @@ public struct JobPayload: Sendable, Codable, Hashable {
     public var waitingForModel: String?
     /// What reading a document of the archive again keeps, from when it is asked for, as its labels and its place were
     /// then, and, once it is read, with `outcome`, until it is filed, when it takes the place of everything the document
-    /// had (`IndexStore.replaceReading`); nil for a file read the first time.
+    /// had but the user's own labels (`IndexStore.replaceReading`); nil for a file read the first time.
     public var rereading: Rereading?
 
     public init() {}

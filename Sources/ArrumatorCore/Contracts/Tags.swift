@@ -90,4 +90,12 @@ extension DocumentLabel {
         if isLabelled { return (labels, false) }
         return labels.isEmpty ? (nil, false) : (labels, true)
     }
+
+    /// How the labels a document was given by hand are stored with its `labels` (`DocumentRecord.byHand`): those of
+    /// `byHand` it has, of kinds the model gives, as a tag is the user's own whoever gave it; nil when none is, as for
+    /// every document before they were told apart.
+    static func storedByHand(_ byHand: [DocumentLabel], with labels: [DocumentLabel]) -> [DocumentLabel]? {
+        let kept = labels.filter { !$0.kind.isUsersOwn && byHand.contains($0) }
+        return kept.isEmpty ? nil : kept
+    }
 }

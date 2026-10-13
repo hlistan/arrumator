@@ -21,7 +21,7 @@ struct ReviewPage: View {
                 VStack(alignment: .leading, spacing: 0) { DocumentList(documents: waiting) }
             }
             if !setAside.isEmpty {
-                PageSection(Wording.setAsideHeading) {
+                PageSection(Wording.setAsideHeading, lazily: !setAside.contains { $0.id == model.session.openDocument }) {
                     Text(Wording.setAsideNotes).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                         .padding(.bottom, Style.sectionRuleGap)
                     DocumentList(documents: setAside)

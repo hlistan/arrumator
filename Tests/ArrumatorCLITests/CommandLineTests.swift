@@ -292,10 +292,17 @@ import UniformTypeIdentifiers
         let labels = try JSON.decoder.decode([DocumentLabel].self, from: JSONSerialization.data(withJSONObject: row?["labels"] ?? []))
         #expect(labels == [invoice, taxes, mine] && row?["labelled"] as? Bool == true,
                 "a tag is added by hand as any label, as written, and the document labelled stays so: \(added.text) \(added.stderr)")
-        let retyped = try JSONSerialization.jsonObject(with: try run(home, ["labels", String(ids[1]), "--json", "--add", "type=receipt"]).stdout)
+        let retyped = try JSONSerialization.jsonObject(with: try run(home, ["labels", String(ids[1]), "--json", "--add", "type=receipt", "--add", "language=pt"]).stdout)
         let types = try JSON.decoder.decode([DocumentLabel].self, from: JSONSerialization.data(withJSONObject: (retyped as? [String: Any])?["labels"] ?? []))
             .filter { $0.kind == .type }
         #expect(types == [receipt], "a type added takes the place of the one there, as on a document's card: \(types)")
+        let byHand = try JSON.decoder.decode([DocumentLabel].self, from: JSONSerialization.data(withJSONObject: (retyped as? [String: Any])?["byHand"] ?? []))
+        let portuguese = DocumentLabel(kind: .language, value: "pt")
+        #expect(byHand == [receipt, portuguese] && (row?["byHand"] == nil),
+                "each is given by hand, to stay when the document is read again, as no tag needs saying: \(byHand)")
+        let shown = try run(home, ["labels", String(ids[1])]).text
+        #expect(shown.contains("Given by hand, kept when it is read again: type “receipt”, language “pt (Portuguese)”"),
+                "and the text says so, a language by its name too, as the table does: \(shown)")
         let browsed = try run(home, ["labels", "browse", "--json", "tag=taxes 2024"])
         #expect(try documentIDs(browsed.stdout, under: "documents") == ids, "every document with the tag, however it is cased: \(browsed.text)")
         let stats = try JSONSerialization.jsonObject(with: try run(home, ["stats", "--json"]).stdout) as? [String: Any]

@@ -225,10 +225,13 @@ extension LabelFormTests {
         ])
     }
 
+    /// The EDP bill, writing besides the numbers of references said in several languages, none beside a field's name.
+    static let numbered = Fixtures.edpText + "\n1ESY 1160 4478 21 · 03-3542-5545-25 · 1234 · 764946860856 · C-2024-118 · 1234/24.5T8LSB"
+
     @Test func aReferenceThatSaysWhatItIsInAnotherLanguageGoesBack() throws {
         let sent = #expect(throws: GuessSentBack<ValidatedAnalysis>.self, "what a reference is, in the document's own words") {
             try Self.validate([.reference: ["Zählernummer 1ESY 1160 4478 21", "お客さま番号 03-3542-5545-25", "номер договора 1234",
-                                            "invoice FT 2026/926804564"]])
+                                            "invoice FT 2026/926804564"]], text: Self.numbered)
         }
         #expect(sent?.problems == [
             "references: “Zählernummer 1ESY 1160 4478 21”, “お客さま番号 03-3542-5545-25”, “номер договора 1234” say what they are in "
@@ -238,7 +241,7 @@ extension LabelFormTests {
                                                               "номер договора 1234", "invoice FT 2026/926804564"],
                 "words the document does not print as a field's name may be part of the number, and stand")
         let english = try Self.validate([.reference: ["invoice FT 2026/926804564", "customer account 764946860856", "contract C-2024-118",
-                                                      "case 1234/24.5T8LSB", "2026/926804564"]])
+                                                      "case 1234/24.5T8LSB", "2026/926804564"]], text: Self.numbered)
         #expect(english.notes.isEmpty, "English words, words too short to tell, and a number alone stand: \(english.notes)")
     }
 
@@ -249,6 +252,7 @@ extension LabelFormTests {
     ])
     func aReferenceDescribedInEnglishStandsWhateverItsNumberIsWritten(_ reference: String, language: String) throws {
         let text = "Référence client\t4711\nCode d'accès\t9921\nClient\t4711\nDocument n°\t77\nContract\t123\nN.º DOCUMENTO / DOCUMENT NO."
+            + "\nNúmeros: 1234 · 123456 · 300 12-34 · 7784210225 · 999999990 · P01172476"
         let reading = try Self.validate([.reference: [reference]], text: text, language: language)
         #expect(!reading.notes.contains { $0.hasPrefix("references") } && reading.labels.values(.reference) == [reference],
                 "the letters of a number, in any script, and English words the document's language shares: \(reading.notes)")

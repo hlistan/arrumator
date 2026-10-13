@@ -32,6 +32,9 @@ public struct DocumentEntry: Codable, Sendable, Hashable {
     public var pages: Int?
     /// What the document is described by; absent while it has no labels and has not been labelled.
     public var labels: [DocumentLabel]?
+    /// Those of `labels` the user gave by hand, of kinds the model gives, which no reading takes the place of
+    /// (`DocumentRecord.byHand`); absent while there are none, as in every entry written before they were told apart.
+    public var byHand: [DocumentLabel]?
     /// True while its labels are only its tags because the model has not labelled it yet; absent otherwise. Never `tags`,
     /// which entries of versions that filed into folders hold topics under.
     public var tagsOnly: Bool?
@@ -46,6 +49,7 @@ public struct DocumentEntry: Codable, Sendable, Hashable {
         case id, uid, file
         case originalName = "original_name"
         case added, filed, status, pages, labels
+        case byHand = "by_hand"
         case tagsOnly = "tags_only"
         case duplicateOf = "duplicate_of"
         case contentType = "content_type"
@@ -64,6 +68,7 @@ public struct DocumentEntry: Codable, Sendable, Hashable {
         status = record.status
         pages = record.pageCount
         labels = record.labels
+        byHand = record.byHand.isEmpty ? nil : record.byHand
         tagsOnly = record.tagsOnly ? true : nil
         duplicateOf = record.duplicateOf
         analysis = record.analysis
@@ -86,14 +91,16 @@ public struct DocumentEntry: Codable, Sendable, Hashable {
     /// extraction) starts empty and is filled in again when the document is read. Labels are kept as the index keeps
     /// them (`DocumentLabel.stored`), so an entry edited by hand to give a document a label of another kind than a tag
     /// labels it, as a correction in the app does. A label an older reading joined with another is the labels it holds
-    /// (`DocumentLabel.split`), as the index keeps them since.
+    /// (`DocumentLabel.split`), as the index keeps them since. Of `byHand`, those of its labels are given by hand
+    /// (`DocumentLabel.storedByHand`), so one edited out of `labels` is no longer.
     public func record(directory: URL, now: Date) throws -> DocumentRecord {
         let stored = labels.map { DocumentLabel.stored(DocumentLabel.split($0), labelled: tagsOnly != true) } ?? (labels: nil, tagsOnly: false)
         return DocumentRecord(id: id, uid: uid, path: directory.appendingPathComponent(file).path, originalFilename: originalName,
                               sha256: sha256, size: size, uttype: contentType, inode: nil, pageCount: pages, status: status,
                               analysisJson: try analysis.map { try JSON.string($0) }, contentJson: nil,
-                              labelsJson: try stored.labels.map { try JSON.string($0) },
-                              tagsOnly: stored.tagsOnly, duplicateOf: duplicateOf, lastTraceId: nil, addedAt: added, filedAt: filed,
+                              labelsJson: try stored.labels.map { try JSON.string($0) }, tagsOnly: stored.tagsOnly,
+                              byHandJson: try DocumentLabel.storedByHand(byHand ?? [], with: stored.labels ?? []).map { try JSON.string($0) },
+                              duplicateOf: duplicateOf, lastTraceId: nil, addedAt: added, filedAt: filed,
                               extractedAt: nil, embeddedAt: nil, fileMtime: nil, createdAt: added, updatedAt: now)
     }
 }

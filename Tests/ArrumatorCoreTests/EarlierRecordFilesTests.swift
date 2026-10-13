@@ -305,4 +305,37 @@ import Testing
         #expect(try await h.services.documents.document(id: 1)?.status == .filed,
                 "found again, it is filed, as a missing event with nothing in it has always meant")
     }
+
+    @Test func anEntryWrittenBeforeLabelsGivenByHandWereToldApartGivesNoneByHand() async throws {
+        let env = try await TestEnvironment.make()
+        defer { env.cleanup() }
+        let file = env.archive.appendingPathComponent("2026-07-05 EDP - Fatura.pdf")
+        try Data("pdf".utf8).write(to: file)
+        // As the release before labels given by hand were told apart wrote it: labels, a tag among them, and no by_hand.
+        try """
+        ---
+        arrumator: 1
+        entries:
+        - id: 7
+          uid: 5B7A8F4E-0000-0000-0000-000000000007
+          file: 2026-07-05 EDP - Fatura.pdf
+          original_name: fatura.pdf
+          added: 2026-07-05T10:00:00Z
+          filed: 2026-07-05T10:01:00Z
+          status: filed
+          labels:
+          - kind: sender
+            value: EDP
+          - kind: tag
+            value: Mine
+          content_type: com.adobe.pdf
+          size: 3
+          sha256: abc
+        ---
+        """.write(to: env.archive.appendingPathComponent(env.config.records.documentsFileName), atomically: true, encoding: .utf8)
+        try await env.records().rebuild()
+        let doc = try #require(try await DocumentStore(database: env.database, time: TestTime(.advances)).document(id: 7))
+        #expect(doc.labels == [DocumentLabel(kind: .sender, value: "EDP"), DocumentLabel(kind: .tag, value: "Mine")] && doc.byHandJson == nil,
+                "read as it always was: every label of a kind the model gives is the model's, and the tag the user's by its kind")
+    }
 }

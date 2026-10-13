@@ -28,4 +28,27 @@ import Testing
         #expect(files.count == 1 && written.contains("Before pruning") && written.contains("After pruning"),
                 "the file being written stays, though alone it is over the limit, so no line goes into a file no longer there: \(files)")
     }
+
+    /// The app and a command log into one day's file at once (QA run of 10 October 2026: a line of the app's written over
+    /// by a command's, leaving a fragment and a blank line). Each writes its lines at the file's end as it is then.
+    @Test func twoProcessesLoggingIntoOneDaysFileEachKeepEveryLineWhole() async throws {
+        let env = try await TestEnvironment.make()
+        defer { env.cleanup() }
+        let folder = env.paths.logsDirectory
+        // Two logs, as two processes have, each with a handle of its own on the day's file.
+        let (app, command) = (Log(), Log())
+        for log in [app, command] { log.configure(directory: folder, minLevel: .info, config: env.config.logging, echoToStderr: false) }
+        app.log(.info, .app, "Arrumator started")
+        command.log(.info, .cli, "Command started")
+        app.log(.info, .ingest, "Filed")
+        command.log(.info, .app, "Arrumator stopped")
+        let files = try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil).filter { $0.pathExtension == "jsonl" }
+        let lines = try files.flatMap { try String(contentsOf: $0, encoding: .utf8).split(separator: "\n", omittingEmptySubsequences: false) }
+            .filter { !$0.isEmpty }
+        let messages = lines.compactMap { line in
+            (try? JSONSerialization.jsonObject(with: Data(line.utf8))).flatMap { ($0 as? [String: Any])?["msg"] as? String }
+        }
+        #expect(messages == ["Arrumator started", "Command started", "Filed", "Arrumator stopped"] && messages.count == lines.count,
+                "every line of both, whole and in the order written: \(lines)")
+    }
 }

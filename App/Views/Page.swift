@@ -60,7 +60,10 @@ struct Page<Content: View>: View {
 
 /// A section: a small bold heading over a hairline, then its rows, built as they come into sight, or all at once
 /// (`lazily: false`) for a section of few rows that can open as a card of any height, as a task's card with its
-/// conversation: a lazy stack estimates the rows it has not built from those it has, which such a card throws off.
+/// conversation, and for one while it holds an open card, as a document's: a lazy stack estimates the rows it has not
+/// built from those it has, which such a card throws off, and a field of the card focused, which the scroll view brings
+/// into sight, then lays the page out again and again without end (QA run of 10 October 2026: the app hung as a label
+/// was added on a document's card on Processed).
 struct PageSection<Content: View, Trailing: View>: View {
     let title: String
     let lazily: Bool

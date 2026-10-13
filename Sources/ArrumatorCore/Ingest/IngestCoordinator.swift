@@ -464,8 +464,9 @@ public actor IngestCoordinator {
 
     /// Files the document under the name the model gave it: a new arrival at the top of the archive, a document read
     /// again where it is, one the user put in the archive left as it is. A document the model could not read waits
-    /// for the user there. What a document read again was read as takes the place of everything it had in the
-    /// transaction that records its filing (`PipelineServices.replaceReading`), so it is found as it was until then.
+    /// for the user there. What a document read again was read as takes the place of everything it had but the user's
+    /// own labels in the transaction that records its filing (`PipelineServices.replaceReading`), so it is found as it was
+    /// until then.
     ///
     /// The job's destination is recorded in the transaction that records the filing, so a job that stopped after it,
     /// on an error or a crash, finds it filed and finishes what is left instead of filing it again, wherever the document
