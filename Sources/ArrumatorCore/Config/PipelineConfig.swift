@@ -328,6 +328,10 @@ public struct LabelsConfig: Sendable, Codable, Hashable {
     /// The digits a word of an object needs to identify a thing, as a number, a plate or an address writes it, which a
     /// quantity or a size ("1L", "x6") does not: an object without one goes back to the model once (`AnswerValidator`).
     public var objectIdentifierDigits: Int
+    /// The most words, one after another on a line, that the document writes one number or identifier over, as `0123 456
+    /// 789`, `1ESY 1160 4478 21` or an IBAN, up to 34 characters printed in groups of four (ISO 13616-1), so nine: an
+    /// object or a reference is made of a number it writes so (`ReadingGrounds`).
+    public var numberWords: Int
     public var vocabulary: LabelVocabularyConfig
 }
 

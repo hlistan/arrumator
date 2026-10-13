@@ -18,7 +18,7 @@ let usage = """
       click | dclick | rclick <pid> <text> [role] [n]   click, double-click or right-click the n-th match
       clickat <pid> <x> <y> [clicks]         click a point of the screen
       hover <pid> <x> <y>                    move the pointer there
-      set <pid> <text> <value> [role] [n]    click a field, select all of it and type value
+      set <pid> <text> <value> [role] [n]    focus a field, select all of it and type value, with no pointer event
       type <pid> <text>                      type into what has focus
       key <pid> <name> [cmd,shift,opt,ctrl]  return, escape, tab, delete, space, arrows, a letter
       focused <pid>                          the element with keyboard focus
@@ -316,12 +316,17 @@ case "hover":
     CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: point(rest[0], rest[1]), mouseButton: .left)?
         .post(tap: .cghidEventTap)
 case "set":
+    // Focused through accessibility and typed to the process alone, with no pointer event: a click posted to the whole
+    // session races whatever the person at the Mac does with the pointer, and a mouse-up lost so leaves the field
+    // tracking a selection, the app stuck (QA run of 10 October 2026).
     guard rest.count >= 2 else { fail(usage, code: 2) }
     let e = pick(rest[0], role: optional(2), n: optional(3).flatMap(Int.init) ?? 0)
     activate()
-    mouse(center(e))
-    AXUIElementSetAttributeValue(e, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+    let focused = AXUIElementSetAttributeValue(e, kAXFocusedAttribute as CFString, kCFBooleanTrue) == .success
     usleep(150_000)
+    guard focused, attr(e, kAXFocusedAttribute) as? Bool == true else {
+        fail("refused: \(describe(e)) took no focus through accessibility, so nothing was typed")
+    }
     key("a", mods: ["cmd"])
     key("delete", mods: [])
     type(rest[1])

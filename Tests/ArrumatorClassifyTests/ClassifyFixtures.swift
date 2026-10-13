@@ -19,6 +19,7 @@ enum Fixtures {
 
     static let edpText = """
     EDP Comercial — Fatura de eletricidade
+    Fatura n.º FT 2026/926804564   CPE PT0002000012345678
     Data de emissão: 05/07/2026   Período de faturação: 01/06/2026 a 30/06/2026
     NIF 503504564   Cliente: Maria Exemplo   Referência Multibanco 12345 678 901
     Total a pagar: 54,21 €   Data limite de pagamento: 25/07/2026
@@ -26,13 +27,13 @@ enum Fixtures {
 
     /// What `text`, in `language` when it is known, grounds a reading in, as the bundled settings tell words apart.
     static func grounds(_ text: String, preferred: [LabelPreference] = [], language: String? = nil) throws -> ReadingGrounds {
-        ReadingGrounds(text: text, letters: try PipelineConfig.bundledDefaults().labels.groundingLetters, preferred: preferred,
+        ReadingGrounds(text: text, labels: try PipelineConfig.bundledDefaults().labels, preferred: preferred,
                        language: language)
     }
 
     /// What `content` grounds a reading in, as the bundled settings tell words apart.
     static func grounds(_ content: ExtractedContent, guidance: LabelGuidance = .none) throws -> ReadingGrounds {
-        ReadingGrounds(content: content, guidance: guidance, letters: try PipelineConfig.bundledDefaults().labels.groundingLetters)
+        ReadingGrounds(content: content, guidance: guidance, labels: try PipelineConfig.bundledDefaults().labels)
     }
 
     /// A validator of `labels`, checking a reading against `grounds` as the bundled settings check its title.
@@ -66,6 +67,12 @@ enum Fixtures {
         .date: ["05/07/2026"], .period: ["2026-06"], .deadline: ["2026-07-25"], .amount: ["54.21 EUR"],
         .jurisdiction: ["Portugal"], .language: ["pt"],
     ]
+
+    /// `overrides` for an answer about another document than the EDP bill, which writes none of the bill's numbers: no
+    /// object or reference of the bill's (`AnswerValidator.numberedKinds`), but those `overrides` gives.
+    static func otherDocument(_ overrides: [LabelKind: [String]]) -> [LabelKind: [String]] {
+        overrides.merging(AnswerValidator.numberedKinds.map { ($0, [String]()) }) { given, _ in given }
+    }
 
     /// What the answer labels the document with, kinds in their order: the EDP bill every suite knows
     /// (`StubAnalyzer.edpBill`), with the broader topic the answer also gives before its own.

@@ -36,7 +36,16 @@ public struct ReadingGrounds: Sendable {
     let writesADay: Bool?
     /// The runs of digits the document writes, which a date's year is told by (`writesYear(of:)`), however the day around
     /// it is written.
-    let numbers: Set<Substring>
+    let digitRuns: Set<Substring>
+    /// The numbers the document writes, each by its digits without the zeros that begin it (`number(of:)`): every run of
+    /// up to `labels.numberWords` words with digits that follow one another on a line, as `0123 456 789`, `1ESY 1160
+    /// 4478 21` or `FT EDPC2026/926804564` write one number over several words. Whole words only: digits inside another
+    /// number are none, so `DE 812871812` writes no `12`.
+    let numbers: Set<String>
+    /// What the document writes with digits, each by its letters and digits as names are compared (`spelled(_:)`): every
+    /// run of up to `labels.numberWords` words that follow one another on a line and hold a digit, as `NL91 ABNA 0417 1643
+    /// 00` writes an IBAN, which a machine writes unbroken, over a group of letters no number crosses.
+    let writings: Set<String>
     /// How the document lays out its words and writes them, in the language it is written in.
     let layout: DocumentLayout
 
@@ -46,45 +55,132 @@ public struct ReadingGrounds: Sendable {
     /// The grounds of a reading of `content`. How it lays out and writes its words (`layout`) is read from its own text
     /// and the e-mail's sender and subject alone: what the vision model wrote of it is prose of the model's, which tells
     /// nothing of how the document writes a word.
-    public init(content: ExtractedContent, guidance: LabelGuidance, letters: Int) {
-        let visual = content.visual.map { [$0.description] + $0.organisations } ?? []
+    /// What the vision model saw is what the prompt shows of it (`ExtractedContent.classificationExcerpt`): its
+    /// description, the text it read, and the organisations it named.
+    public init(content: ExtractedContent, guidance: LabelGuidance, labels: LabelsConfig) {
+        let visual = content.visual.map { [$0.description, $0.visibleTextSummary] + $0.organisations } ?? []
         let mail = [MetadataKey.emailFrom, MetadataKey.emailSubject].compactMap { content.metadata[$0] }
         let written = !content.entities.dates.isEmpty || content.metadata[MetadataKey.emailDate] != nil
             || content.visual?.dates.contains { DocumentLabel.normalized($0, kind: .date) != nil } == true
         let blank = content.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let language = content.language.primary
         let own = ([content.text] + mail).joined(separator: "\n")
-        self.init(text: ([own] + visual).joined(separator: "\n"), letters: letters, preferred: guidance.preferred,
+        self.init(text: ([own] + visual).joined(separator: "\n"), labels: labels, preferred: guidance.preferred,
                   writesADay: blank && !written ? nil : written,
                   language: language.count == DocumentLabel.languageCodeLength ? language : nil, laidOut: own)
     }
 
     /// The grounds of a reading of `text`, its layout read from `laidOut` when it is given, else from `text`.
-    init(text: String, letters: Int, preferred: [LabelPreference] = [], writesADay: Bool? = nil, language: String? = nil,
+    init(text: String, labels: LabelsConfig, preferred: [LabelPreference] = [], writesADay: Bool? = nil, language: String? = nil,
          laidOut: String? = nil) {
+        let letters = labels.groundingLetters
         var words = Set<String>()
         var abbreviations = Set<String>()
+        var numbers = Set<String>()
+        var writings = Set<String>()
         let unbroken = Self.unbroken(text)
         for tokens in Self.lines(unbroken) {
-            words.formUnion(Self.keys(tokens))
+            let folded = tokens.map(Self.key)
+            words.formUnion(Self.keys(folded: folded))
             for (index, token) in tokens.enumerated() where token.count > 1 && token.allSatisfy(\.isUppercase) {
                 if token.count >= letters || index == 0 { abbreviations.insert(Self.key(token)) }
             }
+            numbers.formUnion(Self.numbers(in: tokens, words: labels.numberWords))
+            writings.formUnion(Self.writings(in: folded.map(Self.spelled(key:)), words: labels.numberWords))
         }
+        self.numbers = numbers
+        self.writings = writings
         self.words = words
         self.abbreviations = abbreviations
         layout = DocumentLayout(text: laidOut.map(Self.unbroken) ?? unbroken, language: language)
         self.letters = letters
         self.preferred = preferred
         self.writesADay = writesADay
-        numbers = Set(text.split { !($0.isASCII && $0.isNumber) })
+        digitRuns = Set(text.split { !($0.isASCII && $0.isNumber) })
+    }
+
+    /// The digits of `text`, in order, each as its value whatever its script or width ("０３", "٢٠٢٦"), with nothing
+    /// between them. A numeral worth more than one digit, as `万` or `⑩`, is none.
+    static func digits(of text: String) -> String {
+        String(String.UnicodeScalarView(text.compactMap { character -> Unicode.Scalar? in
+            guard let value = character.wholeNumberValue, (0...9).contains(value) else { return nil }
+            return Unicode.Scalar(UInt8(ascii: "0") + UInt8(value))
+        }))
+    }
+
+    /// The number `text` writes, as numbers are compared: its digits (`digits(of:)`) without the zeros that begin them,
+    /// which a model may leave out ("customer 12345" for `00012345`); empty for a text without digits, or only zeros.
+    static func number(of text: String) -> String {
+        String(digits(of: text).drop { $0 == "0" })
+    }
+
+    /// The numbers `tokens`, a line's words, write (`numbers`): each run of up to `words` words with digits that follow
+    /// one another, as one number.
+    static func numbers(in tokens: [String], words: Int) -> Set<String> {
+        var numbers = Set<String>()
+        var run: [String] = []
+        for token in tokens {
+            let digits = Self.digits(of: token)
+            guard !digits.isEmpty else {
+                run = []
+                continue
+            }
+            run = Array((run + [digits]).suffix(words))
+            for start in run.indices { numbers.insert(Self.number(of: run[start...].joined())) }
+        }
+        return numbers
+    }
+
+    /// What `spellings`, a line's words each spelled (`spelled(_:)`), write with digits (`writings`): each run of up to
+    /// `words` words that follow one another and hold a digit, spelled as one.
+    static func writings(in spellings: [String], words: Int) -> Set<String> {
+        let digits = spellings.map { $0.contains(where: \.isNumber) }
+        var writings = Set<String>()
+        for start in spellings.indices {
+            var writing = ""
+            var holdsDigit = false
+            for index in start..<min(start + words, spellings.count) {
+                writing += spellings[index]
+                holdsDigit = holdsDigit || digits[index]
+                if holdsDigit { writings.insert(writing) }
+            }
+        }
+        return writings
+    }
+
+    /// `text` by its letters and digits alone, as names are compared (`key(_:)`), with nothing between them.
+    static func spelled(_ text: String) -> String {
+        spelled(key: key(text))
+    }
+
+    /// A key (`key(_:)`) with nothing between its words.
+    static func spelled(key: String) -> String {
+        key.filter { $0 != " " }
+    }
+
+    /// Whether the document writes the number of `value`, an object or a reference, or how the owner wants one it writes
+    /// written, as a name is told (`holds`). Its number is written when the document writes it whole (`numbers`), however
+    /// it groups it ("0123456789" by `0123 456 789`), or writes each of its words with digits, wherever: as a number
+    /// ("cloud server CPX31 #42368634" by a line that names the server and another its number), or by its letters and
+    /// digits over words that follow one another on a line (`writings`), as a machine writes `NL91ABNA0417164300` of
+    /// `NL91 ABNA 0417 1643 00`. True for a value without digits, and for a document with no words to tell by, as an
+    /// image nothing was read of, which is not checked.
+    func writesNumber(of value: String) -> Bool {
+        guard !words.isEmpty else { return true }
+        return writtenNumber(value) || preferred.contains { LabelSimilarity.sameWriting($0.to, value) && writtenNumber($0.from.value) }
+    }
+
+    private func writtenNumber(_ value: String) -> Bool {
+        guard !numbers.contains(Self.number(of: value)) else { return true }
+        let parts = Self.tokens(Self.unbroken(value)).filter { !Self.number(of: $0).isEmpty }
+        return parts.allSatisfy { numbers.contains(Self.number(of: $0)) || writings.contains(Self.spelled($0)) }
     }
 
     /// Whether the document writes the year of `day`, a `YYYY-MM-DD`: in four digits, alone or within a longer run
     /// (`20250201`), or in two standing alone, as `01 MAR 22` writes it.
     func writesYear(of day: String) -> Bool {
         let year = day.prefix(Self.yearDigits)
-        return numbers.contains { $0.contains(year) } || numbers.contains(year.suffix(Self.shortYearDigits))
+        return digitRuns.contains { $0.contains(year) } || digitRuns.contains(year.suffix(Self.shortYearDigits))
     }
 
     /// The digits of a year in full, and in short.
@@ -124,6 +220,11 @@ public struct ReadingGrounds: Sendable {
 
     /// `tokens` folded (`key`), each run of two or more single letters also as the word it spells ("E D P" is edp).
     static func keys(_ tokens: [String]) -> [String] {
+        keys(folded: tokens.map(key))
+    }
+
+    /// The keys of a line's words already folded (`key(_:)`), as `keys(_:)` gives them.
+    static func keys(folded: [String]) -> [String] {
         var keys: [String] = []
         var spelled = ""
         var letters = 0
@@ -131,8 +232,8 @@ public struct ReadingGrounds: Sendable {
             if letters > 1 { keys.append(spelled) }
             (spelled, letters) = ("", 0)
         }
-        for token in tokens {
-            let parts = key(token).split(separator: " ").map(String.init)
+        for folded in folded {
+            let parts = folded.split(separator: " ").map(String.init)
             keys += parts
             if parts.count == 1, let part = parts.first, part.count == 1, part.first?.isLetter == true {
                 spelled += part

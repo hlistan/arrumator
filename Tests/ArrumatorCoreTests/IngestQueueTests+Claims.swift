@@ -347,7 +347,8 @@ extension IngestQueueTests {
                 try db.execute(sql: "UPDATE jobs SET source_path = ? WHERE doc_id = ?", arguments: [document.path, docID])
             }
         }
-        #expect(try await h.review.choices(for: document).actions == [.confirm], "\(kind): the card offers no undo meanwhile")
+        #expect(try await h.review.choices(for: document).actions == (kind == .adopt ? [.confirm] : [.readAgain, .confirm]),
+                "\(kind): the card offers no undo meanwhile, nor reading it again where its reading in is at its file")
         await #expect(throws: IngestError.beingReadIn(docID, name: document.filename), "\(kind): it is refused while its reading has not ended") {
             try await h.review.undo(docID)
         }

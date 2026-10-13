@@ -49,7 +49,8 @@ struct LabelsPage: View {
         let all = listing[kind] ?? []
         let pageSize = model.runtime?.config.interface.pageSize ?? all.count
         let shown = expanded.contains(kind) ? all : Array(all.prefix(pageSize))
-        return PageSection(Wording.labelKinds(kind)) {
+        // Built at once while it holds the open card, of any height (`PageSection`).
+        return PageSection(Wording.labelKinds(kind), lazily: !shown.contains { $0.label == model.session.openLabel }) {
             if kind.isUsersOwn {
                 AddTagRow(tags: all.map(\.label.value))
             }

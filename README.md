@@ -37,12 +37,12 @@ say what it is in one vocabulary, so a German electricity bill and a Japanese on
 - **Tags documents by the folder you drop them in.** Put a folder such as `Taxes 2024` into Incoming, and everything in
   it, at any depth, is filed with `Taxes 2024` as a tag of yours beside the labels the model gives. Incoming shows the
   tag under each file before it is read, and the folder stays where it is, for whatever you put there next.
-- **Reads a document again when you put it in again, or every document at once.** An exact copy of a document already
-  in the archive, put into Incoming, is no second document: that document is read again from the start, from its file,
-  with the profile in use. It is found as it was until it is read; then its name, labels, text and meaning take the
-  place of those it had, all at once, keeping its tags and given that of the folder you put the copy in. The copy goes
-  to the Trash. **Read All Documents Again**, under Settings › Filing, does the same for the whole archive, after the
-  files that arrive meanwhile: what a new profile, or a better Arrumator, is for.
+- **Reads a document again when you put it in again, or every document at once.** An exact copy of a document already in
+  the archive, put into Incoming, is no second document: that document is read again from the start, from its file, with
+  the profile in use. It is found as it was until it is read; then its name, labels, text and meaning take the place of
+  those it had, all at once, keeping its tags and every label you gave it by hand, and given the tag of the folder you
+  put the copy in. The copy goes to the Trash. **Read All Documents Again**, under Settings › Filing, does the same for
+  the whole archive, after the files that arrive meanwhile: what a new profile, or a better Arrumator, is for.
 - **Keeps labels one vocabulary, and learns from you.** A label written the way the archive already writes it becomes
   that label, and labels that merely look alike are judged by the local model: one label written two ways is merged
   into the one more documents have, two different ones are kept apart, without asking you. On the Labels page, rename a

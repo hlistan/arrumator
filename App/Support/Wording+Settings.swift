@@ -40,14 +40,15 @@ extension Wording {
     static let readingAgain = "Reading Again"
     static let copiesFooter = "Put a document into Incoming again, as it is, and the one in the archive is read again from "
         + "its file with the profile in use. Once it is read, its name, labels, text and meaning take the place of those it had, "
-        + "keeping its tags and given that of the folder you put it in. The copy goes to the Trash."
+        + "keeping its tags and the labels you gave it by hand, and given the tag of the folder you put it in. The copy goes to the Trash."
     static let readAllAgain = "Read All Documents Again…"
     static let readAllAgainQuestion = "Read every document in the archive again?"
 
     /// What reading every document again does, under the question that asks for it.
     static func readAllAgainNote(profile: String?) -> String {
         "Each document is read from its file with the profile " + (profile.map { "“\($0)”" } ?? "in use")
-            + ", renamed, and given only the labels this reading finds, also in place of those you corrected; its tags stay. "
+            + ", renamed, and given the labels this reading finds in place of those the model gave before; its tags and the labels "
+            + "you gave it by hand stay. "
             + "Documents you left for later stay as they are. New files still come first."
     }
 

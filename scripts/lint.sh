@@ -265,6 +265,24 @@ _ = await runtime.lifecycle.ask()
 await runtime.lifecycle.configure(management: .launchApp, binaryOverride: nil, address: url)' \
   App
 
+gate append "a file another process may write too, as the day's log the app and every command write, is opened to append (O_APPEND) and written a record a call, never at an offset a process remembers, which overwrites what another wrote since" \
+  '^$' \
+  'FileHandle\((forWriting(To|AtPath)|forUpdating(AtPath|URL)?)' \
+  Sources/ArrumatorCore/Sample.swift 'f.handle = try? FileHandle(forWritingTo: url)
+let handle = FileHandle(forUpdatingAtPath: path)
+let other = FileHandle(forWritingAtPath: path)' \
+  Sources App
+
+gate migration-state "a migration's test writes the index it starts from as its release wrote it, in SQL, never through today's record types, which hold columns a later migration adds, so a test of an old migration breaks with every new column" \
+  '^$' \
+  '\.(insert|update|save|upsert)[A-Za-z]*\(db\b' \
+  Tests/ArrumatorCoreTests/MigrationTests+Sample.swift 'try document.insert(db)
+try record.updateChanges(db, from: old)
+let saved = try record.inserted(db)
+try record.saved(db)
+let fetched = try record.insertAndFetch(db)' \
+  Tests/ArrumatorCoreTests/MigrationTests*.swift
+
 gate debt "no TODO, FIXME, HACK or XXX markers" \
   '^scripts/lint\.sh:' \
   '\b(TODO|FIXME|HACK|XXX)\b' \

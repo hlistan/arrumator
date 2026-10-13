@@ -125,21 +125,23 @@ public final class Log: Sendable {
         }
     }
 
+    /// The permissions a day's file is made with: the user's to read and write, as `FileManager` makes a file.
+    static let fileMode: mode_t = 0o644
+
     /// The name of the file of `day`, as `dayFormatter` writes it.
     static func fileName(day: String) -> String { "arrumator-\(day).jsonl" }
 
-    /// Adds `entry` to the file of its day in the logs folder, opened when the day begins or the file was set aside.
+    /// Adds `entry` to the file of its day in the logs folder, opened when the day begins or the file was set aside. The
+    /// file is opened to append (`O_APPEND`) and each line written in one call, so a line goes at the file's end as it is
+    /// then, whatever another process, the app or a command, wrote since: never over another's line.
     private func write(_ entry: LogEntry, to f: inout File) {
         guard let dir = f.directory else { return }
         let day = Log.dayFormatter.string(from: entry.ts)
         if day != f.currentDay || f.handle == nil {
             try? f.handle?.close()
             let url = dir.appendingPathComponent(Self.fileName(day: day))
-            if !FileManager.default.fileExists(atPath: url.path) {
-                FileManager.default.createFile(atPath: url.path, contents: nil)
-            }
-            f.handle = try? FileHandle(forWritingTo: url)
-            _ = try? f.handle?.seekToEnd()
+            let descriptor = open(url.path, O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC, Self.fileMode)
+            f.handle = descriptor < 0 ? nil : FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
             f.current = url
             f.currentDay = day
         }

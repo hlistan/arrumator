@@ -99,7 +99,7 @@ public struct ReviewActions: Sendable {
             confirmed = try await services.database.reader.read { db in try Self.confirmation(db, docID: id) }
         }
         var actions: [DocumentAction] = switch document.status {
-        case .filed: inArchive ? (confirmed == nil ? [.undo, .confirm] : [.undo]) : []
+        case .filed: inArchive ? (confirmed == nil ? [.undo, .readAgain, .confirm] : [.undo, .readAgain]) : []
         case .needsReview, .failed: inArchive ? [.hold, .readAgain, .confirm] : [.hold, .readAgain]
         case .held, .undone: [.readAgain]
         case .arrived, .processing, .duplicate, .missing: []
@@ -346,8 +346,9 @@ public struct ReviewActions: Sendable {
     /// applied to the labels the document has when the change is made (`LabelEdit.applied(to:)`), read and written in
     /// one transaction with the event that records them, so changes made one after another, such as two labels taken off
     /// a card, each keep what the other did. A label of another kind than a tag labels a document not labelled yet; a
-    /// tag, the user's own, does not (`DocumentLabel.stored`). A label added that is no label of its kind
-    /// (`LabelError.refusal(of:)`) is refused, saying what the kind takes, before anything changes.
+    /// tag, the user's own, does not (`DocumentLabel.stored`). A label added that the document did not have is given by
+    /// hand, the user's own as a tag is, which reading it again keeps (`DocumentRecord.byHand`). A label added that is no
+    /// label of its kind (`LabelError.refusal(of:)`) is refused, saying what the kind takes, before anything changes.
     public func edit(_ docID: Int64, fileName: String?, labels: LabelEdit?) async throws {
         if let refused = labels?.adding.lazy.compactMap(LabelError.refusal(of:)).first { throw refused }
         let placer = services.filer.placer
@@ -383,7 +384,8 @@ public struct ReviewActions: Sendable {
                 let before = current.labels ?? []
                 let after = labels.applied(to: before)
                 if DocumentLabel.stored(after, labelled: current.isLabelled).labels != current.labels {
-                    try IndexStore.saveLabels(db, after, docID: docID, labelled: current.isLabelled, at: now)
+                    try IndexStore.saveLabels(db, after, byHand: current.byHand + after.filter { !before.contains($0) }, docID: docID,
+                                              labelled: current.isLabelled, at: now)
                     edited["labels"] = after.map { "\($0.kind.rawValue): \($0.value)" }.joined(separator: "; ")
                     said += Self.changes(from: before, to: after)
                 }

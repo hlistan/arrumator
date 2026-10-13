@@ -110,7 +110,7 @@ struct Ingest: AsyncParsableCommand {
                 let context = try runtime.config.extractionContext(settings: settings, whenOllamaIsAway: .wait)
                 let content = try await runtime.services.extractor.extract(url, sha256: try HashService.sha256(of: url), context: context,
                                                                            trace: trace)
-                let reading = try await runtime.services.read(content, tags: tags.map(\.label), settings: settings, trace: trace)
+                let reading = try await runtime.services.read(content, yours: tags.map(\.label), settings: settings, trace: trace)
                 let steps = await sink.steps
                 runs.append(DryRun(file: url.path, content: content, analysis: reading.outcome.analysis, labels: reading.outcome.labels,
                                    tags: tags, changes: reading.changes, steps: steps))
@@ -311,12 +311,12 @@ struct Replay: AsyncParsableCommand {
         if let model { settings = try settings.reading(withModel: model) }
         _ = await runtime.lifecycle.ensureRunning()
         let trace = try await runtime.services.startTrace(docID: docID, jobID: nil, attempt: 0, source: .replay, settings: settings)
-        // Read with the tags the document has, which a reading keeps, so what differs is what the model gives.
-        let outcome = try await runtime.services.read(content, tags: stored.labels?.filter(\.kind.isUsersOwn) ?? [], settings: settings,
-                                                      trace: trace).outcome
+        // Read with the document's own labels, its tags and those given by hand, which a reading keeps, so what differs
+        // is what the model gives.
+        let outcome = try await runtime.services.read(content, yours: stored.yours, settings: settings, trace: trace).outcome
         await runtime.traces.finish(trace, outcome: "replay", docID: docID)
         let original = Reading(analysis: stored.analysis, labels: stored.labels)
-        let replay = Reading(analysis: outcome.analysis, labels: outcome.labels)
+        let replay = Reading(analysis: outcome.analysis, labels: outcome.labels.map(stored.labels(readAs:)))
         try options.emit(["original": original, "replay": replay]) {
             """
             original: \(original.analysis?.fileName ?? "—") · \(Terminal.labels(original.labels, labelled: stored.isLabelled))

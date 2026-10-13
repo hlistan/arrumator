@@ -28,6 +28,7 @@ import Testing
         (#"{"analysis": {"llmOptions": {"numPredict": 12288}}}"#, "analysis.llmOptions.numPredict"),
         (#"{"labels": {"maxValueChars": 0}}"#, "labels.maxValueChars"),
         (#"{"labels": {"objectIdentifierDigits": 0}}"#, "labels.objectIdentifierDigits"),
+        (#"{"labels": {"numberWords": 0}}"#, "labels.numberWords"),
         (#"{"analysis": {"partiesWithoutSender": 0}}"#, "analysis.partiesWithoutSender"),
         (#"{"tasks": {"inflectionLetters": -1}}"#, "tasks.inflectionLetters"),
         (#"{"labels": {"vocabulary": {"promptUnwanted": -1}}}"#, "labels.vocabulary.promptUnwanted"),

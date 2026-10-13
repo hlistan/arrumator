@@ -12,7 +12,8 @@ import Testing
 @Suite struct LabelFormTests {
     /// The reading of `text`, in `language` when it is known, an answer of `overrides` and `title` gives, in an exchange
     /// that `sentBack` holds what the model was told of; without a title, one of the text's own words, its first line, as
-    /// the title is checked against them too (`ReadingGrounds.unwritten`).
+    /// the title is checked against them too (`ReadingGrounds.unwritten`). An answer about another text than the EDP bill
+    /// gives none of the bill's numbers, which that text does not write (`Fixtures.otherDocument`).
     static func validate(_ overrides: [LabelKind: [String]], title: String? = nil, text: String = Fixtures.edpText,
                          language: String? = nil, preferred: [LabelPreference] = [],
                          sentBack: SentBack? = nil) throws -> ValidatedAnalysis {
@@ -22,14 +23,16 @@ import Testing
         let heading = text.split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
         let sentence = heading.prefix(1).uppercased() + heading.dropFirst().lowercased()
         return try Fixtures.validator(labels, grounds: Fixtures.grounds(text, preferred: preferred, language: language))
-            .validate(Fixtures.answer(overrides, title: title ?? sentence), sentBack: sentBack)
+            .validate(Fixtures.answer(text == Fixtures.edpText ? overrides : Fixtures.otherDocument(overrides), title: title ?? sentence),
+                      sentBack: sentBack)
     }
 
     // MARK: READ-1
 
     @Test func anObjectOrAReferenceIsWhatItIsAndWhatIdentifiesItNeverAFieldAndItsValue() throws {
         let v = try Self.validate([.object: ["account: 123456780", "residence permit : S61271191", "meeting room 12:30"],
-                                   .reference: ["company number: 01234567", "appointment:  AG-2026-5114424", "order AB:12"]])
+                                   .reference: ["company number: 01234567", "appointment:  AG-2026-5114424", "order AB:12"]],
+                                  text: Fixtures.edpText + "\nConta 123456780 · Título S61271191 · Sala às 12:30 · 01234567 · AG-2026-5114424 · AB:12")
         #expect(v.labels.values(.object) == ["account 123456780", "residence permit S61271191", "meeting room 12:30"],
                 "a field's name and its value are what it is and what identifies it, as the kind writes them; a colon inside a value stays")
         #expect(v.labels.values(.reference) == ["company number 01234567", "appointment AG-2026-5114424", "order AB:12"],
@@ -173,6 +176,11 @@ import Testing
                                         preferred: [LabelPreference(from: DocumentLabel(kind: .sender, value: "Autoridade Tributária"), to: "Finanças")])
         #expect(written.labels.values(.sender) == ["Сбербанк", "Finanças"] && written.labels.values(.party) == ["MARIA EXEMPLO"],
                 "a name the document writes, declined, cased otherwise, or as the owner wants one it writes written, is kept")
+        let merge = [LabelPreference(from: DocumentLabel(kind: .sender, value: "Autoridade Tributária"), to: "Finanças")]
+        let other = try Self.validate([.sender: ["Segurança Social"], .party: []], text: "Autoridade Tributária", preferred: merge)
+        let away = try Self.validate([.sender: ["Finanças"], .party: []], text: "Segurança Social", preferred: merge)
+        #expect(other.labels.values(.sender).isEmpty && away.labels.values(.sender).isEmpty,
+                "a merge grounds only the name it merges into, and only where the document writes the name merged")
     }
 
     /// A name and a text that writes it: in full width, with the Turkish I, spaced out letter by letter, with a soft
@@ -285,7 +293,8 @@ import Testing
     /// identifies nothing, goes back to the model named (QA 2026-10-04, READ-5), and the answer as it is would stand.
     @Test func anObjectNothingIdentifiesGoesBackNamingIt() throws {
         let sent = #expect(throws: GuessSentBack<ValidatedAnalysis>.self, "a job title and groceries go back") {
-            try Self.validate([.object: ["job title Senior Software Engineer", "bread integral milk 1L x6", "car AA-12-BB"]])
+            try Self.validate([.object: ["job title Senior Software Engineer", "bread integral milk 1L x6", "car AA-12-BB"]],
+                              text: Fixtures.edpText + "\nPão integral, leite 1L x6, carro AA-12-BB")
         }
         #expect(sent?.problems == [
             "objects: “job title Senior Software Engineer”, “bread integral milk 1L x6” hold no number; keep each only when a number, a "
@@ -295,7 +304,8 @@ import Testing
                     && sent?.standing.notes.contains { $0.hasSuffix(AnswerValidator.keptUnrepaired) } == true,
                 "with no repair left, the answer stands as it is, and its notes say so")
         let identified = try Self.validate([.object: ["car AA-12-BB", "apartment Rua das Flores 12, Porto", "savings account 0012345678",
-                                                      "home Calle del Ejemplo 7"]])
+                                                      "home Calle del Ejemplo 7"]],
+                                           text: Fixtures.edpText + "\nCarro AA-12-BB · Rua das Flores 12, Porto · Conta 0012345678 · Calle del Ejemplo 7")
         #expect(identified.labels.values(.object).count == 4 && identified.notes.isEmpty,
                 "a plate, an address, a number, and a house number of one digit after its street's name identify")
         var labels = try PipelineConfig.bundledDefaults().labels
@@ -319,7 +329,8 @@ import Testing
             "dates: “2023-10-08”, while the document writes no date, nor that year; give a date only as the document writes it, with its "
                 + "year, or [] when it writes none",
         ])
-        #expect(try note.validate(Fixtures.answer([.sender: [], .party: [], .date: []], title: "Lembrete renda")).notes.isEmpty, "no date is the note's answer")
+        #expect(try note.validate(Fixtures.answer(Fixtures.otherDocument([.sender: [], .party: [], .date: []]), title: "Lembrete renda")).notes.isEmpty,
+                "no date is the note's answer")
         let bill = try Fixtures.validator(labels, grounds: Fixtures.grounds(Fixtures.content("edp.pdf", text: Fixtures.edpText)))
         #expect(try bill.validate(Fixtures.answer()).labels.values(.date) == ["2026-07-05"], "the date the bill writes stands")
         #expect(try bill.validate(Fixtures.answer([.date: ["2026-05-07"]])).labels.values(.date) == ["2026-05-07"],
@@ -328,10 +339,10 @@ import Testing
         seen.visual = VisualSummary(imageKind: .photo, description: "A till receipt", visibleTextSummary: "", organisations: [],
                                     dates: ["05/07/2026"])
         let picture = try Fixtures.validator(labels, grounds: Fixtures.grounds(seen))
-        #expect(try picture.validate(Fixtures.answer([.sender: [], .party: []], title: "Till receipt")).notes.isEmpty,
+        #expect(try picture.validate(Fixtures.answer(Fixtures.otherDocument([.sender: [], .party: []]), title: "Till receipt")).notes.isEmpty,
                 "a date the vision model saw in a picture is the document's")
         let card = try Fixtures.validator(labels, grounds: Fixtures.grounds(Fixtures.content("card.jpg", text: "EMITIDO EM\n01 FEV 25", date: nil)))
-        #expect(try card.validate(Fixtures.answer([.sender: [], .party: [], .date: ["2025-02-01"]], title: "Emitido")).notes.isEmpty,
+        #expect(try card.validate(Fixtures.answer(Fixtures.otherDocument([.sender: [], .party: [], .date: ["2025-02-01"]]), title: "Emitido")).notes.isEmpty,
                 "a date the extractor cannot read stands when the document writes its year, in full or in two digits")
         let blank = try Fixtures.validator(labels, grounds: Fixtures.grounds(Fixtures.content("scan.png", text: "", date: nil)))
         #expect(try blank.validate(Fixtures.answer([.sender: [], .party: []], title: "Scan")).notes.isEmpty,

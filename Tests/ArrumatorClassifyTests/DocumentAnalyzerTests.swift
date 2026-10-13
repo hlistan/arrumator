@@ -34,7 +34,8 @@ import Testing
             .object: ["apartment Rua das Flores 12, Porto, with garage and storage room",
                       "PT0002000012345678PT0002000012345678PT0002000012345678"],
         ])
-        let validated = try Self.validator(text: Fixtures.edpText + "\nJoão Silva, Ana Costa, Rui Sá").validate(answer)
+        let validated = try Self.validator(text: Fixtures.edpText + "\nJoão Silva, Ana Costa, Rui Sá\nRua das Flores 12, Porto\n"
+                                           + "PT0002000012345678PT0002000012345678PT0002000012345678").validate(answer)
         #expect(validated.labels.values(.party) == ["Maria Exemplo", "João Silva", "Ana Costa"],
                 "the same name however written is one label, and a kind keeps only the first maxPerKind")
         #expect(validated.notes.contains("parties: more than 3, the rest dropped"), "what was dropped is noted for the trace")
@@ -49,7 +50,8 @@ import Testing
             .reference: ["invoice 2026/17", "tax assessment for 2025", "the customer's"],
             .topic: ["Electricity", "electricity"], .language: ["Portuguese", "POR", "ru", "Klingonese", "english"],
         ])
-        let v = try Self.validator(maxPerKind: 5).validate(answer)
+        let v = try Self.validator(maxPerKind: 5, text: Fixtures.edpText + "\nFatura 2026/17 · Liquidação de 2025")
+            .validate(answer)
         #expect(v.labels.values(.type) == ["invoice"], "a document has one type")
         #expect(v.labels.values(.date).isEmpty && v.labels.values(.deadline) == ["2026-07-31"], "dates are ISO or nothing")
         #expect(v.labels.values(.period) == ["2025", "2026-06/2026-07"], "a period is a year, a month, a day or a span of them")

@@ -24,6 +24,9 @@ struct Labels: AsyncParsableCommand {
         var path: String
         /// Nil while the document has no labels and has not been labelled.
         var labels: [DocumentLabel]?
+        /// Those of `labels` given by hand, of kinds the model gives, which reading the document again keeps, as it keeps
+        /// its tags; absent while there are none.
+        var byHand: [DocumentLabel]?
         /// Whether the document has been labelled; one that has not may have its tags, the user's own.
         var labelled: Bool
 
@@ -31,6 +34,7 @@ struct Labels: AsyncParsableCommand {
             self.id = id
             path = document.path
             labels = document.labels
+            byHand = document.byHand.isEmpty ? nil : document.byHand
             labelled = document.isLabelled
         }
     }
@@ -67,7 +71,9 @@ struct Labels: AsyncParsableCommand {
             try options.emit(row) {
                 let notYet = "Not labelled yet; `arrumatorcli review retry \(row.id)` reads it again."
                 guard let labels = row.labels else { return "\(row.path)\n\(notYet)" }
-                return row.path + "\n" + Terminal.labelTable(labels, indent: 2) + (row.labelled ? "" : "\n" + notYet)
+                let byHand = row.byHand.map { "\nGiven by hand, kept when it is read again: " + $0.map { "\($0.kind.rawValue) “\(Terminal.label($0))”" }
+                    .joined(separator: ", ") } ?? ""
+                return row.path + "\n" + Terminal.labelTable(labels, indent: 2) + byHand + (row.labelled ? "" : "\n" + notYet)
             }
         }
     }

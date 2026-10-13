@@ -27,7 +27,7 @@ struct HistoryPage: View {
                 EmptyState(symbol: "clock", text: Wording.nothingHappened)
             }
             ForEach(days, id: \.title) { day in
-                PageSection(day.title) {
+                PageSection(day.title, lazily: !day.events.contains { $0.id == openEvent }) {
                     ForEach(day.events) { event in
                         ListRow(symbol: EventStyle.symbol(event.kind), tint: EventStyle.color(event.kind), title: event.summary,
                                 detail: event.at.formatted(date: .omitted, time: .shortened),

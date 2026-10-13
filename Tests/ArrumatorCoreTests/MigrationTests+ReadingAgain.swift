@@ -41,16 +41,15 @@ extension MigrationTests {
         let queue = try Self.installed(upTo: "v26_storedLabelsInTheirForm")
         let labels = [DocumentLabel(kind: .sender, value: "EDP Comercial"), DocumentLabel(kind: .tag, value: "Taxes")]
         let filing = #"{"content":{"text":"EDP"},"outcome":{"analysis":{"problems":[]},"labels":[]},"plannedPath":"/A/new.pdf"}"#
+        // As the index held a document then: today's record has columns a later migration adds.
         try queue.write { db in
-            var document = DocumentRecord.arrived(path: "/A/bill.pdf", sha256: "a", size: 1, uttype: "public.data", inode: nil,
-                                                  modified: nil, now: Date(timeIntervalSince1970: 0))
-            document.status = .filed
-            document.labelsJson = try JSON.string(labels)
-            try document.insert(db)
             try db.execute(sql: """
+                INSERT INTO documents (id, uid, path, original_filename, sha256, size, uttype, status, labels_json, added_at, created_at,
+                                       updated_at)
+                VALUES (1, 'u1', '/A/bill.pdf', 'bill.pdf', 'a', 1, 'public.data', 'filed', ?, 0, 0, 0);
                 INSERT INTO jobs (id, kind, doc_id, source_path, state, payload_json, created_at, updated_at) VALUES
-                  (1, 'reanalyse', ?, '/A/bill.pdf', 'filing', ?, 0, 0)
-                """, arguments: [document.id, filing])
+                  (1, 'reanalyse', 1, '/A/bill.pdf', 'filing', ?, 0, 0)
+                """, arguments: [try JSON.string(labels), filing])
         }
         try AppDatabase.migrator(time: TestTime(.advances)).migrate(queue, upTo: "v27_readingAgain")
         let job = try #require(try queue.read { db in try JobRecord.fetchOne(db, key: 1) })

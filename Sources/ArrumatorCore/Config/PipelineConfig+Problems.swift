@@ -149,7 +149,8 @@ extension LabelsConfig {
     /// A label holds a character at least, a word grounds a name or title from two letters, and a likeness is a share of
     /// 0 to 1 that some labels fall below.
     var problems: [String] {
-        var problems = Limits.atLeastOne("labels", ["maxValueChars": maxValueChars, "objectIdentifierDigits": objectIdentifierDigits])
+        var problems = Limits.atLeastOne("labels", ["maxValueChars": maxValueChars, "objectIdentifierDigits": objectIdentifierDigits,
+                                                     "numberWords": numberWords])
         if groundingLetters < 2 { problems.append("labels.groundingLetters must be at least 2: a word of one letter says nothing on its own") }
         problems += Limits.atLeastOne("labels.vocabulary", ["suggestionLimit": vocabulary.suggestionLimit])
         problems += Limits.notNegative("labels.vocabulary", ["promptPreferred": vocabulary.promptPreferred,

@@ -79,10 +79,19 @@ same server with version 11 measured again first, reads a PDF's text layer with 
 columns or a label and its value, apart by a tab, and writes at once, with a note, what the document itself tells in
 place of what is written otherwise than the prompt asks: a party joined to the sender's name printed beside it as the
 other cell, a title in capitals as the document writes its words in a sentence, and a reference described by the
-field's name printed beside it as its number; what the document does not tell goes back once:
+field's name printed beside it as its number; what the document does not tell goes back once. Measured on 2026-10-13
+on the same server with version 12 measured again first (`12 again`), the answer's objects and references are held to
+numbers the document writes, however it groups them, as an IBAN in groups of four the model writes unbroken (`12,
+numbers`): every label the corpus expects is found as before, document by document, in both passes, and one document
+fewer has a reference, a Korean hospital receipt given `receipt 66`, the number of its file name, which the receipt
+never writes. Version 12 measured again shared the server with another run, so its median is not comparable:
 
 | prompt | pass | status | type | sender | date | title | language | labels each | expected labels | median |
 |---|---|---|---|---|---|---|---|---|---|---|
+| 12, numbers | 1 | 100% | 95% | 91% | 98% | 95% | 100% | 13.4 | 93% | 44.6 s |
+| 12, numbers | 2 | 100% | 93% | 89% | 98% | 95% | 100% | 13.6 | 94% | 51.6 s |
+| 12 again | 1 | 100% | 95% | 91% | 98% | 95% | 100% | 13.5 | 93% | 95.0 s |
+| 12 again | 2 | 100% | 93% | 89% | 98% | 95% | 100% | 13.7 | 94% | 97.4 s |
 | 12 | 1 | 100% | 93% | 89% | 98% | 95% | 100% | 13.0 | 96% | 37.6 s |
 | 12 | 2 | 100% | 95% | 89% | 98% | 95% | 100% | 13.3 | 94% | 36.7 s |
 | 11 | 1 | 100% | 96% | 89% | 98% | 97% | 100% | 13.2 | 94% | 28.1 s |
@@ -100,6 +109,10 @@ How consistent the labels are, for the same documents:
 
 | prompt | pass | sender writings | senders | parties | topics | objects | references | jurisdictions |
 |---|---|---|---|---|---|---|---|---|
+| 12, numbers | 1 | 1.12 | 47 | 25 | 47 | 61 | 77 | 32 |
+| 12, numbers | 2 | 1.25 | 47 | 25 | 47 | 62 | 87 | 31 |
+| 12 again | 1 | 1.12 | 47 | 25 | 47 | 63 | 80 | 32 |
+| 12 again | 2 | 1.25 | 47 | 25 | 47 | 64 | 90 | 31 |
 | 12 | 1 | 1.12 | 46 | 25 | 44 | 58 | 79 | 31 |
 | 12 | 2 | 1.12 | 46 | 25 | 44 | 64 | 86 | 31 |
 | 11 | 1 | 1.12 | 46 | 26 | 40 | 61 | 89 | 30 |

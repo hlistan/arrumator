@@ -11,7 +11,8 @@ extension AppDatabase {
         registerFolderMigrations(&m, time: time)
         for register in [registerLabelMigrations, registerSearchTaskMigrations, registerTagMigrations, registerConversationMigrations,
                          registerRecordMigrations, registerQueueMigrations, registerJobMigrations, registerLabelIndexMigrations,
-                         registerTwoPlacesMigrations, registerSplitLabelMigrations, registerReadingAgainMigrations, registerSidecarMigrations] {
+                         registerTwoPlacesMigrations, registerSplitLabelMigrations, registerReadingAgainMigrations, registerSidecarMigrations,
+                         registerLabelsByHandMigrations] {
             register(&m)
         }
         return m

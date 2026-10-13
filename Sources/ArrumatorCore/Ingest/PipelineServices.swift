@@ -131,23 +131,26 @@ public struct PipelineServices: Sendable {
 
     /// Reads a document with the model, telling it of the archive's labels and the user's decisions about them, and
     /// keeps its labels one vocabulary with the archive's (`LabelConsolidator`), recording what that changed in the
-    /// trace. The document's `tags`, the user's own, follow the user's rules alone and come after the model's labels.
-    /// The file name is made of the labels kept, as the user's rules merged, aligned or dropped them, and the model's
-    /// title (`FilenameBuilder.made`), never of what the model wrote before them. Nothing is saved: dry runs and replays
-    /// read this way too.
-    public func read(_ content: ExtractedContent, tags: [DocumentLabel], settings: AppSettings, trace: TraceContext) async throws -> Reading {
+    /// trace. Of `yours`, the document's own labels (`DocumentRecord.yours`), its tags follow the user's rules alone and
+    /// come after the model's labels, and those it was given by hand, which the reading never replaces
+    /// (`IndexStore.kept`), are not among the labels it gives. The file name is made of the labels the document keeps,
+    /// the date and sender given by hand before the model's, as the user's rules merged, aligned or dropped them, and
+    /// the model's title (`FilenameBuilder.made`), never of what the model wrote before them. Nothing is saved: dry runs
+    /// and replays read this way too.
+    public func read(_ content: ExtractedContent, yours: [DocumentLabel], settings: AppSettings, trace: TraceContext) async throws -> Reading {
         var outcome = try await analyzer.analyse(content, guidance: try await labels.guidance(), settings: settings, config: config,
                                                  trace: trace)
         let consolidator = try await labels.consolidator()
-        let kept = consolidator.ruled(tags).labels
+        let kept = consolidator.ruled(yours.filter(\.kind.isUsersOwn)).labels
         guard let given = outcome.labels else { return Reading(outcome: outcome, tags: kept, changes: []) }
         let consolidation = await trace.measure(.consolidate, input: given, output: { (c: LabelConsolidation) in c }) {
             consolidator.consolidate(given)
         }
         outcome.labels = (consolidation.labels + kept).distinct()
+        let named = yours.filter { !$0.kind.isUsersOwn } + consolidation.labels
         outcome.analysis.fileName = outcome.title.flatMap {
             FilenameBuilder(config: config.naming, reserved: SkipRules(watcher: config.watcher))
-                .made(date: consolidation.labels.values(.date).first, sender: consolidation.labels.values(.sender).first, title: $0)
+                .made(date: named.values(.date).first, sender: named.values(.sender).first, title: $0)
         }
         return Reading(outcome: outcome, tags: kept, changes: consolidation.changes)
     }
@@ -156,8 +159,9 @@ public struct PipelineServices: Sendable {
     /// arrives is read: its file hashed and its text read again, then the model reads it, and it is filed under the name
     /// it gives: where it is in the archive, or, for one outside it (back in Incoming), at the top of the archive. One in
     /// the archive (`reanalyse`) is found as it was until it is filed, when what it reads takes the place of everything it
-    /// had at once (`IndexStore.replaceReading`).
-    /// It keeps its tags, which its row in the queue shows, and one in a folder in Incoming is given that folder's too.
+    /// had at once but the user's own labels (`IndexStore.replaceReading`).
+    /// It keeps its tags, which its row in the queue shows, and one in a folder in Incoming is given that folder's too, and
+    /// the labels it was given by hand.
     /// One outside the archive, as one left in Incoming, is read as an arrival, so an exact copy is handed over to its
     /// original (`IngestCoordinator`). One with no file to read where it is recorded, as one missing, or a copy an earlier
     /// version filed, is refused before anything changes (`IngestError.cannotReadAgain`), and so is one filed by its
@@ -322,7 +326,7 @@ public struct PipelineServices: Sendable {
                          trace: TraceContext) async throws -> (outcome: AnalysisOutcome, rereading: Rereading) {
         guard let document = try await documents.document(id: docID) else { throw IngestError.documentNotFound(docID) }
         let before = document.labels ?? []
-        let reading = try await read(content, tags: before.filter(\.kind.isUsersOwn), settings: settings, trace: trace)
+        let reading = try await read(content, yours: document.yours, settings: settings, trace: trace)
         let problems = reading.outcome.analysis.problems
         if !problems.isEmpty {
             // Why it waits for the user, which the steps before it, each done as it should be, do not say.
@@ -333,9 +337,10 @@ public struct PipelineServices: Sendable {
         return (reading.outcome, Rereading(before: before, path: document.path, changes: reading.changes, tags: sources.isEmpty ? nil : sources))
     }
 
-    /// Puts what reading document `docID` again gave it, `outcome`, in the place of everything it had, in the transaction
-    /// of `db` that records its filing under `filename` (`IndexStore.replaceReading`), with its text, `content`, and its
-    /// meaning, and records the reading in History there too, before the filing. The labels saved.
+    /// Puts what reading document `docID` again gave it, `outcome`, in the place of everything it had but the user's own
+    /// labels, in the transaction of `db` that records its filing under `filename` (`IndexStore.replaceReading`), with its
+    /// text, `content`, and its meaning, and records the reading in History there too, before the filing. The labels
+    /// saved.
     @discardableResult
     func replaceReading(_ db: Database, docID: Int64, filename: String, content: ExtractedContent, outcome: AnalysisOutcome,
                         rereading: Rereading, jobID: Int64?, traceID: Int64?, at now: Date) throws -> [DocumentLabel] {

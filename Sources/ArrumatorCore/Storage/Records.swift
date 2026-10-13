@@ -75,6 +75,9 @@ public struct DocumentRecord: ArrumatorRecord, Identifiable, Hashable {
     /// Whether its labels are only its tags, the user's own (`LabelKind.tag`), because the model has not labelled it
     /// yet, as when it gave no valid answer for it: it counts as not labelled (`isLabelled`, `DocumentLabel.stored`).
     public var tagsOnly: Bool
+    /// The labels of its `labelsJson` the user gave it by hand, of kinds the model gives, as JSON: the user's own, as its
+    /// tags are, which no reading takes the place of (`IndexStore.kept`); NULL while it has none.
+    public var byHandJson: String?
     /// The document a `duplicate` repeats.
     public var duplicateOf: Int64?
     public var lastTraceId: Int64?
@@ -93,8 +96,8 @@ public struct DocumentRecord: ArrumatorRecord, Identifiable, Hashable {
                                now: Date) -> DocumentRecord {
         DocumentRecord(id: nil, uid: UUID().uuidString, path: path, originalFilename: (path as NSString).lastPathComponent,
                        sha256: sha256, size: size, uttype: uttype, inode: inode, pageCount: nil, status: .processing, analysisJson: nil,
-                       contentJson: nil, labelsJson: nil, tagsOnly: false, duplicateOf: nil, lastTraceId: nil, addedAt: now, filedAt: nil,
-                       extractedAt: nil, embeddedAt: nil, fileMtime: modified, createdAt: now, updatedAt: now)
+                       contentJson: nil, labelsJson: nil, tagsOnly: false, byHandJson: nil, duplicateOf: nil, lastTraceId: nil, addedAt: now,
+                       filedAt: nil, extractedAt: nil, embeddedAt: nil, fileMtime: modified, createdAt: now, updatedAt: now)
     }
 
     public var url: URL { URL(fileURLWithPath: path) }
@@ -114,6 +117,19 @@ public struct DocumentRecord: ArrumatorRecord, Identifiable, Hashable {
     /// Whether the document has been labelled: read by the model, or given a label of another kind than a tag by hand.
     /// One that is not is read by what reads documents without labels (`DocumentStore.unlabelled`).
     public var isLabelled: Bool { labelsJson != nil && !tagsOnly }
+    /// The labels of kinds the model gives that the user gave the document by hand (`byHandJson`).
+    public var byHand: [DocumentLabel] { JSON.decode([DocumentLabel].self, from: byHandJson) ?? [] }
+    /// The document's labels that are the user's own, which reading it again keeps: its tags, and those it was given by
+    /// hand.
+    public var yours: [DocumentLabel] {
+        let byHand = byHand
+        return (labels ?? []).filter { $0.kind.isUsersOwn || byHand.contains($0) }
+    }
+    /// The labels a reading that gave `read` leaves the document, the user changing nothing meanwhile: the model's in the
+    /// place of those it gave before, beside the user's own (`IndexStore.kept`).
+    public func labels(readAs read: [DocumentLabel]) -> [DocumentLabel] {
+        IndexStore.kept(read, before: labels ?? [], current: labels ?? [], byHand: byHand)
+    }
     /// The values of the document's labels of `kind`.
     public func labels(_ kind: LabelKind) -> [String] { labels?.values(kind) ?? [] }
     /// The document's own date, the day it was issued: its `date` label, `YYYY-MM-DD`, of which it has one at most; nil

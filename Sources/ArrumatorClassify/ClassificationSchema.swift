@@ -146,8 +146,10 @@ struct Mend: Sendable, Hashable {
 /// (`DocumentLabel.entrySeparator`), as the prompt asks for one label per entry, each without the quotes the prompt
 /// lists labels in (`unquoted`). Each signal is kept as `DocumentLabel.normalized` keeps it, cut to `maxValueChars`, once
 /// however it is written; each kind keeps its most significant first, at most `maxPerKind` of it (one of a single-valued
-/// kind). A sender or a party is a name the document itself writes (`ReadingGrounds`). What is no label of its kind, or
-/// not written in the document, is dropped rather than repaired, and noted; a list missing from the answer goes back to
+/// kind). A sender or a party is a name the document itself writes (`ReadingGrounds`), and an object or a reference is
+/// made of a number it writes, however it groups its digits (`ReadingGrounds.writesNumber(of:)`), never of one an example
+/// of the prompt or the model's own knowledge gives. What is no label of its kind, or not written in
+/// the document, is dropped rather than repaired, and noted; a list missing from the answer goes back to
 /// the model. The title is kept on one line, for the file name that is made of it once the user's rules have kept the
 /// labels (`PipelineServices.read`). It is made of the document's own words, in its own language, as the prompt asks: a
 /// title fewer than `titleGroundedShare` of whose words the document writes (`ReadingGrounds.unwritten`), as a
@@ -176,6 +178,10 @@ public struct AnswerValidator: Sendable {
 
     /// The kinds whose labels are names, as the document writes them.
     static let groundedKinds: Set<LabelKind> = [.sender, .party]
+    /// The kinds whose labels are made of a number the document writes, as it writes it: what identifies a thing or a
+    /// matter (`ReadingGrounds.writesNumber(of:)`). An amount is not: it is written in its kind's form, a value, which a
+    /// scale (`12万円`) or a total may make otherwise than the document writes it.
+    static let numberedKinds: Set<LabelKind> = [.object, .reference]
 
     public init(labels: LabelsConfig, titleGroundedShare: Double, partiesWithoutSender: Int, grounds: ReadingGrounds,
                 languages: LanguageDetector, titleMaxChars: Int) {
@@ -421,6 +427,10 @@ public struct AnswerValidator: Sendable {
             }
             guard !Self.groundedKinds.contains(kind) || grounds.holds(label.value) else {
                 notes.append("\(key): “\(label.value)” is not written in the document, dropped")
+                continue
+            }
+            guard !Self.numberedKinds.contains(kind) || grounds.writesNumber(of: label.value) else {
+                notes.append("\(key): “\(label.value)” has a number the document does not write, dropped")
                 continue
             }
             let identified = kind != .object || Self.identifies(label.value, digits: labels.objectIdentifierDigits)
