@@ -9,8 +9,9 @@
 #
 # To move a tool to a newer release: change its version and download below, and its checksum to the SHA-256 GitHub
 # shows beside that download on the release's page (the asset's `digest` in the API), or for the npm package to the
-# `dist.integrity` the registry gives for that version (its dependencies are not pinned here; see install). The downloads are for Apple silicon, which every Mac
-# Arrumator is built on and every runner CI uses is.
+# `dist.integrity` the registry gives for that version, after pinning it and its dependencies in scripts/npm/<tool>
+# (docs/releasing.md › Tools and runners). The downloads are for Apple silicon, which every Mac Arrumator is built on
+# and every runner CI uses is.
 set -eu
 
 cd "$(dirname "$0")/.."
@@ -47,8 +48,22 @@ checksum() { # checksum <file> <pinned>
   esac
 }
 
+# An npm tool's package.json and package-lock.json, which pin it and every package it depends on.
+npm_pins() { # npm_pins <tool>
+  printf 'scripts/npm/%s' "$1"
+}
+
+# What a tool is verified as: its pinned checksum, and for an npm tool the checksum of the lockfile it was installed
+# from too, so a changed lockfile installs it again.
+verified_as() { # verified_as <tool> <checksum>
+  case $2 in
+    sha512-*) printf '%s %s' "$2" "$(shasum -a 256 "$(npm_pins "$1")/package-lock.json" | cut -d' ' -f1)" ;;
+    *) printf '%s' "$2" ;;
+  esac
+}
+
 installed() { # installed <tool> <version> <checksum>: the wrapper runs this version, verified against this checksum
-  [ -x "$root/bin/$1" ] && [ "$(cat "$root/$1-$2/.verified" 2>/dev/null)" = "$3" ]
+  [ -x "$root/bin/$1" ] && [ "$(cat "$root/$1-$2/.verified" 2>/dev/null)" = "$(verified_as "$1" "$3")" ]
 }
 
 install() { # install <tool> <version> <download> <checksum>
@@ -67,9 +82,16 @@ install() { # install <tool> <version> <download> <checksum>
   fi
   case $install_archive in
     *.tgz)
-      # An npm package, installed from the verified archive without running scripts. The archive is pinned; its
-      # dependencies are not: npm resolves them from the registry, checked only against the registry's integrity.
-      npm install --prefix "$install_folder" --no-audit --no-fund --ignore-scripts --silent "$install_archive"
+      # An npm package and every package it depends on, at the versions and integrity its lockfile pins, installed
+      # without running scripts. The lockfile must pin the very archive verified above.
+      install_pins=$(npm_pins "$1")
+      if ! grep -A4 "\"node_modules/$1\": {" "$install_pins/package-lock.json" | grep -qF "\"integrity\": \"$4\""; then
+        echo "tools: $install_pins/package-lock.json does not pin $1 at $4; nothing was installed" >&2
+        rm -rf "$install_folder"
+        return 1
+      fi
+      cp "$install_pins/package.json" "$install_pins/package-lock.json" "$install_folder/"
+      (cd "$install_folder" && npm ci --no-audit --no-fund --ignore-scripts --silent)
       install_executable=$install_folder/node_modules/.bin/$1 ;;
     *.zip) ditto -x -k "$install_archive" "$install_folder/unpacked" ;;
     *.tar.gz) mkdir "$install_folder/unpacked" && tar -xzf "$install_archive" -C "$install_folder/unpacked" ;;
@@ -85,7 +107,7 @@ install() { # install <tool> <version> <download> <checksum>
   # A wrapper, not a link: some tools find their own resources beside the executable.
   printf '#!/bin/sh\nexec "%s" "$@"\n' "$install_executable" > "$root/bin/$1"
   chmod +x "$root/bin/$1"
-  printf '%s' "$4" > "$install_folder/.verified"
+  verified_as "$1" "$4" > "$install_folder/.verified"
   echo "tools: $1 $2 installed"
 }
 
