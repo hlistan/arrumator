@@ -115,16 +115,20 @@ The measurements are in [docs/evaluation.md](docs/evaluation.md).
    `Arrumator-<version>-apple-silicon.zip` for a Mac with Apple silicon (M1 or later), or
    `Arrumator-<version>-universal.zip`, which runs on Apple silicon and Intel Macs alike. Unzip it and move
    **Arrumator** to Applications.
-2. Open it. If the release is not notarized (its notes say so), macOS blocks it the first time. Choose **Done**,
-   then open System Settings › Privacy & Security, click **Open Anyway** next to the message about Arrumator, and
-   confirm ([Apple Support: open an app from an unknown developer](https://support.apple.com/en-us/102445)).
+2. Open it. macOS asks once whether to open an app downloaded from the Internet. Releases are signed with
+   Arrumator's Developer ID, `Developer ID Application: HLISTAN ZOLERANI, LDA (AV6Z7XH9ZM)`, and notarized by
+   Apple; if macOS ever blocks the app instead, do not open it anyway: a prerelease built without that signature says
+   so in its notes, and any other download is not one of ours.
 3. Onboarding asks for your Incoming and Archive folders, then for the models. Install [Ollama](https://ollama.com)
    if you haven't: Arrumator starts it when needed. Choose a profile (Standard unless you choose another) and download
    its models with the Download button beside each, there or later under Settings › Models; `arrumatorcli doctor`
    confirms everything is in place.
 
-To check a download, compare it with the release's checksums (`shasum -a 256 -c SHA256SUMS`) or verify where it was
-built (`gh attestation verify <file> --repo hlistan/arrumator`).
+To check a download, verify that this repository's Release workflow built it (with the [GitHub CLI](https://cli.github.com)):
+`gh attestation verify <file> --repo hlistan/arrumator --signer-workflow hlistan/arrumator/.github/workflows/release.yml`.
+To check who signed the app, `codesign -dv --verbose=2 /Applications/Arrumator.app 2>&1 | grep TeamIdentifier` shows
+`TeamIdentifier=AV6Z7XH9ZM`. The release's `SHA256SUMS` (`shasum -a 256 -c SHA256SUMS`) only shows that a file was not
+damaged on the way. A published release never changes: its files and tag are immutable.
 
 The command line tool is in `arrumatorcli-<version>-apple-silicon.zip` in the same release. Unzip it and keep the folder
 together; [docs/cli.md](docs/cli.md) explains how to use it. To build from source instead, see

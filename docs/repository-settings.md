@@ -1,8 +1,11 @@
 # Repository settings
 
 Some of what keeps the repository safe is switched on in GitHub's settings, not in files, so it is listed here:
-two security features, and the rules that enforce the push protocol ([AGENTS.md §8](../AGENTS.md#8-push-protocol)).
-Changing them needs admin access to [hlistan/arrumator](https://github.com/hlistan/arrumator).
+two security features, the rules that enforce the push protocol ([AGENTS.md §8](../AGENTS.md#8-push-protocol)),
+and what keeps a published release as it was built and lets no one publish one alone. Changing them needs admin access
+to [hlistan/arrumator](https://github.com/hlistan/arrumator). The Release workflow reads the release environment's
+reviewers and the tag ruleset before it signs anything, and refuses to go on without them; it checks the immutability
+of the release it publishes.
 
 ## Security features
 
@@ -117,30 +120,97 @@ gh api repos/hlistan/arrumator/rules/branches/main --jq '.[].type'
 The first shows squash merging alone allowed and branch deletion on; the second lists `deletion`,
 `non_fast_forward`, `pull_request` and `required_status_checks`.
 
+## Releases
+
+A release is the files its workflow built and attested. Once published, they and its tag never change: otherwise
+anyone who can write to the repository, or a token that leaked, could put another file and a `SHA256SUMS` that agrees
+with it in its place, or move its tag to another commit.
+
+| Setting | Value |
+|---|---|
+| Immutable releases | On: a published release's files and tag cannot be changed or deleted ([GitHub Docs: immutable releases](https://docs.github.com/en/code-security/supply-chain-security/understanding-your-software-supply-chain/immutable-releases)). |
+| Ruleset `release tags` | On tags `refs/tags/v*`: no update, no force push, no deletion. Creating a tag stays open: the Publish job creates it. |
+
+### Setting them in the browser
+
+1. **Settings › General**, under **Releases**: tick **Enable release immutability**.
+2. **Settings › Rules › Rulesets › New ruleset › New tag ruleset**: name it `release tags`, set **Enforcement status**
+   to **Active**, and under **Target tags** add the pattern `v*`, excluding nothing. Turn on **Restrict updates**,
+   **Restrict deletions** and **Block force pushes**, and leave **Restrict creations** off. Add no one to the
+   **Bypass list**, not even admins. Click **Create**.
+
+### Setting them from a terminal
+
+```bash
+gh api --method PUT repos/hlistan/arrumator/immutable-releases
+
+gh api --method POST repos/hlistan/arrumator/rulesets --input - <<'JSON'
+{
+  "name": "release tags",
+  "target": "tag",
+  "enforcement": "active",
+  "conditions": {"ref_name": {"include": ["refs/tags/v*"], "exclude": []}},
+  "rules": [{"type": "update"}, {"type": "non_fast_forward"}, {"type": "deletion"}]
+}
+JSON
+```
+
+### Checking them
+
+```bash
+gh api repos/hlistan/arrumator/immutable-releases
+gh api repos/hlistan/arrumator/rulesets --jq '.[] | select(.target == "tag") | {name, enforcement, id}'
+gh api repos/hlistan/arrumator/rulesets/<id> --jq '{include: .conditions.ref_name.include, exclude: .conditions.ref_name.exclude, bypass_actors}'
+```
+
+The first prints `"enabled":true`; the second, `release tags` with `active` and its id; the third, for that id,
+`refs/tags/v*` included, nothing excluded and no bypass actor. The Release workflow checks all of it but the bypass
+list, which GitHub shows to admins alone, so check that here. A release made before immutability was on
+stays changeable; `gh release view <tag> --json isImmutable` tells which a release is.
+
 ## The `release` environment
 
 The Sign and notarize job of a release is the only job that names the `release` environment, which holds the signing
 secrets and the variable `RELEASE_SIGNING` that says how a release is signed
 ([Continuous integration and releases](releasing.md#signing)). A workflow on any branch can name an environment, so
-the environment admits `main` alone:
+the environment admits `main` alone; and it waits for a reviewer to approve each signing, so a merge alone, a
+workflow's token, or the token or account of anyone who is not a reviewer never signs a release with the Developer ID
+and ships it to every user. A reviewer's own account approves, so while one maintainer is the only reviewer and approves
+their own runs, the gate is a second look at each release, not a second person: an account of theirs that someone
+took over could still approve. A second reviewer, such as an account kept only for approving and signed in with a
+hardware security key, with **Prevent self-review** on, makes it a second person:
 
 | Setting | Value |
 |---|---|
 | Deployment branches and tags | Selected branches and tags: `main`. |
+| Required reviewers | The maintainers, one of whom approves each run of the job. A sole maintainer approves their own: leave **Prevent self-review** off until there is a second reviewer, then turn it on. |
 | Variable `RELEASE_SIGNING` | `developer-id`, or `ad-hoc` while there is no Developer ID. Unset, every release stops. |
 | Secrets | The six that [Signing](releasing.md#signing) lists, when `RELEASE_SIGNING` is `developer-id`. |
 
 ### Setting it
 
 [Set up Developer ID signing](releasing.md#set-up-developer-id-signing), parts E and F, sets it step by step: the
-branch rule first, then the secrets, then `RELEASE_SIGNING`. Without a Developer ID, set the branch rule as its steps E1
-and E2 say, and `RELEASE_SIGNING` to `ad-hoc`.
+branch rule and the reviewers first, then the secrets, then `RELEASE_SIGNING`. Without a Developer ID, set the branch
+rule and the reviewers as its steps E1 and E2 say, and `RELEASE_SIGNING` to `ad-hoc`. The reviewers from a terminal,
+keeping the branch rule:
+
+```bash
+gh api --method PUT repos/hlistan/arrumator/environments/release --input - <<JSON
+{"reviewers": [{"type": "User", "id": $(gh api user --jq .id)}], "prevent_self_review": false,
+ "deployment_branch_policy": {"protected_branches": false, "custom_branch_policies": true}}
+JSON
+```
+
+Every account that can approve, or write to the repository, signs in with two-factor authentication: on GitHub,
+**Settings › Password and authentication › Two-factor authentication** shows it as enabled.
 
 ### Checking it
 
 ```bash
 gh api repos/hlistan/arrumator/environments/release/deployment-branch-policies --jq '.branch_policies[].name'
+gh api repos/hlistan/arrumator/environments/release --jq '[.protection_rules[].type]'
 gh variable list --env release --repo hlistan/arrumator
 ```
 
-The first lists `main` alone; the second shows `RELEASE_SIGNING`.
+The first lists `main` alone; the second holds `required_reviewers` beside `branch_policy`; the third shows
+`RELEASE_SIGNING`.

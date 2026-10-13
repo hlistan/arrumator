@@ -285,7 +285,10 @@ These are rules you can check, not aspirations. Each row says how it is checked;
    documents never read: a release asks Gatekeeper about every app it ships once nothing more goes to Apple, and
    requires `Notarized Developer ID`, never merely `accepted`; and code two downloads share, as both apps share their
    Apple-silicon code, goes to Apple in one submission, as Apple serves one ticket for it, the last one submitted
-   (`scripts/release.sh`).
+   (`scripts/release.sh`). No one releases alone, and a release never changes: signing waits for a maintainer's
+   approval, every file published carries a provenance attestation bound to the Release workflow, the checksums
+   among them, which users are told to verify, the release is immutable and its tag protected, and the workflow
+   refuses to sign, or fails, when the repository does not guard that (`release.yml`, Release protections).
 10. **Documentation changes with the code, every time.** A change is not done until every document that describes what
     it touched says what the code now does, in the same change. Where each thing is documented: [README.md](README.md)
     for what users see first, installing and getting started; [docs/how-it-works.md](docs/how-it-works.md) for how

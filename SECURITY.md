@@ -28,4 +28,19 @@ Anything that breaks the guarantees in [AGENTS.md §4](AGENTS.md#4-hard-rules-no
 - document text written to logs, or to diagnostics without the user asking for it;
 - a way for a document's content or the model's output to delete a file, write outside the archive and Incoming, or
   make a file name the model gave reach another directory;
-- a release artifact that does not match its `SHA256SUMS` or its build-provenance attestation.
+- a release artifact that does not match its `SHA256SUMS` or its build-provenance attestation, or that is signed by
+  anyone but the Developer ID below.
+
+## Checking a release
+
+Every file of a release carries a build-provenance attestation from this repository's Release workflow, and a
+published release is immutable. Check a download with the [GitHub CLI](https://cli.github.com):
+
+```sh
+gh attestation verify <file> --repo hlistan/arrumator --signer-workflow hlistan/arrumator/.github/workflows/release.yml
+```
+
+The app is signed with `Developer ID Application: HLISTAN ZOLERANI, LDA (AV6Z7XH9ZM)` and notarized by Apple:
+`codesign -dv --verbose=2 Arrumator.app 2>&1 | grep TeamIdentifier` shows `TeamIdentifier=AV6Z7XH9ZM`, and
+`spctl -a -vv Arrumator.app` shows `source=Notarized Developer ID` with that `origin=`. Report a download that fails
+either check as a vulnerability, above.

@@ -1,0 +1,8 @@
+{
+  "name": "arrumator-markdownlint-cli2",
+  "private": true,
+  "description": "markdownlint-cli2 and every package it depends on, pinned by scripts/tools.sh through package-lock.json",
+  "dependencies": {
+    "markdownlint-cli2": "0.22.0"
+  }
+}

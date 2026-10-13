@@ -73,7 +73,23 @@ You don't build or upload anything yourself: merging a code change into `main` r
 
    **Result:** a run titled like your pull request. If it shows the run before, wait a few seconds and list again.
 
-5. Follow the run until it ends:
+5. Once CI is green, *Sign and notarize* waits for you. Look at what it is about to sign:
+
+   ```sh
+   gh run view <run ID> --repo hlistan/arrumator
+   ```
+
+   **Result:** the run, for the merge you meant to release, shows *Sign and notarize* waiting for a review. Approve
+   it on the run's page (**Review deployments › release › Approve and deploy**), or from a terminal:
+
+   ```sh
+   gh api --method POST repos/hlistan/arrumator/actions/runs/<run ID>/pending_deployments -F "environment_ids[]=$(gh api repos/hlistan/arrumator/environments/release --jq .id)" -f state=approved -f comment="Release"
+   ```
+
+   The approval is what lets the job sign with the Developer ID
+   ([why](#no-one-releases-alone-and-a-release-never-changes)); approve it only for a merge you meant to release.
+
+6. Follow the run until it ends:
 
    ```sh
    gh run watch <run ID> --repo hlistan/arrumator
@@ -82,16 +98,17 @@ You don't build or upload anything yourself: merging a code change into `main` r
    **Result:** every job ends green, the last two being *Sign and notarize* and *Publish*. CI takes the longest, up to
    90 minutes; notarization usually takes a few minutes, and the job allows it an hour.
 
-6. Look at the release:
+7. Look at the release:
 
    ```sh
    gh release view --repo hlistan/arrumator
    ```
 
    **Result:** the title is `Arrumator <version>`, with four files: two app zips, the command's zip and `SHA256SUMS`.
-   The notes start by saying how it is signed, such as "Signed with a Developer ID and notarized by Apple".
+   The notes start by saying who signed it, "Signed by Developer ID Application: HLISTAN ZOLERANI, LDA (AV6Z7XH9ZM)
+   and notarized by Apple".
 
-7. [Verify the release](#verify-a-release).
+8. [Verify the release](#verify-a-release).
 
 **Done when** the release is marked **Latest** on the [releases page](https://github.com/hlistan/arrumator/releases)
 and passes [Verify a release](#verify-a-release). If a job failed, look up its message in
@@ -117,7 +134,16 @@ them.
    cd ~/Downloads/arrumator-<version>
    ```
 
-2. Check the checksums:
+2. Check that each file, `SHA256SUMS` among them, was built by this repository's Release workflow, the check that
+   counts:
+
+   ```sh
+   for file in *.zip SHA256SUMS; do gh attestation verify "$file" --repo hlistan/arrumator --signer-workflow hlistan/arrumator/.github/workflows/release.yml; done
+   ```
+
+   **Result:** `Verification succeeded!` four times.
+
+3. Check the checksums, which show only that the downloads were not damaged on the way:
 
    ```sh
    shasum -a 256 -c SHA256SUMS
@@ -125,32 +151,33 @@ them.
 
    **Result:** each of the three zips ends with `OK`.
 
-3. Check that each zip was built by this repository's workflow:
+4. Check that the release can no longer change:
 
    ```sh
-   for zip in *.zip; do gh attestation verify "$zip" --repo hlistan/arrumator; done
+   gh release view v<version> --repo hlistan/arrumator --json isImmutable --jq .isImmutable
    ```
 
-   **Result:** `Verification succeeded!` three times.
+   **Result:** `true`.
 
-4. Unpack both apps:
+5. Unpack both apps:
 
    ```sh
    for variant in universal apple-silicon; do mkdir "$variant" && ditto -x -k Arrumator-*-"$variant".zip "$variant"; done
    ```
 
-5. Ask Gatekeeper about both apps:
+6. Ask Gatekeeper about both apps:
 
    ```sh
    for variant in universal apple-silicon; do spctl -a -vv -t exec "$variant/Arrumator.app"; done
    ```
 
    **Result**, for a release signed with a Developer ID: `accepted` and `source=Notarized Developer ID` for **both**
-   apps, with `origin=` naming the certificate in the `DEVELOPER_ID` secret. A release signed ad hoc is `rejected`,
-   which is expected: its users allow it once, as [README › Install](../README.md#install) says. For such a release,
-   stop here: steps 6–8 check what only a Developer ID gives.
+   apps, with `origin=Developer ID Application: HLISTAN ZOLERANI, LDA (AV6Z7XH9ZM)`, the certificate users are told to
+   expect ([README › Install](../README.md#install)). A release signed ad hoc is `rejected`, which is expected: it is
+   published as a prerelease, never the latest. For such a release, stop here: steps 7–9 check what only a Developer
+   ID gives.
 
-6. Check the ticket stapled to each app, which lets it open offline:
+7. Check the ticket stapled to each app, which lets it open offline:
 
    ```sh
    for variant in universal apple-silicon; do xcrun stapler validate "$variant/Arrumator.app"; done
@@ -158,7 +185,7 @@ them.
 
    **Result:** `The validate action worked!` twice.
 
-7. Check the command:
+8. Check the command:
 
    ```sh
    ditto -x -k arrumatorcli-*.zip . && ./arrumatorcli-*/arrumatorcli --version
@@ -168,13 +195,13 @@ them.
    **Result:** the version, then `Authority=Developer ID Application: …` and a `Timestamp=`. A command-line tool cannot
    carry a stapled ticket: macOS asks Apple about it online the first time it runs.
 
-8. Open it as a user would: on a Mac that has never had Arrumator, download the universal zip in Safari from the
+9. Open it as a user would: on a Mac that has never had Arrumator, download the universal zip in Safari from the
    [releases page](https://github.com/hlistan/arrumator/releases), unzip it and open **Arrumator**.
 
    **Result:** macOS asks once whether to open an app downloaded from the Internet, and opens it. It does not send you
    to **System Settings › Privacy & Security › Open Anyway**.
 
-**Done when** every result above matches, or, for a release signed ad hoc, the results of steps 2–5.
+**Done when** every result above matches, or, for a release signed ad hoc, the results of steps 2–6.
 
 ### Run a release by hand
 
@@ -325,17 +352,20 @@ than in a release.
 Run each command on its own. A command that asks for a value takes whatever is pasted after it as the answer, so never
 paste two at once.
 
-1. Turn on branch rules for the `release` environment, which is about to hold the secrets. The repository is public
-   and a workflow on any branch can name an environment, so the rules come before any secret:
+1. Turn on branch rules for the `release` environment, which is about to hold the secrets, and make it wait for you
+   to approve each signing. The repository is public and a workflow on any branch can name an environment, so the
+   rules come before any secret; and a merge alone, or a token of anyone who is not a reviewer, must never sign
+   ([what this stops](repository-settings.md#the-release-environment)):
 
    ```sh
-   gh api --method PUT repos/hlistan/arrumator/environments/release --input - <<'JSON'
-   {"deployment_branch_policy": {"protected_branches": false, "custom_branch_policies": true}}
+   gh api --method PUT repos/hlistan/arrumator/environments/release --input - <<JSON
+   {"reviewers": [{"type": "User", "id": $(gh api user --jq .id)}], "prevent_self_review": false,
+    "deployment_branch_policy": {"protected_branches": false, "custom_branch_policies": true}}
    JSON
    ```
 
    **Result:** GitHub answers with the environment, whose `deployment_branch_policy` has
-   `"custom_branch_policies":true`.
+   `"custom_branch_policies":true` and whose `protection_rules` hold `required_reviewers` naming you.
 
 2. Admit `main` alone:
 
@@ -349,8 +379,9 @@ paste two at once.
    gh api repos/hlistan/arrumator/environments/release/deployment-branch-policies --jq '.branch_policies[].name'
    ```
 
-   Steps E1 and E2 in the browser: in **Settings › Environments › `release`**, under **Deployment branches and tags**,
-   choose **Selected branches and tags**, then add a rule for `main`
+   Steps E1 and E2 in the browser: in **Settings › Environments › `release`**, tick **Required reviewers** and add
+   yourself, leaving **Prevent self-review** off; under **Deployment branches and tags**, choose **Selected branches and
+   tags**, then add a rule for `main`
    ([GitHub Docs: deployment branches](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments)).
 
 3. Add the certificate's name. Without `--body`, `gh secret set` asks for the value, so it never lands in your
@@ -431,8 +462,10 @@ paste two at once.
    hand](#run-a-release-by-hand) now; otherwise it goes out with the next code change you merge.
 2. [Verify the release](#verify-a-release).
 
-**Done when** the release notes say "Signed with a Developer ID and notarized by Apple" and every check in
-[Verify a release](#verify-a-release) passes.
+**Done when** the release notes say "Signed by Developer ID Application: <your certificate's name> and notarized by
+Apple" and every check in [Verify a release](#verify-a-release) passes. A new certificate's name, or Team ID, goes into
+[README › Install](../README.md#install) and [SECURITY.md](../SECURITY.md) in the same change, as users check against
+them.
 
 ### Build and sign a release on your Mac
 
@@ -489,7 +522,7 @@ A version is `MAJOR.MINOR.PATCH`. You choose `MAJOR.MINOR`; the patch number is 
 | You want a new notarization key, or someone who had the key leaves. | Make a new key (setup part C). Replace `NOTARY_KEY_P8` and `NOTARY_KEY_ID` (steps E6 and E7), save the profile again (step D1), then click **Revoke** beside the old key in App Store Connect. |
 | The `.p8` file may have leaked. | Revoke the key in App Store Connect at once, then make a new one as above. |
 | The `.p12` file and its password may have leaked. | Ask [Apple Developer Support](https://developer.apple.com/contact/) how to revoke the certificate: revoking it can stop releases signed with it from opening. Then make a new one as above. |
-| You must release while Developer ID signing is broken. | `gh variable set RELEASE_SIGNING --env release --body ad-hoc --repo hlistan/arrumator`. The release notes then tell users to allow the app once. Set it back to `developer-id` when it is fixed. |
+| You must release while Developer ID signing is broken. | `gh variable set RELEASE_SIGNING --env release --body ad-hoc --repo hlistan/arrumator`. Such a release is published as a prerelease, never the latest, and its notes say macOS blocks it, so users are never taught to open an app macOS blocks. Set it back to `developer-id` when it is fixed. |
 
 ## Troubleshooting
 
@@ -528,6 +561,10 @@ Find the message you see, then do what the last column says.
 | `Set the release environment's variable RELEASE_SIGNING to developer-id or ad-hoc` | The variable is missing. | Step F1, or `ad-hoc`. Then [run the release by hand](#run-a-release-by-hand). |
 | `RELEASE_SIGNING is developer-id, but the release environment lacks the secrets for: <names>` | Those secrets are missing or empty. | Set them as in steps E3–E8, then run the release by hand. |
 | `Branch "<name>" is not allowed to deploy to release due to environment protection rules` | The run was not on `main`. | Run it on `main`. |
+| `The release environment requires no reviewer` | The environment lets a merge sign alone. | Add the reviewers ([Repository settings](repository-settings.md#the-release-environment)), then run the release by hand. |
+| `No active tag ruleset, excluding nothing and with no bypass, keeps refs/tags/v* from being updated or deleted` | A release's tag could be moved. | Add the ruleset ([Repository settings](repository-settings.md#releases)), then run the release by hand. |
+| `v<version> is published but its files and tag can still change`, after the warning `The latest release is not immutable` from *Release protections* | Immutable releases are off. The release is out. | Turn them on ([Repository settings](repository-settings.md#releases)); the next release is immutable. |
+| *Sign and notarize* waits, showing *Review deployments*. | The environment waits for a reviewer. | Approve it, as [Release a new version](#release-a-new-version) step 5 says. |
 | `… is not on this runner image; choose an Xcode it has` | GitHub's runner image no longer has the pinned Xcode. | See [Tools and runners](#tools-and-runners). |
 | *Sign and notarize* and *Publish* are skipped. | `main` holds no code that is not released yet. | Nothing: the next code change is released. |
 
@@ -577,9 +614,10 @@ releases only when the change since the last release's tag is scoped `release`. 
 | Job | Holds | What it runs |
 |---|---|---|
 | Last release | Read access to the code | Finds the last release's tag. |
+| Release protections | Read access to the code | Stops the release unless the `release` environment requires a reviewer and an active tag ruleset keeps `v*` tags from being updated or deleted ([Repository settings](repository-settings.md#releases)). |
 | CI | Read access to the code | The CI workflow above, on the change since the last release; its build job keeps what `scripts/build-release.sh` staged. |
-| Sign and notarize | The `release` environment and its signing secrets | `scripts/release.sh` on the staged build: signs, notarizes, staples and packages. It compiles nothing and installs no tool. |
-| Publish | The token that writes releases, and the attestation's identity | [`actions/attest`](https://github.com/actions/attest) on the downloads, so anyone can check one came from this repository's workflow (`gh attestation verify <file> --repo hlistan/arrumator`), then the tag `v<version>` and a release with generated notes and the files below. |
+| Sign and notarize | The `release` environment and its signing secrets, once a reviewer approves | `scripts/release.sh` on the staged build: signs, notarizes, staples and packages; then reads who signed the app, for the notes. The key is imported for `codesign` and `security` alone. It compiles nothing and installs no tool. |
+| Publish | The token that writes releases, and the attestations' identity | [`actions/attest`](https://github.com/actions/attest) on every file, `SHA256SUMS` among them, so anyone can check one came from this repository's Release workflow (`gh attestation verify <file> --repo hlistan/arrumator --signer-workflow hlistan/arrumator/.github/workflows/release.yml`), which it checks first itself; then the tag `v<version>` and a release with generated notes and the files below, made a draft and published once its files are in, and refused, failing the run, when it is not immutable. A release signed ad hoc is a prerelease. |
 
 | File | Contents |
 |---|---|
@@ -604,7 +642,7 @@ instead of quietly publishing it signed less. The `release` environment's variab
 | `RELEASE_SIGNING` | The release |
 |---|---|
 | `developer-id` | Signed with a Developer ID, with the hardened runtime and a secure timestamp, notarized by Apple in one submission, and the app stapled ([why one](#one-notarization-for-every-download)); Gatekeeper is asked about both apps once nothing more is submitted, and must answer that Apple notarized them, not only that it accepts them. The job stops, naming them, when any of the secrets below is missing, and when Apple does not accept the submission, printing Apple's log; it reads Apple's verdict, not only `notarytool`'s exit status, and gives notarization an hour. |
-| `ad-hoc` | Signed ad hoc, not notarized. It runs, but macOS blocks it the first time, and each user has to allow it once (see [README › Install](../README.md#install)); the release notes say so. |
+| `ad-hoc` | Signed ad hoc, not notarized, and published as a prerelease, never the latest: macOS blocks it, and the notes say so and send users to the latest release. |
 | unset or anything else | The release stops before signing. |
 
 The `release` environment admits `main` alone and holds six secrets
@@ -668,8 +706,11 @@ A check gives the same answer until someone changes it on purpose, so nothing it
 
 - **The tools** the checks and the build run are pinned in `scripts/tools.sh`: each at one version, downloaded from
   its publisher's release and refused unless its SHA-256 (for markdownlint-cli2, the npm registry's SHA-512 integrity)
-  is the one written there. markdownlint-cli2's own dependencies are exact versions in its package.json, but npm
-  resolves theirs when it installs, checked only against the registry's integrity: that tree is not pinned here.
+  is the one written there. markdownlint-cli2 and every package it depends on are pinned by version and integrity in
+  `scripts/npm/markdownlint-cli2/package-lock.json`, installed with `npm ci` without running their scripts; the
+  lockfile must pin the very archive the row names, and a changed lockfile installs the tool again. To move it, change
+  the version in that folder's `package.json`, run `npm install --package-lock-only --ignore-scripts` there, and put
+  the new archive's integrity, which the lockfile then holds, in the row.
   The tools are installed into `.tools/`, which Git ignores, and the scripts run them from `.tools/bin`;
   `scripts/lint.sh` fails when one is not installed at its pinned version. To move a tool to a newer release, change
   its row, with the checksum GitHub shows beside the download on the release's page, in a pull request of its own;
@@ -725,6 +766,20 @@ leaves nothing behind: the next push releases what it left, and a run by hand do
 
 The job that compiles holds no secret, the job that holds the signing key compiles nothing and installs no tool, and
 only the job that publishes can write a release. Code from a pull request is never built where the key is.
+
+### No one releases alone, and a release never changes
+
+A release is signed with the Developer ID and reaches every user, so a merge alone, a workflow's token or a leaked
+token of anyone but a reviewer cannot make one: signing waits for a reviewer to approve it, and the workflow refuses
+to sign while the environment does not ask. While the sole maintainer is the only reviewer, the approval is a second
+look, not a second person; a second reviewer makes it one
+([Repository settings](repository-settings.md#the-release-environment)). Once published, a release is immutable
+and its tag protected, so its files cannot be swapped for others later, and every file, the checksums among them,
+carries a provenance attestation bound to this workflow: the attestation, not the checksum beside the files, is what
+proves a download is the one built here
+([GitHub Docs: immutable releases](https://docs.github.com/en/code-security/supply-chain-security/understanding-your-software-supply-chain/immutable-releases),
+[GitHub Docs: verifying attestations](https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/use-artifact-attestations)).
+A release signed ad hoc is a prerelease, so users are never taught to open an app macOS blocks.
 
 ### Signing is said, never inferred
 
