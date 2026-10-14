@@ -15,7 +15,14 @@ dist/
 *.dSYM
 Tests/Fixtures/private/
 .build-*/
-.claude
+# Claude Code: only the shared singularity setup is committed; worktrees and local settings stay on each machine.
+.claude/*
+!.claude/settings.json
+!.claude/singularity.md
+!.claude/singularity/
+# The singularity pipeline's specs and plans (.agentic/work) and the task files (.agentic/tasks), which can hold
+# customer details.
+/.agentic/
 
 # Signing material and credentials never belong in the repository (scripts/check-secrets.sh enforces it).
 *.p12

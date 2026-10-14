@@ -1,0 +1,11 @@
+{
+  "extraKnownMarketplaces": {
+    "singularity": {
+      "source": { "source": "git", "url": "https://github.com/hlistan/singularity.git", "ref": "stable" },
+      "autoUpdate": true
+    }
+  },
+  "enabledPlugins": {
+    "singularity@singularity": true
+  }
+}
