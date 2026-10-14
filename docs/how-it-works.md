@@ -337,20 +337,52 @@ chosen, the most alike to what you write first, the tags you added among them.
 
 ### Removing a document
 
-**Move to Trash…** on a document's card, after you confirm, or `arrumatorcli review remove <document>`, removes it: its
+**Move to Trash…** on a document's card or in the menu of its row (secondary click), as an action VoiceOver lists, or
+with ⌘⌫ while the row has keyboard focus, after you confirm, or `arrumatorcli review remove <document>`, removes it: its
 file goes to the Trash, never deleted, wherever it is, in the archive or back in Incoming, and the document leaves the
 archive's index with its labels, text and meaning, its place in tasks' sets, the work queued for it, and its entry in
 its folder's record file, so a rebuild does not bring it back. History records it, with where its file was and where the
 Trash put it; what History said of it before stays. All of it is decided and done in one step, so two removals at once,
 from the app and a terminal, move the file and record it once. Only the document's own file is moved: one at its path
 that carries another document's identifier stays, and the document, whose file is then not there, as one missing, only
-leaves the index. A file the Trash will not take stays where it is, and so does the document, saying why; one the
-Trash took whose removal could then not be recorded comes back from it, and the document stays. Only a crash between
-the two leaves the file in the Trash and the document in the archive, which the next start marks missing, as if you had
-taken its file away. A document still being read in is not offered to be removed until its reading has ended, nor one
-while reading it again is moving its file to its new name; one whose move failed, or was cut off, is removed with its
-file where the move left it. To have it back, put its file back into
-Incoming from the Trash: it is read again as a new document.
+leaves the index. A file the Trash will not take stays where it is, and so does the document, saying why; one the Trash
+took whose removal could then not be recorded comes back from it, and the document stays. Only a crash between the two
+leaves the file in the Trash and the document in the archive, which the next start marks missing, as if you had taken
+its file away. A document still being read in is not offered to be removed until its reading has ended, nor one while
+reading it again is moving its file to its new name; one whose move failed, or was cut off, is removed with its file
+where the move left it. A row of a document that cannot be removed now says why, dimmed, as the card does not offer it;
+the rule is one, whichever asks.
+
+**Put Back** (the notice after a removal, its row in History, or `arrumatorcli review put-back <document>`, by the
+number `review remove --json` and `history --json` give) brings it back as it was, while its file is in the Trash. The
+removal keeps the document's record file entry in History for it, so a rebuild of the index keeps it too. The file comes
+back to where it was, with its identifier and original name, and the document into the index and its folder's record
+file under the **same number** and identity, with its name, status, labels, the ones you gave by hand still yours, its
+reading and its times. Your rules about labels made meanwhile apply to it as to every document: a label merged comes
+back as the label it was merged into, one removed for good does not come back. Its text and meaning are read again from
+its file without the model, as after a rebuild, so it is found by its words, its labels and its meaning again; it is
+listed where its status puts it, in Needs You or Processed, or in Incoming if it was left there. History records it once
+(`Put back “bill.txt” from the Trash`), with where its file was in the Trash and where it went. It does not come back
+into the tasks' sets it was in, nor does it get back what the removal cut from it: earlier History and traces (so
+“Confirmed by you” and how it was read show nothing until it is read again), or the corrections Statistics counted.
+
+Where its place is taken, it comes back beside the other file under a name of its own, which History says; where its
+folder is gone, at the top of the archive (or of Incoming), as the app makes no folder in the archive; where its number
+is another document's now, as after the index was lost and made again, under a new number, which History says with the
+old one. Across volumes the file comes back as a copy checked against the document's checksum, and the original stays in
+the Trash, which History says. It is refused, before anything changes and saying what to do, when: the number was never
+removed (or, by the removal's own event number, no removal can be read at it); the removal found no file in the Trash
+(the document was missing); the place recorded for it is not in the Trash the app uses (History is a file a person can
+edit, so what it names is not trusted to name a file to move); nothing is at that place in the Trash any more (emptied,
+or taken out by hand, as Finder's Put Back does); what is there is not its file (a link, another document's identifier,
+another size or other content; a file with no identifier, as a copy or a synchronisation leaves one, is known by its
+size and content alone, as the removal took it); it was put back already (decided in the step that records it, so two at
+once put back one); a document of the same identity is in the archive; the removal was recorded by a release before the
+entry was kept, which needs its file put into Incoming from the Trash to be read as a new document; the archive's folder
+is not there; or its folder is inside neither the archive nor Incoming as they are now. A file brought back whose record
+then fails comes back to the very place it was in the Trash; only a crash between the two leaves it in the archive with
+no document, which the next start takes in as a new file, as any file put into the archive. A History month holding a
+put-back cannot be read by an earlier version of Arrumator.
 
 ## Keeping labels one vocabulary
 

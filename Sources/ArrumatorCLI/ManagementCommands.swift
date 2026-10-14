@@ -6,7 +6,7 @@ import Foundation
 struct Review: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         abstract: "Documents waiting for you, those you set aside, and what you can do with any document.",
-        subcommands: [List.self, Confirm.self, Rename.self, Retry.self, Hold.self, Undo.self, Remove.self],
+        subcommands: [List.self, Confirm.self, Rename.self, Retry.self, Hold.self, Undo.self, Remove.self, PutBack.self],
         defaultSubcommand: List.self)
 
     struct List: AsyncParsableCommand {
@@ -120,7 +120,8 @@ struct Review: AsyncParsableCommand {
 
     struct Remove: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
-            abstract: "Remove a document: its file goes to the Trash, and it leaves the archive and its index.")
+            abstract: "Remove a document: its file goes to the Trash, and it leaves the archive and its index. "
+                + "`review put-back` brings it back, as it was, while its file is in the Trash.")
         @OptionGroup var options: GlobalOptions
         @Argument var document: String
         func run() async throws {
@@ -130,6 +131,20 @@ struct Review: AsyncParsableCommand {
             try options.emit(removed) {
                 "Removed #\(id): \(removed.from)" + (removed.trashed.map { " is in the Trash, at \($0)" } ?? " was not there; it left the index")
             }
+        }
+    }
+
+    struct PutBack: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "put-back",
+            abstract: "Put back a document removed, from the Trash: its file returns where it was and the document to the archive, "
+                + "as it was. <document> is the number `review remove --json` and `history --json` give.")
+        @OptionGroup var options: GlobalOptions
+        @Argument(help: "The number of the removed document.") var document: Int64
+        func run() async throws {
+            let runtime = try await options.runtime()
+            let put = try await runtime.review.putBack(document)
+            try await report(put.document, runtime: runtime, options: options)
         }
     }
 }

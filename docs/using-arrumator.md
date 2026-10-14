@@ -24,24 +24,30 @@ sender “EDP”; removed type “invoice”". A label you add is yours: reading
 documents again](how-it-works.md#reading-documents-again)). Beside the value's field, a menu offers the labels the
 archive has of the kind chosen, of the kinds written freely, the most alike to what you write first, and the tags you
 added on the Labels page among them. Dates, deadlines and periods show as dates, in your Mac's style, a period by its
-first and last day or month
-(**1 Jul 2026 – 31 Jul 2026**), on the card and in the sidebar alike. A label's menu opens it on the Labels page, shows
-the documents that have it, or takes it off every document: **Remove from Every Document…**, after which a document read
-later may be given it again, or **Remove for Good…**, which the model's readings follow too. The card's actions follow
-the document's state: **Looks Right** confirms it as it is, after which the card says **Confirmed by you** and when,
-beside where it is, and no longer offers it until the document is read again, corrected, or renamed or moved in Finder;
-**Read Again** has the model read it again, saying it waits to be read after the files already in Incoming (on Needs
-You, which the document then leaves for Incoming's queue, the page says so above the rest, with **Show Incoming**, until
-you go to another page), **Leave for Later** holds it, and **Undo Filing** moves it back to Incoming; neither **Leave
-for Later** nor **Undo Filing** is offered while the document is still being read in, nor **Read Again** while a file
-you put into the archive is, and each is once that ends, on the card as it is. **Recognised Text** shows what the model
-read the document as, what an image shows, and its text as it was recognised, to read, select and copy, with **Show
-Sidecar in Finder** for the file beside it that holds them ([what is kept beside a
+first and last day or month (**1 Jul 2026 – 31 Jul 2026**), on the card and in the sidebar alike. A label's menu opens
+it on the Labels page, shows the documents that have it, or takes it off every document: **Remove from Every
+Document…**, after which a document read later may be given it again, or **Remove for Good…**, which the model's
+readings follow too. The card's actions follow the document's state: **Looks Right** confirms it as it is, after which
+the card says **Confirmed by you** and when, beside where it is, and no longer offers it until the document is read
+again, corrected, or renamed or moved in Finder; **Read Again** has the model read it again, saying it waits to be read
+after the files already in Incoming (on Needs You, which the document then leaves for Incoming's queue, the page says so
+above the rest, with **Show Incoming**, until you go to another page), **Leave for Later** holds it, and **Undo Filing**
+moves it back to Incoming; neither **Leave for Later** nor **Undo Filing** is offered while the document is still being
+read in, nor **Read Again** while a file you put into the archive is, and each is once that ends, on the card as it is.
+**Recognised Text** shows what the model read the document as, what an image shows, and its text as it was recognised,
+to read, select and copy, with **Show Sidecar in Finder** for the file beside it that holds them ([what is kept beside a
 document](how-it-works.md#what-is-kept-beside-a-document)). **Move to Trash…**, after you confirm, removes the document:
 its file goes to the Trash, it leaves the archive with its labels and what was read of it, and the card closes
 ([how](how-it-works.md#removing-a-document)); it is offered for any document but one being read in, or whose file
-reading it again is moving to its new name. A kind of file
-Arrumator cannot read says so, that the model saw only its name, and what would help.
+reading it again is moving to its new name. The rows of Needs You, Processed, the documents the sidebar's labels choose
+and what was just processed on Incoming offer it too, in the menu of a secondary click, as an action VoiceOver lists
+beside the row's own and with ⌘⌫ while the row has keyboard focus, asking the same question; for a document that cannot
+be removed now the item is dimmed with why, and the action and the shortcut say why instead of asking. Focus then goes
+to the next row. The page then says “Moved “bill.txt” to the Trash.” with **Put Back**, until you go to another page or
+move another document; **Put Back** brings the document back as it was, the same number and labels, and the row returns
+to its list. History's row of a removal has **Put Back** too, under the pointer, in its menu and as an action, dimmed
+with why when it cannot be put back ([how](how-it-works.md#removing-a-document)). A kind of file Arrumator cannot read
+says so, that the model saw only its name, and what would help.
 
 - **Incoming**: under **In Progress**, the file being worked on now, with a spinner and what is being done to it
   (**Reading its text**, **Being read by qwen3.5:9b-q8_0**, naming the model of the profile in use, …), and, once that
@@ -292,8 +298,9 @@ by meaning**, documents embedded by another model are found by meaning only once
   its name or waits where it is), correction of a name or labels, decision about labels (a rename, a merge, a label
   removed from every document or for good, two kept apart, a tag added, a rule forgotten; a merge or two kept apart that
   the model judged is Arrumator's, saying so, and links the trace of the judgement), confirmation, undo, a document
-  removed (with where its file was and where the Trash put it), move or rename in Finder, the move of each document
-  in a folder of yours you rename or move in the archive, a record file that cannot be read and the same file readable
+  removed (with where its file was and where the Trash put it), a document put back (with where its file was in the
+  Trash and where it went), move or rename in Finder, the move of each document in a folder of yours you rename or move
+  in the archive, a record file that cannot be read and the same file readable
   again, search task (asked, with the effort and profile it is read with, what it found or why it could not be read,
   changed, its effort or profile among it, its set edited, exported, removed), settings change and Ollama availability
   change (`events` table; History view; `arrumatorcli history`). A settings change made in the app and one made with

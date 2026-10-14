@@ -46,6 +46,8 @@ struct RefusingTrash: Trashing {
     func trash(_ url: URL) throws -> URL? {
         throw CocoaError(.featureUnsupported, userInfo: [NSLocalizedDescriptionKey: Self.reason])
     }
+
+    func holds(_ url: URL) -> Bool { false }
 }
 
 /// Every document is read by the model, labelled and filed at the top of the archive under the name it gave; the

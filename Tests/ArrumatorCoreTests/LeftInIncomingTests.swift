@@ -15,6 +15,8 @@ struct RefusingUntil: Trashing {
         }
         return try folder.trash(url)
     }
+
+    func holds(_ url: URL) -> Bool { folder.holds(url) }
 }
 
 /// A document left in Incoming, not filed: what its card offers, what Read Again and a save of its file do with it, and

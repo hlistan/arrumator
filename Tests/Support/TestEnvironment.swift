@@ -42,6 +42,12 @@ public struct TestEnvironment: Sendable {
                         settings: settings, time: time)
     }
 
+    /// The same folders and index with `archive` as the archive, as after the archive was moved and the app set to it.
+    public func with(archive: URL) -> TestEnvironment {
+        TestEnvironment(root: root, paths: paths, archive: archive, incoming: incoming, database: database, config: config,
+                        settings: settings, time: time)
+    }
+
     /// What stands in for the Trash in everything built on this environment, so nothing a test does reaches the user's.
     public var trash: FolderTrash { FolderTrash(folder: root.appendingPathComponent("Trash", isDirectory: true)) }
 

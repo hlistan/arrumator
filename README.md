@@ -71,7 +71,7 @@ say what it is in one vocabulary, so a German electricity bill and a Japanese on
 - **Everything can be audited**: the prompts, the model's answers, timings and a full history, with Statistics
   showing where documents stop and why.
 - **Nothing is lost.** No code path deletes a document: one you remove goes to the Trash, from which you can take it
-  back. Every move is recorded and can be undone. Every document's labels
+  back, or put it back as it was, with its labels. Every move is recorded and can be undone. Every document's labels
   live in Markdown files inside your archive, and its index can be rebuilt from them.
 - **A command line tool**, `arrumatorcli`, does everything the app does, with `--json` output for scripts.
 

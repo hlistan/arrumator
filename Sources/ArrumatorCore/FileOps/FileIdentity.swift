@@ -10,10 +10,12 @@ public struct FileFingerprint: Sendable, Codable, Hashable {
     public var modified: Date?
     public var inode: Int64?
 
-    public static func of(_ url: URL) throws -> FileFingerprint {
+    /// The fingerprint of the item at `url`; a package of more than `packageItems` items throws
+    /// `FileOperationError.tooManyItems` before it is walked further, where one is given.
+    public static func of(_ url: URL, packageItems: Int? = nil) throws -> FileFingerprint {
         let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
         if attrs[.type] as? FileAttributeType == .typeDirectory, Packages.isPackage(url) {
-            return try Packages.survey(url, limit: nil).fingerprint
+            return try Packages.survey(url, limit: packageItems).fingerprint
         }
         return FileFingerprint(size: (attrs[.size] as? NSNumber)?.int64Value ?? 0, modified: attrs[.modificationDate] as? Date,
                                inode: (attrs[.systemFileNumber] as? NSNumber)?.int64Value)
@@ -61,12 +63,22 @@ extension URL {
     /// case, `/private` or not. The folder that holds the item and this folder are compared as the disk spells them
     /// (`folderOnDisk`); an item whose folder is gone is compared as its path is written against this folder's
     /// spellings (`spellings`). What "in the archive" means wherever it is asked.
-    public func holds(_ path: String) -> Bool {
-        let folder = folderOnDisk.path
+    public func holds(_ path: String) -> Bool { relativeFolder(of: path) != nil }
+
+    /// The folder of the item at `path` below this folder, as a path relative to it (empty for this folder itself); nil
+    /// when the item is not in it. Told as `holds` tells it, so the two never differ, and the relative path is cut from
+    /// the same spelling that was found to be inside: a folder reached through a link is not cut by the length of another
+    /// spelling of this one.
+    func relativeFolder(of path: String) -> String? {
         let parent = URL(fileURLWithPath: path).deletingLastPathComponent()
-        let held = { (item: String, root: String) in item == root || item.hasPrefix(root + "/") }
-        if parent.canonicalFolderPath != nil { return held(parent.folderOnDisk.path, folder) }
-        return spellings.contains { held(parent.standardizedFileURL.path, $0) }
+        let spelt: [(item: String, root: String)] = parent.canonicalFolderPath != nil
+            ? [(parent.folderOnDisk.path, folderOnDisk.path)]
+            : spellings.map { (parent.standardizedFileURL.path, $0) }
+        for (item, root) in spelt {
+            if item == root { return "" }
+            if item.hasPrefix(root + "/") { return String(item.dropFirst(root.count + 1)) }
+        }
+        return nil
     }
 
     /// The ways a path recorded under this folder may begin: as it is written, as the disk spells it, and that without

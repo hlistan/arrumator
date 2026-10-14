@@ -523,4 +523,6 @@ private struct TrashThen: Trashing {
         try then()
         return put
     }
+
+    func holds(_ url: URL) -> Bool { trash.holds(url) }
 }

@@ -258,6 +258,32 @@ import Testing
         #expect(EventEntry.removedKinds.allSatisfy { EventKind(rawValue: $0) == nil }, "and no kind that exists is ever dropped")
     }
 
+    @Test func aRemovalTheReleaseBeforeRecordedIsReadWithNoEntry() async throws {
+        let env = try await TestEnvironment.make()
+        defer { env.cleanup() }
+        let url = env.layout.historyFile(month: "2026-09")
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        // As the release before a removal kept its entry wrote it: the number and both paths, nothing more.
+        try """
+        ---
+        arrumator: 1
+        entries:
+        - id: 1
+          at: 2026-09-02T09:00:00Z
+          kind: documentRemoved
+          actor: user
+          summary: Removed “bill.txt”; its file is in the Trash
+          payload: '{"document":7,"from":"/Archive/bill.txt","trashed":"/Trash/bill.txt"}'
+        ---
+        """.write(to: url, atomically: true, encoding: .utf8)
+        _ = try await env.records().rebuild()
+        let events = try await HistoryStore(database: env.database, time: env.time).events(limit: 10, kinds: [.documentRemoved])
+        let event = try #require(events.first)
+        let payload = try #require(JSON.decode(RemovedPayload.self, from: event.payloadJson))
+        #expect(events.count == 1 && (payload.document, payload.from, payload.trashed) == (7, "/Archive/bill.txt", "/Trash/bill.txt") && payload.entry == nil,
+                "the removal is read, with no entry, as the release before wrote it: \(events)")
+    }
+
     @Test func aDocumentAnEarlierReleaseFoundMissingIsFiledWhenItsFileIsFoundAgain() async throws {
         let h = try await Harness.make()
         defer { h.env.cleanup() }

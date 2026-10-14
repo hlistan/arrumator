@@ -54,6 +54,46 @@ extension CommandLineTests {
         #expect(again.status != 0, "a document removed is removed once: \(again.stderr)")
     }
 
+    @Test func reviewRemoveJSONKeepsItsKeys() throws {
+        let home = try Home.make()
+        defer { home.cleanup() }
+        let ids = try file(home, [("a.txt", [DocumentLabel(kind: .type, value: "invoice")])])
+        let result = try run(home, ["review", "remove", "--json", String(ids[0])])
+        let keys = try #require(try JSONSerialization.jsonObject(with: result.stdout) as? [String: Any], "an object: \(result.text)")
+        #expect(keys["document"] as? Int64 == ids[0] && (keys["from"] as? String)?.hasSuffix("/a.txt") == true
+                    && (keys["trashed"] as? String)?.hasPrefix(home.root.appendingPathComponent("Trash").spelledOnDisk.path) == true,
+                "document, from and trashed keep their meaning: \(keys.keys.sorted())")
+        let entry = try #require(keys["entry"] as? [String: Any], "and the entry that puts it back is there")
+        #expect(entry["file"] as? String == "a.txt" && entry["uid"] is String, "the document's record file entry: \(entry.keys.sorted())")
+    }
+
+    @Test func aRemovedDocumentIsPutBackFromTheCommandLine() throws {
+        let home = try Home.make()
+        defer { home.cleanup() }
+        let ids = try file(home, [("a.txt", [DocumentLabel(kind: .type, value: "invoice")]), ("b.txt", [])])
+        let removed = try JSON.decoder.decode(RemovedPayload.self, from: try run(home, ["review", "remove", "--json", String(ids[0])]).stdout)
+
+        let back = try run(home, ["review", "put-back", "--json", String(ids[0])])
+        let document = try JSON.decoder.decode(DocumentRecord.self, from: back.stdout)
+        #expect(document.id == ids[0] && URL(fileURLWithPath: document.path).spelledOnDisk.path == removed.from,
+                "the same document is back where it was: \(back.text) \(back.stderr)")
+        #expect(FileManager.default.fileExists(atPath: removed.from) && removed.trashed.map { !FileManager.default.fileExists(atPath: $0) } == true,
+                "its file left the Trash")
+
+        let twice = try run(home, ["review", "put-back", String(ids[0])])
+        #expect(twice.status != 0 && twice.stderr.contains("already put back") && twice.stdout.isEmpty,
+                "put back once: the refusal is on standard error, and standard output is empty: \(twice.stderr)")
+        let never = try run(home, ["review", "put-back", "4242"])
+        #expect(never.status != 0 && never.stderr.contains("4242") && never.stdout.isEmpty, "a number never removed is refused: \(never.stderr)")
+        let named = try run(home, ["review", "put-back", "a.txt"])
+        #expect(named.status == Self.usageError, "a name is no number: \(named.stderr)")
+
+        let plain = try run(home, ["review", "remove", String(ids[0])])
+        #expect(plain.status == 0, "it can be removed again: \(plain.stderr)")
+        let output = try run(home, ["review", "put-back", String(ids[0])])
+        #expect(output.text.hasPrefix("#\(ids[0]) filed: ") && output.text.hasSuffix("a.txt\n"), "and put back, printed as the other review commands do: \(output.text)")
+    }
+
     @Test func evalRefusesARunWhoseModelOllamaDoesNotHaveNamingIt() throws {
         let ollama = try LoopbackOllama()
         defer { ollama.stop() }

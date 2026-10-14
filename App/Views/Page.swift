@@ -240,12 +240,14 @@ struct EmptyState<Action: View>: View {
 struct Notice: View {
     let text: String
     var action: (title: String, run: () -> Void)?
+    /// What VoiceOver calls the action's button when its title alone does not say what it acts on.
+    var actionName: String?
 
     var body: some View {
         HStack(spacing: Style.noticeSpacing) {
             Image(systemName: "info.circle").foregroundStyle(Palette.attention)
             Text(text).foregroundStyle(.secondary)
-            if let action { Button(action.title, action: action.run).buttonStyle(.link) }
+            if let action { Button(action.title, action: action.run).buttonStyle(.link).accessibilityLabel(actionName ?? action.title) }
             Spacer()
         }
         .font(.callout)

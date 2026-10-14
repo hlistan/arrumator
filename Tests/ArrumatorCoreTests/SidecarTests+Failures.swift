@@ -11,6 +11,7 @@ extension SidecarTests {
     /// A Trash that takes nothing, as a volume without one.
     struct RefusingTrash: Trashing {
         func trash(_ url: URL) throws -> URL? { throw CocoaError(.fileWriteNoPermission) }
+        func holds(_ url: URL) -> Bool { false }
     }
 
     /// What History says of sidecars not written.

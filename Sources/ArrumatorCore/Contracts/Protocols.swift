@@ -70,4 +70,7 @@ public protocol FolderArchiving: Sendable {
 public protocol Trashing: Sendable {
     /// Moves the file at `url` to the Trash; where it went, when that can be told.
     func trash(_ url: URL) throws -> URL?
+    /// Whether the item at `url` is in this Trash, at any depth, however either is spelled (`URL.holds`): where a file it
+    /// was given is taken back from, and nowhere else.
+    func holds(_ url: URL) -> Bool
 }

@@ -19,6 +19,10 @@ public enum FileOperationError: Error, LocalizedError {
     /// A package holds more items than the limit (`watcher.maxPackageItems`): too many for one document, as a photo
     /// library or an app holds; it is not walked further, nor taken.
     case tooManyItems(String, limit: Int)
+    /// The file to bring back is not in the Trash the app was given: only what the Trash holds is taken out of it.
+    case sourceNotInTrash(String)
+    /// The item to bring back is a link, which is not the file it was recorded as, and which would be moved as the link.
+    case sourceIsALink(String)
 
     public var errorDescription: String? {
         switch self {
@@ -34,6 +38,8 @@ public enum FileOperationError: Error, LocalizedError {
         case let .folderMissing(p): "The folder \(p) is not there, as when its disk is not attached: nothing is moved into it"
         case let .tooManyItems(p, limit):
             "\((p as NSString).lastPathComponent) holds more than \(Format.count(limit, "item")), too many for one document (watcher.maxPackageItems)"
+        case let .sourceNotInTrash(p): "\(p) is not in the Trash, so it is not taken out of it"
+        case let .sourceIsALink(p): "\(p) is a link, not a file, so it is not taken out of the Trash"
         }
     }
 }
@@ -98,10 +104,49 @@ public struct FileOperations: Sendable {
         do {
             _ = try trash.trash(source)
         } catch {
-            throw FileOperationError.sourceNotTrashed(source.path, reason: error.localizedDescription, copy: takeBack(destination))
+            throw FileOperationError.sourceNotTrashed(source.path, reason: error.localizedDescription, copy: trashOrReport(destination))
         }
         Log.info(.fileops, "Copied across volumes and trashed source", ["from": source.path, "to": destination.path])
         return MoveResult(from: source.path, to: destination.path, crossVolume: true, collisionIndex: collision)
+    }
+
+    /// Brings a file out of the Trash to `destination`, a free path in a folder that is there, inside `root`: a rename on
+    /// one volume; across volumes, a copy that hashes as `expectedSHA256` is put in place with its dates, as `move` puts
+    /// one, and the source stays where it is in the Trash, as a file in the Trash goes nowhere but to the Trash and is
+    /// never deleted (§4.2). It makes no folder: the folders of the archive are the user's, and one that is gone is
+    /// `folderMissing` (`ReviewActions.putBack` chooses a folder that is there). What a failure leaves is what `move`
+    /// leaves: `destination` never holds anything but a whole, checked file, and no copy in progress. Only a file the
+    /// Trash holds (`Trashing.holds`) is brought back, never a link: a path read from a record is no leave to take any
+    /// other file, and a link would be moved as the link.
+    public func bringBack(_ source: URL, to destination: URL, within root: URL, expectedSHA256: String) throws -> MoveResult {
+        let fm = FileManager.default
+        guard trash.holds(source) else { throw FileOperationError.sourceNotInTrash(source.path) }
+        guard let attributes = try? fm.attributesOfItem(atPath: source.path) else { throw FileOperationError.sourceMissing(source.path) }
+        guard attributes[.type] as? FileAttributeType != .typeSymbolicLink else { throw FileOperationError.sourceIsALink(source.path) }
+        let directory = destination.deletingLastPathComponent()
+        var isFolder: ObjCBool = false
+        guard fm.fileExists(atPath: root.path, isDirectory: &isFolder), isFolder.boolValue else { throw FileOperationError.folderMissing(root.path) }
+        guard fm.fileExists(atPath: directory.path, isDirectory: &isFolder), isFolder.boolValue else { throw FileOperationError.folderMissing(directory.path) }
+        guard root.holds(destination.path) else { throw FileOperationError.notAFileName(destination.path) }
+        if sameVolume(source, directory) {
+            try fm.moveItem(at: source, to: destination)
+            Log.info(.fileops, "Brought back from the Trash", ["from": source.path, "to": destination.path])
+            return MoveResult(from: source.path, to: destination.path, crossVolume: false, collisionIndex: nil)
+        }
+        try place(copyOf: source, at: destination, expectedSHA256: expectedSHA256)
+        Log.info(.fileops, "Copied back from the Trash across volumes", ["from": source.path, "to": destination.path])
+        return MoveResult(from: source.path, to: destination.path, crossVolume: true, collisionIndex: nil)
+    }
+
+    /// Undoes `bringBack` when the document it was for cannot be recorded: a file renamed goes back to exactly where it
+    /// was in the Trash, not to a new place of it; a copy made across volumes goes to the Trash, never deleted, the
+    /// original being there still. The Trash refusing the copy throws what it threw, and the copy stays where it is.
+    public func takeBack(_ moved: MoveResult) throws {
+        if moved.crossVolume {
+            _ = try trash.trash(URL(fileURLWithPath: moved.to))
+        } else {
+            try FileManager.default.moveItem(at: URL(fileURLWithPath: moved.to), to: URL(fileURLWithPath: moved.from))
+        }
     }
 
     /// Makes the folders from `root`, which must be there, down to `directory`, one at a time, so a `root` that goes
@@ -162,7 +207,7 @@ public struct FileOperations: Sendable {
 
     /// Takes a copy just put in place back out, to the Trash, when the move it was made for cannot be finished; where it
     /// stays when the Trash will not take it either.
-    private func takeBack(_ copy: URL) -> String? {
+    private func trashOrReport(_ copy: URL) -> String? {
         do {
             _ = try trash.trash(copy)
             return nil
