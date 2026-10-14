@@ -20,11 +20,6 @@ import Testing
         }
     }
 
-    private func removal(_ h: Harness) async throws -> (EventRecord, RemovedPayload) {
-        let event = try #require(try await h.services.history.events(limit: 5, kinds: [.documentRemoved]).first)
-        return (event, try #require(JSON.decode(RemovedPayload.self, from: event.payloadJson)))
-    }
-
     @Test func aRemovedDocumentsFileGoesToTheTrashAndNothingOfItIsLeftInTheIndexOrItsRecordFile() async throws {
         let w = try await RecordsWorld.make()
         defer { w.h.env.cleanup() }
@@ -49,16 +44,43 @@ import Testing
                     && h.env.trashed().count == 1,
                 "nor is its sidecar beside where it was, which held what the app wrote, so it is gone rather than in the Trash")
 
-        let (event, payload) = try await removal(h)
+        let (event, payload) = try await PuttingBackDocumentsTests.removal(h)
         #expect(event.actor == .user && event.summary == "Removed “\(doc.filename)”; its file is in the Trash",
                 "History says the user removed it and where its file went")
-        #expect(payload == RemovedPayload(document: id, from: filedOnDisk, trashed: trashed.first?.spelledOnDisk.path),
-                "and keeps its number and both paths, as the disk spells them")
+        #expect(payload == RemovedPayload(document: id, from: filedOnDisk, trashed: trashed.first?.spelledOnDisk.path, entry: DocumentEntry(doc)),
+                "and keeps its number, both paths, as the disk spells them, and its record file's entry")
 
         let (database, records) = try w.freshIndex()
         _ = try await records.rebuild()
         #expect(try await DocumentStore(database: database, time: TestTime(.advances)).document(id: id) == nil,
                 "a rebuild of the index from the archive does not bring it back")
+    }
+
+    @Test func theRemovalKeepsTheDocumentsEntryThroughHistoryAndARebuild() async throws {
+        let w = try await RecordsWorld.make()
+        defer { w.h.env.cleanup() }
+        let h = w.h
+        let id = try #require(w.documents.first)
+        let (tag, sender) = (PuttingBackDocumentsTests.tag, PuttingBackDocumentsTests.handSender)
+        try await h.review.edit(id, fileName: nil, labels: LabelEdit(adding: [tag, sender]))
+        let record = try #require(try await h.services.documents.document(id: id))
+        let entry = try #require(DocumentEntry(record))
+        #expect(entry.labels?.contains(tag) == true && entry.byHand == [sender] && entry.analysis?.model == "stub",
+                "the entry holds a tag, a label given by hand and how the model read it")
+
+        try await h.review.remove(id)
+        let (event, payload) = try await PuttingBackDocumentsTests.removal(h)
+        #expect(payload.entry == entry, "History keeps the entry as it was when the document was removed")
+        try await w.records.flush()
+        let month = RecordKind.month(of: event.at)
+        let text = try String(contentsOf: h.env.layout.historyFile(month: month), encoding: .utf8)
+        #expect(text.contains(entry.uid) && text.contains(sender.value), "the month's History file holds it")
+
+        let (database, records) = try w.freshIndex()
+        _ = try await records.rebuild()
+        let again = try #require(try await HistoryStore(database: database, time: TestTime(.advances)).events(limit: 5, kinds: [.documentRemoved]).first)
+        #expect(JSON.decode(RemovedPayload.self, from: again.payloadJson)?.entry == entry,
+                "and a rebuild of the index reads it back unchanged (dates are whole seconds under `TestTime`, as JSON writes them)")
     }
 
     @Test func aDocumentBackInIncomingIsRemovedFromThere() async throws {
@@ -83,7 +105,7 @@ import Testing
         try await h.review.remove(id)
         #expect(try await h.services.documents.document(id: id) == nil, "it leaves the index")
         #expect(h.env.trashed().isEmpty, "with nothing put in the Trash")
-        let (event, payload) = try await removal(h)
+        let (event, payload) = try await PuttingBackDocumentsTests.removal(h)
         #expect(event.summary == "Removed “\(doc.filename)”; its file was not there" && payload.trashed == nil && payload.from == doc.path,
                 "History says its file was not there, where the index had it")
     }
@@ -91,6 +113,7 @@ import Testing
     /// A Trash that takes nothing, as one on a volume without one.
     struct RefusingTrash: Trashing {
         func trash(_ url: URL) throws -> URL? { throw CocoaError(.fileWriteNoPermission) }
+        func holds(_ url: URL) -> Bool { false }
     }
 
     @Test func aFileTheTrashRefusesStaysAndSoDoesItsDocument() async throws {
@@ -128,7 +151,7 @@ import Testing
         try await h.review.remove(id)
         #expect(FileManager.default.fileExists(atPath: doc.path) && h.env.trashed().isEmpty, "the other file stays where it is")
         #expect(try await h.services.documents.document(id: id) == nil, "and the document, whose file is not there, leaves the index")
-        let (event, payload) = try await removal(h)
+        let (event, payload) = try await PuttingBackDocumentsTests.removal(h)
         #expect(event.summary.hasSuffix("its file was not there") && payload.trashed == nil, "History says its file was not there")
     }
 
@@ -193,8 +216,65 @@ import Testing
         try await h.review.remove(id)
         #expect(!FileManager.default.fileExists(atPath: planned.path) && h.env.trashed().map(\.lastPathComponent) == ["EDP bill.txt"],
                 "its file goes to the Trash from where the move left it, carrying its identifier")
-        let (_, payload) = try await removal(h)
+        let (_, payload) = try await PuttingBackDocumentsTests.removal(h)
         #expect(payload.from == planned.spelledOnDisk.path, "and History says it was there")
+    }
+
+    /// A way a document may not be removed yet, each on its own (`ReviewActions.removalRefusal`).
+    enum Refusing: String, CaseIterable, CustomTestStringConvertible, Sendable {
+        case arrived, processing, readIn, moving
+        var testDescription: String { rawValue }
+    }
+
+    @Test(arguments: Refusing.allCases)
+    func theListingRefusesARemovalExactlyAsRemoveDoes(_ condition: Refusing) async throws {
+        let h = try await Harness.make()
+        defer { h.env.cleanup() }
+        let doc = try await h.ingest("bill.txt", text: IngestTests.bill)
+        let id = try #require(doc.id)
+        switch condition {
+        case .arrived, .processing:
+            try await h.env.database.writer.write { db in
+                try db.execute(sql: "UPDATE documents SET status = ? WHERE id = ?", arguments: [condition.rawValue, id])
+            }
+        case .readIn:
+            _ = try await h.services.jobs.enqueue(path: doc.path, kind: .ingest, docID: id)
+        case .moving:
+            let job = try await h.services.queueReadingAgain(id, settings: await h.services.settings.current)
+            let claim = h.services.claims.make()
+            try await h.env.database.writer.write { db in
+                try db.execute(sql: """
+                    UPDATE jobs SET state = 'filing', claim = ?, claimed_by = ?, payload_json = json_set(payload_json, '$.plannedPath', ?)
+                    WHERE id = ?
+                    """, arguments: [claim, h.services.claims.process, h.env.archive.appendingPathComponent("EDP/bill.txt").path, job])
+            }
+        }
+        let read = try #require(try await h.services.documents.document(id: id))
+        let listed = try await h.review.removalRefusals(of: [read])
+        let expected: IngestError = condition == .moving ? .beingMoved(id, name: doc.filename) : .beingReadIn(id, name: doc.filename)
+        #expect(listed[id] == expected, "the listing says what removing it then says, for \(condition)")
+        await #expect(throws: expected, "removing it is then refused so") { try await h.review.remove(id) }
+        #expect(FileManager.default.fileExists(atPath: doc.path) && h.env.trashed().isEmpty, "its file has not moved")
+        #expect(try await !h.review.choices(for: read).actions.contains(.remove), "and its card offers no removal")
+    }
+
+    @Test(arguments: [DocumentStatus.filed, .needsReview, .failed, .held, .undone, .duplicate, .missing])
+    func everyOtherStatusIsListedRemovableAndIsRemoved(_ status: DocumentStatus) async throws {
+        let h = try await Harness.make()
+        defer { h.env.cleanup() }
+        let other = try #require(try await h.ingest("other.txt", text: "Another letter about something else.").id)
+        let doc = try await h.ingest("bill.txt", text: IngestTests.bill)
+        let id = try #require(doc.id)
+        try await h.env.database.writer.write { db in
+            try db.execute(sql: "UPDATE documents SET status = ?, duplicate_of = ? WHERE id = ?",
+                           arguments: [status.rawValue, status == .duplicate ? other : nil, id])
+        }
+        if status == .missing { try FileManager.default.removeItem(at: doc.url) }
+        let read = try #require(try await h.services.documents.document(id: id))
+        #expect(try await h.review.removalRefusals(of: [read]).isEmpty, "nothing refuses the removal of a \(status) document")
+        #expect(try await h.review.choices(for: read).actions.contains(.remove), "its card offers it")
+        try await h.review.remove(id)
+        #expect(try await h.services.documents.document(id: id) == nil, "and it is removed")
     }
 
     @Test func aFileInTheTrashWhoseRemovalIsNotRecordedComesBack() async throws {
@@ -206,7 +286,8 @@ import Testing
         try await h.env.database.writer.write { db in
             try db.execute(sql: "CREATE TEMP TRIGGER unrecorded BEFORE DELETE ON documents BEGIN SELECT RAISE(ABORT, 'disk full'); END")
         }
-        await #expect(throws: (any Error).self, "the removal fails") { try await h.review.remove(id) }
+        let error = try await #require(throws: DatabaseError.self, "the removal fails with the record's error") { try await h.review.remove(id) }
+        #expect(error.message?.contains("disk full") == true, "the one the trigger raised: \(error)")
         #expect(FileManager.default.fileExists(atPath: doc.path) && h.env.trashed().isEmpty, "its file is back where it was, not in the Trash")
         #expect(try await h.services.documents.document(id: id) == doc, "and the document is as it was")
     }
@@ -224,7 +305,8 @@ import Testing
                 CREATE TEMP TRIGGER uncommitted AFTER DELETE ON main.documents BEGIN INSERT INTO keeping (kept) VALUES (-1); END
                 """)
         }
-        await #expect(throws: (any Error).self, "the removal fails") { try await h.review.remove(id) }
+        let error = try await #require(throws: DatabaseError.self, "the removal fails as it commits") { try await h.review.remove(id) }
+        #expect(error.message?.contains("FOREIGN KEY") == true, "with the constraint checked then: \(error)")
         #expect(FileManager.default.fileExists(atPath: doc.path) && h.env.trashed().isEmpty, "its file is back where it was, not in the Trash")
         #expect(try await h.services.documents.document(id: id) == doc, "and the document is as it was")
     }

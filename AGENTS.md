@@ -163,9 +163,13 @@ These are rules you can check, not aspirations. Each row says how it is checked;
    rebuilt from its archive, is held and recorded when it can (`HistoryStore.insert`), never refused after the change.
    An action that would change nothing records nothing, and one that does not apply to the item as it is, such as an
    undo of a document not in the archive, is refused before it touches a file, both decided where they act
-   (`ReviewActions.confirm`, `undo`). What History says is what happened: never a move to where a file was, a name it no
-   longer had, or "nothing worth a label" for a file nothing could be read of (`DocumentFiler.summary`), and paths in
-   one spelling, as the disk spells them.
+   (`ReviewActions.confirm`, `undo`). An action that undoes another, as a put-back a removal, takes back what that one
+   took by the same rule, never a stricter or looser one, tested as a pair on each state the first accepts
+   (`PutBackRule.onDisk`, `ReviewActions.ownFile`); and as a record file is the user's to edit, a path it reads back
+   from one is held to the folder it must be in before anything touches it (`Trashing.holds`), never trusted as written.
+   What History says is what happened: never a move to where a file was, a name it no longer had, or "nothing worth a
+   label" for a file nothing could be read of (`DocumentFiler.summary`), and paths in one spelling, as the disk spells
+   them.
    Its counts and drop-off reasons show up under the right funnel step (`ProcessingFunnel`) in Statistics and in
    `arrumatorcli funnel`.
 5. **What the model is asked is a contract; what it answers is untrusted input.** Its answer schemas, its prompts and

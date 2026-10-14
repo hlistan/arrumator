@@ -44,16 +44,21 @@ public struct LabelEdit: Sendable, Hashable {
 /// What the user can do with a document from its card, beside correcting its name and labels.
 public enum DocumentAction: String, Sendable, Hashable, CaseIterable {
     case undo, confirm, hold, readAgain
-    /// Move its file to the Trash and take it out of the archive (`ReviewActions.remove`).
+    /// Move its file to the Trash and take it out of the archive (`ReviewActions.remove`); it can be put back while its file is
+    /// in the Trash (`ReviewActions.putBack`).
     case remove
 }
 
 /// What History keeps of a document removed (`ReviewActions.remove`): its number, which the index no longer has, where
-/// its file was, as the disk spells it, and where the Trash put it; nil when it had no file to move, as one missing.
+/// its file was, as the disk spells it, and where the Trash put it (nil when it had no file to move, as one missing), and
+/// its record file's entry as it was, which puts the document back (`ReviewActions.putBack`).
 public struct RemovedPayload: Sendable, Codable, Hashable {
     public var document: Int64
     public var from: String
     public var trashed: String?
+    /// The document as its record file lists it, taken in the removal's transaction; absent in a removal recorded by a
+    /// release before it was kept, which cannot be put back (§4.2: a new key, optional, never one an earlier version wrote).
+    public var entry: DocumentEntry?
 }
 
 /// What a document's card offers, decided where the document is: the actions in the order they are shown, whether it
@@ -104,23 +109,49 @@ public struct ReviewActions: Sendable {
         case .held, .undone: [.readAgain]
         case .arrived, .processing, .duplicate, .missing: []
         }
-        // Any document can be removed, but one being read in, which its reading files.
-        if ![.arrived, .processing].contains(document.status) { actions.append(.remove) }
-        // Its reading in not ended, as in the instant between its filing and its job's end, it is neither undone, left
-        // for later nor removed (`undo`, `hold`, `remove`), nor read again where that reading's job is
-        // (`PipelineServices.queueReadingAgain`), so none of those is offered; nor removed while reading it again moves
-        // its file (`remove`). The card asks again as the worker moves on.
-        if let id = document.id, !actions.isEmpty {
+        // Its reading in not ended, as in the instant between its filing and its job's end, it is neither undone nor left
+        // for later (`undo`, `hold`), nor read again where that reading's job is (`PipelineServices.queueReadingAgain`),
+        // so none of those is offered. It is removed unless the one rule of removal refuses it (`removalRefusal`). The
+        // card asks again as the worker moves on.
+        if let id = document.id {
             let claims = services.claims
-            let (readIn, here, moving) = try await services.database.reader.read { db in
-                (try JobStore.isReadIn(db, docID: id), try JobStore.isReadIn(db, docID: id, at: document.path),
-                 try JobStore.plannedMove(db, docID: id, claims: claims)?.held == true)
+            let (here, refusal) = try await services.database.reader.read { db in
+                (try JobStore.isReadIn(db, docID: id, at: document.path), try Self.removalRefusal(db, of: document, claims: claims).refusal)
             }
-            if readIn { actions.removeAll { [.undo, .hold, .remove].contains($0) } }
+            // The rule refuses a reading in that has not ended (`beingReadIn`), which is what takes these two away.
+            if case .beingReadIn? = refusal { actions.removeAll { [.undo, .hold].contains($0) } }
             if here { actions.removeAll { $0 == .readAgain } }
-            if moving { actions.removeAll { $0 == .remove } }
+            if refusal == nil { actions.append(.remove) }
         }
         return DocumentChoices(actions: actions, notFiled: !inArchive && document.status == .failed, confirmed: confirmed)
+    }
+
+    /// Why document `doc` cannot be removed now, in a transaction of the caller's; nil when it can, with the move planned for
+    /// its file that the rule read to decide it (`JobStore.plannedMove`), which `remove` follows. The one rule of removal,
+    /// which `remove` applies where it acts, `choices(for:)` and `removalRefusals(of:)` apply to say it before it is asked:
+    /// a document being read in (`arrived` or `processing`, or whose reading in has not ended), as that reading would
+    /// file it again (`IngestError.beingReadIn`), and one a worker reading it again holds while it may be moving its
+    /// file (`IngestError.beingMoved`).
+    static func removalRefusal(_ db: Database, of doc: DocumentRecord, claims: JobClaims)
+        throws -> (refusal: IngestError?, move: (path: String, held: Bool)?) {
+        guard let id = doc.id else { return (nil, nil) }
+        if [DocumentStatus.arrived, .processing].contains(doc.status) { return (.beingReadIn(id, name: doc.filename), nil) }
+        if try JobStore.isReadIn(db, docID: id) { return (.beingReadIn(id, name: doc.filename), nil) }
+        let move = try JobStore.plannedMove(db, docID: id, claims: claims)
+        return (move?.held == true ? .beingMoved(id, name: doc.filename) : nil, move)
+    }
+
+    /// Why each of `documents` cannot be removed now (`removalRefusal`), by number; one that can be is not in it. One read
+    /// for all of them, so a list says it for every row as it is read, not per row per redraw.
+    public func removalRefusals(of documents: [DocumentRecord]) async throws -> [Int64: IngestError] {
+        let claims = services.claims
+        return try await services.database.reader.read { db in
+            var refusals: [Int64: IngestError] = [:]
+            for doc in documents {
+                if let id = doc.id, let refusal = try Self.removalRefusal(db, of: doc, claims: claims).refusal { refusals[id] = refusal }
+            }
+            return refusals
+        }
     }
 
     /// The events that change what a confirmation was of: a reading, a filing, a correction, an undo, and a change to its
@@ -288,15 +319,14 @@ public struct ReviewActions: Sendable {
         // The archive's watcher is told, so the file leaving is no change of the user's to follow.
         await services.filer.registry.expect([known.path] + [planned].compactMap { $0 })
         let (database, trash, now) = (services.database, services.trash, services.time.now())
-        let moved = TrashedFile()
+        let moved = Kept<(trashed: URL, from: URL)>()
         let removed: RemovedPayload
         do {
             removed = try await Task {
                 try await database.writer.write { db in
                     guard let doc = try DocumentRecord.fetchOne(db, key: docID) else { throw IngestError.documentNotFound(docID) }
-                    guard try !JobStore.isReadIn(db, docID: docID) else { throw IngestError.beingReadIn(docID, name: doc.filename) }
-                    let move = try JobStore.plannedMove(db, docID: docID, claims: claims)
-                    guard move?.held != true else { throw IngestError.beingMoved(docID, name: doc.filename) }
+                    let (refusal, move) = try Self.removalRefusal(db, of: doc, claims: claims)
+                    if let refusal { throw refusal }
                     let file = Self.ownFile(of: doc, movedTo: move?.path)
                     let from = file?.spelledOnDisk.path ?? doc.path
                     var trashed: URL?
@@ -305,7 +335,7 @@ public struct ReviewActions: Sendable {
                         moved.keep(trashed.map { (trashed: $0, from: file) })
                     }
                     _ = try DocumentRecord.deleteOne(db, key: docID)
-                    let removed = RemovedPayload(document: docID, from: from, trashed: trashed?.spelledOnDisk.path)
+                    let removed = RemovedPayload(document: docID, from: from, trashed: trashed?.spelledOnDisk.path, entry: DocumentEntry(doc))
                     try HistoryStore.insert(db, .documentRemoved, at: now, actor: .user,
                                             summary: "Removed “\(doc.filename)”" + (file != nil ? "; its file is in the Trash" : "; its file was not there"),
                                             payload: removed)
@@ -334,12 +364,12 @@ public struct ReviewActions: Sendable {
         return Xattr.get(Xattr.documentID, from: url) == doc.uid ? url : nil
     }
 
-    /// The file a removal put in the Trash, and where it was, kept past the transaction, so it is put back should the
-    /// transaction then fail, at its commit too.
-    private final class TrashedFile: Sendable {
-        private let file = Mutex<(trashed: URL, from: URL)?>(nil)
-        var kept: (trashed: URL, from: URL)? { file.withLock { $0 } }
-        func keep(_ moved: (trashed: URL, from: URL)?) { file.withLock { $0 = moved } }
+    /// What a file moved inside a transaction leaves to undo it with (a removal's `(trashed:from:)`, a put-back's
+    /// `MoveResult`), kept past the transaction, so the move is undone should the transaction then fail, at its commit too.
+    final class Kept<Value: Sendable>: Sendable {
+        private let value = Mutex<Value?>(nil)
+        var kept: Value? { value.withLock { $0 } }
+        func keep(_ moved: Value?) { value.withLock { $0 = moved } }
     }
 
     /// Applies the user's corrections: a new file name renames the file where it is, and `labels`, when given, are

@@ -12,6 +12,7 @@ struct ProcessedPage: View {
 
     var body: some View {
         Page(.processed) {
+            RemovedNotice()
             if let task = model.session.collecting { CollectingBar(task: task) }
             if documents.isEmpty {
                 EmptyState(symbol: "checkmark.circle", text: Wording.nothingProcessed)
@@ -23,19 +24,31 @@ struct ProcessedPage: View {
         }
         .task(id: "\(pages)|\(model.activity)|\(model.session.openDocument == nil)") {
             let pages = pages
-            guard let loaded = await model.load(Wording.loadProcessedAction, {
-                try await $0.services.documents.list(DocumentFilter(statuses: DocumentStatus.processed), order: .recentlyProcessed,
-                                                     limit: pages * $0.config.interface.pageSize)
+            let cardOpen = model.session.openDocument != nil && !documents.isEmpty
+            let shown = cardOpen ? documents.compactMap(\.id) : []
+            guard let ((loaded, gone), refusals) = await model.load(Wording.loadProcessedAction, withRefusals: { runtime in
+                let loaded = try await runtime.services.documents.list(DocumentFilter(statuses: DocumentStatus.processed), order: .recentlyProcessed,
+                                                                       limit: pages * runtime.config.interface.pageSize)
+                // A row kept under an open card that the page no longer lists is gone only if the index no longer has it: a
+                // document filed meanwhile pushes the last row off the page, which is still a document.
+                let listed = Set(loaded.compactMap(\.id))
+                let missing = shown.filter { !listed.contains($0) }
+                let kept = Set(try await runtime.services.documents.documents(ids: missing).compactMap(\.id))
+                return ((loaded, Set(missing).subtracting(kept)), loaded)
             }) else { return }
-            // While a card is open, the rows keep their places, each brought up to date: a document filed meanwhile would
-            // go in above and move the card from under the reader. It shows once the card is closed.
-            if model.session.openDocument != nil, !documents.isEmpty {
+            // While a card is open, the rows keep their places, each brought up to date, and one that left the index (it
+            // was removed from another row) leaves the list: a document filed meanwhile would go in above and move the
+            // card from under the reader. It shows once the card is closed.
+            if cardOpen {
                 let byID = Dictionary(loaded.compactMap { d in d.id.map { ($0, d) } }, uniquingKeysWith: { first, _ in first })
-                documents = documents.map { d in d.id.flatMap { byID[$0] } ?? d }
+                documents = documents.compactMap { d in
+                    guard let id = d.id else { return d }
+                    return byID[id] ?? (gone.contains(id) ? nil : d)
+                }
             } else {
                 documents = loaded
             }
-            sections = DocumentSection.sections(of: model.listed(documents), heading: Wording.processedDay)
+            sections = DocumentSection.sections(of: model.listed(documents, refusals: refusals), heading: Wording.processedDay)
         }
     }
 }

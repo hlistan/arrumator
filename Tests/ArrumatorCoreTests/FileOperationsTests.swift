@@ -32,6 +32,8 @@ struct PickyTrash: Trashing {
         }
         return try folder.trash(url)
     }
+
+    func holds(_ url: URL) -> Bool { folder.holds(url) }
 }
 
 /// How the app knows a file and a package on disk, and moves them: what a package holds is the package, which is weighed
@@ -278,6 +280,147 @@ struct PickyTrash: Trashing {
         }
         #expect(!FileManager.default.fileExists(atPath: archive.path) && FileManager.default.fileExists(atPath: source.path),
                 "and is not made again where it was: the file stays where it is")
+    }
+
+    // MARK: Bringing a file back from the Trash
+
+    /// A file in the Trash, as a removal left it, and the folder it goes back into.
+    private func trashedFile(_ env: TestEnvironmentSync) throws -> (inTrash: URL, folder: URL, was: URL) {
+        let (source, folder) = try setUp(env)
+        let trash = folderTrash(env)
+        let inTrash = try #require(try trash.trash(source))
+        return (inTrash, folder, source)
+    }
+
+    @Test func bringBackRenamesOnOneVolumeAndTakeBackPutsItExactlyWhereItWas() throws {
+        let env = try TestEnvironmentSync.make()
+        defer { env.cleanup() }
+        let (inTrash, folder, _) = try trashedFile(env)
+        let sha = try HashService.sha256(of: inTrash)
+        let operations = FileOperations(trash: folderTrash(env), sameVolume: { _, _ in true })
+        let destination = folder.appendingPathComponent("scan.pdf")
+        let moved = try operations.bringBack(inTrash, to: destination, within: folder, expectedSHA256: sha)
+        #expect(!moved.crossVolume && moved.from == inTrash.path && moved.to == destination.path, "on one volume it is a rename")
+        #expect(!FileManager.default.fileExists(atPath: inTrash.path) && FileManager.default.fileExists(atPath: destination.path),
+                "the file has left the Trash")
+        try operations.takeBack(moved)
+        #expect(FileManager.default.fileExists(atPath: inTrash.path) && !FileManager.default.fileExists(atPath: destination.path),
+                "and taken back it is exactly where it was in the Trash, not in a new place of it")
+        #expect(trashed(folderTrash(env)) == ["scan.pdf"], "the Trash holds the one file")
+    }
+
+    @Test func bringBackAcrossVolumesPlacesACheckedCopyAndLeavesTheSource() throws {
+        let env = try TestEnvironmentSync.make()
+        defer { env.cleanup() }
+        let (inTrash, folder, _) = try trashedFile(env)
+        let sha = try HashService.sha256(of: inTrash)
+        let trash = folderTrash(env)
+        let operations = FileOperations(trash: trash, sameVolume: Self.otherVolume)
+        let destination = folder.appendingPathComponent("scan.pdf")
+        let moved = try operations.bringBack(inTrash, to: destination, within: folder, expectedSHA256: sha)
+        #expect(moved.crossVolume, "across volumes it is a copy")
+        #expect(try HashService.sha256(of: destination) == sha, "that hashes as the document")
+        #expect(FileManager.default.fileExists(atPath: inTrash.path), "the original stays in the Trash, never deleted")
+        #expect(try names(in: folder) == ["scan.pdf"], "and no copy in progress is left beside the document")
+        try operations.takeBack(moved)
+        #expect(!FileManager.default.fileExists(atPath: destination.path) && trashed(trash).sorted() == ["scan.pdf", "scan.pdf"],
+                "taken back, the copy goes to the Trash, never deleted, beside the original")
+    }
+
+    @Test func bringBackTakesNothingThatTheTrashItWasGivenDoesNotHold() throws {
+        let env = try TestEnvironmentSync.make()
+        defer { env.cleanup() }
+        let (inTrash, folder, _) = try trashedFile(env)
+        let outside = env.root.appendingPathComponent("Elsewhere.pdf")
+        try FileManager.default.copyItem(at: inTrash, to: outside)
+        let operations = FileOperations(trash: folderTrash(env), sameVolume: { _, _ in true })
+        #expect("a file that is not in the Trash is not taken out of it" ) {
+            try operations.bringBack(outside, to: folder.appendingPathComponent("scan.pdf"), within: folder, expectedSHA256: try HashService.sha256(of: outside))
+        } throws: { error in
+            guard case .sourceNotInTrash(outside.path)? = error as? FileOperationError else { return false }
+            return true
+        }
+        #expect(FileManager.default.fileExists(atPath: outside.path) && !FileManager.default.fileExists(atPath: folder.appendingPathComponent("scan.pdf").path),
+                "it stays where it is, and nothing is put in the folder")
+    }
+
+    @Test func bringBackMovesNoLinkEvenOneInTheTrash() throws {
+        let env = try TestEnvironmentSync.make()
+        defer { env.cleanup() }
+        let (inTrash, folder, _) = try trashedFile(env)
+        let target = env.root.appendingPathComponent("Target.pdf")
+        try FileManager.default.moveItem(at: inTrash, to: target)
+        try FileManager.default.createSymbolicLink(at: inTrash, withDestinationURL: target)
+        let operations = FileOperations(trash: folderTrash(env), sameVolume: { _, _ in true })
+        #expect("a link is not the file it was recorded as") {
+            try operations.bringBack(inTrash, to: folder.appendingPathComponent("scan.pdf"), within: folder, expectedSHA256: try HashService.sha256(of: target))
+        } throws: { error in
+            guard case .sourceIsALink(inTrash.path)? = error as? FileOperationError else { return false }
+            return true
+        }
+        #expect((try? FileManager.default.destinationOfSymbolicLink(atPath: inTrash.path)) == target.path
+                    && !FileManager.default.fileExists(atPath: folder.appendingPathComponent("scan.pdf").path), "the link is where it was")
+    }
+
+    @Test func aFolderTrashHoldsWhatIsBelowItAndNothingBesideItOrOutOfItByDotDot() throws {
+        let env = try TestEnvironmentSync.make()
+        defer { env.cleanup() }
+        let trash = folderTrash(env)
+        let inside = trash.folder.appendingPathComponent("one/two/file.pdf")
+        try FileManager.default.createDirectory(at: inside.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let beside = trash.folder.appendingPathExtension("other")
+        try FileManager.default.createDirectory(at: beside, withIntermediateDirectories: true)
+        #expect(trash.holds(inside), "an item below it, at any depth")
+        #expect(trash.holds(trash.folder.appendingPathComponent("not yet there.pdf")), "and one whose place is there")
+        #expect(!trash.holds(beside.appendingPathComponent("file.pdf")), "not one in a folder whose name begins with its own")
+        #expect(!trash.holds(trash.folder.appendingPathComponent("../Elsewhere/file.pdf")), "nor one that gets out of it by ..")
+        #expect(!trash.holds(env.root.appendingPathComponent("file.pdf")), "nor one beside it")
+    }
+
+    @Test func bringBackRefusesACopyThatDoesNotHashAsExpected() throws {
+        let env = try TestEnvironmentSync.make()
+        defer { env.cleanup() }
+        let (inTrash, folder, _) = try trashedFile(env)
+        let operations = FileOperations(trash: folderTrash(env), sameVolume: Self.otherVolume)
+        #expect("another checksum than the file's is a copy that is not the document") {
+            try operations.bringBack(inTrash, to: folder.appendingPathComponent("scan.pdf"), within: folder, expectedSHA256: "0")
+        } throws: { error in
+            guard case .verificationFailed(inTrash.path)? = error as? FileOperationError else { return false }
+            return true
+        }
+        #expect(try names(in: folder).isEmpty && FileManager.default.fileExists(atPath: inTrash.path),
+                "nothing is left at the destination, nor a copy in progress, and the original stays")
+    }
+
+    @Test func bringBackIntoARootThatIsGoneIsFolderMissing() throws {
+        let env = try TestEnvironmentSync.make()
+        defer { env.cleanup() }
+        let (inTrash, folder, _) = try trashedFile(env)
+        try FileManager.default.removeItem(at: folder)
+        let operations = FileOperations(trash: folderTrash(env), sameVolume: { _, _ in true })
+        #expect("the folder is not made again") {
+            try operations.bringBack(inTrash, to: folder.appendingPathComponent("scan.pdf"), within: folder, expectedSHA256: "0")
+        } throws: { error in
+            guard case .folderMissing(folder.path)? = error as? FileOperationError else { return false }
+            return true
+        }
+        #expect(!FileManager.default.fileExists(atPath: folder.path) && FileManager.default.fileExists(atPath: inTrash.path),
+                "no folder is made and the file stays in the Trash")
+    }
+
+    @Test func bringBackMakesNoFolderBelowTheRoot() throws {
+        let env = try TestEnvironmentSync.make()
+        defer { env.cleanup() }
+        let (inTrash, folder, _) = try trashedFile(env)
+        let operations = FileOperations(trash: folderTrash(env), sameVolume: { _, _ in true })
+        let missing = folder.appendingPathComponent("Gone", isDirectory: true)
+        #expect("a folder of the archive that is gone is not made again") {
+            try operations.bringBack(inTrash, to: missing.appendingPathComponent("scan.pdf"), within: folder, expectedSHA256: "0")
+        } throws: { error in
+            guard case .folderMissing(missing.path)? = error as? FileOperationError else { return false }
+            return true
+        }
+        #expect(try names(in: folder).isEmpty, "nothing is made")
     }
 
     // MARK: A file changed since it was read

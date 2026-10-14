@@ -58,6 +58,8 @@ enum Style {
     static let rowSymbolSpacing: CGFloat = 9
     /// Between a document's row and the button that adds it to a task's set or takes it out.
     static let rowAccessorySpacing: CGFloat = 6
+    /// Moves the document of the row in focus to the Trash, as Finder's Move to Trash does.
+    static let moveToTrashShortcut = KeyboardShortcut(.delete, modifiers: .command)
     /// The column a row's status mark sits in.
     static let rowSymbolWidth: CGFloat = 18
     /// Least space between a row's name and its detail at the end.
@@ -511,6 +513,7 @@ enum EventStyle {
         case .labelAdded: Wording.ruleSymbol(.add)
         case .labelRemoved: "minus.circle"
         case .documentRemoved: "trash"
+        case .documentPutBack: "arrow.up.trash"
         default: taskSymbols[kind] ?? "circle"
         }
     }

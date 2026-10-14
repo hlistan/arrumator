@@ -15,6 +15,7 @@ struct LabelledPage: View {
         let selection = model.session.labelSelection
         Page(title: selection.map(Wording.label).joined(separator: Wording.labelSeparator), symbol: Destination.labelled.symbol,
              tint: Destination.labelled.tint) {
+            RemovedNotice()
             if let task = model.session.collecting { CollectingBar(task: task) }
             HStack(spacing: Style.chipSpacing) {
                 ForEach(selection, id: \.self) { ChosenLabel(label: $0) }
@@ -32,12 +33,12 @@ struct LabelledPage: View {
         .onChange(of: selection) { pages = 1 }
         .task(id: "\(pages)|\(selection)|\(model.activity)") {
             let pages = pages
-            guard let loaded = await model.load(Wording.loadLabelledAction, { runtime in
+            guard let loaded = await model.loadListed(Wording.loadLabelledAction, { runtime in
                 try await runtime.services.documents.list(DocumentFilter(labels: selection), order: .documentDate,
                                                           limit: pages * runtime.config.interface.pageSize)
             }) else { return }
             count = loaded.count
-            sections = DocumentSection.sections(of: model.listed(loaded), heading: Wording.documentMonth)
+            sections = DocumentSection.sections(of: loaded, heading: Wording.documentMonth)
         }
     }
 }

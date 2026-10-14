@@ -176,9 +176,12 @@ public enum EventKind: String, Sendable, Codable, CaseIterable {
     case labelAdded
     /// The user took a label off every document, as a correction; a reading may give it again.
     case labelRemoved
-    /// The user removed a document: its file went to the Trash and it left the index and its record file
-    /// (`ReviewActions.remove`).
+    /// The user removed a document: its file went to the Trash and it left the index and its record file, its entry kept in
+    /// the event so it can be put back (`ReviewActions.remove`, `ReviewActions.putBack`).
     case documentRemoved
+    /// The user put a removed document back: its file came back from the Trash and the document into the index and its
+    /// record file, as it was (`ReviewActions.putBack`).
+    case documentPutBack
     /// The user forgot a rule about labels; readings from then on no longer follow it.
     case labelRuleForgotten
     /// The user asked for documents in their own words: a search task joined the queue.

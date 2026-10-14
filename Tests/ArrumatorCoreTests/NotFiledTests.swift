@@ -40,6 +40,8 @@ struct RefusingOne: Trashing {
         }
         return try folder.trash(url)
     }
+
+    func holds(_ url: URL) -> Bool { folder.holds(url) }
 }
 
 /// What is not filed, and why: a refusal that will not change, a reading taken back when its file changed, what Incoming

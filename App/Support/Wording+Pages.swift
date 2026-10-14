@@ -62,7 +62,14 @@ extension Wording {
     static let moveToTrashHelp = "Take it out of the archive; its file goes to the Trash"
     static let moveToTrash = "Move to Trash"
     static func moveToTrashQuestion(_ name: String) -> String { "Move “\(name)” to the Trash?" }
-    static let movedToTrashMessage = "It leaves the archive with its labels and what was read of it. Its file stays in the Trash until you empty it."
+    static let movedToTrashMessage = "It leaves the archive with its labels and what was read of it. Its file stays in the Trash until you empty it, and you can put it back until then."
+    /// What a document's row says it will do, and what fails when it does not: the file as the app shows it.
+    static func moveToTrashNamed(_ name: String) -> String { "Move “\(name)” to the Trash" }
+    static func movedToTrashNotice(_ name: String) -> String { "Moved “\(name)” to the Trash." }
+    static let putBack = "Put Back"
+    static let putBackHelp = "Bring it back from the Trash, as it was"
+    /// The Put Back button of the notice after a removal, as VoiceOver reads it.
+    static func putBackNamed(_ name: String) -> String { "Put “\(name)” back from the Trash" }
 }
 
 // MARK: Incoming

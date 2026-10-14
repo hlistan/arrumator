@@ -5,24 +5,119 @@ import SwiftUI
 /// Documents the way Things lists to-dos: one line each, what happened to it at the end, its labels beneath, and a
 /// click opens the document in place as a card. While documents are added to a search task, each row ends with a button
 /// that adds it to the task's set or takes it out.
+///
+/// Each row can be moved to the Trash (`ReviewActions.remove`) from its context menu, as an accessibility action and with
+/// the shortcut (`Style.moveToTrashShortcut`) while it has keyboard focus, asking as the card does; one Core would refuse
+/// (`ListedDocument.removalRefusal`) is dimmed in the menu with why, and the action and the shortcut say why instead of
+/// asking. Focus then goes to the row that takes its place.
 struct DocumentList: View {
     @Environment(AppModel.self) private var model
     let documents: [ListedDocument]
+    /// Every document of the page in the order it shows them, across the lists it has, so the row after a removed one is
+    /// the page's next, not only this list's.
+    let pageOrder: [Int64]
+    /// The document whose removal is being asked about.
+    @State private var confirming: Int64?
+    @FocusState private var focused: Int64?
+
+    init(documents: [ListedDocument], pageOrder: [Int64]? = nil) {
+        self.documents = documents
+        self.pageOrder = pageOrder ?? documents.compactMap(\.id)
+    }
 
     var body: some View {
-        ForEach(documents) { listed in
-            if let id = listed.id, model.session.openDocument == id {
-                DocumentCard(documentID: id) { if model.session.openDocument == id { model.session.openDocument = nil } }
-            } else {
-                HStack(spacing: Style.rowAccessorySpacing) {
-                    ListRow(symbol: listed.record.status.symbol, tint: listed.record.status.tint, title: listed.record.filename,
-                            detail: listed.detail, subtitle: listed.labels)
-                        .rowAction { withAnimation(.snappy) { model.session.openDocument = listed.id } }
-                    if let task = model.session.collecting, let id = listed.id {
-                        CollectToggle(task: task, document: id, name: listed.record.filename)
+        Group {
+            ForEach(documents) { listed in
+                if let id = listed.id, model.session.openDocument == id {
+                    DocumentCard(documentID: id) { if model.session.openDocument == id { model.session.openDocument = nil } }
+                } else {
+                    HStack(spacing: Style.rowAccessorySpacing) {
+                        ListRow(symbol: listed.record.status.symbol, tint: listed.record.status.tint, title: listed.record.filename,
+                                detail: listed.detail, subtitle: listed.labels)
+                            .rowAction { withAnimation(.snappy) { model.session.openDocument = listed.id } }
+                            .focused($focused, equals: listed.id)
+                            .accessibilityAction(named: Wording.moveToTrashEllipsis) { ask(listed) }
+                            .onKeyPress(Style.moveToTrashShortcut.key, phases: .down) { press in
+                                // Caps Lock is the keyboard's state, not a key pressed with the chord, as the menu's shortcut takes it.
+                                guard press.modifiers.subtracting(.capsLock) == Style.moveToTrashShortcut.modifiers else { return .ignored }
+                                ask(listed)
+                                return .handled
+                            }
+                            .contextMenu {
+                                Button(Wording.moveToTrashEllipsis) { ask(listed) }
+                                    .keyboardShortcut(Style.moveToTrashShortcut)
+                                    .disabled(listed.removalRefusal != nil)
+                                    .help(listed.removalRefusal.map(Wording.reason) ?? Wording.moveToTrashHelp)
+                            }
+                        if let task = model.session.collecting, let id = listed.id {
+                            CollectToggle(task: task, document: id, name: listed.record.filename)
+                        }
                     }
+                    .confirmsMoveToTrash(isPresented: Binding(get: { confirming == listed.id }, set: { if !$0 { confirming = nil } }),
+                                         name: listed.record.filename) { moveToTrash(listed) }
                 }
             }
+        }
+        .onChange(of: model.session.focusAfterRemoval) { _, next in
+            guard let next, documents.contains(where: { $0.id == next }) else { return }
+            focused = next
+            model.session.focusAfterRemoval = nil
+        }
+    }
+
+    /// Asks whether to move the document to the Trash; when Core would refuse, says why instead, to the eye and to
+    /// VoiceOver, so nothing pressed is met with nothing.
+    private func ask(_ listed: ListedDocument) {
+        guard let refusal = listed.removalRefusal else {
+            confirming = listed.id
+            return
+        }
+        model.refuseMoveToTrash(listed.record.filename, because: refusal)
+        AccessibilityNotification.Announcement(Wording.reason(refusal)).post()
+    }
+
+    /// The row that takes the place of document `id` on the page when it leaves: the next, else the previous, else none.
+    private func neighbour(of id: Int64) -> Int64? {
+        guard let at = pageOrder.firstIndex(of: id) else { return nil }
+        if pageOrder.indices.contains(at + 1) { return pageOrder[at + 1] }
+        return at > 0 ? pageOrder[at - 1] : nil
+    }
+
+    private func moveToTrash(_ listed: ListedDocument) {
+        guard let id = listed.id else { return }
+        let neighbour = neighbour(of: id)
+        Task<Void, Never> {
+            guard await model.moveToTrash(id, name: listed.record.filename) else { return }
+            // To the row that takes its place, or to the page when none is left; a row of another list takes it when it reads.
+            if let neighbour, documents.contains(where: { $0.id == neighbour }) { focused = neighbour } else {
+                focused = nil
+                model.session.focusAfterRemoval = neighbour
+            }
+        }
+    }
+}
+
+extension View {
+    /// The question the card and a document's row ask before a document is moved to the Trash: one dialog for both,
+    /// with Move to Trash and Cancel, which leaves everything as it was.
+    func confirmsMoveToTrash(isPresented: Binding<Bool>, name: String, perform: @escaping () -> Void) -> some View {
+        confirmationDialog(Wording.moveToTrashQuestion(name), isPresented: isPresented) {
+            Button(Wording.moveToTrash, role: .destructive, action: perform)
+        } message: {
+            Text(Wording.movedToTrashMessage)
+        }
+    }
+}
+
+/// Says a document was moved to the Trash, with a way to put it back (`ReviewActions.putBack`), on the page it was moved
+/// from, until another page is shown or another document is moved.
+struct RemovedNotice: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        if let removed = model.session.removed {
+            Notice(text: Wording.movedToTrashNotice(removed.name), action: (Wording.putBack, { Task<Void, Never> { await model.putBack(document: removed.id) } }),
+                   actionName: Wording.putBackNamed(removed.name))
         }
     }
 }
@@ -38,7 +133,7 @@ struct DocumentSections: View {
         ForEach(sections) { section in
             // Built at once while it holds the open card, of any height (`PageSection`).
             PageSection(section.title, lazily: !section.documents.contains { $0.id == model.session.openDocument }) {
-                DocumentList(documents: section.documents)
+                DocumentList(documents: section.documents, pageOrder: sections.flatMap { $0.documents.compactMap(\.id) })
             }
         }
     }
@@ -251,11 +346,7 @@ struct DocumentCard: View {
                 case .remove:
                     Button(Wording.moveToTrashEllipsis) { confirmingTrash = true }
                         .help(Wording.moveToTrashHelp)
-                        .confirmationDialog(Wording.moveToTrashQuestion(d.filename), isPresented: $confirmingTrash) {
-                            Button(Wording.moveToTrash, role: .destructive) { moveToTrash() }
-                        } message: {
-                            Text(Wording.movedToTrashMessage)
-                        }
+                        .confirmsMoveToTrash(isPresented: $confirmingTrash, name: d.filename) { moveToTrash(d.filename) }
                 }
             }
         }
@@ -265,9 +356,9 @@ struct DocumentCard: View {
 
     /// Moves the document's file to the Trash and takes it out of the archive (`ReviewActions.remove`); the card closes
     /// once it has, as the document is no more.
-    private func moveToTrash() {
+    private func moveToTrash(_ name: String) {
         Task<Void, Never> {
-            guard await model.perform(Wording.moveToTrashAction, { try await $0.review.remove(documentID) }) != nil else { return }
+            guard await model.moveToTrash(documentID, name: name) else { return }
             close()
         }
     }

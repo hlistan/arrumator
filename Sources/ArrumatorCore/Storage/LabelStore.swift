@@ -114,14 +114,17 @@ public struct LabelStore: Sendable {
         }
     }
 
+    /// The user's rules, oldest first, in the transaction of `db`.
+    static func orderedRules(_ db: Database) throws -> [LabelRule] { try LabelRule.order(Column("id")).fetchAll(db) }
+
     /// The user's rules, oldest first.
     public func rules() async throws -> [LabelRule] {
-        try await database.reader.read { db in try LabelRule.order(Column("id")).fetchAll(db) }
+        try await database.reader.read { db in try Self.orderedRules(db) }
     }
 
     /// Applies the rules and the vocabulary to what the model gives a document.
     public func consolidator() async throws -> LabelConsolidator {
-        let (rules, usage) = try await database.reader.read { db in (try LabelRule.order(Column("id")).fetchAll(db), try Self.usage(db)) }
+        let (rules, usage) = try await database.reader.read { db in (try Self.orderedRules(db), try Self.usage(db)) }
         return LabelConsolidator(config: config.vocabulary, rules: rules, vocabulary: usage)
     }
 

@@ -50,6 +50,12 @@ final class ArchiveSession {
     /// The document a card was last asked to read again, by its number and name, until another page is shown: a page
     /// it leaves, as Needs You, which lists it no longer once it waits in Incoming, says where it went.
     var readAgain: (id: Int64, name: String)?
+    /// The document last moved to the Trash, by its number and name, until another page is shown or another is moved: the
+    /// page says so, with a way to put it back (`ReviewActions.putBack`).
+    var removed: (id: Int64, name: String)?
+    /// The document whose row is to take keyboard focus once the list that shows it has read, as a removal leaves focus
+    /// to the next row, which may be in another list of the page.
+    var focusAfterRemoval: Int64?
     /// The search task whose set documents are being added to, as the user narrows them down by labels in the sidebar:
     /// every document row then shows whether it is in the set, and adds it or takes it out.
     fileprivate(set) var collecting: SearchTask?
@@ -307,6 +313,39 @@ final class AppModel {
         return result
     }
 
+    /// Moves a document's file to the Trash and takes it out of the archive (`ReviewActions.remove`), from its row or its
+    /// card; the page then says so, with a way to put it back. Whether it was removed; if not, why is shown (`lastError`),
+    /// naming the document as the app shows it.
+    @discardableResult
+    func moveToTrash(_ id: Int64, name: String) async -> Bool {
+        guard await perform(Wording.moveToTrashNamed(name), { try await $0.review.remove(id) }) != nil else { return false }
+        session.removed = (id, name)
+        return true
+    }
+
+    /// Says why a document cannot be moved to the Trash, as Core decided it before anything was asked (`removalRefusals`),
+    /// as a removal that failed says it (`moveToTrash`).
+    func refuseMoveToTrash(_ name: String, because refusal: IngestError) {
+        lastError = Wording.failure(Wording.moveToTrashNamed(name), Wording.reason(refusal))
+    }
+
+    /// Puts back the document the notice after a removal names (`ReviewActions.putBack`).
+    func putBack(document id: Int64) async {
+        await putBack { try await $0.review.putBack(id) }
+    }
+
+    /// Puts back the document a removal took out, as its row in History says (`ReviewActions.putBack(removal:)`).
+    func putBack(removal event: Int64) async {
+        await putBack { try await $0.review.putBack(removal: event) }
+    }
+
+    /// What both Put Back buttons do: the notice after a removal goes once the document it names is back, from whichever
+    /// button it was put back, as the number it was removed under is the one the notice names.
+    private func putBack(_ action: @escaping @Sendable (ArrumatorRuntime) async throws -> PutBackPayload) async {
+        guard let put = await perform(Wording.putBackAction, action), session.removed?.id == (put.removedAs ?? put.document) else { return }
+        session.removed = nil
+    }
+
     /// Changes the settings through one of their actions (`SettingsActions`, `ModelProfileActions`, pausing), as
     /// `perform` does, and shows the settings in force at once, rather than once their stream says they changed, so a
     /// control the store refused goes back to what is saved.
@@ -348,6 +387,8 @@ final class AppModel {
         session.openLabel = nil
         session.openTask = nil
         session.readAgain = nil
+        session.removed = nil
+        session.focusAfterRemoval = nil
         if destination != .labelled { session.labelSelection = [] }
         if destination != .labelled && destination != .processed { session.collecting = nil }
     }

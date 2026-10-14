@@ -11,27 +11,32 @@ struct ReviewPage: View {
     @State private var setAside: [ListedDocument] = []
 
     var body: some View {
+        let pageOrder = (waiting + setAside).compactMap(\.id)
         Page(.review, notes: waiting.isEmpty ? nil : Wording.reviewNotes) {
+            RemovedNotice()
             if let readAgain = model.session.readAgain, !waiting.contains(where: { $0.id == readAgain.id }) {
                 Notice(text: Wording.readAgainQueued(named: readAgain.name), action: (Wording.showIncoming, { model.go(.incoming) }))
             }
             if waiting.isEmpty {
                 EmptyState(symbol: "checkmark.circle", text: Wording.nothingNeedsYou)
             } else {
-                VStack(alignment: .leading, spacing: 0) { DocumentList(documents: waiting) }
+                VStack(alignment: .leading, spacing: 0) { DocumentList(documents: waiting, pageOrder: pageOrder) }
             }
             if !setAside.isEmpty {
                 PageSection(Wording.setAsideHeading, lazily: !setAside.contains { $0.id == model.session.openDocument }) {
                     Text(Wording.setAsideNotes).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                         .padding(.bottom, Style.sectionRuleGap)
-                    DocumentList(documents: setAside)
+                    DocumentList(documents: setAside, pageOrder: pageOrder)
                 }
             }
         }
         .task(id: model.activity) {
-            if let read = await model.load(Wording.loadReviewQueueAction, { try await $0.services.documents.needsYou() }) {
-                waiting = model.listed(read.waiting)
-                setAside = model.listed(read.setAside)
+            if let (read, refusals) = await model.load(Wording.loadReviewQueueAction, withRefusals: { runtime in
+                let read = try await runtime.services.documents.needsYou()
+                return (read, read.waiting + read.setAside)
+            }) {
+                waiting = model.listed(read.waiting, refusals: refusals)
+                setAside = model.listed(read.setAside, refusals: refusals)
             }
         }
     }

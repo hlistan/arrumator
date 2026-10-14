@@ -21,6 +21,7 @@ struct IncomingPage: View {
 
     var body: some View {
         Page(.incoming) {
+            RemovedNotice()
             if let attention = model.attention {
                 Notice(text: attention, action: holdupAction)
             }
@@ -77,12 +78,12 @@ struct IncomingPage: View {
         if let active = await model.load(Wording.loadQueueAction, { try await $0.services.jobs.listed(inHand: inHand) }) {
             jobs = active
         }
-        if let processed = await model.load(Wording.loadProcessedAction, {
-            try await $0.services.documents.list(DocumentFilter(statuses: DocumentStatus.processed), order: .recentlyProcessed,
-                                                 limit: $0.config.interface.recentlyProcessed)
+        if let processed = await model.loadListed(Wording.loadProcessedAction, { runtime in
+            try await runtime.services.documents.list(DocumentFilter(statuses: DocumentStatus.processed), order: .recentlyProcessed,
+                                                      limit: runtime.config.interface.recentlyProcessed)
         }) {
             recentCount = processed.count
-            recent = DocumentSection.sections(of: model.listed(processed), heading: Wording.processedDay)
+            recent = DocumentSection.sections(of: processed, heading: Wording.processedDay)
         }
     }
 

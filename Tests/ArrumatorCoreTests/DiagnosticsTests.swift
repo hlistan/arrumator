@@ -99,6 +99,26 @@ import Testing
         var fields: [String: String]
     }
 
+    /// A removal keeps the document's entry in History, labels and reading among it: none of it is in what is shared.
+    @Test func aDiagnosticsArchiveAfterARemovalHoldsNoneOfItsEntry() async throws {
+        let (h, doc, _, _) = try await PuttingBackDocumentsTests.world()
+        defer { h.env.cleanup() }
+        try await h.review.remove(try #require(doc.id))
+        let kept = try #require(try await h.services.history.events(limit: 5, kinds: [.documentRemoved]).first)
+        let sentinels = [PuttingBackDocumentsTests.handSender.value, PuttingBackDocumentsTests.tag.value, "EDP Comercial", StubAnalyzer.edpInterpretation]
+        #expect(sentinels.allSatisfy { kept.payloadJson.contains($0) }, "the removal's History payload does hold the entry")
+        let doctor = DoctorReport(generatedAt: TestTime.start, appVersion: "test", macOS: "test", paths: [:], checks: [], models: [],
+                                  ollama: "none")
+        let exporter = DiagnosticsExporter(database: h.env.database, paths: h.env.paths, config: h.env.config.stats)
+        let zip = h.env.root.appendingPathComponent("diagnostics.zip")
+        _ = try await exporter.export(to: zip, doctor: doctor, settings: await h.env.settings.current, includeDocumentText: false)
+        let files = try await Self.unzipped(zip, into: h.env.root.appendingPathComponent("unzipped", isDirectory: true))
+        for sentinel in sentinels {
+            let holding = files.filter { Self.contains($0.value, sentinel) }.keys.sorted()
+            #expect(holding.isEmpty, "without consent, “\(sentinel)” of the removed document is in no file of the export: \(holding)")
+        }
+    }
+
     /// Whether `data` holds `text`, compared on bytes.
     static func contains(_ data: Data, _ text: String) -> Bool {
         let needle = Array(text.utf8)
