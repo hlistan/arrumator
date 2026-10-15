@@ -1,0 +1,340 @@
+diff --git a/App/Support/LocalText.swift b/App/Support/LocalText.swift
+new file mode 100644
+index 0000000..9125a36
+--- /dev/null
++++ b/App/Support/LocalText.swift
+@@ -0,0 +1,145 @@
++import AppKit
++import ArrumatorCore
++import SwiftUI
++
++/// The one place no text of the app is handed to anything outside it (AGENTS.md §4.1, AC 4a of the QA run of 15 October
++/// 2026). The app processes sensitive documents, so no text it shows or takes, selected or typed, is offered to a web
++/// search, Look Up, Translate, Share, Services or Writing Tools. Three parts, each applied once, where a new view cannot
++/// miss it:
++///
++/// - `TextMenuGuard` filters every text menu AppKit draws, by `TextMenuRule`, and the Edit menu.
++/// - `keepsTextLocal()` is applied where every window's content is made (`ArrumatorApp.swift`, held there by the `hosting`
++///   gate of `scripts/lint.sh`).
++/// - `LocalApplication` drops the gestures that open Look Up without a menu (`LookUpGesture`): its panel's Siri Suggestions
++///   reach Apple.
++///
++/// The app has no Services menu, provides no service and declares no `NSServices` (the `local-text` gate of
++/// `scripts/lint.sh`). Whether a keyboard shortcut a user gave a service can still reach selected text is not verified
++/// (QA charter C14).
++///
++/// Why this mechanism, and what was and was not seen on macOS 26, is in docs/architecture.md, "Keeping text inside the
++/// app". In short: SwiftUI's selectable `Text`, `TextField`, `TextEditor` and the same in a sheet draw their context menu
++/// from an `NSMenu` that `NSMenu.didAddItemNotification` reports with no delegate, so it can be given one in time, and
++/// "the delegate can change the menu by adding, removing, or modifying menu items" (`NSMenuDelegate.menuNeedsUpdate(_:)`).
++/// The items that reach outside have private selectors, hence an allow-list of public ones (`TextMenuRule`), which fails
++/// closed. `menuWillOpen(_:)` is not used: "Do not modify the structure of the menu" (NSMenu.h).
++@MainActor
++final class TextMenuGuard: NSObject, NSMenuDelegate {
++    private var observer: (any NSObjectProtocol)?
++    private weak var editMenu: NSMenu?
++    /// The Edit menu's items as the app made them, which stay; AppKit adds others (AutoFill, Start Dictation, Emoji &
++    /// Symbols, and Writing Tools where it is available), which go.
++    private var ownEditItems: Set<ObjectIdentifier> = []
++    /// The text menus already reported as having a delegate that is not this one.
++    private let unfiltered = NSHashTable<NSMenu>.weakObjects()
++
++    /// Starts guarding every text menu from now on, and the Edit menu `edit`, as the app built it.
++    func install(editMenu edit: NSMenu) {
++        editMenu = edit
++        ownEditItems = Set(edit.items.map(ObjectIdentifier.init))
++        edit.delegate = self
++        guard observer == nil else { return }
++        observer = NotificationCenter.default.addObserver(forName: NSMenu.didAddItemNotification, object: nil, queue: .main) { [weak self] note in
++            // Delivered on the main queue (`queue: .main`), so the menu is only ever touched there.
++            nonisolated(unsafe) let menu = note.object as? NSMenu
++            MainActor.assumeIsolated { self?.adopt(menu) }
++        }
++    }
++
++    /// Takes a menu of text as its delegate, the first time it holds a text action, before it is drawn: a context menu has
++    /// no supermenu and, so far as AppKit builds it, no delegate; the app's own menus and the main menu's are left alone.
++    /// Writing Tools and other apps' contextual menu plug-ins are told not to add their items. A text menu that already has
++    /// another delegate cannot be filtered, which is said once for it.
++    private func adopt(_ menu: NSMenu?) {
++        guard let menu, menu !== NSApp.mainMenu, menu.supermenu == nil, TextMenuRule.isTextMenu(Self.entries(menu)) else { return }
++        if let delegate = menu.delegate {
++            if delegate !== self { reportForeignDelegate(of: menu, delegate) }
++            return
++        }
++        menu.delegate = self
++        menu.automaticallyInsertsWritingToolsItems = false
++        menu.allowsContextMenuPlugIns = false
++    }
++
++    /// Says once for `menu`, which AppKit tells of each item added to it, that its own delegate leaves its items unfiltered.
++    private func reportForeignDelegate(of menu: NSMenu, _ delegate: any NSMenuDelegate) {
++        guard !unfiltered.contains(menu) else { return }
++        unfiltered.add(menu)
++        Log.warning(.ui, "A text menu has a delegate of its own, so its items are not filtered", ["type": String(describing: type(of: delegate))])
++    }
++
++    func menuNeedsUpdate(_ menu: NSMenu) {
++        if menu === editMenu {
++            pruneEdit(menu)
++        } else if TextMenuRule.isTextMenu(Self.entries(menu)) {
++            prune(menu)
++        }
++    }
++
++    /// Takes out of a text menu, at every depth, whatever `TextMenuRule` does not keep.
++    private func prune(_ menu: NSMenu) {
++        let entries = Self.entries(menu)
++        let kept = Set(TextMenuRule.kept(entries))
++        for index in entries.indices.reversed() {
++            if !kept.contains(index) {
++                menu.removeItem(at: index)
++            } else if entries[index].submenu != nil, let submenu = menu.items[index].submenu {
++                prune(submenu)
++            }
++        }
++    }
++
++    /// Takes out of the Edit menu what AppKit added, and the separators left first, last or doubled.
++    private func pruneEdit(_ menu: NSMenu) {
++        let entries = Self.entries(menu)
++        let kept = Set(TextMenuRule.separated(entries) { ownEditItems.contains(ObjectIdentifier(menu.items[$0])) })
++        for index in entries.indices.reversed() where !kept.contains(index) { menu.removeItem(at: index) }
++    }
++
++    /// `menu` as `TextMenuRule` reads it. The Services item, which holds other apps' services under actions that are not on
++    /// the allow-list, is left out with them.
++    private static func entries(_ menu: NSMenu) -> [MenuEntry] {
++        menu.items.map { item in
++            item.isSeparatorItem ? MenuEntry(isSeparator: true) : MenuEntry(action: item.action.map(NSStringFromSelector), submenu: item.submenu.map(entries))
++        }
++    }
++}
++
++/// The app's own `NSApplication` (`ArrumatorMain`): it drops, before anything is dispatched, the gestures that open Look Up
++/// without a menu, as `LookUpGesture` says (Control-Command-D, a force click, a three-finger tap). Typing, other shortcuts
++/// and ordinary clicks reach the app as they always did.
++final class LocalApplication: NSApplication {
++    override func sendEvent(_ event: NSEvent) {
++        guard !LookUpGesture.opensLookUp(event.input) else { return }
++        super.sendEvent(event)
++    }
++}
++
++private extension NSEvent {
++    /// This event as `LookUpGesture` reads it. Only a key event has characters and only a pressure event a stage.
++    var input: InputEvent {
++        switch type {
++        case .keyDown: .keyDown(charactersIgnoringModifiers: charactersIgnoringModifiers ?? "", modifiers: InputModifiers(modifierFlags))
++        case .pressure: .pressure(stage: Int(stage))
++        case .quickLook: .quickLook
++        default: .other
++        }
++    }
++}
++
++private extension InputModifiers {
++    init(_ flags: NSEvent.ModifierFlags) {
++        let held = flags.intersection(.deviceIndependentFlagsMask)
++        self = []
++        if held.contains(.control) { insert(.control) }
++        if held.contains(.command) { insert(.command) }
++        if held.contains(.option) { insert(.option) }
++        if held.contains(.shift) { insert(.shift) }
++    }
++}
++
++extension View {
++    /// Writing Tools never edits the text of the views below, in the window or a sheet or a popover over it. Applied where
++    /// each window's content is made, so every view has it and a new one cannot miss it.
++    func keepsTextLocal() -> some View { writingToolsBehavior(.disabled) }
++}
+diff --git a/Sources/ArrumatorCore/Domain/LookUpGesture.swift b/Sources/ArrumatorCore/Domain/LookUpGesture.swift
+new file mode 100644
+index 0000000..652f006
+--- /dev/null
++++ b/Sources/ArrumatorCore/Domain/LookUpGesture.swift
+@@ -0,0 +1,45 @@
++import Foundation
++
++/// The modifier keys of an input event that decide a shortcut; Caps Lock, the Fn key and the like do not.
++public struct InputModifiers: OptionSet, Sendable, Hashable {
++    public let rawValue: Int
++    public init(rawValue: Int) { self.rawValue = rawValue }
++
++    public static let control = InputModifiers(rawValue: 1 << 0)
++    public static let command = InputModifiers(rawValue: 1 << 1)
++    public static let option = InputModifiers(rawValue: 1 << 2)
++    public static let shift = InputModifiers(rawValue: 1 << 3)
++}
++
++/// An input event as `LookUpGesture` reads it from AppKit's `NSEvent`: only what tells a Look Up gesture from anything
++/// else. A pure value, so the rule needs no AppKit.
++public enum InputEvent: Sendable, Hashable {
++    case keyDown(charactersIgnoringModifiers: String, modifiers: InputModifiers)
++    /// A change in the pressure of a click, as `NSEvent.stage` numbers it.
++    case pressure(stage: Int)
++    /// The three-finger tap (`NSEvent.EventType.quickLook`).
++    case quickLook
++    case other
++}
++
++/// The ways to Look Up the selected text that need no menu, which `LocalApplication` drops (App/Support/LocalText.swift).
++/// The Look Up panel's Siri Suggestions reach Apple, and the app hands no text to anything outside it (AGENTS.md §4.1),
++/// so the menu item is not enough: Control-Command-D (`quickLookPreviewItems:` falls back to the dictionary), a force
++/// click and a three-finger tap each open it.
++public enum LookUpGesture {
++    /// The key of the shortcut, with Control and Command held and nothing else.
++    public static let shortcutKey = "d"
++    public static let shortcutModifiers: InputModifiers = [.control, .command]
++    /// The stage of a press that is a force click; stage 1 is an ordinary click.
++    public static let forceClickStage = 2
++
++    /// Whether `event` asks to Look Up something, and so is never delivered.
++    public static func opensLookUp(_ event: InputEvent) -> Bool {
++        switch event {
++        case let .keyDown(characters, modifiers): characters.lowercased() == shortcutKey && modifiers == shortcutModifiers
++        case let .pressure(stage): stage == forceClickStage
++        case .quickLook: true
++        case .other: false
++        }
++    }
++}
+diff --git a/Sources/ArrumatorCore/Domain/TextMenuRule.swift b/Sources/ArrumatorCore/Domain/TextMenuRule.swift
+new file mode 100644
+index 0000000..8e21905
+--- /dev/null
++++ b/Sources/ArrumatorCore/Domain/TextMenuRule.swift
+@@ -0,0 +1,82 @@
++import Foundation
++
++/// One entry of a menu, as the App's text-menu guard (`TextMenuGuard`) reads it from AppKit: what it sends, whether it is a
++/// separator, and what it opens. A pure value, so the rule below needs no AppKit.
++public struct MenuEntry: Sendable, Hashable {
++    /// The selector the entry sends, by name ("copy:"); nil for a separator and for an item that only opens a submenu.
++    public var action: String?
++    public var isSeparator: Bool
++    /// What the entry opens; nil for an entry that opens nothing, and for a Services item, whose submenu is the system's
++    /// list of other apps' services and is never read.
++    public var submenu: [MenuEntry]?
++
++    public init(action: String? = nil, isSeparator: Bool = false, submenu: [MenuEntry]? = nil) {
++        self.action = action
++        self.isSeparator = isSeparator
++        self.submenu = submenu
++    }
++}
++
++/// What a menu of text may offer. The app processes sensitive documents, so no text in it, selected or typed, is handed to
++/// an outside search, service or tool (AGENTS.md §4.1): no web search, Look Up, Translate, Share, Services, or Writing
++/// Tools. This is an allow-list, so it fails closed: the items AppKit adds on its own, whose selectors are private and
++/// change with each macOS, are dropped without anyone naming them, and a new one leaks nothing. `kept` lists only public
++/// selectors, found in the macOS SDK headers (NSText.h, NSTextView.h, NSResponder.h, NSSpellProtocol.h, NSFontManager.h).
++/// Which of them were seen in a menu and which are taken from the headers, and why only public ones, is in
++/// docs/architecture.md, "Keeping text inside the app".
++public enum TextMenuRule {
++    /// The actions that make a menu one of text: only a text view's menu sends these.
++    public static let textActions: Set<String> = ["cut:", "copy:", "paste:", "selectAll:"]
++
++    /// The actions a menu of text keeps: editing, spelling and grammar, substitutions, transformations and speech, all done
++    /// on this Mac, and the font and layout panels.
++    public static let kept: Set<String> = textActions.union([
++        "pasteAsPlainText:", "delete:", "undo:", "redo:",
++        "showGuessPanel:", "checkSpelling:", "toggleContinuousSpellChecking:", "toggleGrammarChecking:",
++        "toggleAutomaticSpellingCorrection:", "changeSpelling:", "ignoreSpelling:",
++        "orderFrontSubstitutionsPanel:", "toggleSmartInsertDelete:", "toggleAutomaticQuoteSubstitution:",
++        "toggleAutomaticDashSubstitution:", "toggleAutomaticTextReplacement:", "toggleAutomaticLinkDetection:",
++        "toggleAutomaticDataDetection:", "toggleAutomaticTextCompletion:",
++        "uppercaseWord:", "lowercaseWord:", "capitalizeWord:",
++        "startSpeaking:", "stopSpeaking:",
++        "orderFrontFontPanel:", "changeLayoutOrientation:",
++    ])
++
++    /// Whether `entries` are a menu of text, at any depth: some entry sends one of `textActions`. The app's own menus, such
++    /// as a row's, never do, and are left as they are.
++    public static func isTextMenu(_ entries: [MenuEntry]) -> Bool {
++        entries.contains { entry in
++            entry.action.map(textActions.contains) == true || entry.submenu.map(isTextMenu) == true
++        }
++    }
++
++    /// The positions of `entries` to keep, in order: an action in `kept`, a submenu with something kept in it, and the
++    /// separators between what is kept, none first, last or doubled. Anything else goes, a Services item among it.
++    public static func kept(_ entries: [MenuEntry]) -> [Int] {
++        separated(entries) { keeps(entries[$0]) }
++    }
++
++    /// The positions of `entries` to keep, in order: those `wanted` says, and the separators between them, none first,
++    /// last or doubled. Every separator in `entries` goes unless it is the last one before a wanted entry that follows
++    /// another.
++    public static func separated(_ entries: [MenuEntry], wanted: (Int) -> Bool) -> [Int] {
++        var indices: [Int] = []
++        var separatorPending = false
++        for (index, entry) in entries.enumerated() {
++            if entry.isSeparator {
++                separatorPending = !indices.isEmpty
++                continue
++            }
++            guard wanted(index) else { continue }
++            if separatorPending, let separator = entries[..<index].lastIndex(where: \.isSeparator) { indices.append(separator) }
++            separatorPending = false
++            indices.append(index)
++        }
++        return indices
++    }
++
++    private static func keeps(_ entry: MenuEntry) -> Bool {
++        if let submenu = entry.submenu { return !kept(submenu).isEmpty }
++        return entry.action.map(kept.contains) == true
++    }
++}
+diff --git a/Tests/ArrumatorCoreTests/LookUpGestureTests.swift b/Tests/ArrumatorCoreTests/LookUpGestureTests.swift
+new file mode 100644
+index 0000000..825a3f0
+--- /dev/null
++++ b/Tests/ArrumatorCoreTests/LookUpGestureTests.swift
+@@ -0,0 +1,44 @@
++import ArrumatorCore
++import Foundation
++import Testing
++
++/// The gestures that open Look Up without a menu (`LookUpGesture`): its panel's Siri Suggestions reach Apple, and the app
++/// hands no text to anything outside it (AC 4a of the QA run of 15 October 2026, AGENTS.md §4.1).
++@Suite struct LookUpGestureTests {
++    static func key(_ characters: String, _ modifiers: InputModifiers) -> InputEvent {
++        .keyDown(charactersIgnoringModifiers: characters, modifiers: modifiers)
++    }
++
++    @Test func controlCommandDLooksUp() {
++        #expect(LookUpGesture.opensLookUp(Self.key("d", [.control, .command])))
++    }
++
++    @Test func capsLockDoesNotHideIt() {
++        #expect(LookUpGesture.opensLookUp(Self.key("D", [.control, .command])), "Caps Lock gives a capital with no Shift held")
++    }
++
++    @Test func aForceClickLooksUp() {
++        #expect(LookUpGesture.opensLookUp(.pressure(stage: 2)), "the second stage of a press is a force click")
++    }
++
++    @Test func aThreeFingerTapLooksUp() {
++        #expect(LookUpGesture.opensLookUp(.quickLook))
++    }
++
++    @Test(arguments: [
++        ("d", [InputModifiers.command]), ("d", [.control]), ("d", []), ("d", [.control, .command, .shift]),
++        ("d", [.control, .command, .option]), ("e", [.control, .command]), ("", [.control, .command]),
++    ] as [(String, InputModifiers)])
++    func otherKeysAreLeftAlone(characters: String, modifiers: InputModifiers) {
++        #expect(!LookUpGesture.opensLookUp(Self.key(characters, modifiers)), "\(characters) with \(modifiers) is typing or another shortcut")
++    }
++
++    @Test(arguments: [0, 1, 3])
++    func aLightPressIsLeftAlone(stage: Int) {
++        #expect(!LookUpGesture.opensLookUp(.pressure(stage: stage)), "stage \(stage) is an ordinary click or a pressure that has passed")
++    }
++
++    @Test func everythingElseIsLeftAlone() {
++        #expect(!LookUpGesture.opensLookUp(.other), "a click, a scroll or any other event reaches the app as usual")
++    }
++}

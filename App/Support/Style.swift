@@ -104,6 +104,15 @@ enum Style {
     static let cardOuterPadding: CGFloat = 8
     /// Between buttons in a row of actions, on a card or in the menu bar.
     static let actionSpacing: CGFloat = 14
+    /// Between the rows of actions of a card, when they do not fit one.
+    static let actionRowSpacing: CGFloat = 6
+    /// Least space the label value field of a card keeps, whatever the buttons beside it take.
+    static let cardLabelFieldMinWidth: CGFloat = 140
+    /// Smallest clickable area of a control with no title, at the Human Interface Guidelines' minimum: the sidebar's pause
+    /// and More buttons, and the × of cards and chips.
+    static let minimumHit = CGSize(width: 20, height: 20)
+    /// How long "Copied" stands in the place of Copy, after it was pressed.
+    static let copiedDuration: Duration = .seconds(1.5)
     /// A document's thumbnail on its card.
     static let thumbnail = CGSize(width: 66, height: 88)
     /// Between the parts of a document's card: header, labels, reading, actions.
@@ -155,6 +164,8 @@ enum Style {
     static let readingSpacing: CGFloat = 12
     /// Widest the menu of profiles may be, so a long name or model does not push the row apart.
     static let profileMenuMaxWidth: CGFloat = 260
+    /// Narrowest a profile pop-up is made, so its name shows whatever the card around it is.
+    static let profileMenuMinWidth: CGFloat = 120
     /// Seconds a request has been read before its card says for how long: until then it is a moment, not worth a number.
     static let readingTimeShownAfter: TimeInterval = 10
     /// Seconds between updates of how long a request has been read, on its card.
@@ -163,8 +174,12 @@ enum Style {
     static let conversationSpacing: CGFloat = 18
     /// Between a question, its answer, and what the answer draws on and found.
     static let turnSpacing: CGFloat = 8
-    /// Above and below a card's name field, so the descenders of its large font show.
-    static let titleFieldPadding: CGFloat = 2
+    /// Around a name field of a card, a task or a profile, which shows a field's look under the pointer and while it is edited:
+    /// above and below it too, so the descenders of its large font show.
+    static let nameFieldInsets = EdgeInsets(top: 2, leading: 4, bottom: 2, trailing: 4)
+    static let nameFieldCornerRadius: CGFloat = 5
+    static let nameFieldFill = Color(nsColor: .textBackgroundColor)
+    static let nameFieldBorder = Color(nsColor: .separatorColor)
     /// Between the paragraphs, headings and list items of an answer.
     static let answerBlockSpacing: CGFloat = 6
     /// How far each list within a list, and a quote, is indented in an answer.
@@ -205,7 +220,7 @@ enum Style {
     /// The sidebar's width when the window opens.
     static let sidebarIdealWidth: CGFloat = 230
     /// Widest the sidebar can be made.
-    static let sidebarMaxWidth: CGFloat = 300
+    static let sidebarMaxWidth: CGFloat = 400
     /// Around the text of an error shown at the foot of a window.
     static let errorBannerInsets = EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12)
     /// Between the symbol, text and clear button of the sidebar's label filter.
@@ -294,7 +309,7 @@ enum Style {
     // MARK: Onboarding
 
     /// The onboarding window.
-    static let onboardingWindow = CGSize(width: 620, height: 500)
+    static let onboardingWindow = CGSize(width: 620, height: 720)
     /// Space inside the onboarding window.
     static let onboardingPadding: CGFloat = 24
     /// Between a step of onboarding and the buttons under it.
@@ -438,7 +453,9 @@ extension Destination {
         case .incoming: "tray.and.arrow.down.fill"
         case .review: "questionmark.circle.fill"
         case .processed: "checkmark.circle.fill"
-        case .labels, .labelled: "tag.fill"
+        case .labels: "tag.fill"
+        // Filter Labels' own symbol: the page of chosen labels is a filter of the documents, not the page of labels.
+        case .labelled: "line.3.horizontal.decrease.circle.fill"
         case .tasks: "text.magnifyingglass"
         case .history: "clock.fill"
         case .statistics: "chart.bar.fill"

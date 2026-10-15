@@ -120,7 +120,7 @@ import Testing
         for kind in LabelKind.modelKinds {
             let refusal = try #require(LabelError.refusal(of: DocumentLabel(kind: kind, value: "§")), "“§” is no \(kind.rawValue)")
             #expect(!refusal.localizedDescription.contains(kind.rawValue),
-                    "the app calls a party “About” and an object “Concerns”, the command line party= and object=: \(refusal.localizedDescription)")
+                    "the app calls a party “Person or Organisation” and an object “Thing”, the command line party= and object=: \(refusal.localizedDescription)")
         }
         let party = try #require(LabelError.refusal(of: DocumentLabel(kind: .party, value: "123456789")))
         #expect(party.localizedDescription == "“123456789” is no label of its kind: it has a letter in it, and no ;",

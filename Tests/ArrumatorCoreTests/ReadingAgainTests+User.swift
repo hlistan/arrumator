@@ -40,6 +40,50 @@ extension ReadingAgainTests {
         #expect(try await h.jobs().last?.state == .cancelled, "\(action): the reading again is cancelled")
     }
 
+    @Test func aReadingSaysWhenItWasReadAndConfirmingOrCorrectingKeepsIt() async throws {
+        let h = try await Harness.make(analyzer: StubAnalyzer(labels: nil))
+        defer { h.env.cleanup() }
+        // The pipeline's clock is the test's, which the reading stamps; whole seconds are what is kept (`JSON.encoder`).
+        func readAt(_ id: Int64) async throws -> Date {
+            try #require(try await h.services.documents.document(id: id)?.analysis?.readAt)
+        }
+        let first = h.env.time.now()
+        let id = try #require(try await h.ingest("bill.txt", text: Self.bill).id)
+        let afterFirst = h.env.time.now()
+        let firstReading = try await readAt(id)
+        #expect(firstReading >= first.addingTimeInterval(-1) && firstReading <= afterFirst, "the first reading is stamped with the time it was made")
+
+        h.env.time.advance(by: 3_600)
+        try await h.review.confirm(id)
+        try await h.review.edit(id, fileName: "Renamed", labels: LabelEdit(adding: [Self.tag]))
+        #expect(try await readAt(id) == firstReading, "confirming and correcting the document are not a reading, so its time stays")
+
+        h.env.time.advance(by: 3_600)
+        let again = h.env.time.now()
+        try await h.review.retry(id)
+        await h.coordinator.drain()
+        let secondReading = try await readAt(id)
+        #expect(secondReading >= again.addingTimeInterval(-1) && secondReading > firstReading, "a reading again moves it to when it was made")
+    }
+
+    @Test func aReadingThatFailsAgainMovesTheTimeToo() async throws {
+        let h = try await Harness.make(analyzer: StubAnalyzer(labels: [], problems: [DocumentAnalysis.Problem.corrupted]))
+        defer { h.env.cleanup() }
+        let document = try await h.ingest("94-corrupt.txt", text: "%PDF-1.4 broken")
+        let id = try #require(document.id)
+        let firstReading = try #require(document.analysis?.readAt)
+        let handle = try FileHandle(forWritingTo: document.url)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data(" changed".utf8))
+        try handle.close()
+        h.env.time.advance(by: 7_200)
+        try await h.review.retry(id)
+        await h.coordinator.drain()
+        let after = try #require(try await h.services.documents.document(id: id)?.analysis)
+        #expect(after.problems == [DocumentAnalysis.Problem.corrupted] && after.readAt.map { $0 > firstReading.addingTimeInterval(7_000) } == true,
+                "it found the file damaged again, and says when: \(String(describing: after.readAt))")
+    }
+
     @Test func aDocumentLeftForLaterAsItIsRenamedIsRecordedWhereItIsAndKeepsTheRestAsTheUserLeftIt() async throws {
         let h = try await Harness.make()
         defer { h.env.cleanup() }

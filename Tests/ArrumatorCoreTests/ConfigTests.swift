@@ -272,12 +272,12 @@ import Testing
             $0.ollamaBinaryPath = "/opt/homebrew/bin/ollama"
         }
         #expect(!changed.renameFiles && changed.logLevel == .debug, "the settings in force are returned")
-        #expect(try await summaries() == ["Changed logLevel to debug, ollamaBinaryPath to /opt/homebrew/bin/ollama, renameFiles to false"],
-                "History names each setting that changed and what it became, in the order of their names, the app's changes as the command's")
+        #expect(try await summaries() == ["Log detail: debug; Ollama program: /opt/homebrew/bin/ollama; Rename files: off"],
+                "History names each setting that changed by the name Settings shows it under, and what it became in words, in the order of their keys, the app's changes as the command's")
         try await actions.change { $0.ollamaBinaryPath = nil }
         try await actions.change { $0.traceRawRetentionDays = 30 }
-        #expect(try await summaries().dropFirst() == ["Changed ollamaBinaryPath to null", "Changed traceRawRetentionDays to 30"],
-                "a setting taken away is said to be null, and a value that is not text is written as settings.json writes it")
+        #expect(try await summaries().dropFirst() == ["Ollama program: none", "Keep full model prompts: 30"],
+                "a setting taken away is said to be none, and a number is written as settings.json writes it")
         try await actions.change { $0.renameFiles = false }
         #expect(try await summaries().count == 3, "a change that changes nothing records nothing")
         let refused = await #expect(throws: ConfigError.self, "settings the next launch would refuse are refused, so the app shows why") {

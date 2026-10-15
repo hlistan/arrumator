@@ -98,6 +98,9 @@ private struct TurnView: View {
     let task: SearchTask
     let documents: [Int64: ListedDocument]
     let answeredAfterLater: Bool
+    /// Copy was pressed a moment ago: it says so in its own place, to the eye and to VoiceOver.
+    @State private var copied = false
+    @State private var copiedTask: Task<Void, Never>?
 
     var body: some View {
         let progress = model.session.conversation.progress(of: turn)
@@ -122,6 +125,19 @@ private struct TurnView: View {
             if !turn.sources.isEmpty { sources }
             if let finding = turn.finding { FindingView(finding: finding, task: task, documents: documents) }
             actions(progress: progress)
+        }
+    }
+
+    /// Copies the answer, and says it did for `Style.copiedDuration`, announced to VoiceOver; pressed again, it confirms again.
+    /// A copy the pasteboard refused says nothing of the sort (`AppModel.copy(answer:)` says why).
+    private func copy(_ answer: String) {
+        guard model.copy(answer: answer) else { return }
+        AccessibilityNotification.Announcement(Wording.copied).post()
+        copiedTask?.cancel()
+        copiedTask = Task { @MainActor in
+            copied = true
+            try? await Task.sleep(for: Style.copiedDuration)
+            if !Task.isCancelled { copied = false }
         }
     }
 
@@ -152,7 +168,7 @@ private struct TurnView: View {
                 .help(Wording.stopAnswerHelp)
             } else {
                 if let answer = turn.answer {
-                    Button(Wording.copyAnswer) { model.copy(answer) }.help(Wording.copyAnswerHelp)
+                    Button(copied ? Wording.copied : Wording.copyAnswer) { copy(answer) }.help(Wording.copyAnswerHelp)
                 }
                 Button(Wording.askAgain) {
                     let id = turn.id

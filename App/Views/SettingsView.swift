@@ -37,6 +37,9 @@ func setting<T: Sendable>(_ model: AppModel, _ loaded: AppSettings, _ keyPath: a
 struct GeneralSettings: View {
     @Environment(AppModel.self) private var model
     let loaded: AppSettings
+    /// What is said under the folders: in Settings, how archives are switched; in onboarding, to someone setting up for the
+    /// first time, what the two folders are.
+    var footnote = Wording.foldersFooter
     @State private var loginItem = LoginItem.isEnabled
     @State private var loginError: String?
 
@@ -52,7 +55,7 @@ struct GeneralSettings: View {
             } header: {
                 Text(Wording.folders)
             } footer: {
-                Text(Wording.foldersFooter)
+                Text(footnote)
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             Section(Wording.background) {
@@ -68,7 +71,7 @@ struct GeneralSettings: View {
                     }
                 }
                 if let loginError { Text(loginError).foregroundStyle(Palette.problem).font(.caption) }
-                NamedToggle(Wording.pauseProcessing, isOn: Binding(get: { (model.settings ?? loaded).paused },
+                NamedToggle(Wording.pauseSetting, isOn: Binding(get: { (model.settings ?? loaded).paused },
                                                          set: { paused in Task { await model.setPaused(paused) } }))
                 NamedToggle(Wording.pauseOnBattery, isOn: setting(model, loaded, \.pauseOnBattery))
             }
@@ -277,6 +280,10 @@ struct ModelSettingsView: View {
         Section(Wording.modelsRun(at: model.runtime?.ollama.baseURL)) {
             if !profiles.isEmpty {
                 ProfileInUsePicker(inUse: current.profile, profiles: profiles)
+                // What the chosen profile trades, for one the app comes with and nobody changed (`ModelProfileListing.isAsBundled`).
+                if let listing = profiles.first(where: { $0.id == current.profile }), listing.isAsBundled, let trade = Wording.profileTrade(listing.id) {
+                    Text(trade).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
             }
             if let inUse {
                 ForEach(ModelProfile.roles, id: \.self) { role in
@@ -351,8 +358,12 @@ struct AdvancedSettings: View {
                 Picker(Wording.logDetail, selection: setting(model, loaded, \.logLevel)) {
                     ForEach(LogLevel.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                 }
-                Stepper(Wording.keepPrompts(days: (model.settings ?? loaded).traceRawRetentionDays),
-                        value: setting(model, loaded, \.traceRawRetentionDays), in: AppSettings.traceRawRetentionDaysRange, step: Style.retentionDaysStep)
+                // Its name stays as it is whatever the days; the days are its value, as the field's own words show them.
+                Stepper(value: setting(model, loaded, \.traceRawRetentionDays), in: AppSettings.traceRawRetentionDaysRange, step: Style.retentionDaysStep) {
+                    Text(Wording.keepPrompts(days: (model.settings ?? loaded).traceRawRetentionDays))
+                }
+                .accessibilityLabel(Wording.keepPrompts)
+                .accessibilityValue(Wording.days((model.settings ?? loaded).traceRawRetentionDays))
                 NamedToggle(Wording.includeText, isOn: $includeText)
                 Text(Wording.includeTextNote).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 Button(Wording.exportDiagnostics) { Task { await export() } }

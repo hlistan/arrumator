@@ -5,16 +5,17 @@ import SwiftUI
 /// a search task opens the task.
 struct HistoryPage: View {
     @Environment(AppModel.self) private var model
-    @State private var events: [EventRecord] = []
+    /// Each event with the name its document has now, as Core lists it (`HistoryStore.listed`).
+    @State private var events: [ListedEvent] = []
     @State private var pages = 1
     @State private var openEvent: Int64?
     /// Why each removal among `events` cannot be put back now, as read with them (`ReviewActions.putBackRefusals`).
     @State private var refusals: [Int64: PutBackError] = [:]
 
-    private var days: [(title: String, events: [EventRecord])] {
-        var out: [(title: String, events: [EventRecord])] = []
+    private var days: [(title: String, events: [ListedEvent])] {
+        var out: [(title: String, events: [ListedEvent])] = []
         for event in events {
-            let title = Wording.day(event.at)
+            let title = Wording.day(event.event.at)
             if out.last?.title == title { out[out.count - 1].events.append(event) } else { out.append((title, [event])) }
         }
         return out
@@ -31,9 +32,10 @@ struct HistoryPage: View {
             }
             ForEach(days, id: \.title) { day in
                 PageSection(day.title, lazily: !day.events.contains { $0.id == openEvent }) {
-                    ForEach(day.events) { event in
+                    ForEach(day.events) { listed in
+                        let event = listed.event
                         let row = ListRow(symbol: EventStyle.symbol(event.kind), tint: EventStyle.color(event.kind), title: event.summary,
-                                          detail: event.at.formatted(date: .omitted, time: .shortened),
+                                          detail: Wording.historyDetail(document: listed.document, at: event.at),
                                           tag: event.actor == .user ? Wording.byYou : nil, wraps: true)
                         let open = {
                             if Self.taskEvents.contains(event.kind), let task = JSON.decode(TaskEventPayload.self, from: event.payloadJson)?.task {
@@ -61,8 +63,8 @@ struct HistoryPage: View {
         .task(id: "\(pages)|\(model.activity)") {
             let pages = pages
             if let (read, refused) = await model.load(Wording.loadHistoryAction, { runtime in
-                let read = try await runtime.services.history.events(limit: pages * runtime.config.interface.pageSize)
-                return (read, try await runtime.review.putBackRefusals(of: read.filter { $0.kind == .documentRemoved }))
+                let read = try await runtime.services.history.listed(limit: pages * runtime.config.interface.pageSize)
+                return (read, try await runtime.review.putBackRefusals(of: read.map(\.event).filter { $0.kind == .documentRemoved }))
             }) {
                 events = read
                 refusals = refused

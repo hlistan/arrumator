@@ -97,7 +97,7 @@ struct SidebarLabelList: View {
 
     @ViewBuilder private func heading(_ list: SidebarLabelLayout.LabelList) -> some View {
         if let kind = list.id {
-            KindHeading(kind: kind, folded: list.folded, keyed: shows(.heading(kind))) {
+            KindHeading(kind: kind, folded: list.folded, hidden: list.hidden, keyed: shows(.heading(kind))) {
                 keyed = .heading(kind)
                 act(on: .heading(kind))
             }
@@ -166,34 +166,34 @@ struct SidebarLabelList: View {
 }
 
 /// A kind's heading in the sidebar, in its colour: clicking it, or Return or Space on it, folds its labels away, or
-/// unfolds them, as the chevron shown under the pointer says. VoiceOver reads it as a heading and a button, collapsed
-/// or expanded as a disclosure triangle is.
+/// unfolds them, as the chevron it always shows says. Folded, its help and VoiceOver's value say how many labels it hides
+/// (`SidebarLabelLayout.LabelList.hidden`), never a count on screen. VoiceOver reads it as a heading and a button,
+/// collapsed or expanded as a disclosure triangle is.
 private struct KindHeading: View {
     @Environment(\.sidebarRowSize) private var rowSize
     let kind: LabelKind
     let folded: Bool
+    /// How many labels it hides while it is folded.
+    let hidden: Int
     let keyed: Bool
     let toggle: () -> Void
-    @State private var hovering = false
 
     var body: some View {
         HStack(spacing: Style.sidebarLabelSpacing) {
             Text(Wording.labelKinds(kind)).foregroundStyle(Palette.labelKind(kind)).lineLimit(1)
             Spacer(minLength: 0)
-            Image(systemName: folded ? "chevron.right" : "chevron.down").foregroundStyle(.secondary)
-                .opacity(hovering || keyed ? 1 : 0).accessibilityHidden(true)
+            Image(systemName: folded ? "chevron.right" : "chevron.down").foregroundStyle(.secondary).accessibilityHidden(true)
         }
         .font(.subheadline.weight(.semibold))
         .padding(.horizontal, Style.sidebarLabelRowPadding)
         .frame(minHeight: Style.sidebarLabelRowHeight(rowSize))
         .background(keyed ? Style.sidebarLabelKeyed : .clear, in: .rect(cornerRadius: Style.rowCornerRadius))
         .contentShape(.rect)
-        .onHover { hovering = $0 }
         .rowAction(toggle)
         .accessibilityLabel(Wording.labelKinds(kind))
-        .accessibilityValue(Wording.labelKindFolded(folded))
+        .accessibilityValue(Wording.labelKindFolded(folded, hidden: hidden))
         .accessibilityAddTraits(.isHeader)
-        .help(Wording.foldLabelKind(kind, folded: folded))
+        .help(Wording.foldLabelKind(kind, folded: folded, hidden: hidden))
     }
 }
 
@@ -220,13 +220,15 @@ private struct SidebarLabel: View {
         .font(Style.sidebarLabelFont(rowSize))
         .padding(.horizontal, Style.sidebarLabelRowPadding)
         .frame(minHeight: Style.sidebarLabelRowHeight(rowSize))
-        .background(keyed ? Style.sidebarLabelKeyed : .clear, in: .rect(cornerRadius: Style.rowCornerRadius))
+        // A chosen label is drawn with the sidebar's selection highlight, as a chosen list is, besides its weight.
+        .background(chosen ? AnyShapeStyle(.selection) : AnyShapeStyle(keyed ? Style.sidebarLabelKeyed : .clear),
+                    in: .rect(cornerRadius: Style.rowCornerRadius))
         .contentShape(.rect)
         .rowAction(choose)
         .accessibilityLabel(Wording.label(label))
         .accessibilityValue(Text(usage.documents, format: .number))
         .accessibilityAddTraits(chosen ? .isSelected : [])
-        .help(Wording.sidebarLabelHelp(label.kind, chosen: chosen))
+        .help(Wording.sidebarLabelHelp(label, chosen: chosen))
     }
 }
 

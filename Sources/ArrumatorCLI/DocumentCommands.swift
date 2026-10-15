@@ -243,10 +243,13 @@ struct History: AsyncParsableCommand {
 
     func run() async throws {
         let runtime = try await options.runtime()
-        let events = try await runtime.services.history.events(limit: limit ?? runtime.config.interface.pageSize, docID: doc)
+        let events = try await runtime.services.history.listed(limit: limit ?? runtime.config.interface.pageSize, docID: doc)
         try options.emit(events) {
-            Terminal.table(events.reversed().map { [Format.date($0.at), $0.kind.rawValue, $0.actor.rawValue,
-                                                  $0.docId.map { "#\($0)" } ?? "", $0.summary] })
+            Terminal.table(events.reversed().map { listed in
+                let event = listed.event
+                return [Format.date(event.at), event.kind.rawValue, event.actor.rawValue,
+                        event.docId.map { id in "#\(id)" + (listed.document.map { " \($0)" } ?? "") } ?? "", event.summary]
+            })
         }
     }
 }

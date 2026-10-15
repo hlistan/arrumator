@@ -62,12 +62,16 @@ private struct StatisticsPage: View {
 
     /// A few sentences in plain words, so the page can be read without decoding a chart.
     private func verdict(_ funnel: ProcessingFunnel) -> String {
-        guard funnel.documents > 0 else { return "" }
+        guard let verdict = funnel.verdict else { return "" }
         var parts = [Wording.arrivedIn(funnel.documents, waiting: funnel.waiting, days: funnel.windowDays)]
-        if funnel.inProgress > 0 { parts.append(Wording.stillBeingWorkedOn(funnel.inProgress)) }
-        if let main = funnel.mainStop {
-            parts.append(Wording.mostStopped(at: main.step.title, count: main.stop.count, reason: main.stop.reason))
-        } else if funnel.inProgress == 0 {
+        if verdict.inProgress > 0 { parts.append(Wording.stillBeingWorkedOn(verdict.inProgress)) }
+        // What the words say is Core's verdict (`ProcessingFunnel.verdict`), the same the table is read by.
+        if !verdict.notFiled.isEmpty {
+            parts.append(Wording.notFiled(verdict.notFiled))
+            if let main = funnel.mainStop {
+                parts.append(Wording.mostStopped(at: main.step.title, count: main.stop.count, reason: main.stop.reason))
+            }
+        } else if verdict.everyOneFiled {
             parts.append(Wording.everyOneFiled)
         }
         if let slow = funnel.slowestStep {
@@ -101,8 +105,16 @@ private struct FunnelSteps: View {
                         cell(step.medianMs > 0 ? Format.duration(step.medianMs) : Wording.noValue, width: Style.funnelDurationWidth)
                         cell(step.p95Ms > 0 ? Format.duration(step.p95Ms) : Wording.noValue, width: Style.funnelDurationWidth)
                         HStack(spacing: Style.funnelProblemSpacing) {
-                            if step.errors > 0 { Label("\(step.errors)", systemImage: "xmark.octagon.fill").foregroundStyle(Palette.problem) }
-                            if step.warnings > 0 { Label("\(step.warnings)", systemImage: "exclamationmark.triangle").foregroundStyle(Palette.attention) }
+                            if step.errors > 0 {
+                                Label("\(step.errors)", systemImage: "xmark.octagon.fill").foregroundStyle(Palette.problem)
+                                    .help(Wording.stepErrors(step.errors, at: step.title))
+                                    .accessibilityLabel(Wording.stepErrors(step.errors, at: step.title))
+                            }
+                            if step.warnings > 0 {
+                                Label("\(step.warnings)", systemImage: "exclamationmark.triangle").foregroundStyle(Palette.attention)
+                                    .help(Wording.stepWarnings(step.warnings, at: step.title))
+                                    .accessibilityLabel(Wording.stepWarnings(step.warnings, at: step.title))
+                            }
                         }
                         .font(.caption)
                         Spacer(minLength: 0)
@@ -167,9 +179,7 @@ private struct EndedUp: View {
     let outcomes: [FunnelOutcome]
     let documents: Int
 
-    private static func colour(_ outcome: FunnelOutcome) -> Color {
-        outcome.isFiled ? Palette.progress : Palette.severity(outcome.severity)
-    }
+    private static func colour(_ outcome: FunnelOutcome) -> Color { Palette.outcome(outcome.status) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Style.endedUpSpacing) {

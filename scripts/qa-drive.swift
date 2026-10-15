@@ -17,10 +17,10 @@ let usage = """
       press <pid> <text> [role] [n]          press the n-th match, else click its centre
       click | dclick | rclick <pid> <text> [role] [n]   click, double-click or right-click the n-th match
       clickat <pid> <x> <y> [clicks]         click a point of the screen
-      hover <pid> <x> <y>                    move the pointer there
+      hover <pid> <x> <y>                    move the pointer beside the point and then onto it, so tracking areas see it enter
       set <pid> <text> <value> [role] [n]    focus a field, select all of it and type value, with no pointer event
       type <pid> <text>                      type into what has focus
-      key <pid> <name> [cmd,shift,opt,ctrl]  return, escape, tab, delete, space, arrows, a letter
+      key <pid> <name> [cmd,shift,opt,ctrl]  return, escape, tab, delete, space, arrows, a letter or a digit 0-9
       focused <pid>                          the element with keyboard focus
       scroll <pid> <text> <steps>            scroll over the match, negative steps down
       resize <pid> <width> <height>          resize the first window
@@ -33,6 +33,7 @@ let usage = """
       reopen <pid>                           send what a click on the Dock icon sends: the reopen event
       statusitem <pid>                       press the app's menu bar item, also when a full menu bar hides it
       frontmost <pid>                        the frontmost app, and whether it is this process
+      activate <pid>                         bring this process alone to the front, and say whether it is frontmost now
       notification <pid> <token>             the Notification Center alert that holds a token of the run's own, and nothing else
     """
 
@@ -180,9 +181,22 @@ func pick(_ text: String, role: String?, n: Int) -> AXUIElement {
 
 // MARK: Acting
 
-func activate() {
-    NSRunningApplication(processIdentifier: pid)?.activate(options: [])
+/// Brings the process alone to the front, as macOS 14 and later bring an app forward: this process yields its activation
+/// to it (`yieldActivation(to:)`) and then asks for it (`activate(from:)`), which the system honours where a plain request
+/// from a process that is not frontmost is refused; the plain request follows if the cooperative one did not take. Whether
+/// the process is frontmost now.
+@discardableResult
+func activate() -> Bool {
+    guard let target = NSRunningApplication(processIdentifier: pid) else { fail("no process \(pid)") }
+    let isFrontmost = { NSWorkspace.shared.frontmostApplication?.processIdentifier == pid }
+    NSApplication.shared.yieldActivation(to: target)
+    target.activate(from: NSRunningApplication.current, options: [])
     usleep(250_000)
+    if !isFrontmost() {
+        target.activate(options: [])
+        usleep(250_000)
+    }
+    return isFrontmost()
 }
 
 /// The window frontmost on screen at `p`, which the pointer's events there reach: its process, that process's name, and
@@ -239,8 +253,13 @@ let keyCodes: [String: CGKeyCode] = [
     "a": 0, "s": 1, "d": 2, "f": 3, "h": 4, "g": 5, "z": 6, "x": 7, "c": 8, "v": 9, "b": 11, "q": 12, "w": 13, "e": 14,
     "r": 15, "y": 16, "t": 17, "o": 31, "u": 32, "i": 34, "p": 35, "l": 37, "j": 38, "k": 40, "n": 45, "m": 46,
     ",": 43, ".": 47, "pageup": 116, "pagedown": 121, "home": 115, "end": 119,
+    "0": 29, "1": 18, "2": 19, "3": 20, "4": 21, "5": 23, "6": 22, "7": 26, "8": 28, "9": 25,
 ]
 let modifiers: [String: CGEventFlags] = ["cmd": .maskCommand, "shift": .maskShift, "opt": .maskAlternate, "ctrl": .maskControl]
+
+/// How many points beside a hover's target the pointer first moves, and for how long (microseconds) it rests there.
+let hoverApproach: CGFloat = 6
+let hoverPause: UInt32 = 60_000
 
 func key(_ name: String, mods: [String]) {
     guard let code = keyCodes[name] else { fail("no key \(name)", code: 2) }
@@ -311,10 +330,14 @@ case "clickat":
     mouse(point(rest[0], rest[1]), clicks: optional(2).flatMap(Int.init) ?? 1)
 case "hover":
     guard rest.count >= 2 else { fail(usage, code: 2) }
+    let target = point(rest[0], rest[1])
     activate()
-    ensureOwnWindow(at: point(rest[0], rest[1]))
-    CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: point(rest[0], rest[1]), mouseButton: .left)?
-        .post(tap: .cghidEventTap)
+    ensureOwnWindow(at: target)
+    // Beside the point first and then onto it, so a tracking area sees the pointer enter, as it does one that moves in.
+    for stop in [CGPoint(x: target.x - hoverApproach, y: target.y), target] {
+        CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: stop, mouseButton: .left)?.post(tap: .cghidEventTap)
+        usleep(hoverPause)
+    }
 case "set":
     // Focused through accessibility and typed to the process alone, with no pointer event: a click posted to the whole
     // session races whatever the person at the Mac does with the pointer, and a mouse-up lost so leaves the field
@@ -464,6 +487,8 @@ case "statusitem":
     guard let bar = element(attr(app, "AXExtrasMenuBar")), let item = children(bar).first else { fail("no menu bar item") }
     guard AXUIElementPerformAction(item, kAXPressAction as CFString) == .success else { fail("the menu bar item cannot be pressed") }
     print("pressed " + describe(item))
+case "activate":
+    print(activate() ? "frontmost: this process" : "not frontmost: another app kept the front")
 case "frontmost":
     let front = NSWorkspace.shared.frontmostApplication
     print("\(front?.localizedName ?? "nothing") (\(front?.processIdentifier ?? 0))\(front?.processIdentifier == pid ? ", this process" : "")")

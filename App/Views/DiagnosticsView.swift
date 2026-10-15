@@ -75,6 +75,7 @@ struct ProcessingLogView: View {
             }
             .frame(width: Style.logLevelPickerWidth)
             TextField(Wording.filter, text: $filter).textFieldStyle(.roundedBorder).frame(minWidth: Style.logFilterMinWidth)
+                .accessibilityLabel(Wording.filter)
             Spacer()
             Button(Wording.openLogsFolder) { if let dir = model.runtime?.paths.logsDirectory { model.open(dir.path) } }
         }

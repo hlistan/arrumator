@@ -11,7 +11,7 @@ struct ProcessedPage: View {
     @State private var pages = 1
 
     var body: some View {
-        Page(.processed) {
+        Page(.processed, notes: Wording.processedNotes) {
             RemovedNotice()
             if let task = model.session.collecting { CollectingBar(task: task) }
             if documents.isEmpty {

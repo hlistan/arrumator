@@ -67,7 +67,9 @@ struct RefusingTrash: Trashing {
         #expect(!FileManager.default.fileExists(atPath: url.path), "Incoming is left empty")
         #expect(Xattr.get(Xattr.documentID, from: filed) == doc.uid, "the file carries its identity, so a move in Finder is followed")
         #expect(doc.labels == StubAnalyzer.edpBill, "the document is described by its labels")
-        #expect(doc.analysis == DocumentAnalysis(fileName: StubAnalyzer.edpFileName, model: "stub"), "the name the model gave and the model that gave it are kept with the document")
+        #expect(doc.analysis?.fileName == StubAnalyzer.edpFileName && doc.analysis?.model == "stub" && doc.analysis?.problems == [],
+                "the name the model gave and the model that gave it are kept with the document")
+        #expect(doc.analysis?.readAt != nil, "and when it was read")
         let contents = try FileManager.default.contentsOfDirectory(atPath: h.env.archive.path)
         #expect(Set(contents) == [filed.lastPathComponent], "no folder is made for it")
         #expect(try await h.jobs().map(\.state) == [.done], "the job is finished and does not run again")

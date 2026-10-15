@@ -73,6 +73,19 @@ public struct LabelActionOutcome: Sendable, Codable, Hashable {
     public var documents: [Int64]
 }
 
+/// What merging or renaming a label would change (`LabelActions.preview(merging:into:)`), said before it is made.
+public struct LabelMergePreview: Sendable, Hashable {
+    /// The documents whose labels would be written otherwise.
+    public var documents: Int
+    /// Another label is written as the one merged into already: its documents and these become one set.
+    public var intoInUse: Bool
+
+    public init(documents: Int, intoInUse: Bool) {
+        self.documents = documents
+        self.intoInUse = intoInUse
+    }
+}
+
 /// What the user, or the model for labels that look alike, decides about a label for the whole archive: merge it into
 /// another or rename it, stop wanting it, take it off every document, keep two alike ones apart, add a tag of the
 /// user's own, or forget such a decision. Each but taking a label off becomes a rule every reading from then on follows
@@ -108,6 +121,23 @@ public struct LabelActions: Sendable {
         }
     }
 
+    /// What merging `label` into `value`, or renaming it to `value`, would change, before it is made: how many documents
+    /// would have their labels written otherwise, and whether another label is written `value` already, whose documents
+    /// the merge then joins. Decided by the rules `merge` and `rename` apply: a merge they refuse is refused here with the
+    /// same error. Changes and records nothing.
+    public func preview(merging label: DocumentLabel, into value: String) async throws -> LabelMergePreview {
+        let into = try Self.normalized(DocumentLabel(kind: label.kind, value: value))
+        return try await database.reader.read { db in
+            let from = try Self.named(db, label)
+            if let refused = LabelError.refusal(ofMerging: from, into: into.value) { throw refused }
+            let inUse = try Bool.fetchOne(db, sql: """
+                SELECT EXISTS (SELECT 1 FROM documents d, json_each(d.labels_json) l
+                WHERE d.labels_json IS NOT NULL AND json_extract(l.value, '$.kind') = ? AND json_extract(l.value, '$.value') = ?)
+                """, arguments: [into.kind.rawValue, into.value]) ?? false
+            return LabelMergePreview(documents: try Self.relabelling(db, from, to: into.value).count, intoInUse: inUse)
+        }
+    }
+
     /// Takes `label`, written however, off every document, and out of every reading from now on.
     @discardableResult
     public func ignore(_ label: DocumentLabel) async throws -> LabelActionOutcome {
@@ -121,7 +151,7 @@ public struct LabelActions: Sendable {
             try rule.insert(db)
             let documents = try Self.relabel(db, unwanted, to: nil, at: now)
             try HistoryStore.insert(db, .labelIgnored, at: now, actor: .user,
-                                    summary: "Ignored \(unwanted.kind.rawValue) “\(unwanted.value)”" + Self.onDocuments(documents, taken: true),
+                                    summary: "Ignored \(unwanted.kind.sentenceName) “\(unwanted.value)”" + Self.onDocuments(documents, taken: true),
                                     payload: LabelActionOutcome(rule: rule, documents: documents))
             return LabelActionOutcome(rule: rule, documents: documents)
         }
@@ -141,7 +171,7 @@ public struct LabelActions: Sendable {
             let outcome = LabelActionOutcome(rule: added.first, documents: documents)
             guard !documents.isEmpty || !added.isEmpty else { return outcome }
             try HistoryStore.insert(db, .labelRemoved, at: now, actor: .user,
-                                    summary: "Removed \(removed.kind.rawValue) “\(removed.value)”"
+                                    summary: "Removed \(removed.kind.sentenceName) “\(removed.value)”"
                                         + (documents.isEmpty ? "" : " from " + Format.count(documents.count, "document")),
                                     payload: outcome)
             return outcome
@@ -166,7 +196,7 @@ public struct LabelActions: Sendable {
             var rule = LabelRule(kind: tag.kind, value: tag.value, action: .add, target: nil, createdAt: now)
             try rule.insert(db)
             let outcome = LabelActionOutcome(rule: rule, documents: [])
-            try HistoryStore.insert(db, .labelAdded, at: now, actor: .user, summary: "Added \(tag.kind.rawValue) “\(tag.value)”", payload: outcome)
+            try HistoryStore.insert(db, .labelAdded, at: now, actor: .user, summary: "Added \(tag.kind.sentenceName) “\(tag.value)”", payload: outcome)
             return outcome
         }
     }
@@ -260,7 +290,7 @@ public struct LabelActions: Sendable {
                 outcome = LabelActionOutcome(rule: there, documents: [])
                 return .rollback
             }
-            let what = "\(from.kind.rawValue) “\(from.value)”"
+            let what = "\(from.kind.sentenceName) “\(from.value)”"
             let summary = switch said {
             case .merged: "Merged \(what) into “\(into.value)”" + onDocuments(made.documents)
             case .renamed: "Renamed \(what) to “\(into.value)”" + onDocuments(made.documents)
@@ -324,7 +354,7 @@ public struct LabelActions: Sendable {
         if rule.id == nil { try rule.insert(db) }
         let outcome = LabelActionOutcome(rule: rule, documents: [])
         try HistoryStore.insert(db, .labelsKeptApart, at: now, actor: actor, trace: trace,
-                                summary: "Kept \(a.kind.rawValue) “\(a.value)” and “\(b.value)” apart" + (because ?? ""), payload: outcome)
+                                summary: "Kept \(a.kind.sentenceName) “\(a.value)” and “\(b.value)” apart" + (because ?? ""), payload: outcome)
         return outcome
     }
 
@@ -350,11 +380,19 @@ public struct LabelActions: Sendable {
         return DocumentLabel(kind: label.kind, value: written)
     }
 
-    /// Writes `label`, written however, as `value` on every document that has it, or takes it off when `value` is nil.
-    /// A document not labelled yet stays so, and one given it by hand has the new writing as given by hand. Returns the
-    /// documents changed, in order.
-    private static func relabel(_ db: Database, _ label: DocumentLabel, to value: String?, at now: Date) throws -> [Int64] {
-        var changed: [Int64] = []
+    /// A document whose labels a change would write otherwise: what it would hold, and how.
+    private struct Relabelled {
+        let id: Int64
+        let labels: [DocumentLabel]
+        let byHand: [DocumentLabel]
+        let labelled: Bool
+    }
+
+    /// The documents that have `label`, written however, with their labels as they would be with it written as `value`, or
+    /// taken off when `value` is nil, in order; none that the change leaves as they are. Read in the transaction of `db`.
+    /// The one rule behind `relabel` and `preview(merging:into:)`, so what is said of a merge before it is made is what
+    /// it then does.
+    private static func relabelling(_ db: Database, _ label: DocumentLabel, to value: String?) throws -> [Relabelled] {
         let rows = try Row.fetchAll(db, sql: """
             SELECT DISTINCT d.id AS id, d.labels_json AS labels, d.tags_only AS tags_only, d.by_hand_json AS by_hand
             FROM documents d, json_each(d.labels_json) l
@@ -366,15 +404,24 @@ public struct LabelActions: Sendable {
                 return value.map { DocumentLabel(kind: existing.kind, value: $0) }
             }.distinct()
         }
-        for row in rows {
-            guard let id: Int64 = row["id"], let labels = JSON.decode([DocumentLabel].self, from: row["labels"]) else { continue }
+        return rows.compactMap { row in
+            guard let id: Int64 = row["id"], let labels = JSON.decode([DocumentLabel].self, from: row["labels"]) else { return nil }
             let updated = relabelled(labels)
-            guard updated != labels else { continue }
-            try IndexStore.saveLabels(db, updated, byHand: relabelled(JSON.decode([DocumentLabel].self, from: row["by_hand"]) ?? []),
-                                      docID: id, labelled: !(row["tags_only"] as Bool? ?? false), at: now)
-            changed.append(id)
+            guard updated != labels else { return nil }
+            return Relabelled(id: id, labels: updated, byHand: relabelled(JSON.decode([DocumentLabel].self, from: row["by_hand"]) ?? []),
+                              labelled: !(row["tags_only"] as Bool? ?? false))
         }
-        return changed
+    }
+
+    /// Writes `label`, written however, as `value` on every document that has it, or takes it off when `value` is nil.
+    /// A document not labelled yet stays so, and one given it by hand has the new writing as given by hand. Returns the
+    /// documents changed, in order.
+    private static func relabel(_ db: Database, _ label: DocumentLabel, to value: String?, at now: Date) throws -> [Int64] {
+        let changes = try relabelling(db, label, to: value)
+        for change in changes {
+            try IndexStore.saveLabels(db, change.labels, byHand: change.byHand, docID: change.id, labelled: change.labelled, at: now)
+        }
+        return changes.map(\.id)
     }
 
     private static func onDocuments(_ documents: [Int64], taken: Bool = false) -> String {

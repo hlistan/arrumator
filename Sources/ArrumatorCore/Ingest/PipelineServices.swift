@@ -25,12 +25,15 @@ public struct PipelineServices: Sendable {
     public var ollama: any OllamaAPI
     /// The Mac's time zone, which today is in when a request or a question is read.
     public var timeZone: TimeZone
+    /// The language and region labels are shown in when History writes them (`DocumentLabel.shown(locale:)`): given by the
+    /// composition root, never read from the Mac inside Core.
+    public var locale: Locale
     /// Which labels looked alike when last worked out, shared by every `LabelStore` this makes (`labels`).
     public let lookAlikes = LookAlikeMemo()
 
     public init(database: AppDatabase, archive: URL, config: PipelineConfig, settings: SettingsStore, extractor: any ContentExtracting,
                 analyzer: any DocumentAnalyzing, filer: DocumentFiler, traces: TraceRecorder, vectors: VectorIndex,
-                trash: any Trashing, time: any TimeSource, ollama: any OllamaAPI, timeZone: TimeZone, claims: JobClaims,
+                trash: any Trashing, time: any TimeSource, ollama: any OllamaAPI, timeZone: TimeZone, locale: Locale, claims: JobClaims,
                 power: @escaping @Sendable () -> PowerState) {
         self.database = database
         self.archive = archive.standardizedFileURL
@@ -47,6 +50,7 @@ public struct PipelineServices: Sendable {
         self.power = power
         self.ollama = ollama
         self.timeZone = timeZone
+        self.locale = locale
     }
 
     public var documents: DocumentStore { DocumentStore(database: database, time: time) }
@@ -182,6 +186,8 @@ public struct PipelineServices: Sendable {
             guard readable.contains(read.status), FileManager.default.fileExists(atPath: read.path) else {
                 throw IngestError.cannotReadAgain(docID)
             }
+            // Decided on the file as it is now, where the request acts, never on what the card last showed.
+            if let refusal = ReviewActions.readAgainRefusal(of: read) { throw refusal }
             // Filed by its reading in, whose job has not ended and is at its path, as a file put into the archive filed
             // where it is: that job would take the request and read nothing more, so it waits for it to end. One not
             // filed yet is read by that reading, which the request is found to be; one filed from Incoming, its reading
@@ -305,7 +311,7 @@ public struct PipelineServices: Sendable {
             // Where the user changed nothing since the reading began: what the user did meanwhile is kept.
             outcome.labels = try await index.saveReading(labels, before: rereading.before, docID: docID)
         }
-        let event = Self.readingEvent(read, rereading: rereading)
+        let event = Self.readingEvent(read, rereading: rereading, locale: locale)
         try await history.record(event.kind, doc: docID, job: jobID, trace: trace.traceID, summary: event.summary, payload: event.payload)
         return outcome
     }
@@ -326,7 +332,9 @@ public struct PipelineServices: Sendable {
                          trace: TraceContext) async throws -> (outcome: AnalysisOutcome, rereading: Rereading) {
         guard let document = try await documents.document(id: docID) else { throw IngestError.documentNotFound(docID) }
         let before = document.labels ?? []
-        let reading = try await read(content, yours: document.yours, settings: settings, trace: trace)
+        var reading = try await read(content, yours: document.yours, settings: settings, trace: trace)
+        // Every reading says when it was made, a failed one too: its analysis is saved with its problems.
+        reading.outcome.analysis.readAt = time.now()
         let problems = reading.outcome.analysis.problems
         if !problems.isEmpty {
             // Why it waits for the user, which the steps before it, each done as it should be, do not say.
@@ -352,7 +360,7 @@ public struct PipelineServices: Sendable {
         }
         let labels = try IndexStore.replaceReading(db, docID: docID, filename: filename, content: content, read: outcome.labels,
                                                    before: rereading.before, embedding: embedding, at: now)
-        let event = Self.readingEvent(outcome, rereading: rereading)
+        let event = Self.readingEvent(outcome, rereading: rereading, locale: locale)
         try HistoryStore.insert(db, event.kind, at: now, doc: docID, job: jobID, trace: traceID, summary: event.summary, payload: event.payload)
         return labels
     }
@@ -374,24 +382,25 @@ extension PipelineServices {
 
     /// What History records of a reading, `outcome`, its labels as the model gave them: the model's labels, or, without
     /// them, why it was not read; and what gave each of its tags (`Rereading.tags`).
-    static func readingEvent(_ outcome: AnalysisOutcome, rereading: Rereading) -> ReadingEvent {
+    static func readingEvent(_ outcome: AnalysisOutcome, rereading: Rereading, locale: Locale) -> ReadingEvent {
         let note = GivenTag.note(rereading.tags ?? []).map { "; " + $0 } ?? ""
         let problems = outcome.analysis.problems
         guard let labels = outcome.labels else {
             return ReadingEvent(kind: .error, summary: "Not read: " + DocumentAnalysis.said(problems) + note, payload: outcome.analysis)
         }
-        return ReadingEvent(kind: .analysed, summary: readingSummary(labels.filter { !$0.kind.isUsersOwn }, problems: problems) + note,
+        return ReadingEvent(kind: .analysed, summary: readingSummary(labels.filter { !$0.kind.isUsersOwn }, problems: problems, locale: locale) + note,
                             payload: AnalysedPayload(analysis: outcome.analysis, changes: rereading.changes, tags: rereading.tags))
     }
 
-    /// What History says of a reading that gave the model's labels `read`: their values, or that it found nothing worth a
+    /// What History says of a reading that gave the model's labels `read`: the labels as the card shows them in `locale`
+    /// (`DocumentLabel.shown(locale:)`), or that it found nothing worth a
     /// label; and, when the document waits for the user, why. One that waits with nothing read, as a damaged file, a blank
     /// scan or a kind of file no extractor reads, is never said to have had nothing worth a label: nothing of it could be
     /// read.
-    static func readingSummary(_ read: [DocumentLabel], problems: [String]) -> String {
+    static func readingSummary(_ read: [DocumentLabel], problems: [String], locale: Locale) -> String {
         let waits = problems.isEmpty ? nil : "waits for you: " + DocumentAnalysis.said(problems)
         let labels = read.isEmpty ? (waits == nil ? "Nothing worth a label" : "Nothing could be read of it")
-            : read.map(\.value).joined(separator: " · ")
+            : read.map { $0.shown(locale: locale) }.joined(separator: " · ")
         return ([labels] + [waits].compactMap { $0 }).joined(separator: "; ")
     }
 }

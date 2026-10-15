@@ -155,7 +155,7 @@ document as, its interpretation, under **What it is**, and the document's text a
 **Recognised text**: from its text layer, by OCR or both, tabs and line breaks as they were read, at most
 `extraction.maxIndexChars` characters, and saying when it is not all of it. Its data at the top names the document, the
 model that read it and how its text was read. Spotlight finds a document by its sidecar's words, as any text editor
-opens it, without the app. The document's card shows the same (**About**, and **Recognised Text**), and so does
+opens it, without the app. The document's card shows the same (**What it is**, and **Recognised Text**), and so does
 `arrumatorcli show <document>`.
 
 An image is described by the vision model of the profile in use, however much text OCR read on it: a photo without a
@@ -549,7 +549,7 @@ their card:
 A document that waits keeps its own name: what the model read of it is in doubt. Its trace says why it waits, in a step
 of its own marked as a warning (`review`), and History says so with its reading: one of which nothing could be read is
 never said to have had nothing worth a label, and one that stays where it is is said to wait there, never to have moved.
-Confirm one as it is (**Looks Right**), correct its name or labels, or have it read again. Confirming a filed document
+Confirm one as it is (**Keep As It Is**), correct its name or labels, or have it read again. Confirming a filed document
 that is already confirmed, with nothing read, corrected, renamed or moved since (in the app or in Finder), changes
 nothing and records nothing again. A file that keeps failing to be processed at all (`ingest.maxAttempts`) is parked in
 the archive the same way, with status failed, so Incoming stays clean and nothing is lost; one that cannot be moved into
@@ -578,12 +578,13 @@ now, is no second document: it asks for that document to be read again. This is 
 another profile ([profile and effort](#profile-and-effort)): choose it, and put them into Incoming again, as they are.
 
 - **The document is read again from the start**, with the profile in use, as [reading documents
-  again](#reading-documents-again) says: from its file, found as it was until it is read, and then renamed where it is
-  under the name the model gives, everything the earlier reading gave it, its labels, text and meaning, replaced at
-  once. It is queued behind the files already waiting, and shows in Incoming while it waits. Reading with the model takes
-  the place of having only its text read again after a rebuild of the index. A document whose first reading has not
-  ended and is still at its file, as a file you put into the archive and have not renamed or moved since, is left to that
-  reading, and History says it is being read in; one whose first reading is elsewhere is read again once it has ended.
+  again](#reading-documents-again) says: from its file, found as it was until it is read, and then renamed where it
+  is under the name the model gives, everything the earlier reading gave it, its labels, text and meaning, replaced
+  at once. It is queued behind the files already waiting, and shows in Incoming while it waits. Reading with the
+  model takes the place of having only its text read again after a rebuild of the index. A document whose first
+  reading has not ended and is still at its file, as a file you put into the archive and have not renamed or moved
+  since, is left to that reading, and History says it is being read in; one whose first reading is elsewhere is read
+  again once it has ended.
 - **It keeps its tags**, the folders' and those you gave it, and every label you gave it by hand, and a copy put into a
   folder in Incoming, or given `--tag`, gives it those tags at once, before it is read; what the model gives replaces
   what it gave before.
@@ -613,9 +614,17 @@ original again, not it.
 A document of the archive is read again from the start, as a file that arrives is: for an exact copy of it put into
 Incoming ([exact copies](#exact-copies)), for **Read Again** on its card (`arrumatorcli review retry <document>`), for
 one the model has not labelled yet (`arrumatorcli labels unlabelled`), and for every document at once, with **Read All
-Documents Again** (`arrumatorcli review retry --all`). Choose another profile, or install a better Arrumator, and this is
-how the archive is read with it. A document with no file to read where the archive records it, as one missing, or a copy
-an earlier version filed, cannot be read again, which is said at once.
+Documents Again** (`arrumatorcli review retry --all`). Choose another profile, or install a better Arrumator, and this
+is how the archive is read with it. A document with no file to read where the archive records it, as one missing, or a
+copy an earlier version filed, cannot be read again, which is said at once. Nor can one whose last reading found its
+file encrypted or damaged while the file has not changed since, by its size, its modification time and its identity on
+the volume: reading it again finds the same, so **Read Again** is dimmed with why, `review retry` refuses it, naming the
+file and what helps (a good copy, or one without a password, put in Incoming), and nothing is queued or recorded. A file
+that changed is read again, a document whose problem is another (the model gave no answer, no text was found) is offered
+it, and so is one with no fingerprint recorded, as one taken in from a record file before its file was looked at. A
+document read from a record file by a rebuild of the index has its file's fingerprint recorded then, so it is refused
+too from then on. Reading every document again (**Read All Documents Again**) and `labels unlabelled` do not apply the
+refusal: the first still queues such a document, the second leaves it out.
 
 - **From its file**, where it is when its turn comes, also when you moved or renamed it in Finder while it waited. Its
   file is hashed and its text read from it again, images described by the profile's vision model; then the model reads
@@ -640,22 +649,22 @@ an earlier version filed, cannot be read again, which is said at once.
   document keeps the labels it had and its name, and waits for you in Needs You, saying why. One that keeps failing
   (`ingest.maxAttempts`) leaves its labels, text and meaning as they were, and it waits for you in Needs You as failed,
   saying why.
-- **Read All Documents Again**, under Settings › Filing, asks first, naming the profile, then queues every document in
-  the archive that is filed, waiting for you or set aside after failing; those you left for later stay as they are, and
-  one a reading in has filed where it is, as a file you put into the archive, whose reading has not ended, is left to it.
-  They give way to every file that arrives, so new files are filed first, and Incoming counts them in a line of their
-  own rather than listing each; the app, or `arrumatorcli run`, reads them, and no other command does. One already
-  waiting to be read is read once, and asked for again, as with **Read Again** on its card or a copy of it in Incoming,
-  it is read in its turn. History records the request once, naming the profile
-  and the documents, and asked again while every one of them waits, nothing; each reading is recorded under its
-  document, before its filing. **Read Again** on one document is recorded so too, under it, as `Read again: <name>`,
-  when it queues the reading, as it does in place of its turn in reading every document again, or of reading its text
-  again after a rebuild of the index. Asked while another reading of it waits or is under way at its file, an earlier
-  Read Again's, an exact copy's, or its reading in before that has filed it (as it came into Incoming, as its file was
+- **Read All Documents Again**, under Settings › Filing, asks first, naming the profile, then queues every document
+  in the archive that is filed, waiting for you or set aside after failing; those you left for later stay as they
+  are, and one a reading in has filed where it is, as a file you put into the archive, whose reading has not ended,
+  is left to it. They give way to every file that arrives, so new files are filed first, and Incoming counts them in
+  a line of their own rather than listing each; the app, or `arrumatorcli run`, reads them, and no other command
+  does. One already waiting to be read is read once, and asked for again, as with **Read Again** on its card or a
+  copy of it in Incoming, it is read in its turn. History records the request once, naming the profile and the
+  documents, and asked again while every one of them waits, nothing; each reading is recorded under its document,
+  before its filing. **Read Again** on one document is recorded so too, under it, as `Read again: <name>`, when it
+  queues the reading, as it does in place of its turn in reading every document again, or of reading its text again
+  after a rebuild of the index. Asked while another reading of it waits or is under way at its file, an earlier Read
+  Again's, an exact copy's, or its reading in before that has filed it (as it came into Incoming, as its file was
   saved again there, or as a file you put into the archive yourself), it is read with that one, and nothing more is
-  recorded. Asked once its reading in has filed it, before that reading ends, it is recorded and read once that reading
-  has ended; but where that reading is at the document's file, as for a file you put into the archive, filed where it
-  is, Read Again is refused until then.
+  recorded. Asked once its reading in has filed it, before that reading ends, it is recorded and read once that
+  reading has ended; but where that reading is at the document's file, as for a file you put into the archive, filed
+  where it is, Read Again is refused until then.
 
 ## Your own changes
 
@@ -714,8 +723,8 @@ start, or once the app next looks), by the reading model of the task's profile, 
 (`search-system.md`) and the task's effort ([below](#profile-and-effort)). The model is shown the labels the archive
 already uses of the kinds the effort's `promptLabels` names, the most used first, so it asks for them as the archive
 writes them, today's date, so "last year" and "this month" mean something, and the language your request is written in,
-as Apple's NaturalLanguage tells it when it is sure of one (`extraction.languageMinConfidence`; for a request of
-fewer than `extraction.languageShortTextWords` words, which looks like several languages, as "Seguro auto" does,
+as Apple's NaturalLanguage tells it when it is sure of one (`extraction.languageMinConfidence`; for a request of fewer
+than `extraction.languageShortTextWords` words, which looks like several languages, as "Seguro auto" does,
 `extraction.languageShortTextMinConfidence`), so the task is named in it; a name it is just as sure is in another
 language goes back to the model once, named, and stands when given again. The prompt must fit the model's context
 (`analysis.numCtx`) beside the answer's length, the effort's `numPredict`, as a longer one is not read whole: its length
@@ -724,44 +733,41 @@ not others. When it would not fit, the least used labels are left out first, and
 how many tokens Ollama counted the prompt took. When Ollama counts it filling the context, as when the estimate was
 wrong for text in another script, it is fitted again at the characters a token Ollama's count shows it held and asked
 again, as often as `ollama.refitAttempts` says, and the trace says so, with every call; it says too when the context was
-still full. It
-answers in a fixed schema: the labels of each kind to look for, each with the words of the request that ask for it,
-words the text must contain for what no label says, the kinds to arrange what is found by, each with the words that ask
-for that, and a name for the task. The
-answer is untrusted input, checked as a document's answer is: each label must be a label of its kind (a date, period or
-deadline may be a year, a month, a day or a span of them, and an amount a number alone, `54.21`), at most
-`tasks.maxValuesPerKind` of a kind and
-`tasks.maxWords` words. Every kind a task asks for leaves documents out, so a label nobody asked for, such as the
-country all your documents are from, would silently hide what you wanted: a label is kept only when every word the model
-quotes for it is a word of your request (words as NaturalLanguage tells them apart, so a request in Chinese or Thai,
-written without spaces, is read word by word too), but not when every one of them is already quoted by a label of another
-kind, as "Portugal" in "invoices from Portugal" asks for a country, not for documents written in Portuguese, nor, for a
-label of a kind the documents are arranged by, when they are only the words that ask to arrange them, as "по
-отправителю" ("by sender") arranges them by sender and asks for none, while "invoices" in "invoices by sender" still
-asks for invoices. A label whose words hold what labels of other kinds ask for, two things or more, as a sender quoted
-by "квитанции за электричество" holds the type's "квитанции" and the topic's "электричество", goes back to the model,
-named with what it holds, and is kept only when the model gives it again. A word is kept only when it is in your
-request, no label already asks for it and it is not just the words that ask to arrange the documents; a word inside
-those words that is not all of them, as "Lisbon" when the model quotes all of "contracts mentioning Lisbon by sender"
-as asking to arrange them, goes back to the model, named, and is kept when given as a word again. Each time a prompt
-is fitted again to the context, the model is asked afresh, so what was sent back before goes back again. A document
-needs one label of a kind but every word, so "insurance" in "bills for electricity, water,
-insurance or rent" is one more alternative, not a word every bill must hold: a word your request writes between the
-words two labels of one kind quote, or that carries their list on, within `tasks.alternativesGap` words of one of them
-or of another such word, goes back to the model, named, to be given as a label of that kind; given as a word again, it
-is kept, as the model's answer to being told. Where a label's words stand is told by those your request writes once, so
-"da" in "faturas da EDP e da Galp que falam da multa" places nothing, and "multa" is asked of every document. What is
-dropped, and why, is in the task's trace. An answer that
-cannot be read, gives an alternative as a word, a label whose words hold other labels', a word inside the words that
-arrange the documents, or is left asking for nothing at all, goes back to the model with what was wrong, as often as the
-effort's `repairAttempts` says; no other model is asked in its place. A request the model never answers validly fails
-the task, with the reason, and so does an answer that takes longer than the effort's `timeout`
-([below](#profile-and-effort)). While Ollama cannot be reached, or does not answer in time and answers no probe either,
-a task waits in the queue, as a document does, spending nothing, its one trace taken up again by each attempt, and the
-tasks behind it with it, until it is tried again; a server
-that answers with a failure, or answers a probe but not the request in time, fails the task with the reason. A task
-whose reading model is not installed fails, naming the model, until it is downloaded and the task's documents are found
-again (**Find Again**), and one given a profile the settings no longer list fails saying so until it is given another.
+still full. It answers in a fixed schema: the labels of each kind to look for, each with the words of the request that
+ask for it, words the text must contain for what no label says, the kinds to arrange what is found by, each with the
+words that ask for that, and a name for the task. The answer is untrusted input, checked as a document's answer is: each
+label must be a label of its kind (a date, period or deadline may be a year, a month, a day or a span of them, and an
+amount a number alone, `54.21`), at most `tasks.maxValuesPerKind` of a kind and `tasks.maxWords` words. Every kind a
+task asks for leaves documents out, so a label nobody asked for, such as the country all your documents are from, would
+silently hide what you wanted: a label is kept only when every word the model quotes for it is a word of your request
+(words as NaturalLanguage tells them apart, so a request in Chinese or Thai, written without spaces, is read word by
+word too), but not when every one of them is already quoted by a label of another kind, as "Portugal" in "invoices from
+Portugal" asks for a country, not for documents written in Portuguese, nor, for a label of a kind the documents are
+arranged by, when they are only the words that ask to arrange them, as "по отправителю" ("by sender") arranges them by
+sender and asks for none, while "invoices" in "invoices by sender" still asks for invoices. A label whose words hold
+what labels of other kinds ask for, two things or more, as a sender quoted by "квитанции за электричество" holds the
+type's "квитанции" and the topic's "электричество", goes back to the model, named with what it holds, and is kept only
+when the model gives it again. A word is kept only when it is in your request, no label already asks for it and it is
+not just the words that ask to arrange the documents; a word inside those words that is not all of them, as "Lisbon"
+when the model quotes all of "contracts mentioning Lisbon by sender" as asking to arrange them, goes back to the model,
+named, and is kept when given as a word again. Each time a prompt is fitted again to the context, the model is asked
+afresh, so what was sent back before goes back again. A document needs one label of a kind but every word, so
+"insurance" in "bills for electricity, water, insurance or rent" is one more alternative, not a word every bill must
+hold: a word your request writes between the words two labels of one kind quote, or that carries their list on, within
+`tasks.alternativesGap` words of one of them or of another such word, goes back to the model, named, to be given as a
+label of that kind; given as a word again, it is kept, as the model's answer to being told. Where a label's words stand
+is told by those your request writes once, so "da" in "faturas da EDP e da Galp que falam da multa" places nothing, and
+"multa" is asked of every document. What is dropped, and why, is in the task's trace. An answer that cannot be read,
+gives an alternative as a word, a label whose words hold other labels', a word inside the words that arrange the
+documents, or is left asking for nothing at all, goes back to the model with what was wrong, as often as the effort's
+`repairAttempts` says; no other model is asked in its place. A request the model never answers validly fails the task,
+with the reason, and so does an answer that takes longer than the effort's `timeout` ([below](#profile-and-effort)).
+While Ollama cannot be reached, or does not answer in time and answers no probe either, a task waits in the queue, as a
+document does, spending nothing, its one trace taken up again by each attempt, and the tasks behind it with it, until it
+is tried again; a server that answers with a failure, or answers a probe but not the request in time, fails the task
+with the reason. A task whose reading model is not installed fails, naming the model, until it is downloaded and the
+task's documents are found again (**Find Again**), and one given a profile the settings no longer list fails saying so
+until it is given another.
 
 **What a task finds.** The documents in the archive (filed, waiting for you, parked after failing, or left for later;
 not the copies earlier versions filed beside other documents, nor those undone or missing) that have, for every kind of

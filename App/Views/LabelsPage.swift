@@ -22,8 +22,33 @@ struct LabelsPage: View {
         return LabelKind.allCases.filter { labels.isWrittenFreely($0) && (listing[$0]?.isEmpty == false || $0.isUsersOwn) }
     }
 
+    /// The kinds the page leaves out, as Core decides it (`LabelsConfig.isWrittenFreely`), never a list written by hand.
+    private var kindsNotListed: [String] {
+        guard let labels = model.runtime?.config.labels else { return [] }
+        return LabelKind.allCases.filter { !labels.isWrittenFreely($0) }.map(\.groupName)
+    }
+
     var body: some View {
+        ScrollViewReader { proxy in
+            page
+                // An open card is brought into sight, however far down it is: the kind it is in is listed in full first.
+                .task(id: model.session.openLabel) {
+                    guard let open = model.session.openLabel else { return }
+                    if let all = listing[open.kind], let place = all.firstIndex(where: { $0.label == open }),
+                       place >= (model.runtime?.config.interface.pageSize ?? all.count) {
+                        expanded.insert(open.kind)
+                    }
+                    await Task.yield()
+                    withAnimation(.snappy) { proxy.scrollTo(open, anchor: .top) }
+                }
+        }
+    }
+
+    private var page: some View {
         Page(.labels, notes: Wording.labelsNotes) {
+            if !kindsNotListed.isEmpty {
+                Text(Wording.kindsNotListed(kindsNotListed)).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
             if listing.values.allSatisfy(\.isEmpty) {
                 EmptyState(symbol: "tag", text: Wording.noLabelsYet)
             }
@@ -57,6 +82,7 @@ struct LabelsPage: View {
             ForEach(shown, id: \.label) { item in
                 if model.session.openLabel == item.label {
                     LabelCard(label: item.label, documents: item.documents, others: all.map(\.label.value).filter { $0 != item.label.value })
+                        .id(item.label)
                 } else {
                     // The most used first, each with how many documents have it, which is why it comes where it does.
                     ListRow(symbol: "tag", tint: .secondary, title: Wording.label(item.label),
@@ -139,6 +165,9 @@ struct LabelCard: View {
     @State private var renameRefusal: String?
     @State private var confirmingRemoval = false
     @State private var confirmingRemovalForGood = false
+    /// What a merge, or a rename into a label in use, would change, while the user is asked whether to make it
+    /// (`LabelActions.preview(merging:into:)`).
+    @State private var asking: MergeQuestion?
     /// The labels offered to merge into, the most alike first (`LabelSimilarity.mostAlike`), worked out when the card
     /// opens or the labels change, never as it is drawn.
     @State private var candidates: [String] = []
@@ -151,7 +180,8 @@ struct LabelCard: View {
                     Text(Wording.labelKind(label.kind)).font(.callout).foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button { close() } label: { Image(systemName: "xmark") }.buttonStyle(.borderless).foregroundStyle(.secondary).help(Wording.close)
+                Button { close() } label: { Image(systemName: "xmark").frame(minWidth: Style.minimumHit.width, minHeight: Style.minimumHit.height) }
+                    .buttonStyle(.borderless).foregroundStyle(.secondary).help(Wording.close).contentShape(.rect)
                     .accessibilityLabel(Wording.closeNamed(Wording.label(label)))
             }
             renaming
@@ -181,6 +211,13 @@ struct LabelCard: View {
         }
         .card()
         .onExitCommand { close() }
+        // Merging asks first: nothing undoes it. Cancel, or Escape, leaves everything as it was, the field as typed.
+        .confirmationDialog(asking.map { Wording.mergeQuestion(Wording.label(label), into: $0.target) } ?? "",
+                            isPresented: Binding(get: { asking != nil }, set: { if !$0 { asking = nil } }), presenting: asking) { question in
+            Button(Wording.merge, role: .destructive) { confirm(question) }
+        } message: { question in
+            Text(Wording.mergeMessage(documents: question.preview.documents, intoInUse: question.preview.intoInUse))
+        }
         // Filled in when the card opens on a label, never as the page reloads, which would drop what is being typed.
         .task(id: label) { renamed = label.value }
         .task(id: [label.value] + others) {
@@ -248,24 +285,56 @@ struct LabelCard: View {
         return value.isEmpty ? nil : value
     }
 
-    /// Merges into the label written. One it cannot be merged into stays in the field, under why, to be corrected.
-    private func merge() {
-        guard let target, LabelError.refusal(ofMerging: label, into: target) == nil else { return }
-        act(Wording.mergeLabelsAction) { try await $0.labels.merge($1, into: target) }
-        into = ""
+    /// What the user is asked before a merge or a rename into a label in use: the writing, and what Core says it changes.
+    private struct MergeQuestion: Identifiable {
+        let target: String
+        let preview: LabelMergePreview
+        /// Whether the label is written as `target` from now on (a rename) rather than merged into it, which History says
+        /// otherwise and is made by the other action.
+        let renaming: Bool
+        var id: String { target }
     }
 
-    /// Renames the label to what is written, and opens it under its new name. One it cannot be renamed to stays in the
-    /// field, under why.
+    /// Asks before merging into the label written, naming what changes. One it cannot be merged into stays in the field,
+    /// under why, to be corrected.
+    private func merge() {
+        guard let target, LabelError.refusal(ofMerging: label, into: target) == nil else { return }
+        ask(target, renaming: false)
+    }
+
+    /// Asks, from what Core says a merge or rename into `target` changes (`LabelActions.preview`); a rename into a writing
+    /// no label has is made without asking, as it merges nothing.
+    private func ask(_ target: String, renaming: Bool) {
+        let label = label
+        Task<Void, Never> {
+            guard let preview = await model.load(Wording.previewMergeAction, { try await $0.labels.preview(merging: label, into: target) }) else { return }
+            if renaming && !preview.intoInUse {
+                await go(MergeQuestion(target: target, preview: preview, renaming: true))
+            } else {
+                asking = MergeQuestion(target: target, preview: preview, renaming: renaming)
+            }
+        }
+    }
+
+    private func confirm(_ question: MergeQuestion) {
+        Task<Void, Never> { await go(question) }
+    }
+
+    /// Makes what was asked: the one action each of the two buttons has (`AppModel.mergeLabel`, `renameLabel`).
+    private func go(_ question: MergeQuestion) async {
+        if question.renaming {
+            _ = await model.renameLabel(label, to: question.target)
+        } else if await model.mergeLabel(label, into: question.target) {
+            into = ""
+        }
+    }
+
+    /// Renames the label to what is written, and opens it under its new name; into a label in use, after asking, as a merge
+    /// is. One it cannot be renamed to stays in the field, under why.
     private func rename() {
         let value = renamed.trimmingCharacters(in: .whitespaces)
         guard LabelError.refusal(ofMerging: label, into: value) == nil else { return }
-        let label = label
-        Task<Void, Never> {
-            guard let outcome = await model.perform(Wording.renameLabelAction, { try await $0.labels.rename(label, to: value) }),
-                  let target = outcome.rule?.target else { return }
-            withAnimation(.snappy) { model.session.openLabel = DocumentLabel(kind: label.kind, value: target) }
-        }
+        ask(value, renaming: true)
     }
 
     /// Does `action` to the label, as the user asked.

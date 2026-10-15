@@ -24,7 +24,9 @@
 
 ## Guideline refinement
 
-<!-- The [GUIDELINE REFINEMENT] block from the report (AGENTS.md §2): how this change refined AGENTS.md, if it did. -->
+<!-- The [GUIDELINE REFINEMENT] block from the report (AGENTS.md §2): the checks and the guidelines
+     (.claude/singularity/guidelines/, .claude/rules/singularity/) this change added, changed or removed, and any change
+     to AGENTS.md it proposes for a person to make. "The rules and checks already covered it" is an answer. -->
 
 ## Checklist
 

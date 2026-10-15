@@ -81,7 +81,7 @@ import UniformTypeIdentifiers
         #expect(payload.map { Set($0.keys) } == ["showInDock", "renameFiles", "transliterate", "notifyOnFiled", "notifyOnReview",
                                                  "pauseOnBattery", "logLevel", "traceRawRetentionDays", "groupLabelsByKind", "taskEffort"],
                 "naming every setting it changed: \(String(describing: payload))")
-        #expect(events.first?.summary.contains("renameFiles to false") == true, "and saying what each became: \(events.first?.summary ?? "")")
+        #expect(events.first?.summary.contains("Rename files: off") == true, "and saying, by the name Settings gives it, what each became: \(events.first?.summary ?? "")")
         #expect(try run(home, arguments).status == 0 && (try settingsEvents(home)).count == 1, "the same settings again change nothing and record nothing")
     }
 
@@ -598,7 +598,7 @@ extension CommandLineTests {
         func paused() throws -> Int {
             let months = try FileManager.default.contentsOfDirectory(at: layout.history, includingPropertiesForKeys: nil)
             // Each event once, in the data the app reads back; the list below it says it again.
-            return try months.map { try String(contentsOf: $0, encoding: .utf8) }.joined().components(separatedBy: "summary: Processing paused").count - 1
+            return try months.map { try String(contentsOf: $0, encoding: .utf8) }.joined().components(separatedBy: "summary: Filing paused").count - 1
         }
         #expect(try run(home, ["history", "--json"]).status == 0, "the archive's index is made")
         // The index then refuses the new server's event, so the command pauses, records it, and fails at the server.

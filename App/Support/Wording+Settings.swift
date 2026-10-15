@@ -17,11 +17,12 @@ extension Wording {
     static let showInDock = "Show icon in the Dock"
     static let menuBarFull = "Your menu bar is full, so Arrumator's icon there is hidden. Keep the Dock icon on, or remove other menu bar items."
     static let openAtLogin = "Open at login"
-    static let pauseProcessing = "Pause processing"
+    /// The switch that pauses filing, as Core names the setting, so History says it the same way (`AppSettings.CodingKeys.title`).
+    static var pauseSetting: String { AppSettings.CodingKeys.paused.title }
     static let pauseOnBattery = "Pause on battery when low"
     static let notifications = "Notifications"
-    static let notifyWhenFiled = "When a document is filed"
-    static let notifyWhenReview = "When a document needs review"
+    static var notifyWhenFiled: String { AppSettings.CodingKeys.notifyOnFiled.title }
+    static var notifyWhenReview: String { AppSettings.CodingKeys.notifyOnReview.title }
     /// Under the switches, while one is on and macOS does not let the app notify (`NotificationPermission`).
     static let notificationsRefused = "macOS does not let Arrumator show notifications, so none are shown. Allow them for "
         + "Arrumator in System Settings › Notifications."
@@ -154,7 +155,11 @@ extension Wording {
     static let rebuildNote = "Nothing in the archive changes. Search by words and by meaning fills in again as documents are read."
     static let openDataFolder = "Open data folder (indexes, settings, pipeline.json overrides)"
 
-    static func keepPrompts(days: Int) -> String { "Keep full model prompts for \(days) days" }
+    /// What keeps prompts and raw answers in a reading's trace, by the name Core gives the setting (`AppSettings.CodingKeys.title`).
+    static var keepPrompts: String { AppSettings.CodingKeys.traceRawRetentionDays.title }
+    static func keepPrompts(days: Int) -> String { "\(keepPrompts) for \(Wording.days(days))" }
+    /// A number of days, as a value: "30 days".
+    static func days(_ count: Int) -> String { Format.count(count, "day") }
 
     static func rebuilt(_ summary: String, queued: Int) -> String { "\(summary). \(queued) documents are being read again." }
 

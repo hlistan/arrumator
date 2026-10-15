@@ -26,7 +26,7 @@ import Testing
                     "a document is read before it is filed: \(kinds)")
         }
         let event = try #require(try await h.services.history.events(limit: 20, kinds: [.analysed]).first)
-        #expect(event.summary == StubAnalyzer.edpBill.map(\.value).joined(separator: " · "), "the history says what it was labelled with")
+        #expect(event.summary == StubAnalyzer.edpBill.map { $0.shown(locale: TestTime.locale) }.joined(separator: " · "), "the history says what it was labelled with")
     }
 
     @Test func aDocumentShowingNothingSignificantIsLabelledWithNothing() async throws {

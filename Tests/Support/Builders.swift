@@ -44,7 +44,7 @@ public enum TestRecordFiles {
 /// (`SettingsActions.change(_:)`).
 public enum TestSettingChange {
     public static let make: @Sendable (inout AppSettings) -> Void = { $0.renameFiles = false }
-    public static let summary = "Changed renameFiles to false"
+    public static let summary = "Rename files: off"
 }
 
 /// A failure of a test's own, none the app knows: one a stage throws to be tried again, as anything else that fails is.

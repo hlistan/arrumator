@@ -19,6 +19,18 @@ import Testing
         }
     }
 
+    @Test func aReadingTimeIsWrittenAndReadBack() async throws {
+        let w = try await RecordsWorld.make()
+        defer { w.h.env.cleanup() }
+        let id = try #require(w.documents.first)
+        let written = try #require(try await w.h.services.documents.document(id: id)?.analysis?.readAt)
+        #expect(try w.listing(in: w.h.env.archive).contains("readAt:"), "the record file says when it was read")
+        let (database, records) = try w.freshIndex()
+        try await records.rebuild()
+        let back = try await DocumentStore(database: database, time: w.h.env.time).document(id: id)?.analysis?.readAt
+        #expect(back == written, "and an index made again from it has the same instant: \(String(describing: back)) for \(written)")
+    }
+
     @Test func anEditMadeWhileAFileIsWrittenIsNeverWrittenOver() async throws {
         let w = try await RecordsWorld.make()
         defer { w.h.env.cleanup() }

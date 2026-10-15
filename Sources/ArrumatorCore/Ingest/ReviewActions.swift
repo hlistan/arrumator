@@ -61,6 +61,14 @@ public struct RemovedPayload: Sendable, Codable, Hashable {
     public var entry: DocumentEntry?
 }
 
+/// That nothing was read of a document, which its card says beside its dimmed Recognised Text button.
+public struct NothingToShow: Sendable, Hashable {
+    /// What its last reading found wrong (`DocumentAnalysis.Problem`), as it keeps them; empty when it named none.
+    public var problems: [String]
+
+    public init(problems: [String]) { self.problems = problems }
+}
+
 /// What a document's card offers, decided where the document is: the actions in the order they are shown, whether it
 /// was left in Incoming not filed, which its card says, with what to do, and when the user confirmed it as it is, which
 /// its card says too.
@@ -70,11 +78,23 @@ public struct DocumentChoices: Sendable, Hashable {
     /// When the user confirmed the filed document as it is (`ReviewActions.confirm`), if nothing has read, corrected,
     /// undone, renamed or moved it since; nil otherwise.
     public var confirmed: Date?
+    /// Why Read Again, which is among `actions`, cannot help now (`ReviewActions.readAgainRefusal`); nil when it can. The
+    /// card shows it dimmed, with this as its reason.
+    public var readAgainRefusal: IngestError?
+    /// A reading of the document is queued or under way (`JobStore.isBeingRead`): its card says it waits to be read again.
+    public var readingQueued: Bool
+    /// That Recognised Text has nothing to show for the document, with the problems its last reading found; nil when there
+    /// is something to show (`DocumentText.hasSomethingToShow`). The card dims the button, saying why in its words.
+    public var nothingToShow: NothingToShow?
 
-    public init(actions: [DocumentAction], notFiled: Bool, confirmed: Date? = nil) {
+    public init(actions: [DocumentAction], notFiled: Bool, confirmed: Date? = nil, readAgainRefusal: IngestError? = nil,
+                readingQueued: Bool = false, nothingToShow: NothingToShow? = nil) {
         self.actions = actions
         self.notFiled = notFiled
         self.confirmed = confirmed
+        self.readAgainRefusal = readAgainRefusal
+        self.readingQueued = readingQueued
+        self.nothingToShow = nothingToShow
     }
 }
 
@@ -113,17 +133,39 @@ public struct ReviewActions: Sendable {
         // for later (`undo`, `hold`), nor read again where that reading's job is (`PipelineServices.queueReadingAgain`),
         // so none of those is offered. It is removed unless the one rule of removal refuses it (`removalRefusal`). The
         // card asks again as the worker moves on.
+        var queued = false
+        var nothing: NothingToShow?
         if let id = document.id {
             let claims = services.claims
-            let (here, refusal) = try await services.database.reader.read { db in
-                (try JobStore.isReadIn(db, docID: id, at: document.path), try Self.removalRefusal(db, of: document, claims: claims).refusal)
+            let (here, refusal, reading) = try await services.database.reader.read { db in
+                (try JobStore.isReadIn(db, docID: id, at: document.path), try Self.removalRefusal(db, of: document, claims: claims).refusal,
+                 try JobStore.isBeingRead(db, docID: id))
+            }
+            queued = reading
+            if let text = try await services.documentText(id), !text.hasSomethingToShow {
+                nothing = NothingToShow(problems: document.analysis?.problems ?? [])
             }
             // The rule refuses a reading in that has not ended (`beingReadIn`), which is what takes these two away.
             if case .beingReadIn? = refusal { actions.removeAll { [.undo, .hold].contains($0) } }
             if here { actions.removeAll { $0 == .readAgain } }
             if refusal == nil { actions.append(.remove) }
         }
-        return DocumentChoices(actions: actions, notFiled: !inArchive && document.status == .failed, confirmed: confirmed)
+        return DocumentChoices(actions: actions, notFiled: !inArchive && document.status == .failed, confirmed: confirmed,
+                               readAgainRefusal: actions.contains(.readAgain) ? Self.readAgainRefusal(of: document) : nil, readingQueued: queued,
+                               nothingToShow: nothing)
+    }
+
+    /// Why reading `doc` again cannot help; nil when it can. The one rule of Read Again, which `queueReadingAgain` applies
+    /// where it acts, `choices(for:)` applies to say it before it is asked: the last reading found the file encrypted or
+    /// damaged, and the file is as it was then (size, modification time and identity on the volume). A changed file is
+    /// read again, and so is one whose problem is another (nothing to say, no text), which a better model may mend. A
+    /// document with no fingerprint recorded, as one taken in from a record file, is offered: nothing says its file is
+    /// unchanged. Reading every document again (`retryAll`) does not apply it.
+    public static func readAgainRefusal(of doc: DocumentRecord) -> IngestError? {
+        guard let id = doc.id, doc.fingerprint != nil, let problems = doc.analysis?.problems, doc.isAsRecorded else { return nil }
+        let encrypted = problems.contains(DocumentAnalysis.Problem.encrypted)
+        guard encrypted || problems.contains(DocumentAnalysis.Problem.corrupted) else { return nil }
+        return .cannotMend(id, name: doc.filename, encrypted: encrypted)
     }
 
     /// Why document `doc` cannot be removed now, in a transaction of the caller's; nil when it can, with the move planned for
@@ -209,11 +251,12 @@ public struct ReviewActions: Sendable {
 
     /// Reads every document the model has not labelled yet again (`retry`), as `arrumatorcli labels unlabelled` asks:
     /// one with no file to read, as one missing, is left out, as there is nothing to read again, and so is one whose
-    /// reading in has not ended where it is, which is left to it (`IngestError.beingReadIn`). The documents queued.
+    /// reading in has not ended where it is, which is left to it (`IngestError.beingReadIn`), and so is one that cannot be
+    /// helped by being read again (`readAgainRefusal`). The documents queued.
     public func retryUnlabelled() async throws -> [Int64] {
         var ids: [Int64] = []
         for id in try await services.documents.unlabelled() {
-            do { try await retry(id) } catch IngestError.cannotReadAgain, IngestError.beingReadIn { continue }
+            do { try await retry(id) } catch IngestError.cannotReadAgain, IngestError.beingReadIn, IngestError.cannotMend { continue }
             ids.append(id)
         }
         return ids
@@ -429,7 +472,7 @@ public struct ReviewActions: Sendable {
     /// What a correction changed of a document's labels, as History says it: “added sender “EDP”, type “receipt””,
     /// “removed type “invoice””; nothing when only their order changed.
     static func changes(from before: [DocumentLabel], to after: [DocumentLabel]) -> [String] {
-        let said = { (labels: [DocumentLabel]) in labels.map { "\($0.kind.rawValue) “\($0.value)”" }.joined(separator: ", ") }
+        let said = { (labels: [DocumentLabel]) in labels.map { "\($0.kind.sentenceName) “\($0.value)”" }.joined(separator: ", ") }
         let added = after.filter { !before.contains($0) }
         let removed = before.filter { !after.contains($0) }
         return (added.isEmpty ? [] : ["added " + said(added)]) + (removed.isEmpty ? [] : ["removed " + said(removed)])

@@ -161,7 +161,7 @@ private struct ProfileCard: View {
         }
         .labelsHidden()
         .padding(.vertical, Style.profileCardPadding)
-        .onExitCommand(perform: onClose)
+        .onExitCommand { if editing != .name { onClose() } }
         .onChange(of: listing, initial: true) { _, shown in show(shown) }
         // Closed with ✕ or Escape, another row or a new profile opened, the tab or the window left: what was typed and
         // not yet saved is saved rather than dropped.
@@ -195,14 +195,14 @@ private struct ProfileCard: View {
     private var header: some View {
         HStack(alignment: .firstTextBaseline, spacing: Style.profileNameSpacing) {
             TextField(Wording.name, text: $name, prompt: Text(Wording.name))
-                .textFieldStyle(.plain)
                 .font(.title3.weight(.semibold))
+                .nameField(editing: editing == .name, name: $name, saved: listing.profile.name) { editing = nil }
                 .focused($editing, equals: .name)
                 .onSubmit { editing = nil }
             if let state = Wording.profileState(listing) { Text(state).foregroundStyle(.secondary) }
             Spacer(minLength: 0)
-            Button(action: onClose) { Image(systemName: "xmark") }
-                .buttonStyle(.borderless).foregroundStyle(.secondary).help(Wording.close)
+            Button(action: onClose) { Image(systemName: "xmark").frame(minWidth: Style.minimumHit.width, minHeight: Style.minimumHit.height) }
+                .buttonStyle(.borderless).foregroundStyle(.secondary).help(Wording.close).contentShape(.rect)
                 .accessibilityLabel(Wording.closeNamed(listing.profile.name))
         }
     }

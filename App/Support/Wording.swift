@@ -41,11 +41,12 @@ enum Wording {
     static let hideApp = "Hide Arrumator"
     static let quitApp = "Quit Arrumator"
     static let windowMenu = "Window"
-    static let setup = "Setup…"
     static let minimise = "Minimise"
     static let close = "Close"
     /// The name of a card's close button, naming what it closes.
     static func closeNamed(_ name: String) -> String { "Close “\(name)”" }
+    /// A document's thumbnail, which opens it, as VoiceOver names it.
+    static func openNamed(_ name: String) -> String { "Open “\(name)”" }
     static let editMenu = "Edit"
     static let undo = "Undo"
     static let redo = "Redo"
@@ -176,7 +177,7 @@ enum Wording {
 
     /// Notification titles.
     static let notifyFiled = "Filed"
-    static let notifyReview = "Needs your review"
+    static let notifyReview = "Needs You"
 
     // MARK: Actions, as an error names what failed
 
@@ -199,6 +200,10 @@ enum Wording {
     static let confirmAction = "Confirm"
     static let holdAction = "Hold"
     static let readAgainAction = "Read again"
+    static let copyAction = "Copy"
+    static let copyRefused = "macOS would not let Arrumator write to the clipboard."
+    /// Stands in the place of Copy for a moment once it was pressed.
+    static let copied = "Copied"
     static let readAllAgainAction = "Read every document again"
     static let changeLabelsAction = "Change labels"
     static let renameAction = "Rename"
@@ -252,6 +257,8 @@ enum Wording {
     static let removeForGood = "Remove for Good"
     static let remove = "Remove"
     static let looksRight = "Looks Right"
+    /// Confirms a document that waits for the user as it is, where "Looks Right" would claim more than the user says.
+    static let keepAsItIs = "Keep As It Is"
     static let readAgain = "Read Again"
     static let showWithoutLabel = "Show documents without this label too"
 
@@ -333,12 +340,35 @@ enum Wording {
         return outcome(of: document, archive: archive, incoming: incoming)
     }
 
-    /// Who read the document, as a sentence.
+    /// Who read the document, as a sentence, and when it was last read when Core has that (`DocumentAnalysis.readAt`).
     static func reader(_ analysis: DocumentAnalysis) -> String {
         guard let model = analysis.model else { return "Not read by the model" }
-        if analysis.isUnreadableFormat { return "Arrumator cannot read this kind of file, so \(model) saw only its name" }
-        return analysis.hadNoText ? "No text could be taken from it, so \(model) saw only its name" : "Read by \(model)"
+        let said: String
+        if analysis.isUnreadableFormat {
+            said = "Arrumator cannot read this kind of file, so \(model) saw only its name"
+        } else {
+            said = analysis.hadNoText ? "No text could be taken from it, so \(model) saw only its name" : "Read by \(model)"
+        }
+        return said + (analysis.readAt.map { labelSeparator + readTime($0) } ?? "")
     }
+
+    /// What a History row ends with: the name its document has now, when the event is about one the index still has, and the
+    /// time: "bill.pdf · 13:55". The row's summary stays as it was recorded.
+    static func historyDetail(document: String?, at date: Date) -> String {
+        ([document].compactMap(\.self) + [date.formatted(date: .omitted, time: .shortened)]).joined(separator: labelSeparator)
+    }
+
+    /// When a document was last read: "15 Oct 2026, 13:55".
+    static func readTime(_ date: Date) -> String { date.formatted(date: .abbreviated, time: .shortened) }
+
+    /// What the line under a card's name says: where the document is or what happened to it, never its problems, which the
+    /// Read row says once: "Waiting for you · in Archive".
+    static func placement(of document: DocumentRecord, archive: URL?, incoming: URL?) -> String {
+        guard [.needsReview, .failed].contains(document.status) else { return outcome(of: document, archive: archive, incoming: incoming) }
+        return "\(waitingForYou) · in \(place(of: document, archive: archive, incoming: incoming))"
+    }
+
+    static let waitingForYou = "Waiting for you"
 
     /// What would help a document that waits for the user, when Read Again alone cannot.
     static func advice(_ analysis: DocumentAnalysis) -> String? {
@@ -425,43 +455,12 @@ enum Wording {
     /// Separates labels shown on one line.
     static let labelSeparator = " · "
 
-    /// How a kind of label is introduced on a document's card.
-    static func labelKind(_ kind: LabelKind) -> String {
-        switch kind {
-        case .sender: "From"
-        case .party: "About"
-        case .type: "Type"
-        case .topic: "Topic"
-        case .object: "Concerns"
-        case .reference: "Reference"
-        case .date: "Date"
-        case .period: "Period"
-        case .deadline: "Deadline"
-        case .amount: "Amount"
-        case .jurisdiction: "Jurisdiction"
-        case .language: "Language"
-        case .tag: "Tag"
-        }
-    }
+    /// A kind of label as a card introduces one, its picker and a task name it: one name per kind, from Core
+    /// (`LabelKind.name`), so every page says the same.
+    static func labelKind(_ kind: LabelKind) -> String { kind.name }
 
-    /// The labels of a kind, as the Labels page heads them.
-    static func labelKinds(_ kind: LabelKind) -> String {
-        switch kind {
-        case .sender: "Senders"
-        case .party: "People and Organisations"
-        case .type: "Types"
-        case .topic: "Topics"
-        case .object: "Things"
-        case .reference: "References"
-        case .date: "Dates"
-        case .period: "Periods"
-        case .deadline: "Deadlines"
-        case .amount: "Amounts"
-        case .jurisdiction: "Jurisdictions"
-        case .language: "Languages"
-        case .tag: "Tags"
-        }
-    }
+    /// The labels of a kind, as the Labels page and the sidebar head them (`LabelKind.groupName`).
+    static func labelKinds(_ kind: LabelKind) -> String { kind.groupName }
 
     /// A decision about labels, as a sentence: "“EDP Comercial” is written “EDP”".
     static func rule(_ rule: LabelRule) -> String {
@@ -497,26 +496,12 @@ enum Wording {
         }
     }
 
-    /// A label as the card and the sidebar show it: a type by its name, a language by its name in the user's language, a
-    /// date or deadline as a day and a period as its days, one way (`Format.day`, `Format.period`).
-    static func label(_ label: DocumentLabel) -> String {
-        switch label.kind {
-        case .language: Locale.current.localizedString(forLanguageCode: label.value) ?? label.value
-        case .type: DocumentType(rawValue: label.value)?.label ?? label.value
-        case .date, .deadline: Format.day(label.value, locale: .current) ?? label.value
-        case .period: Format.period(label.value, locale: .current) ?? label.value
-        default: label.value
-        }
-    }
+    /// A label as the card and the sidebar show it, in the Mac's language and region: the one rule Core's History
+    /// summaries follow too (`DocumentLabel.shown(locale:)`). The App is the composition root of the locale.
+    static func label(_ label: DocumentLabel) -> String { label.shown(locale: .current) }
 
-    /// A kind of label, as a sentence names one: "the new sender label".
-    static func labelKindName(_ kind: LabelKind) -> String {
-        switch kind {
-        case .party: "person or organisation"
-        case .object: "thing"
-        default: kind.rawValue
-        }
-    }
+    /// A kind of label, as a sentence names one: "the new sender label" (`LabelKind.sentenceName`).
+    static func labelKindName(_ kind: LabelKind) -> String { kind.sentenceName }
 
     /// The field a card's new label is written in, as VoiceOver names it, whatever example it shows.
     static func newLabelField(_ kind: LabelKind) -> String { "Value of the new \(labelKindName(kind)) label" }

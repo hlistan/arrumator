@@ -89,6 +89,10 @@ public struct ModelProfileListing: Sendable, Codable, Hashable, Identifiable {
 }
 
 extension ModelProfileListing {
+    /// The profile is one the app comes with, as it comes: the app can say what it trades (`Wording.profileTrade`), as it
+    /// cannot for one the user changed, whose models are no longer the ones that was written for, or one of the user's own.
+    public var isAsBundled: Bool { predefined && !changed }
+
     /// Why the profile cannot be removed while `searchTasks` search tasks of the archive that is open read with it
     /// (`ModelProfileActions.searchTasks(readingWith:)`), or nil when it can: a predefined one, which the bundled settings
     /// would bring back, the one Settings reads with, and one tasks read with, which are given another first.

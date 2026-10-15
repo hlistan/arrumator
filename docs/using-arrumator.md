@@ -12,30 +12,48 @@ else it is, or waiting for you and why ("Waiting for you: the model gave no vali
 filed of another document, or undone and back in Incoming. Rows are reached with the keyboard too (Tab, with keyboard
 navigation on in System Settings), and Return or Space opens one. Its date, sender, type and tags, and a few more of its
 labels, show beneath it. Clicking a row opens the document in place as a card with its name and its labels, one row for
-each kind it has ([labels](how-it-works.md#labels)), what the model read it as, under **About**, and which model read
-it, or that no text could be taken from it and the model saw only its name, and any problem it had, with what would help
-when **Read Again** alone cannot: a copy saved without its password, or a good copy, put in Incoming. The name can be
-changed there (a blank one, one cleaning leaves nothing of and one of the app's own files are refused, saying so), any
-label taken off with its × or its menu's **Remove from This Document**, and a label added by choosing its kind and
-writing its value. A value that is no label of its kind, such as the type `fatura`, the date `2026-13-45` or the
-language `klingon`, is said under the field as you write it, with what the kind takes, and **Add** waits until it is
-one; Return keeps what you wrote, to correct it. Each change is recorded in History, in words: "Renamed to …; added
-sender “EDP”; removed type “invoice”". A label you add is yours: reading the document again never takes it off ([reading
-documents again](how-it-works.md#reading-documents-again)). Beside the value's field, a menu offers the labels the
-archive has of the kind chosen, of the kinds written freely, the most alike to what you write first, and the tags you
-added on the Labels page among them. Dates, deadlines and periods show as dates, in your Mac's style, a period by its
-first and last day or month (**1 Jul 2026 – 31 Jul 2026**), on the card and in the sidebar alike. A label's menu opens
-it on the Labels page, shows the documents that have it, or takes it off every document: **Remove from Every
-Document…**, after which a document read later may be given it again, or **Remove for Good…**, which the model's
-readings follow too. The card's actions follow the document's state: **Looks Right** confirms it as it is, after which
-the card says **Confirmed by you** and when, beside where it is, and no longer offers it until the document is read
-again, corrected, or renamed or moved in Finder; **Read Again** has the model read it again, saying it waits to be read
-after the files already in Incoming (on Needs You, which the document then leaves for Incoming's queue, the page says so
-above the rest, with **Show Incoming**, until you go to another page), **Leave for Later** holds it, and **Undo Filing**
-moves it back to Incoming; neither **Leave for Later** nor **Undo Filing** is offered while the document is still being
-read in, nor **Read Again** while a file you put into the archive is, and each is once that ends, on the card as it is.
-**Recognised Text** shows what the model read the document as, what an image shows, and its text as it was recognised,
-to read, select and copy, with **Show Sidecar in Finder** for the file beside it that holds them ([what is kept beside a
+each kind it has ([labels](how-it-works.md#labels)), what the model read it as, under **What it is**, and which model
+read it and when it last did (**Read by ministral-3:14b · 15 Oct 2026, 13:55**: the time changes each time it is read
+again, whether the reading finds something or not, and a document taken in from a record file with no reading time shows
+none), or that no text could be taken from it and the model saw only its name, and any problem it had, said once there,
+with what would help when **Read Again** alone cannot: a copy saved without its password, or a good copy, put in
+Incoming; the line under the name says only what happened to it and where it is (**Waiting for you · in Archive**). The
+thumbnail is a button, **Open “bill.pdf”**, and its buttons never break a title: where they do not fit one row they flow
+onto a second, each whole. Each kind of label has one name, the same on the card and its kind picker, in the sidebar, on
+the Labels page and in a task's **Arranged by**: **Sender**, **Person or Organisation**, **Thing**, **Type**, **Topic**,
+**Reference**, **Date**, **Period**, **Deadline**, **Amount**, **Jurisdiction**, **Language** and **Tag** (**Senders**,
+**People and Organisations**, **Things** and so on for a group of them); the command line keeps its keys for them ([the
+names](#how-the-app-names-label-kinds)). The name can be changed there, in a field that shows a field's border under the
+pointer and while you edit it (a name too long for its line ends with an ellipsis; Escape puts back the saved name and
+leaves the field, a second Escape closes the card, and Return saves; a blank one, one cleaning leaves nothing of and one
+of the app's own files are refused, saying so), any label taken off with its × or its menu's **Remove from This
+Document**, and a label added by choosing its kind and writing its value. A value that is no label of its kind, such as
+the type `fatura`, the date `2026-13-45` or the language `klingon`, is said under the field as you write it, with what
+the kind takes, and **Add** waits until it is one; Return keeps what you wrote, to correct it. Each change is recorded
+in History, in words: "Renamed to …; added sender “EDP”; removed type “invoice”". A label you add is yours: reading the
+document again never takes it off ([reading documents again](how-it-works.md#reading-documents-again)). Beside the
+value's field, a menu offers the labels the archive has of the kind chosen, of the kinds written freely, the most alike
+to what you write first, and the tags you added on the Labels page among them. Dates, deadlines and periods show as
+dates, in your Mac's style, a period by its first and last day or month (**1 Jul 2026 – 31 Jul 2026**), on the card and
+in the sidebar alike. A label's menu, which a secondary click opens anywhere on it, its text included, opens it on the
+Labels page (**Show in Labels**), shows the documents that have it (**Show Documents**), puts it on the clipboard as the
+card shows it (**Copy**), takes it off the document (**Remove from This Document**) or off every document: **Remove from
+Every Document…**, after which a document read later may be given it again, or **Remove for Good…**, which the model's
+readings follow too. The card's actions follow the document's state: **Looks Right** confirms a filed document as it is,
+and **Keep As It Is** a document that waits for you, after which the card says **Confirmed by you** and when, beside
+where it is, and no longer offers it until the document is read again, corrected, or renamed or moved in Finder; **Read
+Again** has the model read it again, saying it waits to be read after the files already in Incoming (on Needs You, which
+the document then leaves for Incoming's queue, the page says so above the rest, with **Show Incoming**, for as long as a
+reading of it is queued or under way: not once it has ended, nor after **Leave for Later**, nor when it failed again),
+and is **dimmed**, with why as its help and for VoiceOver, for a document whose file was found damaged or encrypted and
+has not changed since (reading it again would find it the same: put a good copy in Incoming; a file that changed is read
+again, and so is one the model gave no answer for or no text was found in; **Read All Documents Again** and
+`arrumatorcli labels unlabelled` still read it), **Leave for Later** holds it, and **Undo Filing** moves it back to
+Incoming; neither **Leave for Later** nor **Undo Filing** is offered while the document is still being read in, nor
+**Read Again** while a file you put into the archive is, and each is once that ends, on the card as it is. **Recognised
+Text** shows what the model read the document as, what an image shows, and its text as it was recognised, to read,
+select and copy, with **Show Sidecar in Finder** for the file beside it that holds them (it is dimmed, with why, for a
+document nothing was read of, such as a damaged file) ([what is kept beside a
 document](how-it-works.md#what-is-kept-beside-a-document)). **Move to Trash…**, after you confirm, removes the document:
 its file goes to the Trash, it leaves the archive with its labels and what was read of it, and the card closes
 ([how](how-it-works.md#removing-a-document)); it is offered for any document but one being read in, or whose file
@@ -49,10 +67,25 @@ to its list. History's row of a removal has **Put Back** too, under the pointer,
 with why when it cannot be put back ([how](how-it-works.md#removing-a-document)). A kind of file Arrumator cannot read
 says so, that the model saw only its name, and what would help.
 
+**No text in Arrumator is offered to anything outside it.** The app processes documents that are yours, so none of its
+text, selected or typed, is handed to a web search, Look Up, Translate, Share, Services or Writing Tools (Apple
+Intelligence, ChatGPT included). Text stays selectable and copyable, and the menu of a secondary click on text, in a
+field or in an editor keeps what happens on this Mac: **Cut**, **Copy**, **Paste**, **Select All**, **Spelling and
+Grammar**, **Substitutions**, **Transformations** and **Speech**; it has no **Search With Google**, **Look Up**,
+**Translate**, **Share…**, **Services**, **AutoFill** or **Writing Tools**, and neither has the Edit menu while a field
+has the keyboard (Start Dictation and Emoji & Symbols stay reachable from the keyboard, the Globe key and
+Control-Command-Space). Look Up is not offered without the menu either: Control-Command-D, a force click and a
+three-finger tap on text open no Look Up panel. The app has no Services menu and provides no service. The menu is
+filtered by an allow-list of the public editing, spelling, substitution and speech actions, so an item macOS adds in a
+later version is left out until it is allowed; the suggestions for a misspelled word that macOS puts at the top of the
+menu are not on it, and **Spelling and Grammar › Show Spelling and Grammar** still offers them. Dragging selected text
+out of the app, as Copy, is yours to do.
+
 - **Incoming**: under **In Progress**, the file being worked on now, with a spinner and what is being done to it
   (**Reading its text**, **Being read by qwen3.5:9b-q8_0**, naming the model of the profile in use, …), and, once that
   has taken more than a few seconds, for how long so far, as the first file after a start does while the model loads:
-  **Being read by qwen3.5:9b-q8_0… 1 min, 30 sec so far**; under **Queued**, every other file, in the order they
+  **Being read by qwen3.5:9b-q8_0… 1 min, 30 sec so far**; under **Queued · 3 files**, which says how many wait, every
+  other file, in the order they
   arrived, which is the order they are filed in, each saying when it arrived, or, for a file stopped part way (as when
   you quit Arrumator), **Carries on where it stopped**, which it does first at the next start, or the error it had and
   when it is tried again ([how](how-it-works.md#how-a-file-is-handled)); while a file waits for Ollama, which it found
@@ -65,24 +98,32 @@ says so, that the model saw only its name, and what would help.
   that document joins the queue to be read again, under its own name ([exact copies](how-it-works.md#exact-copies)).
   Documents read again all at once (**Read All Documents Again**) are not listed one by one: a line above says how many
   are left, **Reading 120 documents of the archive again with the profile in use. New files still come first.**, and the
-  one being read shows under **In Progress**. Then comes what was just processed, grouped by day as on Processed, each
-  with its labels, its tags among them, with **Show More in Processed** for the rest.
+  one being read shows under **In Progress**. Then comes what was just processed, under **Processed Today**, **Processed
+  Yesterday** or **Processed** and the
+  date, each with its labels, its tags among them, with **Show More in Processed** for the rest.
 - **Needs You**: documents waiting for you, each with the reason: those the model could not read, or that are
   encrypted, damaged, blank or of a kind of file Arrumator cannot read, and those that could not be filed. The sidebar
   and the menu bar count them. Below them, under **Set Aside by You**, come the documents you left for later or undid
   back into Incoming: they wait for nothing, so nothing counts them; read one again when you want it filed.
-- **Processed**: everything finished, newest first and grouped by day, like Things' Logbook.
+- **Processed**: every document Arrumator has finished with, filed or waiting for you, newest first and grouped by day,
+  like Things' Logbook; its notes say so.
 - **Labels**: the archive's labels as one vocabulary ([how](how-it-works.md#keeping-labels-one-vocabulary)). Labels
   written so alike they may be one are judged by the model on its own, and merged or kept apart, so nothing waits for
   you here. **What You Decided** comes first, before the labels however many there are: your rules and those the
   model's judgements made, the latest first, each with **Forget**, `interface.pageSize` of them until **Show More** (and
-  **Show Fewer** back). Below come the labels of each kind the vocabulary keeps, the most used first, each with how
+  **Show Fewer** back). A line under the title names the kinds the page leaves out, as each has one form only (Types,
+  Dates, Amounts,
+  Languages…). Below come the labels of each kind the vocabulary keeps, the most used first, each with how
   many documents have it, and under **Tags** a field to add a tag of your own, which no document need have yet
   (**Add Tag**; one the archive has, however written, is said under the field, and the button waits), then your tags,
   which are never merged or judged without you, those you added and no document has last, with none. Open a label to
   rename it, its field holding it as it is written (**Rename** waits until it is written anew), merge it into another,
   written in its field or chosen from those most alike (a value that is no label of its kind is said under it, and
-  **Merge** waits), take it off every document (**Remove from Every Document…**) or do so for good (**Remove for
+  **Merge** waits), which asks first, **Merge “billing” into “cloud services”?**, naming how many documents change and
+  that documents read later follow the rule; **Cancel** or Escape change nothing, **Merge** merges and opens the card of
+  the label merged into, and a rename into a label in use asks the same, into a new writing it does not; opened from a
+  card, a label far down the page scrolls its card into view; **Forget** on a merge does not give documents their old
+  label back; take it off every document (**Remove from Every Document…**) or do so for good (**Remove for
   Good…**), both after you confirm, or show the documents that have it.
 - **Tasks**: ask for documents in your own words ([search tasks](how-it-works.md#search-tasks)). Write what you need in
   the field at the top and press **Find**. Below the field, **Read with** sets how the request is read ([profile and
@@ -119,7 +160,9 @@ says so, that the model saw only its name, and what would help.
   qwen3.5:9b-q8_0…** beside a spinner and how long so far, **Thinking…** while a model that thinks has written nothing
   yet, or what it waits for: the model to begin, its turn, or Ollama, with when it is tried again. Under an answer,
   **Drawn from** names the documents it drew on, one a line, each to open; when you asked for more documents, it lists
-  those it found outside the task, each with a + to add it, and **Add All**; **Copy** puts the answer on the clipboard,
+  those it found outside the task, each with a + to add it, and **Add All**; **Copy** puts the answer on the clipboard
+  as plain text, without Markdown marks, and as rich text that keeps its
+  emphasis and lists, and says **Copied** in its place for a moment (VoiceOver says so too),
   **Ask Again** answers the question again from the documents as they are now, and **Stop**, while it is answered, ends
   it keeping what came of it. Between questions, the changes made to the task's documents since show where they were
   made. **Clear Conversation…** removes every question and answer; the documents stay. While a question about a task is
@@ -132,16 +175,19 @@ Below the lists, the sidebar lists the labels documents have, each with how many
 most used first. They come in one list under **Most Used**, `interface.sidebarLabels` of them, or, with **Group Labels
 by Kind** in the bar's menu (`groupLabelsByKind`, `arrumatorcli settings --group-labels-by-kind`), kind by kind
 (Senders, Types, Topics and so on, and your Tags last), `interface.sidebarLabelsPerKind` of each, each kind folding
-away when its name is clicked, as its help says (**Hide Senders**, **Show Senders**); **Show More** lists the rest, and
+away when its name is clicked, a chevron at its end always showing which, as its help says (**Hide Senders**, **Show 12
+Senders**, which counts what it hides; VoiceOver reads it **collapsed, 12 labels**); **Show More** lists the rest, and
 **Show Fewer** goes back. Each kind has its colour, on its name heading its
 group and on its labels' tags, so a label shows its kind in the one list too, your own tags in grey; a label's help
-names its kind as well. These counts
+holds the whole label, which its row may cut in the middle, and names its kind (**Senders: electricity contract
+12-5545-25. Show only documents with this label**), and the sidebar can be dragged out to 400 pt. These counts
 are the only ones on the sidebar besides those of what waits for you. Click a label and the window shows the documents
 that have it under the label as its title, by their own date (the day each was issued, not when it was filed), the
 newest first: under a heading for each month, such as **March 2023**, those of one day by name, and those without a date
 last, under **No date**. **Show More** at the foot loads more in the same order. The sidebar then lists only the labels
 those documents have, so each label clicked next narrows them down further: the documents shown have every label chosen.
-Chosen labels come first, as every document shown has them, are marked in the sidebar and head the page; click one
+Chosen labels come first, as every document shown has them, are marked in the sidebar, in the selection's highlight, and
+head the page under a filter symbol of their own; click one
 again, or its × on the page, to let go of it, or **Clear** beside them on the page to let go of them all. Letting go of
 the last, or choosing a list, shows the lists again. "Show Documents" on a label's menu or card starts from that label
 alone. From a terminal, `arrumatorcli labels browse` does the same, listing the documents in the same order.
@@ -187,11 +233,28 @@ Search](evaluation.md#search)). Meaning is compared with the vectors of the prof
 memory: when it cannot be, as while Ollama is away, the words alone find the documents, and the command says why after
 the count, such as `(full text: query too short)`.
 
+### How the app names label kinds
+
+Each kind of label has one name in the app, one for a label of it and one for a group of them, which Core writes
+(`LabelKind.name` and `groupName`) so the card, the sidebar, the Labels page, a task's **Arranged by** and History all
+say the same. The command line keeps its keys, and three of them differ from the app's names:
+
+| Key (`<kind>=`) | Name | Group |
+|---|---|---|
+| `sender` | Sender | Senders |
+| `party` | Person or Organisation | People and Organisations |
+| `object` | Thing | Things |
+| `type`, `topic`, `reference`, `date`, `period`, `deadline`, `amount`, `jurisdiction`, `language`, `tag` | the key, capitalised: Type, Topic, Reference… | Types, Topics, References… |
+
 ### Statistics
 
-**Statistics** is the whole processing funnel, over the last few days (`stats.windowsDays`). It shows how many files
-the app took, and how many more wait in Incoming to be taken, how far they got, how many are still being worked on,
-where those not filed stopped and why, and how long each step takes. The steps come from
+**Statistics** is the whole processing funnel, over the last few days (`stats.windowsDays`). It shows how many files the
+app took, and how many more wait in Incoming to be taken, how far they got, how many are still being worked on, where
+those not filed stopped and why, and how long each step takes. What it says of them is what its table shows: **2 were
+not filed: 1 waiting for you to decide, 1 left for later** whenever any document was not filed, wherever it stopped,
+filing included, and **Every one of them was filed** only when every one was and none is still being worked on. Each
+outcome under **Where files ended up** has a colour of its own, its words beside it, and the ✕ and ⚠ beside a step say
+what they count to the pointer and to VoiceOver (**2 files had errors at Read**). The steps come from
 `stats.funnel.steps`: arrived, checked for copies, read, understood, analysed and filed. Every statistic sits under the
 step it describes:
 
@@ -207,9 +270,17 @@ colours rather than the system accent, which macOS greys out whenever the window
 
 ## Folders and notifications
 
+Onboarding opens the first time, and **Window › Set Up Arrumator…** opens it again: each of its five steps says where
+you are, **Step 2 of 5**, on the page and in the window's title, and closing the window part way and opening it again
+returns to the step you left, with your choices, for as long as the app runs (a new launch starts at Welcome). The
+folder step shows every control it has, and the scroll bar shows when more is below. **Ready** names your Incoming
+folder by its path and offers **Open Incoming Folder** beside **Start**, which Return still presses.
+
 Settings › General, also onboarding's second step, shows Incoming and the archive both as the app uses them: the full
-path, with `~` written out. Under **Notifications**, **When a document is filed** and **When a document needs review**
-ask macOS to show one; Arrumator asks macOS when you turn one on, or else when the first is due. While a switch is on
+path, with `~` written out. Under **Background**, **Pause filing** is the sidebar's pause button as a switch. Under
+**Notifications**, **When a document
+is filed** and **When a document needs you** (the notification is titled **Needs You**) ask macOS to show one; Arrumator
+asks macOS when you turn one on, or else when the first is due. While a switch is on
 and macOS does not let Arrumator notify, because notifications are turned off for it in System Settings ›
 Notifications, or because macOS would not let it ask, the switches say so, with **Open Notification Settings**, and
 the log says why, rather than nothing being shown without a word.
@@ -263,8 +334,11 @@ the server does not say: the work waits while the server cannot answer, as when 
 Below it, **Profile** chooses the model profile documents are read with, and the requests of search tasks without a
 profile of their own ([profile and effort](how-it-works.md#profile-and-effort)), and lists its three models: the one
 that **Reads documents and requests**, and names files, the one that **Describes images** and the one that **Finds by
-meaning**, each with a mark when it is installed, or **Download** when it is not. The bar at the foot of the main
-window's sidebar chooses the profile in use too.
+meaning**, each with a mark when it is installed, or **Download** when it is not. Under it one line says what the
+profile chosen trades, in words and memory (**Fastest, about 5.5 GB of memory; finds fewer
+labels**, **Balanced, about 10 GB; finds the most labels**, **Slowest, about 10.4 GB; its model thinks, which search
+tasks can use**), in Settings and in onboarding's Models step, for Fast, Standard and Smart as they come and not once
+you changed one. The bar at the foot of the main window's sidebar chooses the profile in use too.
 
 **Profiles** lists every profile, Fast, Standard and Smart first, each with the model that reads with it, and says which
 is in use and which predefined one you changed; the note under them names those three as Arrumator calls them, however
@@ -286,31 +360,33 @@ by meaning**, documents embedded by another model are found by meaning only once
 
 ## Audit, logs and tuning
 
-- **History**: every arrival (with the tag its folder in Incoming gives it), file in Incoming that cannot be opened,
-  exact copy (under the document it has read again, with where the copy went and the tags it gave), a document you ask
-  to read again (under it, `Read again: <name>`, when your request queues its reading, as it does in place of its
-  turn in reading every document again, or of reading its text again after a rebuild of the index: not while an earlier
-  Read Again's, an exact copy's, or its reading in, before that has filed it, waits or is under way),
-  every document read again at once (under none, with the profile and the documents, `Read every document again with
-  the profile “Standard”: 120 documents`), extraction, reading
-  (with the labels it gave, which of the model's labels were tidied and why, and what gave its tags, or that nothing
-  could be read of it and why it waits for you), filing (from the name it had to the one it was given, or that it kept
-  its name or waits where it is), correction of a name or labels, decision about labels (a rename, a merge, a label
-  removed from every document or for good, two kept apart, a tag added, a rule forgotten; a merge or two kept apart that
-  the model judged is Arrumator's, saying so, and links the trace of the judgement), confirmation, undo, a document
-  removed (with where its file was and where the Trash put it), a document put back (with where its file was in the
-  Trash and where it went), move or rename in Finder, the move of each document in a folder of yours you rename or move
-  in the archive, a record file that cannot be read and the same file readable
-  again, search task (asked, with the effort and profile it is read with, what it found or why it could not be read,
-  changed, its effort or profile among it, its set edited, exported, removed), settings change and Ollama availability
-  change (`events` table; History view; `arrumatorcli history`). A settings change made in the app and one made with
-  `arrumatorcli settings` are recorded alike, once, in words made of what changed (`Changed logLevel to debug,
-  renameFiles to false`, with the settings and their new values), and each change to the profiles in its own words:
-  `Added the profile “Mine”, reading with qwen3.5:9b-q8_0`, `The profile “Smart” reads with gpt-oss:20b instead of
+- **History**: each row names the document it is about beside the time, as the index has it now, so a row recorded under
+  a name the document had before shows the name it has, and one about a document since removed shows none; the words of
+  the event stay as they were recorded, earlier events included. Every arrival (with the tag its folder in Incoming
+  gives it), file in Incoming that cannot be opened, exact copy (under the document it has read again, with where the
+  copy went and the tags it gave), a document you ask to read again (under it, `Read again: <name>`, when your request
+  queues its reading, as it does in place of its turn in reading every document again, or of reading its text again
+  after a rebuild of the index: not while an earlier Read Again's, an exact copy's, or its reading in, before that has
+  filed it, waits or is under way), every document read again at once (under none, with the profile and the documents,
+  `Read every document again with the profile “Standard”: 120 documents`), extraction, reading (with the labels it gave,
+  which of the model's labels were tidied and why, and what gave its tags, or that nothing could be read of it and why
+  it waits for you), filing (from the name it had to the one it was given, or that it kept its name or waits where it
+  is), correction of a name or labels, decision about labels (a rename, a merge, a label removed from every document or
+  for good, two kept apart, a tag added, a rule forgotten; a merge or two kept apart that the model judged is
+  Arrumator's, saying so, and links the trace of the judgement), confirmation, undo, a document removed (with where its
+  file was and where the Trash put it), a document put back (with where its file was in the Trash and where it went),
+  move or rename in Finder, the move of each document in a folder of yours you rename or move in the archive, a record
+  file that cannot be read and the same file readable again, search task (asked, with the effort and profile it is read
+  with, what it found or why it could not be read, changed, its effort or profile among it, its set edited, exported,
+  removed), settings change and Ollama availability change (`events` table; History view; `arrumatorcli history`). A
+  settings change made in the app and one made with `arrumatorcli settings` are recorded alike, once, in words made of
+  what changed (`Log detail: debug; Rename files: off`, each setting by the name Settings shows it under, with its new
+  value in words: on or off, none for one taken away), and each change to the profiles in its own words: `Added the
+  profile “Mine”, reading with qwen3.5:9b-q8_0`, `The profile “Smart” reads with gpt-oss:20b instead of
   qwen3.5:9b-q8_0`, `Reset the profile “Smart”`, `Removed the profile “Mine”`, `Reading with the profile “Smart”`, which
-  comes first when other settings change with it (`Reading with the profile “Smart”; changed renameFiles to false`).
-  Pausing, the Ollama server and switching archives have their own (`Processing paused`, `Ollama at …`, `Switched to the
-  archive at …`).
+  comes first when other settings change with it (`Reading with the profile “Smart”; Rename files: off`). Pausing, the
+  Ollama server and switching archives have their own (`Filing paused`, `Filing resumed`, `Ollama at …`, `Switched to
+  the archive at …`).
 - **Traces**: for every document, each stage's inputs, outputs and timing, including the tags it was given and the
   folder in Incoming or command that gave each (the `tag` step), the exact prompts (with what the model was shown of the
   archive's labels), raw model responses and the labels the `consolidate` step changed ("How was this read?";
@@ -525,8 +601,7 @@ Environment variables:
 Everything Arrumator knows that it could not work out again is kept in Markdown files inside the archive, next to what
 it describes: a `_documents.md` in every directory holding documents, with each document's labels and what the model
 read it as, beside each document its sidecar, with what the model read it as and its text as it was recognised, and, in
-the
-`System` folder at the top of the archive, the history (`History`, one file per month), your rules for labels
+the `System` folder at the top of the archive, the history (`History`, one file per month), your rules for labels
 (`_labels.md`), your search tasks with their exports (`_tasks.md`) and the conversations about their documents
 (`Conversations`, one file per task).
 

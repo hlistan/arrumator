@@ -1,0 +1,262 @@
+diff --git a/App/Support/LocalText.swift b/App/Support/LocalText.swift
+new file mode 100644
+index 0000000..554aa9a
+--- /dev/null
++++ b/App/Support/LocalText.swift
+@@ -0,0 +1,108 @@
++import AppKit
++import ArrumatorCore
++import SwiftUI
++
++/// The one place no text of the app is handed to anything outside it (AGENTS.md §4.1, AC 4a of the QA run of 15 October
++/// 2026). The app processes sensitive documents, so no text it shows or takes, selected or typed, is offered to a web
++/// search, Look Up, Translate, Share, Services or Writing Tools. Three parts, each applied once, where a new view cannot
++/// miss it:
++///
++/// - `TextMenuGuard` filters every text menu AppKit draws, by `TextMenuRule`, and the Edit menu.
++/// - `keepsTextLocal()` is applied where every window's content is made (`ArrumatorApp.swift`, held there by the `hosting`
++///   gate of `scripts/lint.sh`).
++/// - `LocalApplication` offers no selection to any service, so not even a keyboard shortcut the user gave a service does.
++///
++/// Why this mechanism, from what the spike of 15 October 2026 saw on macOS 26 (`.agentic/work/ui-usability/spike-ac4a.md`):
++/// SwiftUI's selectable `Text`, `TextField` (also with `axis: .vertical`), `TextEditor` and the same in a sheet all draw
++/// their context menu from an `NSMenu` that was seen by `NSMenu.didAddItemNotification` ("Posted after a menu item is added
++/// to the menu … the notification object is the instance of NSMenu") with no delegate, so it could be given one in time. The
++/// delegate's `menuNeedsUpdate(_:)` ran on each before it was drawn, and "the delegate can change the menu by adding,
++/// removing, or modifying menu items" (`NSMenuDelegate.menuNeedsUpdate(_:)`). The items that reach outside have private
++/// selectors, hence an allow-list of public ones, which fails closed. `menuWillOpen(_:)` is not used: "Do not modify the
++/// structure of the menu" (NSMenu.h). `NSMenu.didBeginTrackingNotification` is not either: its object is the menu bar or a
++/// popup button's root menu, never a context menu.
++@MainActor
++final class TextMenuGuard: NSObject, NSMenuDelegate {
++    private var observer: (any NSObjectProtocol)?
++    private weak var editMenu: NSMenu?
++    /// The Edit menu's items as the app made them, which stay; AppKit adds others (AutoFill, Start Dictation, Emoji &
++    /// Symbols, and Writing Tools where it is available), which go.
++    private var ownEditItems: Set<ObjectIdentifier> = []
++
++    /// Starts guarding every text menu from now on, and the Edit menu `edit`, as the app built it.
++    func install(editMenu edit: NSMenu) {
++        editMenu = edit
++        ownEditItems = Set(edit.items.map(ObjectIdentifier.init))
++        edit.delegate = self
++        guard observer == nil else { return }
++        observer = NotificationCenter.default.addObserver(forName: NSMenu.didAddItemNotification, object: nil, queue: .main) { [weak self] note in
++            // Delivered on the main queue (`queue: .main`), so the menu is only ever touched there.
++            nonisolated(unsafe) let menu = note.object as? NSMenu
++            MainActor.assumeIsolated { self?.adopt(menu) }
++        }
++    }
++
++    /// Takes a menu of text as its delegate, the first time it holds a text action, before it is drawn: a context menu has
++    /// no supermenu and, so far as AppKit builds it, no delegate; the app's own menus and the main menu's are left alone.
++    /// Writing Tools and other apps' contextual menu plug-ins are told not to add their items.
++    private func adopt(_ menu: NSMenu?) {
++        guard let menu, menu !== NSApp.mainMenu, menu.supermenu == nil, menu.delegate == nil,
++              TextMenuRule.isTextMenu(Self.entries(menu)) else { return }
++        menu.delegate = self
++        menu.automaticallyInsertsWritingToolsItems = false
++        menu.allowsContextMenuPlugIns = false
++    }
++
++    func menuNeedsUpdate(_ menu: NSMenu) {
++        if menu === editMenu {
++            pruneEdit(menu)
++        } else if TextMenuRule.isTextMenu(Self.entries(menu)) {
++            prune(menu)
++        }
++    }
++
++    /// Takes out of a text menu, at every depth, whatever `TextMenuRule` does not keep.
++    private func prune(_ menu: NSMenu) {
++        let entries = Self.entries(menu)
++        let kept = Set(TextMenuRule.kept(entries))
++        for index in entries.indices.reversed() {
++            if !kept.contains(index) {
++                menu.removeItem(at: index)
++            } else if entries[index].submenu != nil, let submenu = menu.items[index].submenu {
++                prune(submenu)
++            }
++        }
++    }
++
++    /// Takes out of the Edit menu what AppKit added, and the separators left first, last or doubled.
++    private func pruneEdit(_ menu: NSMenu) {
++        for item in menu.items.reversed() where !ownEditItems.contains(ObjectIdentifier(item)) { menu.removeItem(item) }
++        var separated = true
++        for item in menu.items {
++            if item.isSeparatorItem, separated { menu.removeItem(item) } else { separated = item.isSeparatorItem }
++        }
++        if menu.items.last?.isSeparatorItem == true { menu.removeItem(at: menu.items.count - 1) }
++    }
++
++    /// `menu` as `TextMenuRule` reads it. The Services item, which holds other apps' services under actions that are not on
++    /// the allow-list, is left out with them.
++    private static func entries(_ menu: NSMenu) -> [MenuEntry] {
++        menu.items.map { item in
++            item.isSeparatorItem ? MenuEntry(isSeparator: true) : MenuEntry(action: item.action.map(NSStringFromSelector), submenu: item.submenu.map(entries))
++        }
++    }
++}
++
++/// Offers the selection of no text to any service (`NSResponder.validRequestor(forSendType:returnType:)`): the Services
++/// menu is not in the app, and with nothing offering a selection, a keyboard shortcut a user gave a service does nothing
++/// here either. The app never sets `NSApp.servicesMenu` nor a services provider (`local-text` gate of `scripts/lint.sh`).
++final class LocalApplication: NSApplication {
++    override func validRequestor(forSendType sendType: NSPasteboard.PasteboardType?, returnType: NSPasteboard.PasteboardType?) -> Any? { nil }
++}
++
++extension View {
++    /// Writing Tools never edits the text of the views below, in the window or a sheet or a popover over it. Applied where
++    /// each window's content is made, so every view has it and a new one cannot miss it.
++    func keepsTextLocal() -> some View { writingToolsBehavior(.disabled) }
++}
++
+diff --git a/Sources/ArrumatorCore/Domain/TextMenuRule.swift b/Sources/ArrumatorCore/Domain/TextMenuRule.swift
+new file mode 100644
+index 0000000..5f67d10
+--- /dev/null
++++ b/Sources/ArrumatorCore/Domain/TextMenuRule.swift
+@@ -0,0 +1,74 @@
++import Foundation
++
++/// One entry of a menu, as the App's text-menu guard (`TextMenuGuard`) reads it from AppKit: what it sends, whether it is a
++/// separator, and what it opens. A pure value, so the rule below needs no AppKit.
++public struct MenuEntry: Sendable, Hashable {
++    /// The selector the entry sends, by name ("copy:"); nil for a separator and for an item that only opens a submenu.
++    public var action: String?
++    public var isSeparator: Bool
++    /// What the entry opens; nil for an entry that opens nothing, and for a Services item, whose submenu is the system's
++    /// list of other apps' services and is never read.
++    public var submenu: [MenuEntry]?
++
++    public init(action: String? = nil, isSeparator: Bool = false, submenu: [MenuEntry]? = nil) {
++        self.action = action
++        self.isSeparator = isSeparator
++        self.submenu = submenu
++    }
++}
++
++/// What a menu of text may offer. The app processes sensitive documents, so no text in it, selected or typed, is handed to
++/// an outside search, service or tool (AGENTS.md §4.1): no web search, Look Up, Translate, Share, Services, or Writing
++/// Tools. This is an allow-list, so it fails closed: the items AppKit adds on its own, whose selectors are private and
++/// change with each macOS, are dropped without anyone naming them, and a new one leaks nothing. `kept` lists only public
++/// selectors, found in the macOS SDK headers (NSText.h, NSTextView.h, NSResponder.h, NSSpellProtocol.h, NSFontManager.h).
++public enum TextMenuRule {
++    /// The actions that make a menu one of text: only a text view's menu sends these.
++    public static let textActions: Set<String> = ["cut:", "copy:", "paste:", "selectAll:"]
++
++    /// The actions a menu of text keeps: editing, spelling and grammar, substitutions, transformations and speech, all done
++    /// on this Mac, and the font and layout panels.
++    public static let kept: Set<String> = textActions.union([
++        "pasteAsPlainText:", "delete:", "undo:", "redo:",
++        "showGuessPanel:", "checkSpelling:", "toggleContinuousSpellChecking:", "toggleGrammarChecking:",
++        "toggleAutomaticSpellingCorrection:", "changeSpelling:", "ignoreSpelling:",
++        "orderFrontSubstitutionsPanel:", "toggleSmartInsertDelete:", "toggleAutomaticQuoteSubstitution:",
++        "toggleAutomaticDashSubstitution:", "toggleAutomaticTextReplacement:", "toggleAutomaticLinkDetection:",
++        "toggleAutomaticDataDetection:", "toggleAutomaticTextCompletion:",
++        "uppercaseWord:", "lowercaseWord:", "capitalizeWord:",
++        "startSpeaking:", "stopSpeaking:",
++        "orderFrontFontPanel:", "changeLayoutOrientation:",
++    ])
++
++    /// Whether `entries` are a menu of text, at any depth: some entry sends one of `textActions`. The app's own menus, such
++    /// as a row's, never do, and are left as they are.
++    public static func isTextMenu(_ entries: [MenuEntry]) -> Bool {
++        entries.contains { entry in
++            entry.action.map(textActions.contains) == true || entry.submenu.map(isTextMenu) == true
++        }
++    }
++
++    /// The positions of `entries` to keep, in order: an action in `kept`, a submenu with something kept in it, and the
++    /// separators between what is kept, none first, last or doubled. Anything else goes, a Services item among it.
++    public static func kept(_ entries: [MenuEntry]) -> [Int] {
++        var indices: [Int] = []
++        var separatorPending = false
++        for (index, entry) in entries.enumerated() {
++            if entry.isSeparator {
++                separatorPending = !indices.isEmpty
++                continue
++            }
++            guard keeps(entry) else { continue }
++            if separatorPending, let separator = entries[..<index].lastIndex(where: \.isSeparator) { indices.append(separator) }
++            separatorPending = false
++            indices.append(index)
++        }
++        return indices
++    }
++
++    private static func keeps(_ entry: MenuEntry) -> Bool {
++        if let submenu = entry.submenu { return !kept(submenu).isEmpty }
++        return entry.action.map(kept.contains) == true
++    }
++}
++
+diff --git a/Tests/ArrumatorCoreTests/TextMenuRuleTests.swift b/Tests/ArrumatorCoreTests/TextMenuRuleTests.swift
+new file mode 100644
+index 0000000..e19857c
+--- /dev/null
++++ b/Tests/ArrumatorCoreTests/TextMenuRuleTests.swift
+@@ -0,0 +1,62 @@
++import ArrumatorCore
++import Foundation
++import Testing
++
++/// What a menu of text may offer (`TextMenuRule`): no text of the app is handed to a search, a service or a tool outside it
++/// (AC 4a of the QA run of 15 October 2026, AGENTS.md §4.1).
++@Suite struct TextMenuRuleTests {
++    static func item(_ action: String) -> MenuEntry { MenuEntry(action: action) }
++    static let separator = MenuEntry(isSeparator: true)
++
++    @Test func aTextMenuKeepsEditingSpellingSubstitutionsAndSpeech() {
++        let spelling = MenuEntry(submenu: [Self.item("showGuessPanel:"), Self.item("checkSpelling:"), Self.item("toggleContinuousSpellChecking:")])
++        let substitutions = MenuEntry(submenu: [Self.item("toggleSmartInsertDelete:"), Self.item("toggleAutomaticQuoteSubstitution:")])
++        let speech = MenuEntry(submenu: [Self.item("startSpeaking:"), Self.item("stopSpeaking:")])
++        let menu = [Self.item("cut:"), Self.item("copy:"), Self.item("paste:"), Self.item("pasteAsPlainText:"), Self.separator,
++                    spelling, substitutions, speech, Self.separator, Self.item("selectAll:")]
++        #expect(TextMenuRule.kept(menu) == Array(menu.indices), "every one of them stays, with the separators between")
++        #expect(TextMenuRule.isTextMenu(menu), "and it is a menu of text")
++    }
++
++    @Test(arguments: ["_lookUpDefinitionFromMenu:", "_translate:", "_searchWithGoogleFromMenu:", "showWritingTools:", "_shareFromMenu:",
++                      "anyFutureAction:"])
++    func aTextMenuDropsEveryOtherAction(action: String) {
++        let menu = [Self.item("copy:"), Self.separator, Self.item(action), Self.item("paste:")]
++        #expect(TextMenuRule.kept(menu) == [0, 1, 3], "\(action) goes, with nothing but the allow-list to say so, and the rest stays")
++        #expect(!TextMenuRule.kept.contains(action), "it is not on the allow-list")
++    }
++
++    @Test func aSubmenuLeftEmptyIsDropped() {
++        let translate = MenuEntry(submenu: [Self.item("_translateSelection:"), Self.item("_lookUp:")])
++        let none = MenuEntry(submenu: [])
++        #expect(TextMenuRule.kept([Self.item("copy:"), translate, none]) == [0], "a submenu with nothing kept in it goes, and so does an empty one")
++        let nested = MenuEntry(submenu: [MenuEntry(submenu: [Self.item("checkSpelling:")])])
++        #expect(TextMenuRule.kept([nested]) == [0], "a submenu that holds one that is kept is kept")
++    }
++
++    @Test func theServicesItemIsDropped() {
++        // AppKit gives the Services item no action, and its submenu is the system's list of services, never read.
++        let services = MenuEntry(action: nil, isSeparator: false, submenu: nil)
++        #expect(TextMenuRule.kept([Self.item("copy:"), services, Self.item("paste:")]) == [0, 2], "an item that does nothing and opens nothing known goes")
++        let listed = MenuEntry(submenu: [Self.item("_performService:")])
++        #expect(TextMenuRule.kept([Self.item("copy:"), listed]) == [0], "and so does one whose services are listed")
++    }
++
++    @Test func separatorsAreNeitherFirstLastNorDoubled() {
++        let menu = [Self.separator, Self.item("_translate:"), Self.separator, Self.item("copy:"), Self.separator, Self.item("_share:"),
++                    Self.separator, Self.item("paste:"), Self.separator]
++        let kept = TextMenuRule.kept(menu)
++        #expect(kept.map { menu[$0] } == [Self.item("copy:"), Self.separator, Self.item("paste:")] && kept == [3, 6, 7],
++                "one separator between what is kept, none at either end: \(kept)")
++        #expect(TextMenuRule.kept([Self.separator, Self.separator]).isEmpty, "separators alone leave nothing")
++        #expect(TextMenuRule.kept([Self.item("copy:"), Self.separator, Self.separator, Self.item("paste:")]) == [0, 2, 3],
++                "doubled ones are one")
++    }
++
++    @Test func aMenuWithoutTextActionsIsNotATextMenu() {
++        let row = [Self.item("moveToTrash:"), Self.separator, Self.item("showInFinder:")]
++        #expect(!TextMenuRule.isTextMenu(row), "a row's own menu, Move to Trash… among it, is the app's and is left alone")
++        #expect(TextMenuRule.isTextMenu([MenuEntry(submenu: [Self.item("selectAll:")])]), "a text action within a submenu makes it one")
++    }
++}
++

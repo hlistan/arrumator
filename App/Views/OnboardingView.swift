@@ -1,18 +1,17 @@
 import SwiftUI
 
 /// The first run, step by step: what the app does, the folders and how it runs, Ollama, the models, and then the app.
-/// Each step fills the window down to the buttons, its title above it; Return continues.
+/// Each step fills the window down to the buttons, its title above it, and says where the user is ("Step 2 of 5") to the
+/// eye, to VoiceOver and in the window's title; Return continues. The step is kept by the app (`AppModel.onboardingStep`),
+/// so the window closed part way opens again where it was left.
 struct OnboardingView: View {
     @Environment(AppModel.self) private var model
-    @State private var step = Step.welcome
 
-    /// The steps, in order.
-    private enum Step: Int {
-        case welcome, folders, ollama, models, ready
-    }
+    private var step: OnboardingStep { model.onboardingStep }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Style.onboardingSpacing) {
+            Text(Wording.stepOf(step.number, OnboardingStep.allCases.count)).font(.callout).foregroundStyle(.secondary)
             Group {
                 switch step {
                 case .welcome: welcome
@@ -24,12 +23,13 @@ struct OnboardingView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             HStack {
-                if let previous = Step(rawValue: step.rawValue - 1) { Button(Wording.back) { step = previous } }
+                if let previous = OnboardingStep(rawValue: step.rawValue - 1) { Button(Wording.back) { model.onboardingStep = previous } }
                 Spacer()
-                if let next = Step(rawValue: step.rawValue + 1) {
-                    Button(Wording.continueStep) { step = next }
+                if let next = OnboardingStep(rawValue: step.rawValue + 1) {
+                    Button(Wording.continueStep) { model.onboardingStep = next }
                         .keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent)
                 } else {
+                    Button(Wording.openIncomingFolder) { if let path = model.settings?.incomingURL.path { model.open(path) } }
                     Button(Wording.start) {
                         Task {
                             await model.finishOnboarding()
@@ -73,7 +73,10 @@ struct OnboardingView: View {
     private var folders: some View {
         VStack(alignment: .leading, spacing: Style.onboardingStepSpacing) {
             Text(Wording.chooseFolders).font(.title.bold())
-            if let settings = model.settings { GeneralSettings(loaded: settings).frame(maxHeight: .infinity) }
+            // Its controls all fit the window at the default text size; where they do not, the scroll bar shows there is more.
+            if let settings = model.settings {
+                GeneralSettings(loaded: settings, footnote: Wording.foldersFooterFirstRun).scrollIndicators(.visible).frame(maxHeight: .infinity)
+            }
         }
     }
 
@@ -100,6 +103,10 @@ struct OnboardingView: View {
             Text(Wording.ready).font(.largeTitle.bold())
             Text(model.menuBarIconHidden ? Wording.readyIntroWithoutMenuBar : Wording.readyIntro)
                 .fixedSize(horizontal: false, vertical: true)
+            // Where to put the first document, by its path, which the next window does not show.
+            if let incoming = model.settings?.incomingURL {
+                Text(Wording.readyIncoming(path: incoming.path)).fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 }

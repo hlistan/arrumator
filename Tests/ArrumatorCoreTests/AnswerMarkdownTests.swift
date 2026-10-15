@@ -39,6 +39,51 @@ import Testing
         #expect(bold.map { String(blocks[1].text[$0.range].characters) } == "72,61 EUR", "and the emphasis within a block is kept")
     }
 
+    @Test func plainTextKeepsTheWordsWithoutTheMarks() {
+        #expect(AnswerMarkdown.plainText(Self.draft) == """
+            Resumo
+
+            As faturas somam 72,61 EUR:
+
+            • EDP: 54,21 EUR
+            • Águas:
+              • março: 10,00 EUR
+              • maio: 8,40 EUR
+
+            1. Pagar
+            2. Arquivar
+
+            Nota do contrato
+
+            U-2653
+            """, "no #, **, -, > or fence: the words, the lists with their markers and nesting, the quote and the code as text")
+    }
+
+    @Test func aNumberedListWithinABulletedOneStaysInIt() {
+        #expect(AnswerMarkdown.plainText("- A\n  1. x\n  2. y\n- B") == "• A\n  1. x\n  2. y\n• B",
+                "a list within an item is part of it, and the next bullet goes on the first list")
+    }
+
+    @Test func plainTextKeepsCodeAsWritten() {
+        #expect(AnswerMarkdown.plainText("Use `lista[7]` e\n\n```\nitens[42]\n  indentado\n```") == "Use lista[7] e\n\nitens[42]\n  indentado",
+                "a span and a fence show the text as it is, indentation and brackets included")
+    }
+
+    @Test func aLinkInPlainTextIsItsWordsAndAddress() {
+        #expect(AnswerMarkdown.plainText("Veja [os detalhes](https://x.example/d?x=1).") == "Veja os detalhes (https://x.example/d?x=1).",
+                "a link is inert on the pasteboard as on screen: its words, then its address as text")
+    }
+
+    @Test func plainTextOfNonLatinText() {
+        #expect(AnswerMarkdown.plainText("**Счёт** за *электроэнергию*\n\n- 請求書: 5 400 円") == "Счёт за электроэнергию\n\n• 請求書: 5 400 円",
+                "the words of any script, without their marks")
+    }
+
+    @Test func plainTextOfNothingIsEmpty() {
+        #expect(AnswerMarkdown.plainText("") == "", "nothing is nothing")
+        #expect(AnswerMarkdown.plainText("   ").trimmingCharacters(in: .whitespaces).isEmpty, "and so is blank space")
+    }
+
     /// An answer is untrusted: a document can ask the model to end it with a link that carries the document's data to a
     /// host of its choosing. Nothing in it becomes clickable; a link shows as its words and, when they differ, its
     /// address as plain text, so nothing is hidden either; an image shows as its words.

@@ -37,6 +37,9 @@ public enum DocumentStatus: String, Sendable, Codable, CaseIterable {
     /// the app could do: Needs You lists it apart from what waits for the user, and counts it not.
     public var isSetAside: Bool { [.held, .undone].contains(self) }
 
+    /// The pipeline is still working on the document, so it has not ended up anywhere.
+    public var isUnfinished: Bool { [.arrived, .processing].contains(self) }
+
     /// Statuses of documents the pipeline has finished with, whatever the outcome.
     public static let processed: Set<DocumentStatus> = [.filed, .needsReview, .failed, .duplicate, .undone, .held]
 

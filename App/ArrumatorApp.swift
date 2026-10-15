@@ -7,7 +7,8 @@ import SwiftUI
 @main
 enum ArrumatorMain {
     static func main() {
-        let app = NSApplication.shared
+        // The principal class is the app's own, which offers no text to any service (`LocalApplication`).
+        let app = LocalApplication.shared
         let delegate = AppDelegate()
         app.delegate = delegate
         app.run()
@@ -40,6 +41,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Wind
     /// Whether the icon's place has been said once, after it settled; afterwards only a change is.
     private var reportedStatusItem = false
     private let popover = NSPopover()
+    /// Filters every text menu and the Edit menu (`TextMenuGuard`); held here as a menu's delegate is weak.
+    private let textMenus = TextMenuGuard()
     private var windows: [WindowID: NSWindow] = [:]
     /// True when macOS started the app by itself, as a login item; then no window is opened unasked.
     private var launchedAsLoginItem = false
@@ -49,7 +52,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Wind
     func applicationDidFinishLaunching(_ notification: Notification) {
         launchedAsLoginItem = LoginItem.launchedTheApp
         model.presenter = self
-        NSApp.mainMenu = MainMenu.build()
+        let (mainMenu, editMenu) = MainMenu.build()
+        NSApp.mainMenu = mainMenu
+        textMenus.install(editMenu: editMenu)
         installStatusItem()
         Task {
             await model.start()
@@ -128,7 +133,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Wind
         }
         popover.behavior = .transient
         popover.contentSize = Style.popover
-        popover.contentViewController = NSHostingController(rootView: MenuBarView().environment(model))
+        popover.contentViewController = NSHostingController(rootView: MenuBarView().environment(model).keepsTextLocal())
     }
 
     /// Records whether the icon is actually on screen: a full menu bar silently clips status items, and then the
@@ -197,6 +202,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Wind
             _ = model.statusSymbol
             _ = model.session.reviewCount
             _ = model.settings?.showInDock
+            _ = model.onboardingStep
         } onChange: { [weak self] in
             Task { @MainActor in
                 guard let self else { return }
@@ -204,6 +210,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Wind
                                                          accessibilityDescription: Wording.appName)
                 self.statusItem?.button?.title = self.model.session.reviewCount > 0 ? Wording.statusItemCount(self.model.session.reviewCount) : ""
                 self.applyDockPolicy()
+                self.windows[.onboarding]?.title = self.title(of: .onboarding)
                 self.trackModel()
             }
         }
@@ -244,8 +251,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Wind
         case .onboarding: AnyView(OnboardingView())
         case .settings: AnyView(SettingsView())
         }
-        let window = NSWindow(contentViewController: NSHostingController(rootView: content.environment(model)))
-        window.title = id.title
+        let window = NSWindow(contentViewController: NSHostingController(rootView: content.environment(model).keepsTextLocal()))
+        window.title = title(of: id)
         window.identifier = NSUserInterfaceItemIdentifier(id.rawValue)
         window.setContentSize(id.size)
         window.styleMask.insert(.miniaturizable)
@@ -274,6 +281,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Wind
         windows[id]?.close()
     }
 
+    /// A window's title: the onboarding window's names the step the user is on ("Set Up Arrumator: Step 2 of 5"), the others'
+    /// are fixed.
+    private func title(of id: WindowID) -> String {
+        id == .onboarding ? Wording.onboardingTitle(step: model.onboardingStep.number) : id.title
+    }
+
     func windowWillClose(_ notification: Notification) {
         guard let window = notification.object as? NSWindow, let raw = window.identifier?.rawValue,
               let id = WindowID(rawValue: raw) else { return }
@@ -283,7 +296,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Wind
 
 /// The standard macOS menus: without them a Dock app has no Edit menu, so text fields lose cut, copy and paste.
 enum MainMenu {
-    static func build() -> NSMenu {
+    /// The menus, and the Edit menu in them, which `TextMenuGuard` keeps to what the app made.
+    static func build() -> (main: NSMenu, edit: NSMenu) {
         let main = NSMenu()
         let appItem = NSMenuItem()
         let app = NSMenu()
@@ -299,7 +313,7 @@ enum MainMenu {
         let windowItem = NSMenuItem()
         let window = NSMenu(title: Wording.windowMenu)
         window.addItem(item(Wording.appName, #selector((any AppCommands).showMain), "0"))
-        window.addItem(item(Wording.setup, #selector((any AppCommands).showOnboarding), ""))
+        window.addItem(item(Wording.setUpApp, #selector((any AppCommands).showOnboarding), ""))
         window.addItem(.separator())
         window.addItem(withTitle: Wording.minimise, action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
         window.addItem(withTitle: Wording.close, action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
@@ -323,7 +337,7 @@ enum MainMenu {
         edit.addItem(filter)
         editItem.submenu = edit
         main.addItem(editItem)
-        return main
+        return (main, edit)
     }
 
     private static func item(_ title: String, _ action: Selector, _ key: String) -> NSMenuItem {

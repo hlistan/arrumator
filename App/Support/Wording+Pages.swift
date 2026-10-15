@@ -11,8 +11,7 @@ extension Wording {
     static let add = "Add"
     static let readHeading = "Read"
     /// What the model read the document as (`DocumentAnalysis.interpretation`): its row on the card, and its part of the
-    /// sheet that shows its text, as its sidecar heads it.
-    static let aboutHeading = "About"
+    /// sheet that shows its text, as its sidecar heads it. One name, so "About" no longer means this and a kind of label.
     static let interpretationHeading = "What it is"
     /// What the vision model saw in an image, as its sidecar heads it.
     static let imageHeading = "What it shows"
@@ -41,6 +40,13 @@ extension Wording {
         case .some(.vlmOnly), .some(.metadataOnly), .some(TextOrigin.none), nil: nil
         }
         return [origin, text.truncated ? "Not all of it: its text was cut to the length kept, or not every page was read." : nil].compactMap(\.self)
+    }
+    static let copyLabel = "Copy"
+    static let readAgainHelp = "Read it again with the model in use"
+    static let recognisedTextHelp = "Show the text that was recognised in it"
+    /// Why Recognised Text is dimmed: nothing was read of the document, and why when its last reading says.
+    static func nothingToShow(_ why: NothingToShow) -> String {
+        "Nothing was read of it" + (why.problems.isEmpty ? "" : ": " + DocumentAnalysis.said(why.problems))
     }
     static let undoFiling = "Undo Filing"
     static let undoFilingHelp = "Move it back to Incoming"
@@ -77,7 +83,12 @@ extension Wording {
 extension Wording {
     static let nothingWaiting = "Nothing waiting. Files dropped into Incoming are picked up on their own."
     static let inProgress = "In Progress"
-    static let queuedHeading = "Queued"
+    /// Heads the files waiting in Incoming, with how many: the files listed under it, which are the ones that wait, never
+    /// the one in hand nor documents read again with the rest of the archive, which a notice counts.
+    static func queuedHeading(count: Int) -> String { "Queued" + labelSeparator + Format.count(count, "file") }
+
+    /// Heads what was just processed on Incoming, by the day it was: "Processed Today", "Processed Yesterday".
+    static func processedHeading(_ document: DocumentRecord) -> String { "Processed " + processedDay(document) }
     static let showMoreInProcessed = "Show More in Processed"
 
     /// While documents of the archive are read again with the rest of it.
@@ -108,6 +119,8 @@ extension Wording {
         + "correct its name and details, or have it read again."
     static let nothingNeedsYou = "Nothing needs you."
     static let nothingProcessed = "Nothing has been processed yet."
+    /// What Processed holds, which is every document the pipeline finished with, those waiting for the user too.
+    static let processedNotes = "Every document Arrumator has finished with, filed or waiting for you, newest first."
     static let nothingHappened = "Nothing has happened yet."
     /// Tags an event the user caused.
     static let byYou = "you"
@@ -134,12 +147,30 @@ extension Wording {
     static func renameField(_ label: String) -> String { "New name of “\(label)”" }
     static let chooseLabelInUse = "Choose a label in use"
     static let merge = "Merge"
+    static let previewMergeAction = "Check what merging would change"
+
+    /// Asks before a label is merged into another, or renamed into one in use, which nothing undoes.
+    static func mergeQuestion(_ label: String, into target: String) -> String { "Merge “\(label)” into “\(target)”?" }
+
+    /// What it changes, from Core's preview (`LabelMergePreview`): how many documents, and that documents read later follow.
+    static func mergeMessage(documents: Int, intoInUse: Bool) -> String {
+        let changed = documents == 0 ? "No document has it now" : "\(Format.count(documents, "document")) will be written with the new label"
+        let joined = intoInUse ? " The label it is merged into is in use already, so its documents and these become one set." : ""
+        return "\(changed).\(joined) Documents read later follow the rule. A merge cannot be undone: forgetting it does not give "
+            + "documents their old label back."
+    }
+
+    /// One line on the Labels page: the kinds it does not list, as it computes them from the kinds written freely.
+    static func kindsNotListed(_ names: [String]) -> String {
+        "Not listed here, as each has one form only and nothing to rename or merge: \(names.joined(separator: ", "))."
+    }
     static let rename = "Rename"
     static let removeHelp = "Take it off every document; a document read later may be given it again"
     static let removeForGoodHelp = "Take it off every document, and never give it again"
     static let removedForGoodFromLabels = "Arrumator will not give this label again. You can forget this decision under What You Decided."
     static let forget = "Forget"
-    static let forgetHelp = "Read documents without this rule from now on; documents keep their labels"
+    static let forgetHelp = "Read documents without this rule from now on; documents keep their labels. Forgetting a merge "
+        + "does not give documents their old label back."
     static let addTag = "Add Tag"
     /// The field a new tag is typed in, as VoiceOver names it.
     static let newTagField = "New tag"
@@ -160,22 +191,41 @@ extension Wording {
     /// The help of the profile in use, in the bar at the sidebar's foot.
     static let profileInUseHelp = "The model profile documents are read with, and requests without a profile of their own, "
         + "as Settings › Models chooses it"
+    /// What the profile chosen trades, in words and memory, for a profile the app comes with, by its id, as Settings and
+    /// onboarding show it under the profile's pop-up; nil for any other. The memory figures are README's and
+    /// `docs/evaluation.md`'s (update them together); the percentages of labels found are left out, so
+    /// the app holds no figure that changes with each prompt.
+    static func profileTrade(_ id: String) -> String? {
+        switch id {
+        case "fast": "Fastest, about 5.5 GB of memory; finds fewer labels."
+        case "standard": "Balanced, about 10 GB; finds the most labels."
+        case "smart": "Slowest, about 10.4 GB; its model thinks, which search tasks can use."
+        default: nil
+        }
+    }
+
     /// Heads the sidebar's labels when they are in one list.
     static let mostUsedLabels = "Most Used"
 
     static func noLabelsMatch(_ query: String) -> String { "No labels match “\(query)”." }
 
-    /// What a kind's heading in the sidebar does when clicked, or chosen with Return or Space: as the Finder's sidebar
-    /// says it of its own headings.
-    static func foldLabelKind(_ kind: LabelKind, folded: Bool) -> String { "\(folded ? "Show" : "Hide") \(labelKinds(kind))" }
-    /// What VoiceOver reads of a kind's heading in the sidebar, as it reads a disclosure triangle's state.
-    static func labelKindFolded(_ folded: Bool) -> String { folded ? "collapsed" : "expanded" }
+    /// What a kind's heading in the sidebar does when clicked, or chosen with Return or Space, as the Finder's sidebar says it
+    /// of its own headings, with how many labels it hides while it is folded: "Show 12 Senders".
+    static func foldLabelKind(_ kind: LabelKind, folded: Bool, hidden: Int) -> String {
+        folded ? "Show \(hidden) \(hidden == 1 ? labelKind(kind) : labelKinds(kind))" : "Hide \(labelKinds(kind))"
+    }
+    /// What VoiceOver reads of a kind's heading in the sidebar, as it reads a disclosure triangle's state: "collapsed, 12
+    /// labels" while folded.
+    static func labelKindFolded(_ folded: Bool, hidden: Int) -> String {
+        folded ? "collapsed, \(Format.count(hidden, "label"))" : "expanded"
+    }
     /// The name VoiceOver reads of the sidebar's labels, which take the keyboard as one stop.
     static let sidebarLabels = "Labels"
 
-    /// A sidebar label's help: its kind, which its colour stands for, and what clicking it does.
-    static func sidebarLabelHelp(_ kind: LabelKind, chosen: Bool) -> String {
-        "\(labelKinds(kind)): \(chosen ? showWithoutLabel : showOnlyWithLabel)"
+    /// A sidebar label's help: its kind, the whole label as shown, which the row may cut in the middle, and what clicking it
+    /// does: "Senders: electricity contract 12-5545-25. Show only documents with this label".
+    static func sidebarLabelHelp(_ label: DocumentLabel, chosen: Bool) -> String {
+        "\(labelKinds(label.kind)): \(Wording.label(label)). \(chosen ? showWithoutLabel : showOnlyWithLabel)"
     }
 
     /// How many documents wait for the user, in the menu bar.
@@ -197,6 +247,15 @@ extension Wording {
     static let welcomeNoFolders = "No folders to keep tidy: every document sits at the top of the archive, found by its labels."
     static let welcomeLabels = "Labels say who sent it, what it is, its dates, amounts, references and more; correct any of them."
     static let chooseFolders = "Your folders, and how Arrumator runs"
+    /// Under the folders in onboarding, to someone setting up for the first time. Settings says how archives are switched.
+    static let foldersFooterFirstRun = "You drop documents into Incoming, and Arrumator files them into your archive. "
+        + "You can choose other folders later, in Settings."
+    /// Which step of onboarding the user is on, seen and heard: "Step 2 of 5".
+    static func stepOf(_ step: Int, _ steps: Int) -> String { "Step \(step) of \(steps)" }
+    /// The window's title while it is on a step.
+    static func onboardingTitle(step: Int) -> String { "Set Up Arrumator: " + stepOf(step, OnboardingStep.allCases.count) }
+    /// Where the first document goes, on the last step.
+    static func readyIncoming(path: String) -> String { "Put a document into your Incoming folder, \(path), and it is filed." }
     static let ready = "Ready"
     static let readyIntro = "Arrumator lives in the menu bar. Open it to see what was filed, find documents by their labels, "
         + "and answer documents that need you."
@@ -273,6 +332,19 @@ extension Wording {
     static func stillBeingWorkedOn(_ count: Int) -> String {
         "\(count) \(count == 1 ? "is" : "are") still being worked on."
     }
+
+    /// How many documents of the window were not filed, and why each, as Core counts them (`FunnelVerdict.notFiled`): "2 were
+    /// not filed: 1 waiting for you to decide, 1 left for later."
+    static func notFiled(_ outcomes: [FunnelOutcome]) -> String {
+        let total = outcomes.reduce(0) { $0 + $1.count }
+        let why = outcomes.map { "\($0.count) \($0.reason.lowercased())" }.joined(separator: ", ")
+        return "\(total) \(total == 1 ? "was" : "were") not filed: \(why)."
+    }
+
+    /// The ✕ beside a step: how many files had errors there, for its help and VoiceOver.
+    static func stepErrors(_ count: Int, at step: String) -> String { "\(Format.count(count, "file")) had errors at \(step)" }
+    /// The ⚠ beside a step.
+    static func stepWarnings(_ count: Int, at step: String) -> String { "\(Format.count(count, "file")) had warnings at \(step)" }
 
     /// Where most files that came to an end without being filed stopped, and why.
     static func mostStopped(at step: String, count: Int, reason: String) -> String {
@@ -387,9 +459,19 @@ extension Wording {
     /// (`SearchTaskQueueStatus.progress(of:)`); then what it found, or that it found nothing.
     static func taskOutcome(_ task: SearchTask, progress: SearchTaskProgress?) -> String {
         if let progress { return taskProgress(progress) }
-        guard task.state != .failed else { return "Could not read the request" }
+        guard task.state != .failed else { return taskState(.failed) }
         return Format.count(task.documents.count, "document")
             + (task.exports.isEmpty ? "" : labelSeparator + "exported \(task.exports.count == 1 ? "once" : "\(task.exports.count) times")")
+    }
+
+    /// A task's state in words, for the mark beside the name of its card (VoiceOver reads it, as the row's outcome does).
+    static func taskState(_ state: SearchTaskState) -> String {
+        switch state {
+        case .queued: "Waiting to be read"
+        case .interpreting: "Being read"
+        case .ready: "Ready"
+        case .failed: "Could not read the request"
+        }
     }
 
     /// What the queue does with a task, at the end of its row: “Being read by qwen3.5:9b-q8_0”.

@@ -56,6 +56,9 @@ struct Funnel: AsyncParsableCommand {
             if let main = funnel.mainStop {
                 out.append("Most documents not filed stopped at: \(main.step.title) (\(main.stop.count) \(main.stop.reason.lowercased()))")
             }
+            if let verdict = funnel.verdict, !verdict.notFiled.isEmpty {
+                out.append("Not filed: " + verdict.notFiled.map { "\($0.count) \($0.reason.lowercased())" }.joined(separator: ", "))
+            }
             return out.joined(separator: "\n")
         }
     }

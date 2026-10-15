@@ -31,7 +31,7 @@ extension CommandLineTests {
         let cleared = try run(home, ["settings", "--ollama-binary", ""])
         #expect(try cleared.status == 0 && (try settings(home)).ollamaBinaryPath == nil, "an empty path looks for Ollama where it is installed again")
         let summaries = try settingsEvents(home).map(\.summary).sorted()
-        #expect(summaries == ["Changed enableVLM to false, ollamaBinaryPath to \(program)", "Changed ollamaBinaryPath to null"], "each recorded: \(summaries)")
+        #expect(summaries == ["Describe images: off; Ollama program: \(program)", "Ollama program: none"], "each recorded: \(summaries)")
     }
 
     /// Settings an earlier version saved that this one cannot run with, written into the scratch home's `settings.json`.
@@ -58,7 +58,7 @@ extension CommandLineTests {
         let incoming = home.root.appendingPathComponent("Incoming").path
         let mended = try run(home, ["settings", "--json", "--incoming", incoming])
         #expect(try mended.status == 0 && (try settings(home)).incomingPath == incoming, "another Incoming mends them: \(mended.stderr)")
-        #expect(try settingsEvents(home).map(\.summary) == ["Changed incomingPath to \(incoming)"], "and the change is recorded")
+        #expect(try settingsEvents(home).map(\.summary) == ["Incoming folder: \(incoming)"], "and the change is recorded")
     }
 
     @Test func aRetentionAnEarlierVersionAcceptedIsMendedFromTheCommandLine() throws {

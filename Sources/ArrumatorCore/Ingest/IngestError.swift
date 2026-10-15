@@ -1,6 +1,6 @@
 import Foundation
 
-public enum IngestError: Error, LocalizedError, Equatable {
+public enum IngestError: Error, LocalizedError, Hashable {
     case documentNotPersisted
     case documentNotFound(Int64)
     case sourceMissing(String)
@@ -13,6 +13,10 @@ public enum IngestError: Error, LocalizedError, Equatable {
     /// A document can be read again only from its file where the index records it, kept as itself: one missing, or a copy
     /// an earlier version filed, has none to read (`PipelineServices.queueReadingAgain`).
     case cannotReadAgain(Int64)
+    /// A document whose last reading found its file encrypted or damaged, and whose file has not changed since, cannot be
+    /// helped by reading it again: the same file is read the same way (`ReviewActions.readAgainRefusal`). It names the
+    /// document by its file, and says which of the two it was.
+    case cannotMend(Int64, name: String, encrypted: Bool)
     /// A document can be left for later, undone or removed once its reading in has ended: one being read in, as its file has
     /// just come or it is read again from Incoming, is still the reading's (`ReviewActions.hold`, `ReviewActions.undo`).
     /// It names the document by its file.
@@ -48,6 +52,9 @@ public enum IngestError: Error, LocalizedError, Equatable {
             "Document \(id) is not in the archive; only a document in the archive can be \(action == .undo ? "undone" : "confirmed")"
         case let .cannotReadAgain(id):
             "Document \(id) cannot be read again: its file is not where the archive records it, or it is a copy of another document"
+        case let .cannotMend(_, name, encrypted):
+            "“\(name)” is \(encrypted ? "encrypted" : "damaged") and has not changed since it was read, so reading it again cannot mend it: "
+                + (encrypted ? "put a copy without a password in Incoming." : "put a good copy of it in Incoming.")
         case let .beingReadIn(_, name): "\(name) is still being read in; it can be left for later, undone, removed or read again once it is read"
         case let .beingMoved(_, name): "\(name) is being moved where reading it again files it; it can be removed once it is there"
         case let .notTrashed(path, reason): "Could not move \(path) to the Trash: \(reason)"

@@ -155,8 +155,6 @@ struct DocumentCard: View {
     @State private var newLabelRefusal: String?
     @State private var showingTrace = false
     @State private var showingText = false
-    /// Read Again was pressed: the card says the document waits to be read, until it is.
-    @State private var readAgainAsked = false
     /// What the card offers, as Core decides it from where the document is (`ReviewActions.choices`).
     @State private var choices = DocumentChoices(actions: [], notFiled: false)
     /// The labels the archive has of the kind being added, the most used first, tags the user added among them
@@ -179,7 +177,8 @@ struct DocumentCard: View {
             }
         }
         .card()
-        .onExitCommand { close() }
+        // The first Escape in the name field puts back the saved name (`nameField`); a second closes the card.
+        .onExitCommand { if !editingName { close() } }
         .task(id: model.ingestActivity) { await load() }
         .onChange(of: editingName) { wasEditing, _ in
             if wasEditing { Task { await rename() } }
@@ -199,12 +198,12 @@ struct DocumentCard: View {
         HStack(alignment: .top, spacing: Style.thumbnailSpacing) {
             FileThumbnail(url: d.url, size: Style.thumbnail)
                 .openAction { model.open(d.path) }
+                .accessibilityLabel(Wording.openNamed(d.filename))
                 .help(Wording.doubleClickToOpen)
             VStack(alignment: .leading, spacing: Style.cardHeaderSpacing) {
                 TextField(Wording.name, text: $name)
-                    .textFieldStyle(.plain)
                     .font(.title3.weight(.semibold))
-                    .padding(.vertical, Style.titleFieldPadding)
+                    .nameField(editing: editingName, name: $name, saved: (d.filename as NSString).deletingPathExtension) { editingName = false }
                     .accessibilityLabel(Wording.name)
                     .focused($editingName)
                     .onSubmit { editingName = false }
@@ -213,8 +212,9 @@ struct DocumentCard: View {
                     .font(.caption).foregroundStyle(.tertiary)
             }
             Spacer(minLength: 0)
-            Button { close() } label: { Image(systemName: "xmark") }
+            Button { close() } label: { Image(systemName: "xmark").frame(minWidth: Style.minimumHit.width, minHeight: Style.minimumHit.height) }
                 .buttonStyle(.borderless).foregroundStyle(.secondary).help(Wording.close)
+                .contentShape(.rect)
                 .accessibilityLabel(Wording.closeNamed(d.filename))
         }
     }
@@ -223,7 +223,7 @@ struct DocumentCard: View {
     private func placement(_ d: DocumentRecord) -> some View {
         HStack(spacing: Style.placementSpacing) {
             Image(systemName: d.status.symbol).foregroundStyle(d.status.tint)
-            Text(Wording.outcome(of: d, archive: model.archive, incoming: model.settings?.incomingURL))
+            Text(Wording.placement(of: d, archive: model.archive, incoming: model.settings?.incomingURL))
             if let confirmed = choices.confirmed {
                 Text(Wording.labelSeparator + Wording.confirmedByYou(at: confirmed)).foregroundStyle(.secondary)
             }
@@ -257,6 +257,7 @@ struct DocumentCard: View {
                         TextField(Wording.newLabelField(newKind), text: $newValue, prompt: Text(Wording.labelPrompt(newKind)))
                             .accessibilityLabel(Wording.newLabelField(newKind))
                             .textFieldStyle(.roundedBorder)
+                            .frame(minWidth: Style.cardLabelFieldMinWidth)
                             .onSubmit { add() }
                         if !offered.isEmpty {
                             Menu {
@@ -300,7 +301,7 @@ struct DocumentCard: View {
             Grid(alignment: .leading, horizontalSpacing: Style.cardGridColumnSpacing, verticalSpacing: Style.cardReadingRowSpacing) {
                 if let interpretation = analysis.interpretation {
                     GridRow(alignment: .firstTextBaseline) {
-                        label(Wording.aboutHeading)
+                        label(Wording.interpretationHeading)
                         Text(interpretation).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
                     }
                 }
@@ -324,34 +325,42 @@ struct DocumentCard: View {
         }
     }
 
+    /// The card's buttons, on as many rows as the width needs, none wrapping its title (`ActionRow`): what it does with the
+    /// file first, then what it does with the document, which stand at the right edge of their row.
     private func actions(_ d: DocumentRecord) -> some View {
-        HStack(spacing: Style.actionSpacing) {
+        ActionRow(spacing: Style.actionSpacing, rowSpacing: Style.actionRowSpacing) {
             Button(Wording.open) { model.open(d.path) }
             Button(Wording.showInFinder) { model.reveal(d.path) }
             Button(Wording.recognisedText) { showingText = true }
+                .disabled(choices.nothingToShow != nil)
+                .help(choices.nothingToShow.map(Wording.nothingToShow) ?? Wording.recognisedTextHelp)
             Button(Wording.howWasThisRead) { showingTrace = true }
-            Spacer()
-            ForEach(choices.actions, id: \.self) { action in
-                switch action {
-                case .undo:
-                    Button(Wording.undoFiling) { run(Wording.undoAction) { try await $0.review.undo(documentID) } }
-                        .help(Wording.undoFilingHelp)
-                case .confirm:
-                    Button(Wording.looksRight) { run(Wording.confirmAction) { try await $0.review.confirm(documentID) } }
-                        .help(d.status == .filed ? Wording.confirmFiledHelp : Wording.confirmWaitingHelp)
-                case .hold:
-                    Button(Wording.leaveForLater) { run(Wording.holdAction) { try await $0.review.hold(documentID) } }
-                case .readAgain:
-                    readAgain
-                case .remove:
-                    Button(Wording.moveToTrashEllipsis) { confirmingTrash = true }
-                        .help(Wording.moveToTrashHelp)
-                        .confirmsMoveToTrash(isPresented: $confirmingTrash, name: d.filename) { moveToTrash(d.filename) }
-                }
+            ForEach(Array(choices.actions.enumerated()), id: \.element) { place, action in
+                actionButton(action, of: d)
+                    .startsTrailingGroup(place == 0)
             }
         }
         .buttonStyle(.borderless)
         .font(.callout)
+    }
+
+    @ViewBuilder private func actionButton(_ action: DocumentAction, of d: DocumentRecord) -> some View {
+        switch action {
+        case .undo:
+            Button(Wording.undoFiling) { run(Wording.undoAction) { try await $0.review.undo(documentID) } }
+                .help(Wording.undoFilingHelp)
+        case .confirm:
+            Button(d.status == .filed ? Wording.looksRight : Wording.keepAsItIs) { run(Wording.confirmAction) { try await $0.review.confirm(documentID) } }
+                .help(d.status == .filed ? Wording.confirmFiledHelp : Wording.confirmWaitingHelp)
+        case .hold:
+            Button(Wording.leaveForLater) { run(Wording.holdAction) { try await $0.review.hold(documentID) } }
+        case .readAgain:
+            readAgain
+        case .remove:
+            Button(Wording.moveToTrashEllipsis) { confirmingTrash = true }
+                .help(Wording.moveToTrashHelp)
+                .confirmsMoveToTrash(isPresented: $confirmingTrash, name: d.filename) { moveToTrash(d.filename) }
+        }
     }
 
     /// Moves the document's file to the Trash and takes it out of the archive (`ReviewActions.remove`); the card closes
@@ -363,19 +372,25 @@ struct DocumentCard: View {
         }
     }
 
-    /// Read Again, or, once pressed, that the document waits to be read again.
+    /// Read Again; dimmed, with why as its help and for VoiceOver, where reading again cannot help (`ReviewActions.readAgainRefusal`);
+    /// and, while Core says a reading of the document is queued or under way, that it waits to be read again.
     @ViewBuilder private var readAgain: some View {
-        if readAgainAsked {
+        if choices.readingQueued {
             Text(Wording.readAgainQueued).foregroundStyle(.secondary)
         } else {
+            let refusal = choices.readAgainRefusal.map(Wording.reason)
             Button(Wording.readAgain) {
                 let name = Wording.documentName(document, id: documentID)
                 Task<Void, Never> {
-                    readAgainAsked = await model.perform(Wording.readAgainAction) { try await $0.review.retry(documentID) } != nil
                     // Also said by a page the document leaves, with this card, as Needs You (`ArchiveSession.readAgain`).
-                    if readAgainAsked { model.session.readAgain = (documentID, name) }
+                    if await model.perform(Wording.readAgainAction, { try await $0.review.retry(documentID) }) != nil {
+                        model.session.readAgain = (documentID, name)
+                    }
                 }
             }
+            .disabled(refusal != nil)
+            .help(refusal ?? Wording.readAgainHelp)
+            .accessibilityHint(refusal ?? "")
         }
     }
 
@@ -433,15 +448,10 @@ struct DocumentCard: View {
     }
 
     private func load() async {
-        let readBefore = document?.updatedAt
         guard let read = await model.load(Wording.loadDocumentAction, { try await $0.services.documents.document(id: documentID) }) else { return }
         document = read
         if let document, let offered = await model.load(Wording.loadDocumentAction, { try await $0.review.choices(for: document) }) {
             choices = offered
-        }
-        // Read again since, or no longer waiting: Read Again is offered again where it applies.
-        if document?.updatedAt != readBefore || document.map({ ![.needsReview, .failed, .held, .undone].contains($0.status) }) == true {
-            readAgainAsked = false
         }
         guard let document, !editingName else { return }
         name = (document.filename as NSString).deletingPathExtension
@@ -460,12 +470,15 @@ struct LabelChip: View {
 
     var body: some View {
         HStack(spacing: Style.chipContentSpacing) {
-            Text(Wording.label(label)).textSelection(.enabled)
+            // Not selectable: a selectable text has the system's text menu, which comes before the chip's own.
+            Text(Wording.label(label))
             if hovering {
                 Button(action: remove) {
                     Image(systemName: "xmark.circle.fill").accessibilityLabel(Wording.removeLabelNamed(Wording.label(label)))
+                        .frame(minWidth: Style.minimumHit.width, minHeight: Style.minimumHit.height)
                 }
                 .buttonStyle(.plain).foregroundStyle(.secondary).help(Wording.removeLabelHelp)
+                .contentShape(.rect)
             }
         }
         .padding(Style.labelChipInsets)
@@ -473,6 +486,8 @@ struct LabelChip: View {
         .onHover { hovering = $0 }
         // The × shows only under the pointer; the keyboard and VoiceOver reach the same through an action and the menu.
         .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityLabel(Wording.label(label))
         .accessibilityAction(named: Wording.removeFromDocument, remove)
         .contextMenu {
             Button(Wording.removeFromDocument, action: remove)
@@ -480,6 +495,7 @@ struct LabelChip: View {
                 Button(Wording.showInLabels) { model.open(label: label) }
             }
             Button(Wording.showDocuments) { model.browse(label) }
+            Button(Wording.copyLabel) { model.copy(Wording.label(label)) }
             Divider()
             Button(Wording.removeFromEveryDocument) { confirmingRemoval = true }
             Button(Wording.removeForGoodEllipsis) { confirmingRemovalForGood = true }
