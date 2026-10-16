@@ -39,7 +39,7 @@ import Testing
     /// What each of `searchable` finds, by words alone.
     static func found(_ h: Harness) async throws -> [String: [Int64]] {
         var found: [String: [Int64]] = [:]
-        for words in searchable { found[words] = try await h.search.fullText(SearchQuery(text: words, semantic: false)).hits.map(\.id) }
+        for words in searchable { found[words] = try await h.search.search(SearchQuery(text: words, meaning: .wordsOnly)).hits.map(\.id) }
         return found
     }
 

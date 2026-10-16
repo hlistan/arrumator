@@ -12,7 +12,10 @@ import Testing
     }
 
     func insert(_ db: AppDatabase, title: String, body: String, sender: String) async throws -> Int64 {
-        let labels = [DocumentLabel(kind: .sender, value: sender)]
+        try await insert(db, title: title, body: body, labels: [DocumentLabel(kind: .sender, value: sender)])
+    }
+
+    func insert(_ db: AppDatabase, title: String, body: String, labels: [DocumentLabel]) async throws -> Int64 {
         var record = DocumentRecord.arrived(path: "/tmp/\(title).pdf", sha256: title, size: 1,
                                             uttype: "com.adobe.pdf", inode: nil, modified: nil, now: TestTime.start)
         record.labelsJson = try JSON.string(labels)
@@ -32,13 +35,25 @@ import Testing
                                     sender: "Sberbank")
         let config = try PipelineConfig.bundledDefaults().search
         let search = SearchService(database: db, vectors: VectorIndex(), embedder: nil, config: config, time: TestTime(.advances))
-        let pt = try await search.fullText(SearchQuery(text: "FATURAÇÃO"))
+        let pt = try await search.search(SearchQuery(text: "FATURAÇÃO", meaning: .wordsOnly))
         #expect(pt.hits.map(\.id) == [edp], "case and accents do not matter")
-        let ru = try await search.fullText(SearchQuery(text: "выпис"))
+        let ru = try await search.search(SearchQuery(text: "выпис", meaning: .wordsOnly))
         #expect(ru.hits.map(\.id) == [sber], "a Cyrillic word is found by its start")
         #expect(ru.hits.first?.snippet.contains(SearchHighlight.open) == true, "the match is highlighted in the snippet")
-        let field = try await search.fullText(SearchQuery(text: "sender:edp"))
+        let field = try await search.search(SearchQuery(text: "sender:edp", meaning: .wordsOnly))
         #expect(field.hits.map(\.id) == [edp], "a label is found under its kind")
+        for query in ["FATURAÇÃO", "faturacao", "Faturação"] {
+            #expect(try await search.search(SearchQuery(text: query, meaning: .wordsOnly)).hits.map(\.id) == [edp], "\(query) finds faturação")
+        }
+        #expect(try await search.search(SearchQuery(text: "счет", meaning: .wordsOnly)).hits.map(\.id) == [sber], "е finds ё")
+        let war = try await insert(db, title: "Война", body: "война и мир", sender: "Tolstoy")
+        let knowledge = try await insert(db, title: "Воина", body: "воина древности", sender: "Tolstoy")
+        for query in ["война", "воина"] {
+            #expect(Set(try await search.search(SearchQuery(text: query, meaning: .wordsOnly)).hits.map(\.id)) == [war, knowledge],
+                    "й and и are one letter to the fold, both ways, which the search accepts for the recall: \(query)")
+        }
+        let greek = try await insert(db, title: "Λογαριασμός", body: "λογαριασμός ρεύματος", sender: "ΔΕΗ")
+        #expect(try await search.search(SearchQuery(text: "λογαριασμος", meaning: .wordsOnly)).hits.map(\.id) == [greek], "a Greek word is found without its tonos")
     }
 
     @Test func aDocumentIsFoundByWhatTheModelReadItAsWhateverItsTextSays() async throws {
@@ -49,16 +64,16 @@ import Testing
         try await store.update(photo) { $0.analysisJson = try JSON.string(DocumentAnalysis(interpretation: "A photo of a grey cat asleep on a red sofa.")) }
         let search = SearchService(database: db, vectors: VectorIndex(), embedder: nil, config: try PipelineConfig.bundledDefaults().search,
                                    time: TestTime(.advances))
-        #expect(try await search.fullText(SearchQuery(text: "cat sofa")).hits.map(\.id) == [photo],
+        #expect(try await search.search(SearchQuery(text: "cat sofa", meaning: .wordsOnly)).hits.map(\.id) == [photo],
                 "a photo without a word on it is found by what the model said it shows, as soon as its reading is saved")
-        let (cat, recibo) = (try await search.fullText(SearchQuery(text: "interpretation:cat")),
-                             try await search.fullText(SearchQuery(text: "interpretation:recibo")))
+        let (cat, recibo) = (try await search.search(SearchQuery(text: "interpretation:cat", meaning: .wordsOnly)),
+                             try await search.search(SearchQuery(text: "interpretation:recibo", meaning: .wordsOnly)))
         #expect(cat.hits.map(\.id) == [photo] && recibo.hits.isEmpty, "and the interpretation is a field of its own, as a kind of label is")
         try await IndexStore(database: db, time: TestTime(.advances)).upsertText(docID: photo, filename: "IMG_2041.pdf", body: "", summary: nil,
                                                                                  metadata: [:], extractorVersion: "t", labels: [])
-        #expect(try await search.fullText(SearchQuery(text: "sofa")).hits.map(\.id) == [photo],
+        #expect(try await search.search(SearchQuery(text: "sofa", meaning: .wordsOnly)).hits.map(\.id) == [photo],
                 "its text indexed again keeps what the model read it as")
-        #expect(try await search.fullText(SearchQuery(text: "farmacia")).hits.map(\.id) == [other], "while the others are found as before")
+        #expect(try await search.search(SearchQuery(text: "farmacia", meaning: .wordsOnly)).hits.map(\.id) == [other], "while the others are found as before")
     }
 
     @Test func hybridSearchFusesSemanticHits() async throws {
@@ -73,10 +88,11 @@ import Testing
         }
         let search = SearchService(database: db, vectors: vectors, embedder: embedder, config: try PipelineConfig.bundledDefaults().search,
                                    time: TestTime(.advances))
-        let results = try await search.search(SearchQuery(text: "kilowatt power"))
-        #expect(results.semanticUsed, "the query is compared by meaning too")
+        let results = try await search.search(SearchQuery(text: "kilowatt power", meaning: .askOnce))
+        #expect(results.withoutMeaning == nil, "the query is compared by meaning too")
         #expect(results.hits.first?.id == a, "the document with the words and the meaning leads")
         #expect(results.hits.first?.sources == [.fullText, .semantic], "it is found both by its words and by its meaning")
+        #expect(results.hits.first?.byMeaningAlone == false, "so it is in the section of the documents with the words")
     }
 
     /// Maps every text to one fixed vector, so a test sets each document's similarity to the query exactly.
@@ -105,13 +121,14 @@ import Testing
         config.semanticMinSimilarity = 0.5
         let search = SearchService(database: db, vectors: vectors, embedder: FixedEmbedder(vector: [1, 0]), config: config, time: TestTime(.advances))
 
-        let results = try await search.search(SearchQuery(text: "kilowatt"))
+        let results = try await search.search(SearchQuery(text: "kilowatt", meaning: .askOnce))
 
-        #expect(results.semanticUsed, "the query is compared by meaning too")
+        #expect(results.withoutMeaning == nil, "the query is compared by meaning too")
         #expect(results.hits.map(\.id) == [withWord, closest, alike],
                 "the document containing the word leads although it is least alike; the rest follow by similarity, and one below the floor is left out")
         #expect(results.hits.first?.sources == [.fullText], "the word match is not among the similar documents above the floor")
         #expect(results.hits.dropFirst().allSatisfy { $0.sources == [.semantic] }, "the rest are found by meaning alone")
+        #expect(results.hits.map(\.byMeaningAlone) == [false, true, true], "which is where the results divide into their two sections")
         #expect(results.hits.dropFirst().map(\.score) == [0.9, 0.6].map { Double(Float($0)) },
                 "a document found by meaning alone is scored by its similarity to the query")
     }
@@ -125,18 +142,18 @@ import Testing
         config.semanticMinSimilarity = 0.5
         let search = SearchService(database: db, vectors: vectors, embedder: FixedEmbedder(vector: [1, 0]), config: config, time: TestTime(.advances))
 
-        #expect(try await search.search(SearchQuery(text: "eletricidade")).hits.map(\.id) == [near],
+        #expect(try await search.search(SearchQuery(text: "eletricidade", meaning: .askOnce)).hits.map(\.id) == [near],
                 "a word in another language still finds the document it means, and nothing unrelated")
         config.semanticMinSimilarity = 0.95
         let strict = SearchService(database: db, vectors: vectors, embedder: FixedEmbedder(vector: [1, 0]), config: config, time: TestTime(.advances))
-        #expect(try await strict.search(SearchQuery(text: "eletricidade")).hits.isEmpty,
+        #expect(try await strict.search(SearchQuery(text: "eletricidade", meaning: .askOnce)).hits.isEmpty,
                 "when nothing contains the words and nothing is alike enough, search finds nothing")
     }
 
     /// Fails as it is told to, as an embedding model that is missing or a server that is away, keeping whether each call
     /// asked for a server that is away to be asked again.
     struct FailingEmbedder: Embedder {
-        let modelId = "failing"
+        let modelId = FixedEmbedder.model
         let error: any Error & Sendable
         let retried = Retried()
         func embed(_ texts: [String], retrying: Bool) async throws -> [[Float]] {
@@ -165,21 +182,20 @@ import Testing
         }
         let search = service(FixedEmbedder(vector: [1, 0]))
         let ordered = try await search.relevance(of: "What does the meter say about the gas?", among: set)
-        #expect(ordered.documents == [gas, meter, power] && ordered.semanticUsed && ordered.semanticUnavailableReason == nil,
+        #expect(ordered.documents == [gas, meter, power] && ordered.withoutMeaning == nil,
                 "those with its words lead, the rarer the word the sooner (gas is in one document, meter in two); then one alike in meaning")
         #expect(try await !search.relevance(of: "meter passport", among: [meter, power, gas]).documents.contains(passport),
                 "nothing outside the set is ever ordered")
         let words = try await service(nil).relevance(of: "the meter", among: set)
-        #expect(words.documents == [meter] && !words.semanticUsed && words.semanticUnavailableReason == SearchService.noEmbedder,
+        #expect(words.documents == [meter] && words.withoutMeaning == .noEmbeddingModel,
                 "without an embedding model, the words alone order them, and it says so")
         #expect(try await service(nil).relevance(of: "?!", among: set).documents.isEmpty, "a question without words concerns none")
         let none = try await search.relevance(of: "meter", among: [])
-        #expect(none.documents.isEmpty && !none.semanticUsed && none.semanticUnavailableReason == SearchService.noDocuments,
+        #expect(none.documents.isEmpty && none.withoutMeaning == .noDocuments,
                 "and an empty set has none, compared with nothing")
 
         let missing = try await service(FailingEmbedder(error: OllamaError.modelNotFound("bge-m3"))).relevance(of: "the meter", among: set)
-        #expect(missing.documents == [meter] && !missing.semanticUsed
-                && missing.semanticUnavailableReason == OllamaError.modelNotFound("bge-m3").localizedDescription,
+        #expect(missing.documents == [meter] && missing.withoutMeaning == .modelNotInstalled,
                 "an embedding model that is missing leaves the words to order them, and says why")
         let unreachable = FailingEmbedder(error: OllamaError.unreachable("down"))
         let away = service(unreachable)
@@ -190,8 +206,11 @@ import Testing
         #expect(unreachable.retried.calls.withLock { $0 } == [false],
                 "and at once, not asked again meanwhile: the question's queue says it waits for Ollama, and when it tries again")
         let searched = FailingEmbedder(error: OllamaError.unreachable("down"))
-        _ = try await service(searched).search(SearchQuery(text: "meter reading"))
-        #expect(searched.retried.calls.withLock { $0 } == [true], "a search, which waits for nothing else, asks it again")
+        _ = try await service(searched).search(SearchQuery(text: "meter reading", meaning: .askRetrying))
+        #expect(searched.retried.calls.withLock { $0 } == [true], "a search that is told to, which waits for nothing else, asks it again")
+        let once = FailingEmbedder(error: OllamaError.unreachable("down"))
+        _ = try await service(once).search(SearchQuery(text: "meter reading", meaning: .askOnce))
+        #expect(once.retried.calls.withLock { $0 } == [false], "and the app's search does not")
     }
 
     @Test func aQueryTheIndexCannotCompareIsSearchedByItsWordsAndSaysWhy() async throws {
@@ -200,16 +219,15 @@ import Testing
         let vectors = await Self.vectors([(meter, 0.9)])
         let config = try PipelineConfig.bundledDefaults().search
         let longer = SearchService(database: db, vectors: vectors, embedder: FixedEmbedder(vector: [1, 0, 0]), config: config, time: TestTime(.advances))
-        let found = try await longer.search(SearchQuery(text: "kilowatt"))
-        #expect(found.hits.map(\.id) == [meter] && !found.semanticUsed, "a query of another dimension than the index is not compared by meaning")
-        #expect(found.semanticUnavailableReason == VectorIndexError.otherDimension(model: FixedEmbedder.model, held: 2, asked: 3).localizedDescription,
-                "and the results say why")
+        let found = try await longer.search(SearchQuery(text: "kilowatt", meaning: .askOnce))
+        #expect(found.hits.map(\.id) == [meter] && found.withoutMeaning != nil, "a query of another dimension than the index is not compared by meaning")
+        #expect(found.withoutMeaning == .vectorsUnreadable, "and the results say why")
         let other = SearchService(database: db, vectors: vectors, embedder: FixedEmbedder(modelId: "other", vector: [1, 0]), config: config,
                                   time: TestTime(.advances))
         let ordered = try await other.relevance(of: "the kilowatt meter", among: [meter])
         let loaded = await vectors.model
-        #expect(ordered.documents == [meter] && ordered.semanticUsed && loaded == "other",
-                "a question by another model than the index's loads that model's vectors first, here none, and is compared with them")
+        #expect(ordered.documents == [meter] && ordered.withoutMeaning == .noDocuments && loaded == "other",
+                "a question by another model than the index's loads that model's vectors first, here none, so there is nothing to compare, and asks nothing")
     }
 
     /// Holds every embedding asked for until its task is stopped, saying when it is first asked, as Ollama does with a
@@ -228,11 +246,12 @@ import Testing
 
     @Test func aSearchThatIsStoppedStops() async throws {
         let db = try AppDatabase.inMemory()
-        _ = try await insert(db, title: "Meter reading", body: "kilowatt hours read on the meter", sender: "EDP")
+        let meter = try await insert(db, title: "Meter reading", body: "kilowatt hours read on the meter", sender: "EDP")
         let embedder = StalledEmbedder()
-        let search = SearchService(database: db, vectors: await Self.vectors([]), embedder: embedder,
+        // The index holds a vector to compare with: with none, the search would not ask the embedder at all.
+        let search = SearchService(database: db, vectors: await Self.vectors([(meter, 0.9)]), embedder: embedder,
                                    config: try PipelineConfig.bundledDefaults().search, time: TestTime(.advances))
-        let searching = Task { try await search.search(SearchQuery(text: "kilowatt")) }
+        let searching = Task { try await search.search(SearchQuery(text: "kilowatt", meaning: .askOnce)) }
         #expect(await Patience.until { embedder.asked.fired }, "the search asks for the query's meaning")
         searching.cancel()
         await #expect(throws: CancellationError.self, "stopped, it stops: no results by the words alone as though Ollama failed") {
@@ -268,7 +287,7 @@ import Testing
         let embedder = HeldEmbedder()
         let search = SearchService(database: db, vectors: await Self.vectors([(meter, 0.9)]), embedder: embedder, config: config,
                                    time: TestTime(.advances))
-        let query = SearchQuery(text: "kilowatt")
+        let query = SearchQuery(text: "kilowatt", meaning: .askOnce)
         async let first = search.search(query)
         async let second = search.search(query)
         #expect(await Patience.until { await embedder.asked == 2 }, "both searches ask for the query's meaning at once")
@@ -315,10 +334,10 @@ import Testing
         }
         let search = SearchService(database: db, vectors: VectorIndex(), embedder: FixedEmbedder(vector: [1, 0]),
                                    config: try PipelineConfig.bundledDefaults().search, time: TestTime(.advances))
-        async let first = search.search(SearchQuery(text: "electricidade"))
-        async let second = search.search(SearchQuery(text: "electricidade"))
+        async let first = search.search(SearchQuery(text: "electricidade", meaning: .askOnce))
+        async let second = search.search(SearchQuery(text: "electricidade", meaning: .askOnce))
         let (one, other) = try await (first, second)
-        #expect(one.semanticUsed && other.semanticUsed && one.hits.map(\.id) == [bill] && other.hits.map(\.id) == [bill],
+        #expect(one.withoutMeaning == nil && other.withoutMeaning == nil && one.hits.map(\.id) == [bill] && other.hits.map(\.id) == [bill],
                 "both are compared by meaning")
         #expect(reads.withLock { $0 } == 1, "with the vectors one of them read, which the other waited for")
     }
@@ -334,8 +353,8 @@ import Testing
         let search = SearchService(database: db, vectors: vectors, embedder: FixedEmbedder(vector: [1, 0]),
                                    config: try PipelineConfig.bundledDefaults().search, time: TestTime(.advances))
         #expect(await vectors.model == nil, "nothing is loaded before a search needs it")
-        let found = try await search.search(SearchQuery(text: "electricidade"))
-        #expect(found.semanticUsed && found.hits.map(\.id) == [bill], "a search by meaning loads the vectors of its embedding model first")
+        let found = try await search.search(SearchQuery(text: "electricidade", meaning: .askOnce))
+        #expect(found.withoutMeaning == nil && found.hits.map(\.id) == [bill], "a search by meaning loads the vectors of its embedding model first")
         #expect(await vectors.model == FixedEmbedder.model, "and keeps them for the next")
     }
 
@@ -345,16 +364,19 @@ import Testing
         try await db.writer.write { try $0.execute(sql: "DROP TABLE embeddings") }
         let search = SearchService(database: db, vectors: VectorIndex(), embedder: FixedEmbedder(vector: [1, 0]),
                                    config: try PipelineConfig.bundledDefaults().search, time: TestTime(.advances))
-        let found = try await search.search(SearchQuery(text: "kilowatt"))
-        #expect(found.hits.map(\.id) == [meter] && !found.semanticUsed && found.semanticUnavailableReason?.isEmpty == false,
+        let found = try await search.search(SearchQuery(text: "kilowatt", meaning: .askOnce))
+        #expect(found.hits.map(\.id) == [meter] && found.withoutMeaning == .vectorsUnreadable,
                 "vectors that cannot be read leave the words to find the documents, and the results say why")
         let ordered = try await search.relevance(of: "the kilowatt meter", among: [meter])
-        #expect(ordered.documents == [meter] && !ordered.semanticUsed && ordered.semanticUnavailableReason?.isEmpty == false,
+        #expect(ordered.documents == [meter] && ordered.withoutMeaning == .vectorsUnreadable,
                 "and a question's documents are ordered by its words, without waiting for anything")
     }
 
     @Test func queryBuilderEscapes() {
         #expect(FTSQueryBuilder.build("  ") == nil, "a blank query searches for nothing")
+        #expect(FTSQueryBuilder.build("-") == nil && FTSQueryBuilder.build(".") == nil && FTSQueryBuilder.build("\"%%\"") == nil,
+                "so does one with no letter or number in any term")
+        #expect(FTSQueryBuilder.build("2024-07") == "\"2024-07\" *", "a date is a term")
         #expect(FTSQueryBuilder.build("a\"b") == "\"a\" \"b\"", "a stray quote cannot break the query")
         #expect(FTSQueryBuilder.build("filename:fatura edp") == "filename : \"fatura\" \"edp\" *", "a field names its column; the last word is a prefix")
         #expect(FTSQueryBuilder.build("\"nota de liquidação\"") == "\"nota de liquidação\"", "a quoted phrase is searched as a phrase")

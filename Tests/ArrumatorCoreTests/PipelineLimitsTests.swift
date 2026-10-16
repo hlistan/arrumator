@@ -45,6 +45,20 @@ import Testing
         (#"{"tasks": {"efforts": {"low": {"promptLabels": {"sender": -1}}}}}"#, "tasks.efforts.low.promptLabels.sender"),
     ]
 
+    /// The pause before the search asks Ollama: none would ask on every keystroke, and a day is the most any wait is.
+    @Test(arguments: [(#"{"interface": {"searchMeaningDelay": 0}}"#, "interface.searchMeaningDelay must be more than 0"),
+                      (#"{"interface": {"searchMeaningDelay": 1e300}}"#, "interface.searchMeaningDelay must be at most 86400 seconds")])
+    func theSearchMeaningDelayIsRefusedWhenItWouldAskOllamaOnEveryKeystrokeOrNeverEnd(_ override: String, _ message: String) async throws {
+        let env = try await TestEnvironment.make()
+        defer { env.cleanup() }
+        try Data(override.utf8).write(to: env.paths.pipelineOverrideURL)
+        #expect("\(override) is refused with its reason") {
+            try PipelineConfig.load(paths: env.paths, environment: TestEnvironment.isolated)
+        } throws: { error in
+            ConfigRefusal(error)?.underlying.contains(message) == true
+        }
+    }
+
     @Test(arguments: limitsThePipelineCannotRunWith)
     func aLimitThePipelineCannotRunWithStopsTheAppNamingItsKey(_ override: String, _ key: String) async throws {
         let env = try await TestEnvironment.make()

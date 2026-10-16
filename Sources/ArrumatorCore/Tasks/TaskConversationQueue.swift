@@ -406,8 +406,7 @@ struct ContextTrace: Encodable {
     var unlisted: Int
     var characters: Int
     var exchanges: Int
-    var semanticUsed: Bool
-    var semanticUnavailableReason: String?
+    var withoutMeaning: WithoutMeaning?
 
     init(_ chosen: TaskContextBuilder.ContextChoice) {
         let context = chosen.shown
@@ -416,7 +415,6 @@ struct ContextTrace: Encodable {
         unlisted = context.unlisted
         characters = context.read.reduce(0) { $0 + ($1.text?.count ?? 0) }
         exchanges = context.conversation.count
-        semanticUsed = chosen.semanticUsed
-        semanticUnavailableReason = chosen.semanticUnavailableReason
+        withoutMeaning = chosen.withoutMeaning
     }
 }

@@ -39,6 +39,8 @@ public final class ArrumatorRuntime: Sendable {
     public let analyzer: DocumentAnalyzer
     public let vectors: VectorIndex
     public let search: SearchService
+    /// The search of what is typed in the app's search field.
+    public let typedSearch: TypedSearch
     public let traces: TraceRecorder
     public let services: PipelineServices
     public let coordinator: IngestCoordinator
@@ -259,6 +261,7 @@ public final class ArrumatorRuntime: Sendable {
         let skip = SkipRules(watcher: config.watcher)
         vectors = VectorIndex()
         search = SearchService(database: database, vectors: vectors, embedder: nil, config: config.search, time: time)
+        typedSearch = TypedSearch(search: search, meaningDelay: config.interface.searchMeaningDelay, time: time)
         traces = TraceRecorder(database: database, appVersion: appVersion, time: time)
         let placer = Placer(builder: FilenameBuilder(config: config.naming, reserved: skip),
                             operations: FileOperations(trash: trash, sameVolume: FileOperations.onOneVolume))
@@ -476,6 +479,7 @@ public final class ArrumatorRuntime: Sendable {
         // Told to stop beside the queues, as it may wait for the generation lane one of them holds.
         async let judging: Void = labelJudge.stop()
         await Self.stopTogether(coordinator, taskQueue, conversationQueue)
+        await typedSearch.stop()
         await judging
         await tasks.ended()
         await incomingWatcher.stop()

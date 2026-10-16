@@ -241,7 +241,7 @@ extension Wording {
     static let welcomeIntro = """
         Drop any document into your Incoming folder. Arrumator reads it on this Mac, labels it with who sent it, \
         what it is and whom it concerns, its dates, amounts and references, where it applies and its language, \
-        names it, and files it into your archive. You find it again by searching for any of its labels.
+        names it, and files it into your archive. You find it again by its labels, its words or its meaning.
         """
     static let welcomeLocal = "Documents are read by Ollama, on this Mac or a machine of yours on the local network, and go nowhere else."
     static let welcomeNoFolders = "No folders to keep tidy: every document sits at the top of the archive, found by its labels."

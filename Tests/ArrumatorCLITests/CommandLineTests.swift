@@ -246,7 +246,7 @@ import UniformTypeIdentifiers
     }
 
     /// The numbers of the documents a listing's JSON names, in its order.
-    private func documentIDs(_ json: Data, under key: String? = nil) throws -> [Int64] {
+    func documentIDs(_ json: Data, under key: String? = nil) throws -> [Int64] {
         let object = try JSONSerialization.jsonObject(with: json)
         let listing: Any? = if let key { (object as? [String: Any])?[key] } else { object }
         let rows = listing as? [[String: Any]] ?? []

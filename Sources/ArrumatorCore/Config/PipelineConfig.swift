@@ -538,6 +538,13 @@ public struct InterfaceConfig: Sendable, Codable, Hashable {
     public var menuBarSettleSeconds: Double
     /// Characters of a file's text `arrumatorcli extract` prints.
     public var extractPreviewChars: Int
+    /// Seconds typing in the search field must pause before the search asks Ollama to compare the query by meaning; the
+    /// words are searched on every change. It is longer than the pause between keystrokes inside a word, about 240 ms on
+    /// average and about 400 ms for a slower typist (Dhakal et al., "Observations on Typing from 136 Million Keystrokes",
+    /// CHI 2018), so a word typed at a normal pace asks once. Pause and one embedding of a short query together stay near
+    /// the second that keeps a person's flow of thought unbroken (Nielsen, "Response Times: The 3 Important Limits",
+    /// 1993).
+    public var searchMeaningDelay: Double
 }
 
 /// The app's housekeeping: pruning logs, trimming model exchanges from old traces, writing record files a change marked,

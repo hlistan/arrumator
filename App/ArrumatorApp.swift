@@ -53,8 +53,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Wind
         launchedAsLoginItem = LoginItem.launchedTheApp
         model.presenter = self
         let (mainMenu, editMenu) = MainMenu.build()
-        NSApp.mainMenu = mainMenu
-        textMenus.install(editMenu: editMenu)
+        textMenus.install(mainMenu: mainMenu, editMenu: editMenu)
         installStatusItem()
         Task {
             await model.start()
@@ -242,6 +241,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Wind
         window.makeKeyAndOrderFront(nil)
         window.orderFrontRegardless()
         NSApp.activate()
+        // Find… brings the main window back with the cursor in its search field. A window not yet the key one takes it as it
+        // becomes so (`windowDidBecomeKey`); one that is, now.
+        if id == .main, window.isKeyWindow { SearchFieldFocus.take(asked: model, in: window) }
+    }
+
+    func windowDidBecomeKey(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow, window.identifier?.rawValue == WindowID.main.rawValue else { return }
+        // After this notification, when the window restores where the cursor was.
+        DispatchQueue.main.async { [model] in SearchFieldFocus.take(asked: model, in: window) }
     }
 
     private func makeWindow(_ id: WindowID) -> NSWindow {
@@ -329,9 +337,11 @@ enum MainMenu {
         edit.addItem(withTitle: Wording.copy, action: #selector(NSText.copy(_:)), keyEquivalent: "c")
         edit.addItem(withTitle: Wording.paste, action: #selector(NSText.paste(_:)), keyEquivalent: "v")
         edit.addItem(withTitle: Wording.selectAll, action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        // Made here, before `TextMenuGuard.install(mainMenu:editMenu:)` records the items this menu has, so pruning keeps it.
+        edit.addItem(item(Wording.findMenuItem, #selector((any AppCommands).findDocuments), "f"))
         edit.addItem(.separator())
-        // Go to the search field, as the Human Interface Guidelines give Option-Command-F: the filter sits in a row of the
-        // sidebar's list, outside the window's key view loop, so this is how the keyboard reaches it.
+        // The filter sits in a row of the sidebar's list, outside the window's key view loop, so this is how the keyboard
+        // reaches it. Command-F is Find, which goes to the toolbar's search field; this one filters the sidebar's labels.
         let filter = item(Wording.filterLabels, #selector((any AppCommands).filterLabels), "f")
         filter.keyEquivalentModifierMask = [.command, .option]
         edit.addItem(filter)
@@ -351,6 +361,7 @@ enum MainMenu {
     func showOnboarding()
     func showSettings()
     func filterLabels()
+    func findDocuments()
 }
 
 extension AppDelegate: AppCommands {
@@ -358,4 +369,5 @@ extension AppDelegate: AppCommands {
     @objc func showOnboarding() { show(.onboarding) }
     @objc func showSettings() { show(.settings) }
     @objc func filterLabels() { model.filterLabels() }
+    @objc func findDocuments() { model.findDocuments() }
 }

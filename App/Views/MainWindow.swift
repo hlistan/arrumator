@@ -22,6 +22,8 @@ struct MainWindow: View {
                     }
                     .background(Style.page)
                 }
+                // In this branch only: an app that could not start has nothing to search.
+                .toolbar { ToolbarItem(placement: .primaryAction) { SearchField() } }
             }
         }
         .showsLastError()
@@ -35,6 +37,7 @@ struct MainWindow: View {
         case .labels: LabelsPage()
         case .tasks: TasksPage()
         case .labelled: LabelledPage()
+        case .search: SearchPage()
         case .history: HistoryPage()
         case .statistics: StatisticsView()
         }
@@ -229,8 +232,11 @@ private struct LabelFilter: View {
                 // Escape clears what was typed, then leaves the field, as a search field does.
                 .onExitCommand { if filter.isEmpty { filtering = false } else { filter = "" } }
             if !filter.isEmpty {
-                Button { filter = "" } label: { Image(systemName: "xmark.circle.fill").accessibilityLabel(Wording.clearFilter) }
-                    .buttonStyle(.plain).foregroundStyle(.tertiary).help(Wording.clearFilter)
+                Button { filter = "" } label: {
+                    Image(systemName: "xmark.circle.fill").accessibilityLabel(Wording.clearFilter)
+                        .frame(minWidth: Style.minimumHit.width, minHeight: Style.minimumHit.height)
+                }
+                .buttonStyle(.plain).contentShape(.rect).foregroundStyle(.tertiary).help(Wording.clearFilter)
             }
         }
         .padding(Style.filterFieldInsets)

@@ -46,7 +46,7 @@ struct Page<Content: View>: View {
                         }
                     }
                     if let notes, !notes.isEmpty {
-                        Text(notes).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        Text(notes).foregroundStyle(Palette.quietText).fixedSize(horizontal: false, vertical: true)
                     }
                 }
                 content()
@@ -83,7 +83,7 @@ struct PageSection<Content: View, Trailing: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Style.sectionHeadingSpacing) {
             HStack(alignment: .firstTextBaseline) {
-                Text(title).font(.system(size: Style.sectionTitleSize, weight: .semibold))
+                Text(title).font(.system(size: Style.sectionTitleSize, weight: .semibold)).accessibilityAddTraits(.isHeader)
                 Spacer()
                 trailing().font(.callout)
             }
@@ -108,6 +108,8 @@ struct ListRow: View {
     /// The kind of label the subtitle lists, when it lists labels of one kind: shown after a tag in that kind's colour,
     /// with the kind named in its help, as the sidebar shows a label.
     var subtitleKind: LabelKind?
+    /// The text around what a search found, under the subtitle, with the words found in bold.
+    var excerpt: AttributedString?
     var busy = false
     /// Sentences wrap onto a second line; file names stay on one, shortened in the middle.
     var wraps = false
@@ -132,7 +134,7 @@ struct ListRow: View {
                 Spacer(minLength: Style.rowDetailMinGap)
                 // Ends with an ellipsis, so the part that says what happened is the part that shows; the whole text is its help,
                 // and is part of the row's words for VoiceOver, which the truncation does not cut.
-                if let detail { Text(detail).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail).help(detail) }
+                if let detail { Text(detail).foregroundStyle(Palette.quietText).lineLimit(1).truncationMode(.tail).help(detail) }
                 if let tag { Tag(tag) }
             }
             if let subtitle, let subtitleKind {
@@ -141,14 +143,17 @@ struct ListRow: View {
                 } icon: {
                     Image(systemName: "tag").foregroundStyle(Palette.labelKind(subtitleKind))
                 }
-                .font(.callout).foregroundStyle(.secondary).padding(.leading, Style.rowSubtitleIndent)
+                .font(.callout).foregroundStyle(Palette.quietText).padding(.leading, Style.rowSubtitleIndent)
                 .help(Wording.labelKinds(subtitleKind))
             } else if let subtitle {
-                Text(subtitle).font(.callout).foregroundStyle(.secondary).lineLimit(Style.rowSubtitleMaxLines).padding(.leading, Style.rowSubtitleIndent)
+                Text(subtitle).font(.callout).foregroundStyle(Palette.quietText).lineLimit(Style.rowSubtitleMaxLines).padding(.leading, Style.rowSubtitleIndent)
+            }
+            if let excerpt {
+                Text(excerpt).font(.callout).foregroundStyle(Palette.quietText).lineLimit(Style.snippetMaxLines).padding(.leading, Style.rowSubtitleIndent)
             }
         }
         .padding(.horizontal, Style.rowHorizontalPadding)
-        .padding(.vertical, subtitle == nil && !wraps ? 0 : Style.rowVerticalPadding)
+        .padding(.vertical, subtitle == nil && excerpt == nil && !wraps ? 0 : Style.rowVerticalPadding)
         .frame(minHeight: Style.rowHeight)
         .background(hovering ? Style.hover : .clear, in: .rect(cornerRadius: Style.rowCornerRadius))
         .contentShape(.rect)
@@ -232,7 +237,7 @@ struct EmptyState<Action: View>: View {
     var body: some View {
         VStack(spacing: Style.emptyStateSpacing) {
             Image(systemName: symbol).font(.system(size: Style.emptyStateSymbolSize)).foregroundStyle(.quaternary).accessibilityHidden(true)
-            Text(text).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            Text(text).foregroundStyle(Palette.quietText).multilineTextAlignment(.center)
             action().buttonStyle(.link)
         }
         .frame(maxWidth: .infinity)
@@ -250,7 +255,7 @@ struct Notice: View {
     var body: some View {
         HStack(spacing: Style.noticeSpacing) {
             Image(systemName: "info.circle").foregroundStyle(Palette.attention).accessibilityHidden(true)
-            Text(text).foregroundStyle(.secondary)
+            Text(text).foregroundStyle(Palette.quietText)
             if let action { Button(action.title, action: action.run).buttonStyle(.link).accessibilityLabel(actionName ?? action.title) }
             Spacer()
         }

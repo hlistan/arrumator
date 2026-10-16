@@ -201,6 +201,24 @@ struct Show: AsyncParsableCommand {
     }
 }
 
+extension WithoutMeaning {
+    /// What the search command says after its count when documents were not compared by meaning.
+    var commandLineWords: String {
+        switch self {
+        case .notAsked: "disabled"
+        case .nothingToLookFor: "nothing to look for"
+        case .tooShort: "query too short"
+        case .noEmbeddingModel: "no embedding model"
+        case .noDocuments: "no documents"
+        case .modelNotInstalled: "embedding model not installed"
+        case .runsElsewhere: "embedding model runs elsewhere"
+        case .ollamaAway: "Ollama not answering"
+        case .ollamaFailed: "Ollama failed"
+        case .vectorsUnreadable: "vectors cannot be read"
+        }
+    }
+}
+
 struct Search: AsyncParsableCommand {
     static let configuration = CommandConfiguration(abstract: "Search the archive (full text + semantic).")
     @OptionGroup var options: GlobalOptions
@@ -209,16 +227,18 @@ struct Search: AsyncParsableCommand {
 
     func run() async throws {
         let runtime = try await options.runtime()
-        let results = try await runtime.search.search(SearchQuery(text: query.joined(separator: " "), semantic: !noSemantic))
+        let results = try await runtime.search.search(SearchQuery(text: query.joined(separator: " "), meaning: noSemantic ? .wordsOnly : .askRetrying))
         try options.emit(results.hits.map { SearchRow(id: $0.id, path: $0.document.path, score: $0.score, snippet: SearchHighlight.plain($0.snippet),
                                                    sources: $0.sources.map(\.rawValue).sorted(), labels: $0.document.labels,
                                                    labelled: $0.document.isLabelled) }) {
+            // A document found by its name or labels has no snippet: no empty line stands for it.
             var lines = results.hits.map { hit in
-                "\(hit.document.path)\n    \(Terminal.highlight(hit.snippet).replacingOccurrences(of: "\n", with: " "))"
+                "\(hit.document.path)"
+                    + (hit.snippet.isEmpty ? "" : "\n    \(Terminal.highlight(hit.snippet))")
                     + (hit.document.labels?.isEmpty == false ? "\n    \(Terminal.labels(hit.document.labels, labelled: hit.document.isLabelled))" : "")
             }
             lines.append(String(format: "%d results in %.0f ms%@", results.hits.count, results.elapsedMs,
-                                results.semanticUsed ? " (hybrid)" : " (full text: \(results.semanticUnavailableReason ?? ""))"))
+                                results.withoutMeaning.map { " (full text: \($0.commandLineWords))" } ?? " (hybrid)"))
             return lines.joined(separator: "\n")
         }
     }

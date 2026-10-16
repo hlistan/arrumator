@@ -11,8 +11,12 @@ fi
 if echo "$input" | grep -Eq 'scripts/release\.sh|ollama (pull|rm|delete)'; then
   block "ask the user first (AGENTS.md §4.8)"
 fi
-if echo "$input" | grep -Eq 'arrumatorcli' && ! echo "$input" | grep -Eq 'ARRUMATOR_HOME=|arrumatorcli (eval|--version|help)'; then
-  block "run arrumatorcli only in a scratch home: ARRUMATOR_HOME and ARRUMATOR_TRASH on the command (AGENTS.md §4.3, G35)"
+# The command line is named only as eval, --version or help (which open no archive), or as the product being built; every
+# other call goes through scripts/qa-cli.sh, which sets the scratch home itself and refuses anything else (G35). A variable
+# written on the command is no proof: the incident of 16 October 2026 had them, in a form zsh did not split.
+named="$(echo "$input" | sed -E 's/arrumatorcli (eval|--version|help)([^A-Za-z-]|$)//g; s/--product arrumatorcli//g')"
+if echo "$named" | grep -Eq 'arrumatorcli'; then
+  block "run the command line only as eval, --version or help, or through scripts/qa-cli.sh <run folder> <arguments>, which refuses any home but the run's (AGENTS.md §4.3, G35)"
 fi
 if echo "$input" | grep -Eq '(rm|mv|ditto|cp|rsync)[^"]*(Documents/(Archive|Incoming)|Application Support/Arrumator|Logs/Arrumator)'; then
   block "the user's own archive, Incoming, support or log folders: ask first (AGENTS.md §4.3, §4.8)"

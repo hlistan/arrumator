@@ -37,3 +37,10 @@ Each guideline states the current right way. Format and rules: singularity
   renamed `settings.json` or `pipeline.json` keys, changed CLI output;
   AGENTS.md §7) and which documents change with it (§4.10 says which
   document covers what).
+- **G54** A criterion about the keyboard says which Keyboard navigation
+  setting it holds for (off, as this Mac has it, and on; G48 in
+  `.claude/rules/singularity/app.md`) and promises only keys the plan
+  handles; a key nobody handles, as Tab, is probed, never promised (G31). A
+  limit on automatic work (one embedding request per query) leaves the
+  person's own request, as Return, acting: AGENTS.md §4.7, nothing pressed
+  is met with nothing.

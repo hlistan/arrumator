@@ -297,6 +297,11 @@ and writes a sidecar beside every document of the archive whose text was read, w
 have no interpretation until they are read again (**Read All Documents Again**, under Settings › Filing). A
 `_documents.md` entry without `interpretation` under `analysis` is read as it always was.
 
+Search ignoring case and accents in every script came after labels by hand. The first start of the version that brought
+it makes the full-text index again, from the text the index already holds, with a tokenizer that folds each word to one
+spelling, so nothing is read again or lost and no text stored is changed; it may take a few seconds on a large archive.
+Plain `sqlite3` cannot query the index afterwards, as the tokenizer is the app's own.
+
 Tags came after labels. The first start of the version that brought them makes the full-text index again with a column
 for tags, from the text the index already holds, so nothing is read again or lost, and adds to each document whether
 its labels are only its tags, which no document's are yet. No record file is written again for it: an entry without

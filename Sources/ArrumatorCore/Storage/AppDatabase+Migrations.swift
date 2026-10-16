@@ -12,7 +12,7 @@ extension AppDatabase {
         for register in [registerLabelMigrations, registerSearchTaskMigrations, registerTagMigrations, registerConversationMigrations,
                          registerRecordMigrations, registerQueueMigrations, registerJobMigrations, registerLabelIndexMigrations,
                          registerTwoPlacesMigrations, registerSplitLabelMigrations, registerReadingAgainMigrations, registerSidecarMigrations,
-                         registerLabelsByHandMigrations] {
+                         registerLabelsByHandMigrations, registerSearchMigrations] {
             register(&m)
         }
         return m

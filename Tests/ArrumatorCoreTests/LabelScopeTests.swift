@@ -103,7 +103,7 @@ import Testing
                 "the invoices are both filed")
         #expect(try await documents(h, [Self.invoice], statuses: [.needsReview]).isEmpty, "both conditions hold at once")
         let search = h.search
-        let hits = try await search.fullText(SearchQuery(text: "document", filter: DocumentFilter(labels: [Self.edp]))).hits.map(\.id).sorted()
+        let hits = try await search.search(SearchQuery(text: "document", filter: DocumentFilter(labels: [Self.edp]), meaning: .wordsOnly)).hits.map(\.id).sorted()
         #expect(hits == (try ids(all, "edp_bill.txt", "edp_contract.txt")), "search can be kept within the chosen labels")
     }
 

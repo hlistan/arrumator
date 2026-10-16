@@ -74,11 +74,24 @@ changes, the guideline changes with it. Format and rules: singularity
 - **G27** Committed code, comments and docs never cite a file under
   `.agentic/`, which is git-ignored: move what a spike or a run file proves
   into `docs/` (`docs/architecture.md`) and cite that.
-- **G35** Before running the app or any `arrumatorcli` command but `eval`,
-  `--version` and `help`, point `ARRUMATOR_HOME` at a scratch folder holding
-  a `settings.json` whose `incomingPath` and `archivePath` are scratch
-  folders, and `ARRUMATOR_TRASH` at another (AGENTS.md §4.3; the recipe is
-  step 2 of "Environment" in `docs/qa/protocol.md`): even `ingest --dry-run`
-  and a read-only command open the archive the settings name and can write
-  into it. Ask the user before pulling or deleting an Ollama model or
-  running `scripts/release.sh` (§4.8).
+- **G35** Run the app and the command line only in a scratch home
+  (AGENTS.md §4.3): even `ingest --dry-run` and a read-only command open
+  the archive the settings name and can write into it. Launch the app as
+  step 4 of "Environment" in `docs/qa/protocol.md`, with `ARRUMATOR_HOME`
+  at a folder whose `settings.json` names scratch folders as `incomingPath`
+  and `archivePath`, and `ARRUMATOR_TRASH` at another (step 2). Name
+  `arrumatorcli` on a command only for `eval`, `--version` or `help`; run
+  every other command as `scripts/qa-cli.sh <run folder> <arguments>`,
+  which takes the command `scripts/verify.sh --app` built, needs a run
+  folder under `/private/tmp` or `/private/var/folders` holding `home`,
+  `Incoming` and `Archive`, sets both variables itself and refuses any
+  other home. The Bash hook (`.claude/singularity/hooks/pre-bash.sh`)
+  blocks the rest. Write the variables out on the command, never through
+  a shell variable holding `A=b C=d`, which zsh does not split. Ask the
+  user before pulling or deleting an Ollama model or running
+  `scripts/release.sh` (§4.8).
+- **G55** A guideline a task's Learn step writes (AGENTS.md §2.5) takes the
+  next id above the highest in `.claude/singularity/guidelines/`,
+  `.claude/rules/singularity/` and
+  `.claude/singularity/experience/runs.jsonl`, never one in use in another
+  file: the verifier fails a change that holds an id twice.

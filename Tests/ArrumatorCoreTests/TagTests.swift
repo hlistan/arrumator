@@ -347,9 +347,9 @@ import Testing
         let tagged = try await h.ingest("Taxes 2024/a.txt", text: "EDP electricity July")
         try await h.ingest("b.txt", text: "EDP electricity August")
         let search = h.search
-        #expect(try await search.fullText(SearchQuery(text: "tag:\"taxes 2024\"")).hits.map(\.id) == [tagged.id],
+        #expect(try await search.search(SearchQuery(text: "tag:\"taxes 2024\"", meaning: .wordsOnly)).hits.map(\.id) == [tagged.id],
                 "tag:… finds the documents with the tag, however it is cased")
-        #expect(try await search.fullText(SearchQuery(text: "sender:\"taxes 2024\"")).hits.isEmpty, "under its own kind only")
+        #expect(try await search.search(SearchQuery(text: "sender:\"taxes 2024\"", meaning: .wordsOnly)).hits.isEmpty, "under its own kind only")
         #expect(try await h.services.labels.usage()[.tag] == [LabelUsage(label: Self.tag, documents: 1)],
                 "the sidebar lists it with how many documents have it")
         #expect(try await Self.insights(h).labelsByKind[LabelKind.tag.rawValue] == 1, "and Statistics counts it among the labels by kind")

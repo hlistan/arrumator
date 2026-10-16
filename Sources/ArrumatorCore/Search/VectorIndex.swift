@@ -164,6 +164,13 @@ public actor VectorIndex {
         return ranked.prefix(k).map { (docID: $0.0, score: $0.1) }
     }
 
+    /// Whether the index holds a vector of a document among `allowed` (of any, when it is nil): whether a comparison has
+    /// anything to compare the query with.
+    public func holdsAny(among allowed: Set<Int64>?) -> Bool {
+        guard let allowed else { return !ids.isEmpty }
+        return allowed.count < ids.count ? allowed.contains { rowOf[$0] != nil } : ids.contains { allowed.contains($0) }
+    }
+
     /// Adds or replaces a vector of the index's dimension.
     private func put(_ docID: Int64, _ vector: [Float]) {
         if let row = rowOf[docID] {

@@ -29,6 +29,7 @@ enum Wording {
         case .labels: "Labels"
         case .tasks: "Tasks"
         case .labelled: "Labelled"
+        case .search: Wording.searchTitle
         case .history: "History"
         case .statistics: "Statistics"
         }

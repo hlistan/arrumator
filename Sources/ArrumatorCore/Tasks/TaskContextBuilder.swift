@@ -47,7 +47,7 @@ public struct TaskContextBuilder: Sendable {
         }
         return ContextChoice(shown: TaskContext(documents: chosen.read + chosen.listed, unlisted: held - chosen.read.count - chosen.listed.count,
                                                 conversation: Self.exchanges(earlier, maxChars: conversation.historyChars)),
-                             semanticUsed: relevance.semanticUsed, semanticUnavailableReason: relevance.semanticUnavailableReason)
+                             withoutMeaning: relevance.withoutMeaning)
     }
 
     /// The documents with these numbers that the index has, by number, in the order of their own date, the newest first
@@ -144,7 +144,6 @@ public struct TaskContextBuilder: Sendable {
     /// well as its words, or, when they were not, why (`SearchService.relevance`): what its trace records.
     public struct ContextChoice: Sendable {
         public var shown: TaskContext
-        public var semanticUsed: Bool
-        public var semanticUnavailableReason: String?
+        public var withoutMeaning: WithoutMeaning?
     }
 }

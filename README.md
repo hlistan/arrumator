@@ -32,8 +32,9 @@ say what it is in one vocabulary, so a German electricity bill and a Japanese on
   deadlines, amounts, jurisdictions and languages: twelve kinds of label, drawn from archival metadata standards. A
   thirteenth, `tag`, is yours alone. Browse by them in the sidebar, which lists them with how many documents have each,
   the most used first, in one list or kind by kind, each kind in its colour, and finds any of them as you type. Each
-  label you choose narrows the documents and the labels left to choose. Search by any of them from a terminal
-  (`sender:edp`, `deadline:2026-07`, `jurisdiction:portugal`, `tag:"taxes 2024"`) and correct any of them.
+  label you choose narrows the documents and the labels left to choose. Search by any of them from the search field
+  in the app's toolbar (Edit › Find…, ⌘F) or from a terminal with `arrumatorcli search` (`sender:edp`,
+  `deadline:2026-07`, `jurisdiction:portugal`, `tag:"taxes 2024"`) and correct any of them.
 - **Tags documents by the folder you drop them in.** Put a folder such as `Taxes 2024` into Incoming, and everything in
   it, at any depth, is filed with `Taxes 2024` as a tag of yours beside the labels the model gives. Incoming shows the
   tag under each file before it is read, and the folder stays where it is, for whatever you put there next.
@@ -150,8 +151,9 @@ together; [docs/cli.md](docs/cli.md) explains how to use it. To build from sourc
    that reads the request under **Read with**, look over what is found, add or take out any, and export them into
    folders by their labels (`arrumatorcli tasks new …` from a terminal). Under **Conversation** on the task's card, ask
    about them: summarize, translate or compare them, or draft an e-mail from them (`arrumatorcli tasks ask …`).
-7. Search documents by any word, or by a kind of label, with `arrumatorcli search`: `sender:edp`,
-   `party:"maria silva"`, `type:invoice`, `language:russian`.
+7. Search documents by any word, or by a kind of label, in the search field in the window's toolbar (press ⌘F, or
+   choose Edit › **Find…**): `sender:edp`, `party:"maria silva"`, `type:invoice`, `language:russian`. The same search
+   runs from a terminal with `arrumatorcli search`.
 
 ## Documentation
 

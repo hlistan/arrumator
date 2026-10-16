@@ -39,15 +39,7 @@ struct ProcessedPage: View {
             // While a card is open, the rows keep their places, each brought up to date, and one that left the index (it
             // was removed from another row) leaves the list: a document filed meanwhile would go in above and move the
             // card from under the reader. It shows once the card is closed.
-            if cardOpen {
-                let byID = Dictionary(loaded.compactMap { d in d.id.map { ($0, d) } }, uniquingKeysWith: { first, _ in first })
-                documents = documents.compactMap { d in
-                    guard let id = d.id else { return d }
-                    return byID[id] ?? (gone.contains(id) ? nil : d)
-                }
-            } else {
-                documents = loaded
-            }
+            documents = cardOpen ? RowsUnderCard.merged(shown: documents, read: loaded, gone: gone, id: \.id) : loaded
             sections = DocumentSection.sections(of: model.listed(documents, refusals: refusals), heading: Wording.processedDay)
         }
     }
