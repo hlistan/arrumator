@@ -73,7 +73,7 @@ import Testing
         var byName: [String: Int64] = [:]
         for name in ["edp.txt", "meo.txt"] { byName[name] = try await h.ingest(name, text: "A bill: \(name)").id }
         let search = h.search
-        func found(_ query: String) async throws -> [Int64] { try await search.fullText(SearchQuery(text: query)).hits.map(\.id) }
+        func found(_ query: String) async throws -> [Int64] { try await search.search(SearchQuery(text: query, meaning: .wordsOnly)).hits.map(\.id) }
 
         #expect(try await found("jurisdiction:portugal") == [byName["edp.txt"]], "a label is found under its kind")
         #expect(try await found("party:\"joão silva\"") == [byName["meo.txt"]], "a whole name as a phrase, accents or not")

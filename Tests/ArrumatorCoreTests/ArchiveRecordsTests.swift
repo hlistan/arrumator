@@ -91,7 +91,7 @@ import Testing
                 "reading again moves nothing")
         #expect(await analyzer.calls.files.isEmpty, "and asks the model nothing")
         let search = SearchService(database: database, vectors: VectorIndex(), embedder: nil, config: services.config.search, time: services.time)
-        #expect(Set(try await search.fullText(SearchQuery(text: "jurisdiction:portugal")).hits.map(\.id)) == Set(w.documents),
+        #expect(Set(try await search.search(SearchQuery(text: "jurisdiction:portugal", meaning: .wordsOnly)).hits.map(\.id)) == Set(w.documents),
                 "a document is found by its labels again, from its record")
     }
 

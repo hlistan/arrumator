@@ -756,7 +756,8 @@
     "notificationEvents": 12,
     "notificationAskTimeout": 10,
     "menuBarSettleSeconds": 2,
-    "extractPreviewChars": 2000
+    "extractPreviewChars": 2000,
+    "searchMeaningDelay": 0.5
   },
   "maintenance": {
     "interval": 3600

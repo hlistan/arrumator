@@ -90,8 +90,8 @@ import Testing
 
         await h.coordinator.drain(.everything)
         #expect(await analyzer.calls.files.count == readBefore, "the model was not asked to read it again")
-        #expect(try await h.search.fullText(SearchQuery(text: "electricity")).hits.map(\.id).contains(id), "its text is found again")
-        #expect(try await h.search.fullText(SearchQuery(text: "Hand")).hits.map(\.id).contains(id), "and its labels")
+        #expect(try await h.search.search(SearchQuery(text: "electricity", meaning: .wordsOnly)).hits.map(\.id).contains(id), "its text is found again")
+        #expect(try await h.search.search(SearchQuery(text: "Hand", meaning: .wordsOnly)).hits.map(\.id).contains(id), "and its labels")
         #expect(await h.foundByMeaning() == [id], "its embedding is back in the vector index")
         try await records.flush()
         #expect(try String(contentsOf: h.env.archive.appendingPathComponent(h.env.config.records.documentsFileName), encoding: .utf8)

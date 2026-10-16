@@ -10,34 +10,71 @@ import SwiftUI
 /// the shortcut (`Style.moveToTrashShortcut`) while it has keyboard focus, asking as the card does; one Core would refuse
 /// (`ListedDocument.removalRefusal`) is dimmed in the menu with why, and the action and the shortcut say why instead of
 /// asking. Focus then goes to the row that takes its place.
+///
+/// A page that holds its rows as one focus stop, with a highlight its arrow keys move (`SearchPage`), shares the focus its
+/// rows take of their own, with Keyboard navigation on, between its lists (`rowFocus`), as `SidebarLabelList` does: the
+/// highlight shows only while no row has the focus, whose ring shows where the keyboard is, and the arrow keys then move
+/// that focus. VoiceOver's cursor moves with the keyboard.
 struct DocumentList: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
     let documents: [ListedDocument]
     /// Every document of the page in the order it shows them, across the lists it has, so the row after a removed one is
     /// the page's next, not only this list's.
     let pageOrder: [Int64]
+    /// The text around what a search found of each document, by its number, under its row, as it is shown; none where a list is
+    /// no search's.
+    let snippets: [Int64: AttributedString]
+    /// The focus the rows of the page's lists take, shared by them, as a page that holds its rows as one focus stop has it
+    /// (`SearchPage`): the keyboard is sent to a row through `AppModel.session.rowToFocus` to the page, which moves its
+    /// highlight there. None: this list's rows take the keyboard's focus of their own when it is sent to them, as a page of
+    /// rows does.
+    private let sharedFocus: FocusState<Int64?>.Binding?
+    /// The row the page's arrow keys are on, while they move one; none otherwise.
+    let keyed: Int64?
+    /// Whether the page's container has the keyboard, so its highlight shows on `keyed`.
+    let highlighting: Bool
     /// The document whose removal is being asked about.
     @State private var confirming: Int64?
-    @FocusState private var focused: Int64?
+    @FocusState private var ownFocus: Int64?
+    /// The row VoiceOver's cursor is on, moved with the page's arrow keys.
+    @AccessibilityFocusState private var spoken: Int64?
 
-    init(documents: [ListedDocument], pageOrder: [Int64]? = nil) {
+    init(documents: [ListedDocument], pageOrder: [Int64]? = nil, snippets: [Int64: AttributedString] = [:],
+         rowFocus: FocusState<Int64?>.Binding? = nil, keyed: Int64? = nil, highlighting: Bool = false) {
         self.documents = documents
         self.pageOrder = pageOrder ?? documents.compactMap(\.id)
+        self.snippets = snippets
+        self.sharedFocus = rowFocus
+        self.keyed = keyed
+        self.highlighting = highlighting
     }
+
+    private var focus: FocusState<Int64?>.Binding { sharedFocus ?? $ownFocus }
+
+    /// Whether the page, not this list, takes the keyboard when it is sent to a row.
+    private var heldByPage: Bool { sharedFocus != nil }
 
     var body: some View {
         Group {
             ForEach(documents) { listed in
                 if let id = listed.id, model.session.openDocument == id {
-                    DocumentCard(documentID: id) { if model.session.openDocument == id { model.session.openDocument = nil } }
+                    DocumentCard(documentID: id) {
+                        guard model.session.openDocument == id else { return }
+                        model.session.openDocument = nil
+                        // Escape returns the keyboard to the row the card opened from.
+                        model.session.rowToFocus = id
+                    }
                 } else {
                     HStack(spacing: Style.rowAccessorySpacing) {
                         ListRow(symbol: listed.record.status.symbol, tint: listed.record.status.tint, title: listed.record.filename,
-                                detail: listed.detail, subtitle: listed.labels)
+                                detail: listed.detail, subtitle: listed.labels,
+                                excerpt: listed.id.flatMap { snippets[$0] })
                             .rowAction { withAnimation(.snappy) { model.session.openDocument = listed.id } }
-                            .focused($focused, equals: listed.id)
+                            .focused(focus, equals: listed.id)
+                            .accessibilityFocused($spoken, equals: listed.id)
                             .accessibilityAction(named: Wording.moveToTrashEllipsis) { ask(listed) }
-                            .onKeyPress(Style.moveToTrashShortcut.key, phases: .down) { press in
+                            .onKeyPress(Style.deleteKeyPress, phases: .down) { press in
                                 // Caps Lock is the keyboard's state, not a key pressed with the chord, as the menu's shortcut takes it.
                                 guard press.modifiers.subtracting(.capsLock) == Style.moveToTrashShortcut.modifiers else { return .ignored }
                                 ask(listed)
@@ -53,16 +90,49 @@ struct DocumentList: View {
                             CollectToggle(task: task, document: id, name: listed.record.filename)
                         }
                     }
+                    .background(highlighted(listed) ? Style.sidebarLabelKeyed : .clear, in: .rect(cornerRadius: Style.rowCornerRadius))
+                    .id(listed.id)
                     .confirmsMoveToTrash(isPresented: Binding(get: { confirming == listed.id }, set: { if !$0 { confirming = nil } }),
                                          name: listed.record.filename) { moveToTrash(listed) }
                 }
             }
         }
-        .onChange(of: model.session.focusAfterRemoval) { _, next in
-            guard let next, documents.contains(where: { $0.id == next }) else { return }
-            focused = next
-            model.session.focusAfterRemoval = nil
+        // The removal a page that holds its rows as one stop asked for by the keyboard, for a row of this list.
+        .onChange(of: removalAskedOfThisList, initial: true) { _, id in
+            guard let id, let listed = documents.first(where: { $0.id == id }) else { return }
+            model.session.removeRequested = nil
+            ask(listed)
         }
+        // The row the keyboard is sent to, once this list holds it: also when this list was made in the very update that named
+        // the row, as when a section appears as a card closes, and when the list grows to hold it. A page change clears it
+        // (`AppModel.go`), so a row named earlier is never taken up later.
+        .onChange(of: rowToFocusHere, initial: true) { _, next in
+            guard let next else { return }
+            focus.wrappedValue = next
+            model.session.rowToFocus = nil
+        }
+        // VoiceOver's cursor goes where the page's arrow keys go, as the sidebar's does.
+        .onChange(of: keyed) { _, row in
+            if voiceOver { spoken = row.flatMap { row in documents.contains { $0.id == row } ? row : nil } }
+        }
+    }
+
+    /// The row of this list the keyboard was sent to, where its rows take the focus of their own: not one whose card is open,
+    /// which is in its place and takes the keyboard when it closes.
+    private var rowToFocusHere: Int64? {
+        guard !heldByPage, let row = model.session.rowToFocus, row != model.session.openDocument else { return nil }
+        return documents.contains { $0.id == row } ? row : nil
+    }
+
+    /// Whether the page's highlight is on the row: only while the container has the keyboard, not a row of it, whose own focus
+    /// ring shows where the keyboard is.
+    private func highlighted(_ listed: ListedDocument) -> Bool {
+        highlighting && sharedFocus?.wrappedValue == nil && keyed == listed.id
+    }
+
+    /// The document of this list the page's keyboard asked to move to the Trash, if it is one.
+    private var removalAskedOfThisList: Int64? {
+        model.session.removeRequested.flatMap { id in documents.contains { $0.id == id } ? id : nil }
     }
 
     /// Asks whether to move the document to the Trash; when Core would refuse, says why instead, to the eye and to
@@ -76,8 +146,20 @@ struct DocumentList: View {
         AccessibilityNotification.Announcement(Wording.reason(refusal)).post()
     }
 
+    /// Sends the keyboard to the row of document `id`: its focus when this list holds it, or when the page shares the focus of
+    /// its rows between its lists and a row had it (`ringed`); else the page, which a list of another section, or a page that
+    /// holds its rows as one focus stop, takes up when it reads `rowToFocus`; nowhere once none is left.
+    private func send(keyboardTo id: Int64?, ringed: Bool) {
+        if let id, heldByPage ? ringed : documents.contains(where: { $0.id == id }) {
+            focus.wrappedValue = id
+        } else {
+            focus.wrappedValue = nil
+            model.session.rowToFocus = id
+        }
+    }
+
     /// The row that takes the place of document `id` on the page when it leaves: the next, else the previous, else none.
-    private func neighbour(of id: Int64) -> Int64? {
+    private func replacement(for id: Int64) -> Int64? {
         guard let at = pageOrder.firstIndex(of: id) else { return nil }
         if pageOrder.indices.contains(at + 1) { return pageOrder[at + 1] }
         return at > 0 ? pageOrder[at - 1] : nil
@@ -85,14 +167,12 @@ struct DocumentList: View {
 
     private func moveToTrash(_ listed: ListedDocument) {
         guard let id = listed.id else { return }
-        let neighbour = neighbour(of: id)
+        let neighbour = replacement(for: id)
+        let ringed = focus.wrappedValue != nil
         Task<Void, Never> {
             guard await model.moveToTrash(id, name: listed.record.filename) else { return }
             // To the row that takes its place, or to the page when none is left; a row of another list takes it when it reads.
-            if let neighbour, documents.contains(where: { $0.id == neighbour }) { focused = neighbour } else {
-                focused = nil
-                model.session.focusAfterRemoval = neighbour
-            }
+            send(keyboardTo: neighbour, ringed: ringed)
         }
     }
 }
@@ -203,10 +283,10 @@ struct DocumentCard: View {
             VStack(alignment: .leading, spacing: Style.cardHeaderSpacing) {
                 TextField(Wording.name, text: $name)
                     .font(.title3.weight(.semibold))
-                    .nameField(editing: editingName, name: $name, saved: (d.filename as NSString).deletingPathExtension) { editingName = false }
+                    .nameField(editing: editingName, name: $name, saved: (d.filename as NSString).deletingPathExtension) { leaveName() }
                     .accessibilityLabel(Wording.name)
                     .focused($editingName)
-                    .onSubmit { editingName = false }
+                    .onSubmit { leaveName() }
                 placement(d)
                 Text(Wording.arrived(as: d.originalFilename, at: d.addedAt))
                     .font(.caption).foregroundStyle(.tertiary)
@@ -432,6 +512,14 @@ struct DocumentCard: View {
 
     private func close() {
         withAnimation(.snappy) { onClose() }
+    }
+
+    /// The name's field gives up the keyboard, which goes to the card's row: a page that holds its rows as one stop takes it
+    /// there, so a second Escape still reaches the card (`SearchPage`); a page of rows that take focus has none here, for the
+    /// card is in the row's place.
+    private func leaveName() {
+        editingName = false
+        model.session.rowToFocus = documentID
     }
 
     /// The labels the archive has of the kind being added, of the kinds written freely; none of a kind with one form. A

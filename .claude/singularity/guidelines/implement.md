@@ -48,6 +48,15 @@ Each guideline states the current right way. Format and rules: singularity
 - **G28** A test of a set or an allow-list (`TextMenuRule.kept`) compares
   it with a literal list written in the test, every value in it; never
   iterate the code's own set, which passes whatever the set holds.
+- **G53** A test of a stream of states reads it through `Collected`
+  (`Tests/Support/Collected.swift`) from a stream made `.unbounded`
+  (`TypedSearch.states()`): `.bufferingNewest` drops the very state a
+  "never published" test looks for. Assert that a state never came only
+  once a later state has reached the reader (type "" and wait with
+  `Patience.until` for `last == .idle`, then check the states before it);
+  never read `all` or `last` right after `untilIdle()` or `stop()` returns,
+  as they wait for the work, not for the reader. Show each such test
+  failing with its guard disabled, several times (AGENTS.md §3).
 
 ## Lint gates
 

@@ -158,7 +158,7 @@ import Testing
 
         let command = try await home.open()
         let ordered = try await command.search.relevance(of: "the electricity bill", among: [id])
-        #expect(!ordered.semanticUsed && ordered.semanticUnavailableReason?.isEmpty == false,
+        #expect(ordered.withoutMeaning == .vectorsUnreadable,
                 "every command opens the archive, and a question is ordered by its words, saying why")
     }
 

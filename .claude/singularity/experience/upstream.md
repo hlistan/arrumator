@@ -32,8 +32,11 @@ Written and read by the singularity optimizer. Format and rules: singularity
 - **U4** A reviewer cites line numbers as the file has them in the working
   tree, not positions in the diff output. The 0.5.0 reviewer agent doesn't
   say so.
-  Evidence: 1 run; 4 findings in one round cited lines past the end of the
-  file · refs: remove-documents.
+  Evidence: 2 runs; 4 findings in one round cited lines past the end of the
+  file (remove-documents); the interface lens cited diff positions in round
+  1, corrected by the challengers, although the project guideline G17 said
+  so (t1-in-app-word-search) · refs: remove-documents,
+  t1-in-app-word-search.
 - **U5** The orchestrator never merges a PR/MR (`gh pr merge`): merging waits
   for the human review, and auto mode refuses it anyway.
   Evidence: 1 run · refs: remove-documents.
@@ -82,3 +85,30 @@ Written and read by the singularity optimizer. Format and rules: singularity
   playbooks' source gave no case; the first 7 cases came from two QA-found
   escapes and five review findings; 7 MD041 errors on the template's format ·
   refs: O-2026-10-15-3.
+- **U14** A review round after a fix round includes the testability lens
+  whenever the fix round wrote or changed tests, not only the lenses whose
+  findings it fixed: a fix round's own tests are new code.
+  Evidence: 1 run; round 2 ran correctness and interface only, and the
+  verifier found a regression test the fix round wrote that could pass
+  without its fix; rounds 3 and 4 then found three more test
+  synchronization defects of the fix rounds' own making · refs:
+  t1-in-app-word-search.
+- **U15** The pipeline runs `scripts/check-guidelines.sh` after any stage
+  that changed a guideline or rule file (a project's own Learn step, a QA
+  drive), not only at the final verification, so that an id taken twice
+  is caught where it was written.
+  Evidence: 1 run; a QA drive wrote G36, G46 and G47, ids already in use in
+  other files, and the final verification failed on them · refs:
+  t1-in-app-word-search.
+- **U16** A project hook that keeps a command inside a scratch environment
+  checks it through a wrapper that sets and validates the environment
+  itself, never by matching the variable's name in the command's text.
+  Evidence: 1 run; a hook that passed any command naming `ARRUMATOR_HOME=`
+  let a command whose variable zsh had not split open the user's real
+  data, and a tag was written there · refs: t1-in-app-word-search.
+- **U17** Before a stage that drives a GUI app (a QA drive), the pipeline
+  checks that the screen is unlocked and, if not, asks the user then,
+  instead of finding out within the stage.
+  Evidence: 1 run; the drive was blocked by a locked screen through four
+  fix rounds, about six hours from the end of implementation (00:30Z to
+  06:23Z) · refs: t1-in-app-word-search.

@@ -164,6 +164,11 @@ holds the vision model's own description too, in English, under **What it shows*
 read on it, never the vision model's words. `arrumatorcli settings --describe-images false`
 (`enableVLM`) reads an image by its text alone.
 
+A search ignores case and accents in every script: `faturacao` finds `faturação`, `счет` finds `счёт`, and a Greek word
+is found without its accents, in a text or a query written composed or decomposed. The words are folded as they are
+indexed and as they are asked for; what the document keeps is not changed. `й` is found by `и` too, which is accepted for
+the documents it finds.
+
 The interpretation is a field of the search: words the document's text does not hold, such as what a photo shows, find
 it (`interpretation:cat`), and its meaning is part of what it is found by meaning with. It is kept with the rest of how
 the document was read, in its entry in `_documents.md`, so a rebuild of the index brings it back without asking the

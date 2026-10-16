@@ -112,7 +112,7 @@ struct RefusingTrash: Trashing {
         #expect(await analyzer.calls.files == [original.filename], "the original is what is read, once")
         #expect((read.extractedAt ?? .distantPast) > (original.extractedAt ?? .distantFuture),
                 "its text is read from its file again, as a file that arrives is, not taken from before")
-        #expect(try await h.search.fullText(SearchQuery(text: "sender:meo")).hits.map(\.id) == [id], "the index has what it reads now")
+        #expect(try await h.search.search(SearchQuery(text: "sender:meo", meaning: .wordsOnly)).hits.map(\.id) == [id], "the index has what it reads now")
         #expect(!FileManager.default.fileExists(atPath: copy.path), "the copy leaves Incoming")
         let trashed = h.env.trashed()
         #expect(trashed.map(\.lastPathComponent) == ["bill copy.txt"], "into the Trash, under its own name, never deleted")
@@ -441,7 +441,7 @@ struct RefusingTrash: Trashing {
         #expect(edited.labels(.deadline) == ["2026-07-25"], "and a correction refused changes nothing: the deadline it had stays")
         #expect(edited.labels(.topic) == ["electricity"], "the same topic however written is one")
         let search = h.search
-        #expect(try await search.fullText(SearchQuery(text: "sender:energia")).hits.map(\.id) == [id], "a corrected label is searchable")
+        #expect(try await search.search(SearchQuery(text: "sender:energia", meaning: .wordsOnly)).hits.map(\.id) == [id], "a corrected label is searchable")
         let summary = try await h.services.history.events(limit: 5, kinds: [.corrected], docID: id).first?.summary ?? ""
         #expect(summary.hasPrefix("Renamed to “2026-07-05 EDP - Julho.txt”; added ") && summary.contains("sender “EDP Energia”")
                     && summary.contains("type “receipt”") && summary.contains("; removed ") && summary.contains("type “invoice”"),

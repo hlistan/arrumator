@@ -33,11 +33,15 @@ final class TextMenuGuard: NSObject, NSMenuDelegate {
     /// The text menus already reported as having a delegate that is not this one.
     private let unfiltered = NSHashTable<NSMenu>.weakObjects()
 
-    /// Starts guarding every text menu from now on, and the Edit menu `edit`, as the app built it.
-    func install(editMenu edit: NSMenu) {
+    /// Makes `main` the app's menu bar and starts guarding every text menu from now on, and the Edit menu `edit` of `main`, as the
+    /// app built it. The items the app made are recorded before AppKit has the menu, which adds AutoFill, Start Dictation and
+    /// Emoji & Symbols to an Edit menu as it takes it: recorded after, those would be the app's own and never pruned (seen on 16
+    /// October 2026). So this is the one place the menu bar is set (gate `main-menu`).
+    func install(mainMenu main: NSMenu, editMenu edit: NSMenu) {
         editMenu = edit
         ownEditItems = Set(edit.items.map(ObjectIdentifier.init))
         edit.delegate = self
+        NSApp.mainMenu = main
         guard observer == nil else { return }
         observer = NotificationCenter.default.addObserver(forName: NSMenu.didAddItemNotification, object: nil, queue: .main) { [weak self] note in
             // Delivered on the main queue (`queue: .main`), so the menu is only ever touched there.

@@ -25,4 +25,8 @@ Each guideline states the current right way. Format and rules: singularity
   `scripts/verify.sh --app` adds the release build and `scripts/deadcode.sh`
   (about a quarter of an hour on this Mac; it needs
   `scripts/tools.sh xcodegen periphery`), and `--checks-only` runs no tests.
-  Bound a run with G6, as `timeout` is missing.
+  Bound a run with G6, as `timeout` is missing. A `.timeLimit` failure in
+  code the change did not touch is first checked against the load
+  (`uptime`, then `ps -o pid,ppid,etime,command` for orphaned shells with
+  parent 1, such as old `snapshot-zsh` processes): ask the user before
+  stopping a process the run did not start, then run the check again.

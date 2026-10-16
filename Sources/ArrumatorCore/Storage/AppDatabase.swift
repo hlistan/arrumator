@@ -199,12 +199,19 @@ public struct AppDatabase: Sendable {
         }
     }
 
+    /// What every connection to the index has before it reads or writes it: the full-text index's tokenizer
+    /// (`FoldingTokenizer`), which a migration registers on the connection it runs on as well.
+    static func register(_ db: Database) throws {
+        db.add(tokenizer: FoldingTokenizer.self)
+    }
+
     private static func openPool(at url: URL, config database: DatabaseConfig, time: any TimeSource) throws -> AppDatabase {
         var config = Configuration()
         config.foreignKeysEnabled = true
         config.busyMode = .timeout(database.busyTimeout)
         config.prepareDatabase { db in
             try db.execute(sql: "PRAGMA synchronous = NORMAL")
+            try register(db)
         }
         let pool = try DatabasePool(path: url.path, configuration: config)
         return try AppDatabase(pool, observationRetry: database.observationRetry, time: time, signal: ChangeSignal(index: url))
@@ -216,6 +223,7 @@ public struct AppDatabase: Sendable {
     public static func inMemory(time: any TimeSource = SystemTime()) throws -> AppDatabase {
         var config = Configuration()
         config.foreignKeysEnabled = true
+        config.prepareDatabase { db in try register(db) }
         let database = try AppDatabase(DatabaseQueue(configuration: config),
                                        observationRetry: try PipelineConfig.bundledDefaults().database.observationRetry, time: time,
                                        signal: nil)
@@ -260,6 +268,16 @@ extension AppDatabase {
         values(of: ValueObservation.tracking { db in
             try Int64.fetchOne(db, sql: "SELECT COALESCE(MAX(id), 0) FROM events") ?? 0
         }.removeDuplicates(), named: "activity")
+    }
+
+    /// Emits each time the documents or their text change, whoever wrote them and whether or not History records it: what the
+    /// results of a search follow. `activity()` is no signal for that, as a document read again, as a put-back does, has its
+    /// text written to the index after the History event that began it and records nothing then.
+    public func indexChanges() -> AsyncStream<Int> {
+        // What it reads is what it watches: every row of both tables, and no removing of repeats, so each write is a value.
+        values(of: ValueObservation.tracking { db in
+            try Table("documents").fetchCount(db) + Table("document_text").fetchCount(db)
+        }, named: "index")
     }
 
     /// Each time another process, or another connection of this one, has committed a change to the index, for as long

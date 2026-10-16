@@ -60,6 +60,10 @@ enum Style {
     static let rowAccessorySpacing: CGFloat = 6
     /// Moves the document of the row in focus to the Trash, as Finder's Move to Trash does.
     static let moveToTrashShortcut = KeyboardShortcut(.delete, modifiers: .command)
+    /// The key a press of the Mac's Delete key is for `onKeyPress`: U+007F, as AppKit sends it, where `KeyEquivalent.delete`
+    /// is U+0008, which a menu's shortcut translates to the Delete key and a key press never equals (seen in a QA run of
+    /// 16 October 2026: the handler of ⌘⌫ on a row never ran).
+    static let deleteKeyPress = KeyEquivalent("\u{7F}")
     /// The column a row's status mark sits in.
     static let rowSymbolWidth: CGFloat = 18
     /// Least space between a row's name and its detail at the end.
@@ -233,6 +237,11 @@ enum Style {
     static let filterFieldFillOpacity = 0.6
     /// Around the sidebar's label filter, between the lists and the labels: in line with their rows' insides.
     static let filterFieldOuterInsets = EdgeInsets(top: 2, leading: 10, bottom: 6, trailing: 10)
+    /// The search field in the main window's toolbar: the narrowest it is whole and usable at, and the width it asks for.
+    static let searchFieldMinWidth: CGFloat = 160
+    static let searchFieldIdealWidth: CGFloat = 240
+    /// The most lines a snippet of a result's text takes under its row.
+    static let snippetMaxLines = 2
     /// Around what the main window says above every page while the archive is away.
     static let archiveAwayInsets = EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16)
     /// Between that notice's sentence and the archive's path under it.
@@ -456,6 +465,7 @@ extension Destination {
         case .labels: "tag.fill"
         // Filter Labels' own symbol: the page of chosen labels is a filter of the documents, not the page of labels.
         case .labelled: "line.3.horizontal.decrease.circle.fill"
+        case .search: "magnifyingglass"
         case .tasks: "text.magnifyingglass"
         case .history: "clock.fill"
         case .statistics: "chart.bar.fill"
@@ -470,6 +480,7 @@ extension Destination {
         case .processed: Palette.processedList
         case .labels, .labelled: Palette.labelsList
         case .tasks: Palette.tasksList
+        case .search: Palette.searchList
         case .history, .statistics: .secondary
         }
     }

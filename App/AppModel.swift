@@ -54,14 +54,37 @@ final class ArchiveSession {
     /// page says so, with a way to put it back (`ReviewActions.putBack`).
     var removed: (id: Int64, name: String)?
     /// The document whose row is to take keyboard focus once the list that shows it has read, as a removal leaves focus
-    /// to the next row, which may be in another list of the page.
-    var focusAfterRemoval: Int64?
+    /// to the next row, which may be in another list of the page; and Down Arrow from the search field and a card closing,
+    /// which leave it to a row too.
+    var rowToFocus: Int64?
+    /// The document the keyboard asks to move to the Trash from a page that holds its rows as one stop (`SearchPage`): the list
+    /// that has its row asks, as its own row does when it has the focus.
+    var removeRequested: Int64?
     /// The search task whose set documents are being added to, as the user narrows them down by labels in the sidebar:
     /// every document row then shows whether it is in the set, and adds it or takes it out.
     fileprivate(set) var collecting: SearchTask?
     /// The labels chosen in the sidebar, in the order they were chosen: the documents shown have every one, and the
     /// sidebar offers only the labels those documents have.
     var labelSelection: [DocumentLabel] = []
+    /// What the search field holds, which the page of results is for; never kept past the archive or the launch.
+    var searchText = ""
+    /// What searching it has found so far (`TypedSearch`).
+    var searchState = TypedSearchState.idle
+    /// The documents of `searchState` as the results page lists them, in Core's order: read by `AppModel.showSearchResults`
+    /// as each state arrives, never by the page, whose `.task(id:)` and `.onChange` did not always run for a state that
+    /// follows another within a millisecond (QA run of 16 October 2026: a settled search shown as nothing until the next
+    /// change), where the model's own reading of its stream does.
+    var searchRows: [SearchRow] = []
+    /// The text around each row's match as it is shown, built once when the rows are read, not by each evaluation of the body.
+    var searchExcerpts: [Int64: AttributedString] = [:]
+    /// The query the rows are the results of, which tells a search of the same query, whose rows keep their places under a
+    /// card, from one of another.
+    var shownSearchQuery = ""
+    /// The search as it stands for the text in the field, never a state of an older query: nil until the words of this
+    /// text have been searched.
+    var currentSearch: TypedSearchState? { searchState.query == searchText ? searchState : nil }
+    /// The page shown before searching began, which clearing the field shows again.
+    var beforeSearch: Destination?
 }
 
 /// Main-actor state shared by the menu bar and the windows. Owns the runtime and mirrors its streams.
@@ -96,6 +119,11 @@ final class AppModel {
     var onboardingStep = OnboardingStep.welcome
     /// Set by the Filter Labels command until the sidebar has put the cursor in its filter.
     var labelFilterWanted = false
+    /// Set by the Find command until the toolbar's search field has put the cursor there.
+    var searchFieldWanted = false
+    /// What the search field and the arrow keys feed `TypedSearch` with, in the order they came: one stream, read by one
+    /// task, so keystrokes are never reordered.
+    var searchFeed: AsyncStream<TypedSearch.Input>.Continuation?
     weak var presenter: (any WindowPresenting)?
     /// True when the menu bar has no room left for the icon, so the Dock icon is the only way in.
     var menuBarIconHidden = false
@@ -215,9 +243,27 @@ final class AppModel {
     private func observe(_ runtime: ArrumatorRuntime) {
         streams.forEach { $0.cancel() }
         let session = session
+        let (inputs, feed) = AsyncStream<TypedSearch.Input>.makeStream()
+        searchFeed?.finish()
+        searchFeed = feed
         streams = [
             Task {
                 for await status in await runtime.coordinator.statusUpdates() { session.ingest = status }
+            },
+            Task {
+                for await input in inputs { await runtime.typedSearch.take(input) }
+            },
+            Task { [weak self] in
+                var failed: String?
+                for await state in await runtime.typedSearch.states() {
+                    session.searchState = state
+                    await self?.showSearchResults()
+                    // A failure is said once, as the search that met it settles.
+                    if state.failure != failed, let failure = state.failure {
+                        self?.lastError = Wording.failure(Wording.searchAction, failure)
+                    }
+                    failed = state.failure
+                }
             },
             Task {
                 for await status in await runtime.taskQueue.statusUpdates() { session.taskQueue = status }
@@ -256,6 +302,11 @@ final class AppModel {
                     self.activity &+= 1
                     await self.refresh()
                 }
+            },
+            Task { [weak self] in
+                // The results follow the index, asking Ollama nothing again (`TypedSearch`), whatever wrote to it, History
+                // or not: a document read again has its text written after the event that began it.
+                for await _ in runtime.database.indexChanges() where !session.searchText.isEmpty { self?.send(.indexChanged) }
             },
         ]
     }
@@ -414,7 +465,16 @@ final class AppModel {
         session.openTask = nil
         session.readAgain = nil
         session.removed = nil
-        session.focusAfterRemoval = nil
+        session.rowToFocus = nil
+        // Any page but the results lets go of the search: its field is cleared.
+        if destination != .search {
+            if !session.searchText.isEmpty { send(.typed("")) }
+            session.searchText = ""
+            session.beforeSearch = nil
+            session.searchRows = []
+            session.searchExcerpts = [:]
+            session.shownSearchQuery = ""
+        }
         if destination != .labelled { session.labelSelection = [] }
         if destination != .labelled && destination != .processed { session.collecting = nil }
     }
@@ -562,6 +622,8 @@ final class AppModel {
 enum Destination: Hashable {
     case incoming, review, processed, labels, tasks
     case labelled
+    /// The documents the search field finds; reached by typing in it, never from the sidebar.
+    case search
     case history, statistics
 
     static let lists: [Destination] = [.incoming, .review, .processed, .labels, .tasks]

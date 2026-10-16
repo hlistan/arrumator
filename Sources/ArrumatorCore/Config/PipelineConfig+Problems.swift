@@ -231,15 +231,18 @@ extension InterfaceConfig {
     /// from JSON within what a `Duration` holds.
     static let longestWait: Double = 86_400
 
-    /// A list shows something; a preview may show nothing; macOS is given a while to answer, and no more than a day.
+    /// A list shows something; a preview may show nothing; macOS is given a while to answer, and no more than a day; the
+    /// search pauses before it asks Ollama, so it never asks per keystroke.
     var problems: [String] {
         Limits.atLeastOne("interface", ["recentlyProcessed": recentlyProcessed, "pageSize": pageSize,
                                         "sidebarLabelsPerKind": sidebarLabelsPerKind, "sidebarLabels": sidebarLabels,
                                         "menuBarRecent": menuBarRecent, "notificationEvents": notificationEvents])
             + Limits.notNegative("interface", ["extractPreviewChars": extractPreviewChars], zero: "prints none")
-            + Limits.moreThanZero("interface", ["notificationAskTimeout": notificationAskTimeout])
+            + Limits.moreThanZero("interface", ["notificationAskTimeout": notificationAskTimeout,
+                                                "searchMeaningDelay": searchMeaningDelay])
             + (menuBarSettleSeconds < 0 ? ["interface.menuBarSettleSeconds cannot be negative: 0 says it at once"] : [])
-            + [("notificationAskTimeout", notificationAskTimeout), ("menuBarSettleSeconds", menuBarSettleSeconds)]
+            + [("notificationAskTimeout", notificationAskTimeout), ("menuBarSettleSeconds", menuBarSettleSeconds),
+               ("searchMeaningDelay", searchMeaningDelay)]
             .filter { $0.1 > Self.longestWait }.map { "interface.\($0.0) must be at most \(Int(Self.longestWait)) seconds" }
     }
 }

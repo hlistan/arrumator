@@ -1,0 +1,250 @@
+import AppKit
+import ArrumatorCore
+import SwiftUI
+
+/// The search field in the main window's toolbar: the words typed are looked for at once, and what they mean once typing
+/// pauses (`TypedSearch`). Its name, to VoiceOver, is "Search Documents", never the placeholder, which is only a hint.
+///
+/// A plain text field as the sidebar's label filter is, not SwiftUI's `.searchable`: that names itself by its
+/// placeholder, is not driven by the Edit menu this app makes, and brings recent searches and suggestions, which the
+/// app must not keep or show (G25, G9). The text lives in the session (`ArchiveSession.searchText`), which no window
+/// restores, so no query is kept past the archive or the launch.
+struct SearchField: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let text = Binding(get: { model.session.searchText }, set: { model.search($0) })
+        HStack(spacing: Style.filterFieldSpacing) {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary).accessibilityHidden(true)
+            TextField(Wording.searchDocuments, text: text, prompt: Text(Wording.searchPrompt)).textFieldStyle(.plain)
+                .accessibilityLabel(Wording.searchDocuments)
+                // Return asks for the meaning now, without waiting for typing to pause.
+                .onSubmit { model.submitSearch() }
+                // Escape clears what was typed, then leaves the field, as a search field does.
+                .onExitCommand { if model.session.searchText.isEmpty { SearchFieldFocus.leave() } else { model.clearSearch() } }
+                .onKeyPress(.downArrow) {
+                    // The first result is where the keyboard goes, the results having it once the loop moves on from the field.
+                    guard model.focusFirstResult() else { return .ignored }
+                    SearchFieldFocus.next()
+                    return .handled
+                }
+            if !model.session.searchText.isEmpty {
+                Button { model.clearSearch() } label: {
+                    Image(systemName: "xmark.circle.fill").accessibilityLabel(Wording.clearSearch)
+                        .frame(minWidth: Style.minimumHit.width, minHeight: Style.minimumHit.height)
+                }
+                .buttonStyle(.plain).contentShape(.rect).foregroundStyle(.tertiary).help(Wording.clearSearch)
+            }
+        }
+        .padding(Style.filterFieldInsets)
+        .background(.quaternary.opacity(Style.filterFieldFillOpacity), in: .rect(cornerRadius: Style.filterFieldCornerRadius))
+        .frame(minWidth: Style.searchFieldMinWidth, idealWidth: Style.searchFieldIdealWidth)
+        // Also when the command opened the window, before this field was there to hear it: the cursor goes there with its
+        // text selected, so typing replaces it.
+        .task(id: model.searchFieldWanted) {
+            guard let window = NSApp.keyWindow ?? NSApp.mainWindow, window.isKeyWindow else { return }
+            SearchFieldFocus.take(asked: model, in: window)
+        }
+    }
+}
+
+/// Where the cursor is, in a field a toolbar holds: its view lives in the window's toolbar, which SwiftUI's focus does
+/// not reach, so AppKit puts the cursor there and takes it away, as it does for any field.
+@MainActor
+enum SearchFieldFocus {
+    /// The cursor in the field of `window`, else of the key window, with its text selected, so typing replaces it; whether the
+    /// field was there to take it.
+    @discardableResult
+    static func enter(in window: NSWindow? = nil) -> Bool {
+        guard let window = window ?? NSApp.keyWindow ?? NSApp.mainWindow, let field = field(in: window.contentView?.superview) else { return false }
+        window.makeFirstResponder(field)
+        field.selectText(nil)
+        return true
+    }
+
+    /// The cursor in the field of `window` if Find… asked for it (`AppModel.searchFieldWanted`) and the field is there to take it:
+    /// at once, and again after the window has given the cursor back to where it was when it closed, which it does as it becomes
+    /// the key window. Left asked for, when the field is not yet there, until it is.
+    static func take(asked model: AppModel, in window: NSWindow) {
+        guard model.searchFieldWanted, enter(in: window) else { return }
+        model.searchFieldWanted = false
+        DispatchQueue.main.async { enter(in: window) }
+    }
+
+    /// The cursor out of the field.
+    static func leave() { (NSApp.keyWindow ?? NSApp.mainWindow)?.makeFirstResponder(nil) }
+
+    /// The keyboard to the next stop after the field, which is the results as one stop when there are some.
+    static func next() {
+        guard let window = NSApp.keyWindow ?? NSApp.mainWindow else { return }
+        // A field being edited is in the window as its field editor, whose delegate is the field the loop goes on from.
+        let field = (window.firstResponder as? NSText)?.delegate as? NSView ?? window.firstResponder as? NSView
+        if let field { window.selectKeyView(following: field) } else { window.selectNextKeyView(nil) }
+    }
+
+    /// The keyboard to the results as one stop, from wherever it was, as when the card it was in closes and takes the cursor
+    /// with it: through the field, the stop before them in the window's loop, which SwiftUI's own focus cannot be asked to
+    /// leave while a toolbar's AppKit field or nothing holds the cursor.
+    static func toResults() {
+        guard let window = NSApp.keyWindow ?? NSApp.mainWindow, let field = field(in: window.contentView?.superview) else { return }
+        window.makeFirstResponder(field)
+        window.selectKeyView(following: field)
+    }
+
+    private static func field(in view: NSView?) -> NSTextField? {
+        guard let view else { return nil }
+        if let field = view as? NSTextField, field.accessibilityLabel() == Wording.searchDocuments { return field }
+        return view.subviews.lazy.compactMap { field(in: $0) }.first
+    }
+}
+
+/// The documents the search field finds, in two sections in Core's order (`SearchResults`): the documents with the words,
+/// then those alike in meaning alone. Each row is a document row like Processed's, with the text around the match under
+/// it. The words come at once; the meaning line says while Ollama is asked, and why when it could not be.
+struct SearchPage: View {
+    @Environment(AppModel.self) private var model
+    /// Whether the results, as one stop, have the keyboard: with Keyboard navigation off, as on this Mac by default, Tab and
+    /// the arrow keys reach only text fields and lists, never a row, so the rows are held as a list is (`SidebarLabelList`).
+    @FocusState private var focused: Bool
+    /// The row that has focus of its own, as keyboard navigation brings focus to each with Tab: shared by both lists.
+    @FocusState private var rowFocused: Int64?
+    /// The row the arrow keys are on while the results have the keyboard.
+    @State private var keyed: Int64?
+
+    var body: some View {
+        let current = model.session.currentSearch
+        let rows = model.session.searchRows
+        let withWords = rows.filter { !$0.byMeaningAlone }
+        let alike = rows.filter(\.byMeaningAlone)
+        let order = rows.compactMap(\.id)
+        let holdsCard = rows.contains { $0.id == model.session.openDocument }
+        let highlighting = focused && model.session.openDocument == nil
+        Page(title: Wording.searchTitle, symbol: Destination.search.symbol, tint: Destination.search.tint, notes: model.session.searchText) {
+            RemovedNotice()
+            if model.session.ingest.reindexing > 0 { Notice(text: Wording.reindexing(model.session.ingest.reindexing)) }
+            if let line = current.flatMap({ Wording.meaningLine($0.meaning) }) {
+                Text(line).font(.callout).foregroundStyle(Palette.quietText)
+            }
+            if current?.settled == true, current?.failure == nil, let nothing = current?.results.flatMap(Wording.nothingFound) {
+                EmptyState(symbol: Destination.search.symbol, text: nothing)
+            }
+            ScrollViewReader { proxy in
+                VStack(alignment: .leading, spacing: Style.sectionSpacing) {
+                    if !withWords.isEmpty {
+                        PageSection(Wording.withTheseWords, lazily: !holdsCard) {
+                            DocumentList(documents: withWords.map(\.listed), pageOrder: order, snippets: model.session.searchExcerpts,
+                                         rowFocus: $rowFocused, keyed: keyed, highlighting: highlighting)
+                        }
+                    }
+                    if !alike.isEmpty {
+                        PageSection(Wording.alikeInMeaning, lazily: !holdsCard) {
+                            DocumentList(documents: alike.map(\.listed), pageOrder: order, snippets: model.session.searchExcerpts,
+                                         rowFocus: $rowFocused, keyed: keyed, highlighting: highlighting)
+                        }
+                    }
+                }
+                // The results are one stop, as a list is, so Tab reaches them whether Keyboard navigation is on or off. The ring
+                // round all of them is off: the highlight of the row the arrow keys are on shows where the keyboard is. With
+                // Keyboard navigation on, Tab reaches each row too, which shows its own ring, and the arrow keys then move that
+                // focus, never a highlight beside it.
+                .focusable(!order.isEmpty, interactions: .edit)
+                .focused($focused)
+                .focusEffectDisabled()
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel(Wording.searchResults)
+                .onKeyPress(phases: .down) { press($0, order: order) }
+                // Escape is the exit command, not a key press: a field of an open card, as its name being edited, takes it first.
+                .onExitCommand { escape() }
+                // The keyboard sent to a row, as Down Arrow in the field does and a closing card does for its row.
+                .onChange(of: model.session.rowToFocus.flatMap { row in order.contains(row) ? row : nil }, initial: true) { _, row in
+                    guard let row else { return }
+                    keyed = row
+                    model.session.rowToFocus = nil
+                    // After this update: the card that had the cursor is still there until it ends.
+                    Task { SearchFieldFocus.toResults() }
+                }
+                .onChange(of: focused) { _, now in
+                    if now, keyed.map(order.contains) != true { keyed = order.first }
+                }
+                .onChange(of: rowFocused) { _, row in
+                    // Back on the container, Shift-Tab finds the highlight where focus last was.
+                    if let row { keyed = row }
+                }
+                .onChange(of: keyed) { _, row in
+                    if let row { proxy.scrollTo(row) }
+                }
+            }
+            if current?.results?.cut == true {
+                Text(Wording.searchCut).font(.callout).foregroundStyle(Palette.quietText)
+            }
+        }
+        // Read again when a card closes: the rows kept in place under it are read again then. Each state of the search is read
+        // as it arrives (`AppModel.showSearchResults`).
+        .task(id: model.session.openDocument != nil) { await model.showSearchResults() }
+        // Nothing visible counts the results: VoiceOver is told what the page says, or how many were found, or why it failed,
+        // when they settle.
+        .onChange(of: model.session.currentSearch.flatMap(Wording.searchSaid)) { _, said in
+            guard let said else { return }
+            AccessibilityNotification.Announcement(said).post()
+        }
+    }
+
+    /// The arrow keys move the highlight through the rows, or the focus when a row has it, Return and Space open the card of the
+    /// one it is on, the shortcut that moves a document to the Trash asks about it (Caps Lock being the keyboard's state, not a
+    /// key of the chord), and Up Arrow from the first row goes back to the field. With a card open every key is the card's own.
+    private func press(_ press: KeyPress, order: [Int64]) -> KeyPress.Result {
+        guard model.session.openDocument == nil, !order.isEmpty else { return .ignored }
+        let at = (rowFocused ?? keyed).flatMap(order.firstIndex(of:))
+        let chord = press.modifiers.subtracting(.capsLock)
+        if press.key == Style.deleteKeyPress, chord == Style.moveToTrashShortcut.modifiers {
+            guard let row = at.map({ order[$0] }) else { return .ignored }
+            model.session.removeRequested = row
+            return .handled
+        }
+        guard chord.isDisjoint(with: [.command, .option, .control, .shift]) else { return .ignored }
+        switch press.key {
+        case .downArrow:
+            guard let next = at.map({ order[min($0 + 1, order.count - 1)] }) ?? order.first else { return .ignored }
+            move(to: next)
+        case .upArrow:
+            guard let at, at > 0 else {
+                SearchFieldFocus.enter()
+                return .handled
+            }
+            move(to: order[at - 1])
+        case .return, .space:
+            guard let row = at.map({ order[$0] }) else { return .ignored }
+            withAnimation(.snappy) { model.session.openDocument = row }
+        default:
+            return .ignored
+        }
+        return .handled
+    }
+
+    /// Moves the keyboard onto the row: the focus when a row has it, else the highlight.
+    private func move(to row: Int64) {
+        keyed = row
+        if rowFocused != nil { rowFocused = row }
+    }
+
+    /// Escape with the results holding the keyboard: an open card closes, with the highlight on its row; otherwise the keyboard
+    /// goes back to the field.
+    private func escape() {
+        if let open = model.session.openDocument {
+            withAnimation(.snappy) { model.session.openDocument = nil }
+            keyed = open
+        } else {
+            SearchFieldFocus.enter()
+        }
+    }
+}
+
+/// A result as the page lists it: the document as a list shows it, the text around the match as it is shown, and whether it
+/// was found by its meaning alone (`SearchHit.byMeaningAlone`).
+struct SearchRow: Identifiable {
+    let listed: ListedDocument
+    let excerpt: AttributedString?
+    let byMeaningAlone: Bool
+
+    var id: Int64? { listed.id }
+}

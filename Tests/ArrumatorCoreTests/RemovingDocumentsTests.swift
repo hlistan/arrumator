@@ -36,7 +36,7 @@ import Testing
         let trashed = h.env.trashed()
         #expect(trashed.map(\.lastPathComponent) == [doc.filename], "and is in the Trash, never deleted")
         #expect(try await referring(to: id, in: h.env.database).isEmpty, "nothing of the index refers to it: labels, text, meaning, jobs")
-        #expect(try await h.search.fullText(SearchQuery(text: "EDP")).hits.map(\.id).contains(id) == false, "it is found no more")
+        #expect(try await h.search.search(SearchQuery(text: "EDP", meaning: .wordsOnly)).hits.map(\.id).contains(id) == false, "it is found no more")
         try await w.records.flush()
         #expect(try !w.listing(in: h.env.archive).contains("file: \(doc.filename)"), "and its record file lists it no more")
         let sidecar = try #require(h.env.layout.sidecar(of: doc.path))

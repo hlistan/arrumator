@@ -1,0 +1,295 @@
+diff --git a/App/AppModel+Search.swift b/App/AppModel+Search.swift
+new file mode 100644
+index 0000000..08133b2
+--- /dev/null
++++ b/App/AppModel+Search.swift
+@@ -0,0 +1,80 @@
++import ArrumatorCore
++import ArrumatorRuntime
++import Foundation
++
++/// The search field: what typing in it and the Find command do. Core decides which documents, in what order, and when
++/// Ollama is asked (`TypedSearch`); this only passes the text on, in order, and shows the page of results.
++extension AppModel {
++    /// Hands `TypedSearch` what the person did, in the order they did it.
++    func send(_ input: TypedSearch.Input) { searchFeed?.yield(input) }
++
++    /// Brings the main window forward with the cursor in the search field (Edit › Find…, ⌘F). Until the field is there to
++    /// hear it, as before the app is set up, the window that comes is the one that sets it up, and the request is let go
++    /// of (`show(_:)`).
++    func findDocuments() {
++        searchFieldWanted = phase == .ready && settings?.onboardingCompleted == true
++        show(.main)
++    }
++
++    /// Every change of the field's text. The first character shows the page of results in place of the page that was
++    /// shown, which clearing the field shows again; searching lets go of the labels chosen and of collecting for a task,
++    /// as any other page does (`go(_:)`).
++    func search(_ text: String) {
++        guard text != session.searchText else { return }
++        guard !text.isEmpty else {
++            go(session.beforeSearch ?? .processed)
++            return
++        }
++        if session.destination != .search {
++            session.beforeSearch = session.destination == .labelled ? .processed : session.destination
++            go(.search)
++        }
++        session.searchText = text
++        send(.typed(text))
++    }
++
++    /// Return in the field: Ollama is asked for the query's meaning now, without waiting for typing to pause.
++    func submitSearch() { send(.submitted) }
++
++    /// The field's × and its first Escape.
++    func clearSearch() { search("") }
++
++    /// The first document the page lists, which Down Arrow in the field puts the keyboard on; whether there is one.
++    func focusFirstResult() -> Bool {
++        guard let first = session.searchRows.first?.id else { return false }
++        session.rowToFocus = first
++        return true
++    }
++
++    /// Shows the results of the search for the text in the field: reads their documents with why each cannot be removed now
++    /// and sets the rows the page lists. The rows keep their places under an open card and one no longer found closes it
++    /// (`RowsUnderCard.reread`); a state of an older query is never shown. A query whose search failed before it found
++    /// anything shows no rows, never the previous query's, and closes the card the same way; one whose words are still being
++    /// searched leaves the page as it is.
++    func showSearchResults() async {
++        guard let state = session.currentSearch, state.results != nil || state.failedBeforeFinding else { return }
++        var found: [SearchRow] = []
++        if let results = state.results {
++            let documents = results.hits.map(\.document)
++            let read: @Sendable (ArrumatorRuntime) async throws -> (value: SearchResults, documents: [DocumentRecord]) = { _ in (results, documents) }
++            guard let (_, refusals) = await load(Wording.loadSearchAction, withRefusals: read) else { return }
++            // A newer state came while the refusals were read: its own reading shows it.
++            guard session.currentSearch == state else { return }
++            let listed = listed(documents, refusals: refusals)
++            found = zip(results.hits, listed).map { hit, listed in
++                SearchRow(listed: listed, excerpt: Wording.snippet(hit.snippet), byMeaningAlone: hit.byMeaningAlone)
++            }
++        }
++        let outcome = RowsUnderCard.reread(shown: session.searchRows, read: found, open: session.openDocument,
++                                           sameQuery: session.shownSearchQuery == state.query, id: \.id)
++        session.shownSearchQuery = state.query
++        session.searchRows = outcome.rows
++        session.searchExcerpts = Dictionary(outcome.rows.compactMap { row in row.id.flatMap { id in row.excerpt.map { (id, $0) } } },
++                                            uniquingKeysWith: { first, _ in first })
++        // A card that closes because its document is no longer found leaves the keyboard on the row that takes its place.
++        if !outcome.keepsCard {
++            session.openDocument = nil
++            session.rowToFocus = outcome.focus
++        }
++    }
++}
+diff --git a/App/AppModel.swift b/App/AppModel.swift
+index d3a9025..ffa94c0 100644
+--- a/App/AppModel.swift
++++ b/App/AppModel.swift
+@@ -54,14 +54,37 @@ final class ArchiveSession {
+     /// page says so, with a way to put it back (`ReviewActions.putBack`).
+     var removed: (id: Int64, name: String)?
+     /// The document whose row is to take keyboard focus once the list that shows it has read, as a removal leaves focus
+-    /// to the next row, which may be in another list of the page.
+-    var focusAfterRemoval: Int64?
++    /// to the next row, which may be in another list of the page; and Down Arrow from the search field and a card closing,
++    /// which leave it to a row too.
++    var rowToFocus: Int64?
++    /// The document the keyboard asks to move to the Trash from a page that holds its rows as one stop (`SearchPage`): the list
++    /// that has its row asks, as its own row does when it has the focus.
++    var removeRequested: Int64?
+     /// The search task whose set documents are being added to, as the user narrows them down by labels in the sidebar:
+     /// every document row then shows whether it is in the set, and adds it or takes it out.
+     fileprivate(set) var collecting: SearchTask?
+     /// The labels chosen in the sidebar, in the order they were chosen: the documents shown have every one, and the
+     /// sidebar offers only the labels those documents have.
+     var labelSelection: [DocumentLabel] = []
++    /// What the search field holds, which the page of results is for; never kept past the archive or the launch.
++    var searchText = ""
++    /// What searching it has found so far (`TypedSearch`).
++    var searchState = TypedSearchState.idle
++    /// The documents of `searchState` as the results page lists them, in Core's order: read by `AppModel.showSearchResults`
++    /// as each state arrives, never by the page, whose `.task(id:)` and `.onChange` did not always run for a state that
++    /// follows another within a millisecond (QA run of 16 October 2026: a settled search shown as nothing until the next
++    /// change), where the model's own reading of its stream does.
++    var searchRows: [SearchRow] = []
++    /// The text around each row's match as it is shown, built once when the rows are read, not by each evaluation of the body.
++    var searchExcerpts: [Int64: AttributedString] = [:]
++    /// The query the rows are the results of, which tells a search of the same query, whose rows keep their places under a
++    /// card, from one of another.
++    var shownSearchQuery = ""
++    /// The search as it stands for the text in the field, never a state of an older query: nil until the words of this
++    /// text have been searched.
++    var currentSearch: TypedSearchState? { searchState.query == searchText ? searchState : nil }
++    /// The page shown before searching began, which clearing the field shows again.
++    var beforeSearch: Destination?
+ }
+ 
+ /// Main-actor state shared by the menu bar and the windows. Owns the runtime and mirrors its streams.
+@@ -96,6 +119,11 @@ final class AppModel {
+     var onboardingStep = OnboardingStep.welcome
+     /// Set by the Filter Labels command until the sidebar has put the cursor in its filter.
+     var labelFilterWanted = false
++    /// Set by the Find command until the toolbar's search field has put the cursor there.
++    var searchFieldWanted = false
++    /// What the search field and the arrow keys feed `TypedSearch` with, in the order they came: one stream, read by one
++    /// task, so keystrokes are never reordered.
++    var searchFeed: AsyncStream<TypedSearch.Input>.Continuation?
+     weak var presenter: (any WindowPresenting)?
+     /// True when the menu bar has no room left for the icon, so the Dock icon is the only way in.
+     var menuBarIconHidden = false
+@@ -215,10 +243,28 @@ final class AppModel {
+     private func observe(_ runtime: ArrumatorRuntime) {
+         streams.forEach { $0.cancel() }
+         let session = session
++        let (inputs, feed) = AsyncStream<TypedSearch.Input>.makeStream()
++        searchFeed?.finish()
++        searchFeed = feed
+         streams = [
+             Task {
+                 for await status in await runtime.coordinator.statusUpdates() { session.ingest = status }
+             },
++            Task {
++                for await input in inputs { await runtime.typedSearch.take(input) }
++            },
++            Task { [weak self] in
++                var failed: String?
++                for await state in await runtime.typedSearch.states() {
++                    session.searchState = state
++                    await self?.showSearchResults()
++                    // A failure is said once, as the search that met it settles.
++                    if state.failure != failed, let failure = state.failure {
++                        self?.lastError = Wording.failure(Wording.searchAction, failure)
++                    }
++                    failed = state.failure
++                }
++            },
+             Task {
+                 for await status in await runtime.taskQueue.statusUpdates() { session.taskQueue = status }
+             },
+@@ -257,6 +303,11 @@ final class AppModel {
+                     await self.refresh()
+                 }
+             },
++            Task { [weak self] in
++                // The results follow the index, asking Ollama nothing again (`TypedSearch`), whatever wrote to it, History
++                // or not: a document read again has its text written after the event that began it.
++                for await _ in runtime.database.indexChanges() where !session.searchText.isEmpty { self?.send(.indexChanged) }
++            },
+         ]
+     }
+ 
+@@ -414,7 +465,16 @@ final class AppModel {
+         session.openTask = nil
+         session.readAgain = nil
+         session.removed = nil
+-        session.focusAfterRemoval = nil
++        session.rowToFocus = nil
++        // Any page but the results lets go of the search: its field is cleared.
++        if destination != .search {
++            if !session.searchText.isEmpty { send(.typed("")) }
++            session.searchText = ""
++            session.beforeSearch = nil
++            session.searchRows = []
++            session.searchExcerpts = [:]
++            session.shownSearchQuery = ""
++        }
+         if destination != .labelled { session.labelSelection = [] }
+         if destination != .labelled && destination != .processed { session.collecting = nil }
+     }
+@@ -562,6 +622,8 @@ final class AppModel {
+ enum Destination: Hashable {
+     case incoming, review, processed, labels, tasks
+     case labelled
++    /// The documents the search field finds; reached by typing in it, never from the sidebar.
++    case search
+     case history, statistics
+ 
+     static let lists: [Destination] = [.incoming, .review, .processed, .labels, .tasks]
+diff --git a/docs/using-arrumator.md b/docs/using-arrumator.md
+index 4459232..f736521 100644
+--- a/docs/using-arrumator.md
++++ b/docs/using-arrumator.md
+@@ -197,7 +197,7 @@ written with your text in them, every one it finds, whatever their case, accents
+ type `tax-return`), and a language by its English name too. **Clear Filter** below them, or the × in the field, clears
+ it. It filters the labels the sidebar offers, so with labels chosen, only those of the documents in view. Tab reaches
+ it between the lists and the labels, and Edit › **Filter Labels** (Option-Command-F) brings the window forward with the
+-cursor in it; Escape clears it, then leaves it.
++cursor in it; Escape clears it, then leaves it. It finds labels; the [search field](#searching) finds documents.
+ `arrumatorcli labels browse --matching` does the same.
+ 
+ Tab goes on from **Filter Labels** to the labels, with keyboard navigation off as on: the arrow keys move through them,
+@@ -222,7 +222,56 @@ Arrumator…**. The menu bar's icon opens a small window of what the app is doin
+ the Dock icon, shown by default, is then the way in; the icon pressed all the same, as through accessibility, brings the
+ main window forward instead of a window that could not be seen.
+ 
+-Documents are searched from a terminal, with `arrumatorcli search`. It lists the documents that contain your words
++### Searching
++
++Documents are searched from the **search field** in the main window's toolbar, which is there on every page, and from a
++terminal, with `arrumatorcli search`. Edit › **Find…** (Command-F) brings the window forward with the cursor in the
++field and its text selected, so typing replaces it; Escape clears the field, then leaves it, and its × ("Clear Search")
++clears it too. Searching shows its results in place of the page that was shown, under the title **Search** with what you
++typed under it; clearing the field shows that page again. Choosing a list or a label in the sidebar shows that page and
++clears the field, and searching lets go of the labels chosen and of adding documents to a task, as any other page does.
++The field keeps no recent searches, and no query survives the archive being switched or the app quitting.
++
++Each change in the field looks for its words at once: the documents that hold them are listed under **With These Words**,
++and, once typing pauses (`interface.searchMeaningDelay`, 0.5 seconds) or you press Return, the documents alike in meaning
++alone follow under **Alike in Meaning**, most similar first, each at or above `search.semanticMinSimilarity`. While
++Ollama is asked, one quiet line says so (*Looking for documents alike in meaning…*); when meaning could not be compared,
++the line says why (*Not compared by meaning: Ollama cannot be reached or is not answering*, *…the profile has no
++embedding model*, *…the embedding model is not installed in Ollama*, *…runs outside your network*, *…Ollama answered
++with an error*, *…the search index's vectors cannot be read*, *…no document can be compared by meaning yet*), and the
++words alone stand. Ollama is
++asked once for a query by itself, never again after a pause or when the index changes, whether it was away or not, and
++never for one too short to mean anything (`search.minSemanticQueryChars`) or with nothing in it to look for; pressing
++Return asks again, also after Ollama was away or failed, and does nothing once the meaning was compared or while it is
++being asked for. A query with no letter or number in it, such
++as `%%%`, finds nothing (*Type a word to look for.*); one that finds nothing says so (*No document has these words.*).
++When more documents match than `search.resultLimit`, the best are listed, a line at the foot says so and how to narrow
++them down (more words, a phrase in quotes, or `field:word`), and no count is shown. Every document is searched whatever
++happened to it, one being read, set aside or missing included, and each row says so; under a row, the text around the
++words found shows with them in bold, as the text is, never as Markdown, and none shows for a document whose name or labels
++hold the words and whose text does not. The results follow the index: a document filed,
++renamed, labelled or moved to the Trash (with **Put Back** in the notice) shows at once, without Ollama being asked
++again, and an open card stays where it is, closing when its document no longer matches; typing another query with a
++card open shows that query's results at once, and the card stays only if its document is still found. With VoiceOver,
++the field is **Search Documents**, the two sections are headings, and a row reads its name, what happened to it, its
++labels and its text.
++
++From the keyboard the results are one stop, as a list is, so they take it whether Keyboard navigation (System Settings ›
++Keyboard) is on or off: Down Arrow in the field, or Tab, puts the keyboard on the first result, which shows a highlight;
++the arrow keys move the highlight through the rows, Up Arrow from the first goes back to the field, Return or Space open
++the card of the row it is on, Command-Delete asks whether to move it to the Trash, and Escape closes an open card, with
++the highlight on its row, or, with none open, goes back to the field. Command-F from the results returns to the field
++with its text selected. With Keyboard navigation on, Tab also reaches each result, which shows its own ring, and the
++arrow keys then move that ring instead of the highlight (VoiceOver's cursor follows the keys in both cases); that
++setting has not been verified.
++
++What is found is the current file name (not the one the file arrived with), the text, the labels by their values (a
++language by its English name too, a date as `2026-07-15`, not as the card shows it) and what the model read the document
++as. It ignores case and accents in every script (`faturacao` finds `faturação`, `счет` finds `счёт`, Greek words are found
++without their accents; `и` finds `й` too). A word inside a run of text written without spaces between words, as in
++Japanese, Chinese or Thai, is not found by its words, only the start of the run is; meaning may find it.
++
++The command lists the documents that contain your words
+ first, then those alike in meaning, such as the same kind of document in another language, most similar first. Words are
+ looked for in the file name, the text and the labels; `field:word` or `field:"a phrase"` looks in one of them only:
+ `filename`, `body`, a kind of label, `sender`, `party`, `type`, `topic`, `object`, `reference`, `date`, `period`,
+@@ -546,7 +595,12 @@ No tunable lives in code. Defaults are bundled in `Sources/ArrumatorCore/Resourc
+   `interface.sidebarLabelsPerKind`, how many recent events notifications are drawn from, `interface.notificationEvents`,
+   how long the app waits for macOS to answer its asking to show notifications, `interface.notificationAskTimeout`, how
+   long after starting it says whether its menu bar icon can be seen, `interface.menuBarSettleSeconds`, and how much text
+-  `arrumatorcli extract` prints, `interface.extractPreviewChars`), `maintenance` (how often the app prunes logs, trims
++  `arrumatorcli extract` prints, `interface.extractPreviewChars`, and how long typing in the search field must pause
++  before the search asks Ollama to compare the query by meaning, `interface.searchMeaningDelay`, 0.5 seconds: longer than
++  the pause between keystrokes inside a word, about 0.24 seconds on average and about 0.4 for a slower typist (Dhakal et
++  al., "Observations on Typing from 136 Million Keystrokes", CHI 2018), and short enough that pause and one embedding
++  stay near the second that keeps a person's flow of thought unbroken (Nielsen, "Response Times: The 3 Important Limits",
++  1993)), `maintenance` (how often the app prunes logs, trims
+   traces and looks for files, tasks and questions `arrumatorcli` left in hand when it was killed,
+   `maintenance.interval`; what a command queues or changes while the app runs, the app takes up and shows as soon as the
+   command commits it) and `database` (how long a write waits for another process using the index,

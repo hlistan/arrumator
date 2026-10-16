@@ -34,6 +34,12 @@ Each guideline states the current right way. Format and rules: singularity
   the project's pattern, as is an `AppModel` action's shape: `perform`, then
   open or reload what changed (`AppModel.mergeLabel`). Don't flag either as
   duplication.
+- **G56** A sentence in `docs/` about what the App's own code decides (the
+  search field cleared by `AppModel.go`, a new `ArchiveSession` on
+  `AppModel.switchArchive`) is checked against that code, and stands when
+  the code does it. Only AppKit and system behaviour (keys, focus,
+  VoiceOver, menus) needs a drive before docs state it (G31 in
+  `.claude/rules/singularity/app.md`).
 
 ## How to review here
 

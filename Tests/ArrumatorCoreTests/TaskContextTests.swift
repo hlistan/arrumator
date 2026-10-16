@@ -122,13 +122,13 @@ import Testing
         let config = w.h.env.config
         let words = try await TaskContextBuilder(database: w.h.env.database, search: w.h.search, config: config)
             .context(for: "the water bill", set: [edp, water], earlier: [])
-        #expect(!words.semanticUsed && words.semanticUnavailableReason == SearchService.noEmbedder,
+        #expect(words.withoutMeaning == .noEmbeddingModel,
                 "without an embedding model the words alone order the documents, and the choice says why")
         let meaning = SearchService(database: w.h.env.database, vectors: await SearchTests.vectors([(water, 0.9), (edp, 0.1)]),
                                     embedder: SearchTests.FixedEmbedder(vector: [1, 0]), config: config.search, time: w.h.env.time)
         let both = try await TaskContextBuilder(database: w.h.env.database, search: meaning, config: config)
             .context(for: "the water bill", set: [edp, water], earlier: [])
-        #expect(both.semanticUsed && both.semanticUnavailableReason == nil && both.shown.documents.first?.id == water,
+        #expect(both.withoutMeaning == nil && both.shown.documents.first?.id == water,
                 "with one, its meaning orders them too")
     }
 

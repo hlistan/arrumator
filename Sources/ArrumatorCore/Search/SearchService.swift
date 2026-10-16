@@ -3,30 +3,44 @@ import GRDB
 
 /// Markers wrapped around matched terms in snippets; the UI and CLI turn them into highlighting.
 public enum SearchHighlight {
-    public static let open = "\u{E000}"
-    public static let close = "\u{E001}"
+    private static let openScalar: Unicode.Scalar = "\u{E000}"
+    private static let closeScalar: Unicode.Scalar = "\u{E001}"
+    public static let open = String(openScalar)
+    public static let close = String(closeScalar)
 
-    /// Splits highlighted text into (segment, isMatch) runs.
+    /// Splits highlighted text into (segment, isMatch) runs, on one line (`DocumentLabel.oneLine`: no break or control
+    /// character reaches a screen). A close marker with no open before it is dropped, an open inside a match is dropped,
+    /// and a match left open runs to the end. Read by scalar: a marker is one, and a combining mark or a skin-tone
+    /// modifier after it would join it into one `Character` that is no marker.
     public static func runs(_ text: String) -> [(String, Bool)] {
         var out: [(String, Bool)] = []
-        var rest = Substring(text)
-        while let o = rest.range(of: open) {
-            if o.lowerBound > rest.startIndex { out.append((String(rest[..<o.lowerBound]), false)) }
-            rest = rest[o.upperBound...]
-            if let c = rest.range(of: close) {
-                out.append((String(rest[..<c.lowerBound]), true))
-                rest = rest[c.upperBound...]
-            } else {
-                out.append((String(rest), true))
-                rest = ""
+        var current = String.UnicodeScalarView()
+        var inMatch = false
+        func end() {
+            if !current.isEmpty { out.append((String(current), inMatch)) }
+            current = String.UnicodeScalarView()
+        }
+        for scalar in DocumentLabel.oneLine(text).unicodeScalars {
+            switch scalar {
+            case openScalar where !inMatch:
+                end()
+                inMatch = true
+            case closeScalar where inMatch:
+                end()
+                inMatch = false
+            case openScalar, closeScalar:
+                break
+            default:
+                current.append(scalar)
             }
         }
-        if !rest.isEmpty { out.append((String(rest), false)) }
+        end()
         return out
     }
 
+    /// `text` without the markers.
     public static func plain(_ text: String) -> String {
-        text.replacingOccurrences(of: open, with: "").replacingOccurrences(of: close, with: "")
+        String(String.UnicodeScalarView(text.unicodeScalars.filter { $0 != openScalar && $0 != closeScalar }))
     }
 }
 
@@ -34,15 +48,25 @@ public enum HitSource: String, Sendable, Codable, Hashable {
     case fullText, semantic
 }
 
+/// Whether a search compares documents with the query by meaning too, and how it asks Ollama for that.
+public enum SearchMeaning: Sendable, Hashable {
+    /// The words alone, with no model: what the app shows on every change of its field.
+    case wordsOnly
+    /// The words and meaning, asking Ollama once: when it is away, the meaning part ends at once. The app's search.
+    case askOnce
+    /// The words and meaning, asking Ollama again when it is away, after each of `ollama.retryDelays`. The command line's.
+    case askRetrying
+}
+
 public struct SearchQuery: Sendable, Hashable {
     public var text: String
     public var filter: DocumentFilter
-    public var semantic: Bool
+    public var meaning: SearchMeaning
 
-    public init(text: String, filter: DocumentFilter = DocumentFilter(), semantic: Bool = true) {
+    public init(text: String, filter: DocumentFilter = DocumentFilter(), meaning: SearchMeaning) {
         self.text = text
         self.filter = filter
-        self.semantic = semantic
+        self.meaning = meaning
     }
 }
 
@@ -54,26 +78,34 @@ public struct SearchHit: Sendable, Identifiable, Hashable {
     public var score: Double
     public var snippet: String
     public var sources: Set<HitSource>
+
+    /// Whether the document was found by its meaning alone, without the query's words: what puts it in the second
+    /// section of the results, after the documents that hold the words.
+    public var byMeaningAlone: Bool { sources == [.semantic] }
 }
 
 public struct SearchResults: Sendable, Hashable {
     public var hits: [SearchHit]
-    /// Whether documents were compared with the query by meaning too; when they were not, why.
-    public var semanticUsed: Bool
-    public var semanticUnavailableReason: String?
+    /// Why documents were not compared by meaning too; nil when they were.
+    public var withoutMeaning: WithoutMeaning?
+    /// Whether more documents were found than `search.resultLimit`: `hits` holds the best of them.
+    public var cut: Bool
     public var elapsedMs: Double
+
+    /// Whether the query had nothing to look for, so none was looked for.
+    public var nothingToLookFor: Bool { withoutMeaning == .nothingToLookFor }
 }
 
 /// The documents of a set that a text concerns, the most first (`SearchService.relevance`): whether they were compared
 /// with it by meaning too, and, when they were not, why, as a search says (`SearchResults`).
 public struct Relevance: Sendable, Hashable {
     public var documents: [Int64]
-    public var semanticUsed: Bool
-    public var semanticUnavailableReason: String?
+    public var withoutMeaning: WithoutMeaning?
 }
 
 /// Builds safe FTS5 MATCH expressions from user input: quoted terms, `"phrases"`, `field:term`, `field:"phrase"`, prefix
-/// on the last term. The fields are the full-text columns (`SearchService.columns`), a label's kind among them.
+/// on the last term. A term with no letter or number is left out, and a query left with no term is nil: nothing to look
+/// for. The fields are the full-text columns (`SearchService.columns`), a label's kind among them.
 public enum FTSQueryBuilder {
     static let fields = Set(SearchService.columns)
 
@@ -115,19 +147,25 @@ public enum FTSQueryBuilder {
             }
             if term.hasPrefix("\"") {
                 let phrase = term.dropFirst().dropLast()
-                guard !phrase.trimmingCharacters(in: .whitespaces).isEmpty else { continue }
+                guard hasSomethingToLookFor(phrase) else { continue }
                 let expr = "\"" + phrase.replacingOccurrences(of: "\"", with: "\"\"") + "\""
                 parts.append(column.map { "\($0) : \(expr)" } ?? expr)
                 continue
             }
             let cleaned = term.unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) || $0 == "-" || $0 == "." }
             let word = String(String.UnicodeScalarView(cleaned))
-            guard !word.isEmpty else { continue }
+            guard hasSomethingToLookFor(word) else { continue }
             var expr = "\"" + word.replacingOccurrences(of: "\"", with: "\"\"") + "\""
             if isLast && word.count >= 2 { expr += " *" }
             parts.append(column.map { "\($0) : \(expr)" } ?? expr)
         }
         return parts.isEmpty ? nil : parts.joined(separator: " ")
+    }
+
+    /// Whether `term` holds a letter or a number: what a term needs to be looked for, as `anyOf` has it. `-`, `.` and
+    /// `%%` are not words.
+    private static func hasSomethingToLookFor<S: StringProtocol>(_ term: S) -> Bool {
+        term.contains { $0.isLetter || $0.isNumber }
     }
 
     /// Any of the words of `text`, each as a term of its own, never a field, a phrase or a prefix: what a sentence is
@@ -155,13 +193,6 @@ public actor SearchService {
     static let interpretationColumn = "interpretation"
     /// The column snippets are cut from: the document's text.
     static let bodyColumn = 1
-
-    /// Why documents were not compared by meaning: the query asked for its words alone; it is too short to mean
-    /// anything (`search.minSemanticQueryChars`); no embedding model is ready; there were no documents to compare.
-    public static let notAsked = "disabled"
-    public static let tooShort = "query too short"
-    public static let noEmbedder = "no embedding model"
-    public static let noDocuments = "no documents"
 
     private let database: AppDatabase
     private let vectors: VectorIndex
@@ -223,51 +254,78 @@ public actor SearchService {
         try Task.checkCancellation()
     }
 
-    /// Full-text phase only (fast path for type-ahead).
-    public func fullText(_ query: SearchQuery) async throws -> SearchResults {
-        let start = time.now()
-        let hits = try await ftsHits(query)
-        return SearchResults(hits: Array(hits.prefix(config.resultLimit)), semanticUsed: false, semanticUnavailableReason: nil,
-                             elapsedMs: time.now().timeIntervalSince(start) * 1000)
-    }
-
-    /// The documents that hold the query's words, fused with those alike to it in meaning (`fuse`). When they cannot be
-    /// compared by meaning, as when Ollama is away, the words alone find them, and the results say why. Stopping is
-    /// thrown.
+    /// The documents that hold the query's words, fused with those alike to it in meaning (`fuse`), by the query's
+    /// `meaning`. When they cannot be compared by meaning, as when Ollama is away, the words alone find them, and the
+    /// results say why. A query with nothing to look for finds nothing and asks nothing. Stopping is thrown.
     public func search(_ query: SearchQuery) async throws -> SearchResults {
         let start = time.now()
         let text = query.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let fts = try await ftsHits(query)
-        let meaning = query.semantic
-            ? try await alike(to: text, k: config.ftsCandidateLimit, waitingForOllama: false) { try await self.allowedIDs(query.filter) }
-            : (found: [], unavailable: Self.notAsked)
+        guard let match = FTSQueryBuilder.build(query.text) else {
+            return SearchResults(hits: [], withoutMeaning: .nothingToLookFor, cut: false, elapsedMs: elapsedMs(since: start))
+        }
+        let fts = try await ftsHits(query, match: match)
+        let meaning: (found: [(docID: Int64, score: Float)], without: WithoutMeaning?)
+        switch query.meaning {
+        case .wordsOnly: meaning = ([], tooShort(text) ? .tooShort : .notAsked)
+        case .askOnce, .askRetrying:
+            meaning = try await alike(to: text, k: config.ftsCandidateLimit, waitingForOllama: false, retrying: query.meaning == .askRetrying) {
+                try await self.allowedIDs(query.filter)
+            }
+        }
         let fused = try await fuse(fts: fts, semantic: meaning.found)
-        let elapsed = time.now().timeIntervalSince(start) * 1000
-        Log.debug(.search, "Search", ["ms": String(format: "%.0f", elapsed), "fts": String(fts.count),
-                                      "semantic": String(meaning.found.count)])
-        return SearchResults(hits: Array(fused.prefix(config.resultLimit)), semanticUsed: meaning.unavailable == nil,
-                             semanticUnavailableReason: meaning.unavailable, elapsedMs: elapsed)
+        let elapsed = elapsedMs(since: start)
+        Log.debug(.search, "Search", Self.logFields(elapsedMs: elapsed, words: fts.count, meaning: meaning.found.count, without: meaning.without))
+        return SearchResults(hits: Array(fused.prefix(config.resultLimit)), withoutMeaning: meaning.without, cut: fused.count > config.resultLimit,
+                             elapsedMs: elapsed)
     }
 
+    /// What a search logs: how long it took, how many documents the words and the meaning found, and why meaning was not
+    /// used. Never the query or a snippet: a search is no action, and what is looked for stays with the person.
+    static func logFields(elapsedMs: Double, words: Int, meaning: Int, without: WithoutMeaning?) -> [String: String] {
+        ["ms": String(format: "%.0f", elapsedMs), "fts": String(words), "semantic": String(meaning), "without": without?.rawValue ?? ""]
+    }
+
+    /// Whether `text` is shorter than `search.minSemanticQueryChars`: too short to mean anything.
+    private func tooShort(_ text: String) -> Bool { text.count < config.minSemanticQueryChars }
+
+    private func elapsedMs(since start: Date) -> Double { time.now().timeIntervalSince(start) * 1000 }
+
     /// The documents alike in meaning to `text`, the most alike first, at most `k`, among those `allowed` gives (all when
-    /// it gives nil); or, when they cannot be compared by meaning, as when their vectors cannot be read, none, and why.
-    /// Stopping is thrown, and so is Ollama being away when `waitingForOllama`, for what asks to wait for it all the same:
-    /// at once, without asking it again meanwhile, as what asks says it waits for Ollama, and when it tries again.
-    private func alike(to text: String, k: Int, waitingForOllama: Bool,
-                       among allowed: () async throws -> Set<Int64>?) async throws -> (found: [(docID: Int64, score: Float)], unavailable: String?) {
-        guard text.count >= config.minSemanticQueryChars else { return ([], Self.tooShort) }
-        guard let embedder else { return ([], Self.noEmbedder) }
+    /// it gives nil); or, when they cannot be compared by meaning, none, and why. Stopping is thrown, and so is Ollama being
+    /// away when `waitingForOllama`, for what asks to wait for it all the same: at once, without asking it again meanwhile,
+    /// as what asks says it waits for Ollama, and when it tries again. Ollama away is asked again only when `retrying`.
+    private func alike(to text: String, k: Int, waitingForOllama: Bool, retrying: Bool,
+                       among allowed: () async throws -> Set<Int64>?) async throws -> (found: [(docID: Int64, score: Float)], without: WithoutMeaning?) {
+        guard !tooShort(text) else { return ([], .tooShort) }
+        guard let embedder else { return ([], .noEmbeddingModel) }
         do {
             try await loadVectors(of: embedder.modelId)
-            let vector = try await queryVector(text, embedder: embedder, retrying: !waitingForOllama)
-            return (try await vectors.topK(vector, model: embedder.modelId, k: k, allowed: try await allowed()), nil)
+        } catch {
+            return try unreadable(error)
+        }
+        let among: Set<Int64>?
+        do {
+            among = try await allowed()
+        } catch {
+            return try unreadable(error)
+        }
+        guard await vectors.holdsAny(among: among) else { return ([], .noDocuments) }
+        do {
+            let vector = try await queryVector(text, embedder: embedder, retrying: retrying)
+            return (try await vectors.topK(vector, model: embedder.modelId, k: k, allowed: among), nil)
         } catch let error as OllamaError where waitingForOllama && error.isTransient {
             throw error
         } catch {
-            if error is CancellationError || Task.isCancelled { throw error }
-            Log.warning(.search, "Search by meaning unavailable", ["error": error.localizedDescription])
-            return ([], error.localizedDescription)
+            return try unreadable(error)
         }
+    }
+
+    /// The reason `failure` leaves documents without a comparison by meaning, logged; stopping is thrown instead.
+    private func unreadable(_ failure: any Error) throws -> (found: [(docID: Int64, score: Float)], without: WithoutMeaning?) {
+        if failure is CancellationError || Task.isCancelled { throw failure }
+        let reason = WithoutMeaning(failure: failure)
+        Log.warning(.search, "Search by meaning unavailable", ["reason": reason.rawValue, "error": failure.localizedDescription])
+        return ([], reason)
     }
 
     /// `text`'s vector by `embedder`, kept for the next `search.queryCacheSize` texts asked for. A text two searches ask
@@ -283,16 +341,8 @@ public actor SearchService {
         return vector
     }
 
-    private func ftsHits(_ query: SearchQuery) async throws -> [SearchHit] {
+    private func ftsHits(_ query: SearchQuery, match: String) async throws -> [SearchHit] {
         let limit = config.ftsCandidateLimit
-        guard let match = FTSQueryBuilder.build(query.text) else {
-            return try await database.reader.read { db in
-                let (whereSQL, whereArgs) = try query.filter.sql(db)
-                return try DocumentRecord.fetchAll(db, sql: "SELECT d.* FROM documents d WHERE 1=1 \(whereSQL) ORDER BY d.added_at DESC LIMIT ?",
-                                            arguments: whereArgs + [limit])
-                    .map { SearchHit(document: $0, score: 0, snippet: "", sources: []) }
-            }
-        }
         let weights = config.bm25Weights.map { String($0) }.joined(separator: ", ")
         let open = SearchHighlight.open
         let close = SearchHighlight.close
@@ -307,8 +357,10 @@ public actor SearchService {
                 ORDER BY rank LIMIT ?
                 """, arguments: [open, close, tokens, match] + whereArgs + [limit])
             return try rows.map { row in
-                SearchHit(document: try DocumentRecord(row: row), score: -(row["rank"] as Double? ?? 0),
-                          snippet: row["snip"] ?? "", sources: [.fullText])
+                // SQLite cuts the start of the text when the words are in no part of it, a name or a label: that shows nothing found.
+                let snippet: String = row["snip"] ?? ""
+                return SearchHit(document: try DocumentRecord(row: row), score: -(row["rank"] as Double? ?? 0),
+                                 snippet: snippet.contains(open) ? snippet : "", sources: [.fullText])
             }
         }
     }
@@ -370,7 +422,7 @@ public actor SearchService {
     /// words alone order them, and the relevance says why; documents `text` does not concern at all are left out.
     /// Ollama that cannot be reached is thrown, as is stopping: what asks has to wait for Ollama all the same.
     public func relevance(of text: String, among ids: [Int64]) async throws -> Relevance {
-        guard !ids.isEmpty else { return Relevance(documents: [], semanticUsed: false, semanticUnavailableReason: Self.noDocuments) }
+        guard !ids.isEmpty else { return Relevance(documents: [], withoutMeaning: .noDocuments) }
         let weights = config.bm25Weights.map { String($0) }.joined(separator: ", ")
         var fts: [Int64] = []
         if let match = FTSQueryBuilder.anyOf(text) {
@@ -381,10 +433,9 @@ public actor SearchService {
                     """, arguments: StatementArguments([match]) + StatementArguments(ids))
             }
         }
-        let meaning = try await alike(to: text.trimmingCharacters(in: .whitespacesAndNewlines), k: ids.count, waitingForOllama: true) { Set(ids) }
+        let meaning = try await alike(to: text.trimmingCharacters(in: .whitespacesAndNewlines), k: ids.count, waitingForOllama: true, retrying: false) { Set(ids) }
         let order = Self.fusedOrder(fts: fts, semantic: meaning.found, rrfK: config.rrfK, minSimilarity: config.semanticMinSimilarity)
-        return Relevance(documents: order.withWords.map(\.id) + order.meaningOnly.map(\.id), semanticUsed: meaning.unavailable == nil,
-                         semanticUnavailableReason: meaning.unavailable)
+        return Relevance(documents: order.withWords.map(\.id) + order.meaningOnly.map(\.id), withoutMeaning: meaning.without)
     }
 
     private func allowedIDs(_ filter: DocumentFilter) async throws -> Set<Int64>? {

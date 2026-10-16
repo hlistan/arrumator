@@ -186,7 +186,7 @@ root](https://blog.ploeh.dk/2011/07/28/CompositionRoot/). What each module owns 
 
 | Folder | Owns | Main types |
 |---|---|---|
-| `Contracts/` | The types and protocols modules exchange: extracted content, labels and their kinds, analysis, search plans, conversations, traces, prompt templates. | `ExtractedContent`, `LabelKind`, `DocumentLabel`, `SearchPlan`, `TraceContext`, `PromptTemplates` |
+| `Contracts/` | The types and protocols modules exchange: extracted content, labels and their kinds, analysis, search plans, conversations, traces, prompt templates, and App presentation logic that tests reach, such as how a list reloads under an open card (`RowsUnderCard`). | `ExtractedContent`, `LabelKind`, `DocumentLabel`, `SearchPlan`, `TraceContext`, `PromptTemplates`, `RowsUnderCard` |
 | `Config/` | Settings and tunables, loaded strictly; process environment; where app state lives. | `PipelineConfig`, `AppSettings`, `SettingsStore`, `ConfigLoader`, `RuntimeEnvironment`, `AppPaths` |
 | `Storage/` | The index: schema and migrations, record types, one store per concern, and the notification that tells other processes it changed. | `AppDatabase`, `ChangeSignal`, `DocumentStore`, `JobStore`, `IndexStore`, `HistoryStore`, `TraceRecorder`, `LabelStore`, `SearchTaskStore`, `TaskConversationStore` |
 | `Records/` | The archive's record files: rendering, reading back, rebuilding the index; and each document's sidecar, written from the index and never read back. | `ArchiveRecords`, `ArchiveLayout`, `RecordKind`, `FrontMatter`, `DocumentText` |
@@ -195,7 +195,7 @@ root](https://blog.ploeh.dk/2011/07/28/CompositionRoot/). What each module owns 
 | `Watching/` | FSEvents on Incoming and on the archive; when a file has stopped changing; a file and a folder as the disk knows them. | `IncomingWatcher`, `ArchiveWatcher`, `SelfChangeRegistry`, `FSEventStream`, `SkipRules`, `Settling`, `FileOnDisk`, `FolderIdentity` |
 | `Ollama/` | The only network client, its guard, the server's lifecycle, one model call at a time. | `OllamaClient`, `OllamaConnection`, `OllamaEndpoint`, `SystemHostResolver`, `NetworkGuardProtocol`, `OllamaLifecycle`, `ModelManager`, `InferenceGate` |
 | `Tasks/` | Search tasks and conversations: two queues and the machinery they share, their actions, what an answer is shown, exports. | `ModelQueue`, `SearchTaskQueue`, `SearchTaskActions`, `TaskConversationQueue`, `TaskConversationActions`, `TaskContextBuilder`, `SearchTaskExporter` |
-| `Search/` | Full-text search fused with search by meaning. | `SearchService`, `VectorIndex`, `SearchPlanMatcher` |
+| `Search/` | Full-text search fused with search by meaning, in one entry point the app and the command line share (`SearchMeaning` says whether and how Ollama is asked), the reason meaning was not used as a closed set (`WithoutMeaning`), the timing of what is typed in the search field (`TypedSearch`: the pause, the cancelling, one automatic request for each settled query, and Return asking again), and the tokenizer that folds case and accents in every script (`FoldingTokenizer`). | `SearchService`, `WithoutMeaning`, `TypedSearch`, `VectorIndex`, `FoldingTokenizer`, `SearchPlanMatcher` |
 | `Vocabulary/` | Keeping labels one vocabulary: tidying what a reading gives, finding labels that look alike, and the worker that has the model judge them. | `LabelConsolidator`, `LabelSimilarity`, `LookAlikeMemo`, `LabelJudge` |
 | `Observability/` | What the pipeline did, in numbers; how an eval run read its corpus; the doctor; the diagnostics export. | `StatsService`, `ProcessingFunnel`, `Evaluation`, `Doctor`, `DiagnosticsExporter` |
 | `Domain/`, `System/`, `Logging/` | Deadlines, retries, the worker's doorbell, identifiers and the words that label them, the language a text is written in (a document's, a request's, a question's); power state; structured logs; what a menu of text may offer, as an allow-list over action names (`TextMenuRule`, which `TextMenuGuard` in `App/Support/LocalText.swift` applies to every text menu AppKit draws, so no text of the app is offered to a search, a service or a tool outside it). | `Deadline`, `Retry`, `Doorbell`, `AsyncSemaphore`, `LanguageDetector`, `PowerState`, `Log`, `TextMenuRule` |
@@ -562,9 +562,13 @@ app shaped like `App/ArrumatorApp.swift`:
   Seen and dropped: `addFontTrait:`, `underline:`, `outline:`, `highlight:`, `orderFrontStylesPanel:`,
   `orderFrontColorPanel:` (the Font submenu keeps only Show Fonts), and the Writing Direction items.
 - **The Edit menu.** AppKit does insert into a hand-built Edit menu: AutoFill (a submenu), Start Dictation…
-  (`startDictation:`) and Emoji & Symbols (`orderFrontCharacterPalette:`), some more than once. The Edit menu's own
-  delegate removing everything the app did not put there worked: with a field focused it held Undo, Redo, Cut, Copy,
-  Paste and Select All only. Start Dictation and Emoji & Symbols stay reachable system-wide (the Globe key,
+  (`startDictation:`) and Emoji & Symbols (`orderFrontCharacterPalette:`), some more than once, **as the menu is
+  assigned to `NSApp.mainMenu`**: a guard that records the menu's items after that records these as the app's own and
+  prunes nothing (seen on 16 October 2026 with a field focused, in the menu opened by `press Edit`, with and without
+  this branch's Find…). `TextMenuGuard.install(mainMenu:editMenu:)` records the items and then makes the assignment;
+  then the Edit menu's own delegate removing everything the app did not put there holds: with a field focused it held
+  Undo, Redo, Cut, Copy, Paste, Select All, Find… and Filter Labels only, after being opened three times and after a
+  card's name field had focus. Start Dictation and Emoji & Symbols stay reachable system-wide (the Globe key,
   Control-Command-Space).
 - **Services.** The Services item is removed from every menu. A probe showed that an `NSTextView` with a selection
   answers `validRequestor(forSendType:returnType:)` for `NSStringPboardType` itself, so overriding that method in
@@ -590,6 +594,54 @@ Not verified, and so steps of charter C14 in [the QA protocol](qa/protocol.md):
   A user who rebinds Look Up (symbolic hotkey 70, System Settings › Keyboard › Keyboard Shortcuts) is not covered: the
   fixed combination is all it drops.
 - Dragging selected text out of the app stays possible, and is the user's to do.
+
+### The search field
+
+The field sits in the main window's toolbar (`App/Views/SearchPage.swift`): a plain `TextField` named "Search Documents"
+to VoiceOver, never SwiftUI's `.searchable`, which names itself by its placeholder, is not driven by the Edit menu this
+app makes, and brings recent searches and suggestions that must not exist. It keeps no recents, has no
+`recentsAutosaveName` and its text lives in the session (`ArchiveSession.searchText`), which no window restores. Its
+context menu is drawn by the same `NSMenu` hook as any text field's, and Look Up gestures are dropped for it as
+everywhere.
+
+Probed in the built app (macOS 26, 16 October 2026): a `.toolbar` on the `NavigationSplitView` of the main window,
+made by AppKit as `NSWindow(contentViewController: NSHostingController(...))`, bridges into the window's `NSToolbar`
+with no `sceneBridgingOptions`; `tree` shows an `AXToolbar` holding an `AXTextField` "Search Documents", the title bar
+is a unified toolbar with the title beside the traffic lights, and no sidebar toggle appeared. SwiftUI's `@FocusState`
+does not reach a view the toolbar holds (Find… left the keyboard on the sidebar), so Edit › Find… puts the cursor
+there through AppKit: it finds the field by its accessibility name in the window's views, makes it first responder and
+selects its text, and typing then replaced the text. Find… with the main window closed, or Settings the key window,
+opens the window with the cursor in the field only once the window is key and has given the cursor back to where it
+was (`AppDelegate.windowDidBecomeKey`, `SearchFieldFocus.take`): asked of the window before that, the cursor went to
+the sidebar, and a field asked for by `.task` as the window was shown lost it to the same restore.
+
+Probed the same day with Keyboard navigation off, this Mac's setting: rows that are `.focusable(interactions:
+.activate)` take no focus (Down Arrow in the field, Return and Escape reached nothing), where a
+`.focusable(interactions: .edit)` container does, Tab included, as `SidebarLabelList` is. So the results are one such
+container with a highlight the arrow keys move (`SearchPage`, `DocumentList.keyed`; with Keyboard navigation on the rows
+also take focus of their own, shared between the lists as `SidebarLabelList` shares its rows', the highlight showing
+only while none has it, and the arrow keys then moving that focus and VoiceOver's cursor with either): Down Arrow in the
+field moves the window's key view loop on from the field (`SearchFieldFocus.next`), because assigning `@FocusState`
+while a toolbar's AppKit field held the cursor left the flag false though the container took the keys, and a card that
+closes with the cursor in its field sends it back through the field and on (`SearchFieldFocus.toResults`), after the
+update that removes the card. A name field's Escape and Return send the keyboard to the card's row
+(`DocumentCard.leaveName`), so the second Escape reaches the results' exit command and closes the card. Return, Space,
+Up and Down, the highlight scrolling at 760×520, Escape with and without a card, Up Arrow from the first row,
+Command-Delete (the Mac's Delete key arrives in `onKeyPress` as U+007F, where `KeyEquivalent.delete` is U+0008 and never
+equals it: `Style.deleteKeyPress`), the card closing with the highlight on the row that takes its place, and a query
+whose search failed before it found anything showing no rows and closing the card, were driven. The results page reads
+each state of the search as it arrives (`AppModel.showSearchResults`), not by `.task(id:)` or `.onChange` of the state:
+a settled state that followed its pending state within a millisecond was not seen as a change by either, and a short
+query showed an empty page. The results follow the index itself (`AppDatabase.indexChanges`), not History
+(`activity()`): a document put back is read again and its text written after the event that began it.
+
+Not verified, and so steps of charter C14 (the Look Up gestures for the field) and C16: a force click and a three-finger
+tap on the field's text (Control-Command-D opened nothing); that Tab reaches each result on its own with Keyboard
+navigation on, and Down Arrow, the arrow keys, Return, Escape and Command-Delete in that setting, where a row has the
+focus of its own (the code mirrors `SidebarLabelList`, and the setting is the user's, which this Mac could not be
+switched to); the field and the arrow keys with the Russian layout active; VoiceOver's reading of a row, of the results
+and of the settle announcement, and whether its cursor follows the arrow keys, which is speech; the collecting of
+documents into a task and a switch of archives ending a query.
 
 ## Decisions
 

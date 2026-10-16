@@ -51,6 +51,23 @@ enum Palette {
     static let labelsList = Color.purple
     /// The Tasks list.
     static let tasksList = Color.teal
+    /// The page of search results.
+    static let searchList = Color.cyan
+
+    // MARK: Quiet text
+
+    /// What a page says quietly in words: beside and beneath a row's name (what happened to it, its labels, the text around a
+    /// match), the query under a page's title, the search's meaning and cut lines, an empty page's sentence and a notice. The
+    /// system's secondary label in dark, and in light a grey of `quietLightWhite`, because the system's measures 3.1 to 1 on the
+    /// light page (QA runs of 15 and 16 October 2026, the method of `docs/qa/protocol.md` › C14), under the 4.5 to 1 of
+    /// WCAG 2.2, 1.4.3.
+    static let quietText = Color(nsColor: NSColor(name: nil) { appearance in
+        let looks = appearance.bestMatch(from: [.aqua, .darkAqua, .accessibilityHighContrastAqua, .accessibilityHighContrastDarkAqua])
+        return looks == .darkAqua || looks == .accessibilityHighContrastDarkAqua ? .secondaryLabelColor : NSColor(white: quietLightWhite, alpha: 1)
+    })
+
+    /// How dark the quiet grey is on the light page: 0.36 is 6.7 to 1 on white, and measures over 4.5 to 1 in a screenshot, whose antialiasing lightens thin strokes.
+    static let quietLightWhite: CGFloat = 0.36
 
     // MARK: Kinds of label
 

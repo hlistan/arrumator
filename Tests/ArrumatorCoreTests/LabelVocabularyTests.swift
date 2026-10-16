@@ -203,7 +203,7 @@ import Testing
 
     private func search(_ h: Harness, _ query: String) async throws -> [Int64] {
         try await h.search
-            .fullText(SearchQuery(text: query)).hits.map(\.id).sorted()
+            .search(SearchQuery(text: query, meaning: .wordsOnly)).hits.map(\.id).sorted()
     }
 
     @Test func aMergeRelabelsEveryDocumentAndIsRecorded() async throws {

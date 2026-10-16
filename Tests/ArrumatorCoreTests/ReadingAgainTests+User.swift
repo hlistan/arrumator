@@ -142,7 +142,7 @@ extension ReadingAgainTests {
         defer { h.env.cleanup() }
         let earlier = try await Self.filedEarlier(h)
         let id = try #require(earlier.id)
-        let (services, coordinator, review) = Self.pipeline(h, WithoutMeaning(labels: LabelingTests.meoContract))
+        let (services, coordinator, review) = Self.pipeline(h, AnalyzerWithoutAnEmbedding(labels: LabelingTests.meoContract))
         try await review.retry(id)
         await coordinator.drain()
         let after = try #require(try await services.documents.document(id: id))
@@ -246,7 +246,7 @@ extension ReadingAgainTests {
 
 /// Reads a document as `StubAnalyzer` does, with `labels`, but makes no embedding of it, as an embedding model that
 /// failed.
-struct WithoutMeaning: DocumentAnalyzing {
+struct AnalyzerWithoutAnEmbedding: DocumentAnalyzing {
     let labels: [DocumentLabel]
 
     func analyse(_ content: ExtractedContent, guidance: LabelGuidance, settings: AppSettings, config: PipelineConfig,

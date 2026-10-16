@@ -238,6 +238,13 @@ gate local-text-config "the app declares no service of its own: no NSServices in
     NSServices: []' \
   project.yml App
 
+gate main-menu "the menu bar is set in one place, TextMenuGuard.install(mainMenu:editMenu:), which records the Edit menu's own items before AppKit has the menu: AppKit adds AutoFill, Start Dictation and Emoji & Symbols to an Edit menu as it takes it, so a guard that records the items after takes them as the app's own and prunes none" \
+  '^App/Support/LocalText\.swift:[0-9]+: +NSApp\.mainMenu = main$|^App/[^:]+:[0-9]+: *//' \
+  'NSApp\.mainMenu *=|mainMenu *= *' \
+  App/Sample.swift 'NSApp.mainMenu = mainMenu
+NSApplication.shared.mainMenu = menu' \
+  App
+
 gate hosting "every window and popover is made in App/ArrumatorApp.swift, where its content passes keepsTextLocal(), so a new one cannot miss it: no NSHostingController, NSHostingView, NSWindow, NSPanel or NSPopover made anywhere else in App" \
   '^App/ArrumatorApp\.swift:|^App/[^:]+:[0-9]+: *//' \
   'NSHostingController\(|NSHostingView\(|NSWindow\(|NSPanel\(|NSPopover\(' \

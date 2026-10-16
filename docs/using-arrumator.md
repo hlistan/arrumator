@@ -197,7 +197,7 @@ written with your text in them, every one it finds, whatever their case, accents
 type `tax-return`), and a language by its English name too. **Clear Filter** below them, or the × in the field, clears
 it. It filters the labels the sidebar offers, so with labels chosen, only those of the documents in view. Tab reaches
 it between the lists and the labels, and Edit › **Filter Labels** (Option-Command-F) brings the window forward with the
-cursor in it; Escape clears it, then leaves it.
+cursor in it; Escape clears it, then leaves it. It finds labels; the [search field](#searching) finds documents.
 `arrumatorcli labels browse --matching` does the same.
 
 Tab goes on from **Filter Labels** to the labels, with keyboard navigation off as on: the arrow keys move through them,
@@ -222,7 +222,56 @@ Arrumator…**. The menu bar's icon opens a small window of what the app is doin
 the Dock icon, shown by default, is then the way in; the icon pressed all the same, as through accessibility, brings the
 main window forward instead of a window that could not be seen.
 
-Documents are searched from a terminal, with `arrumatorcli search`. It lists the documents that contain your words
+### Searching
+
+Documents are searched from the **search field** in the main window's toolbar, which is there on every page, and from a
+terminal, with `arrumatorcli search`. Edit › **Find…** (Command-F) brings the window forward with the cursor in the
+field and its text selected, so typing replaces it; Escape clears the field, then leaves it, and its × ("Clear Search")
+clears it too. Searching shows its results in place of the page that was shown, under the title **Search** with what you
+typed under it; clearing the field shows that page again. Choosing a list or a label in the sidebar shows that page and
+clears the field, and searching lets go of the labels chosen and of adding documents to a task, as any other page does.
+The field keeps no recent searches, and no query survives the archive being switched or the app quitting.
+
+Each change in the field looks for its words at once: the documents that hold them are listed under **With These Words**,
+and, once typing pauses (`interface.searchMeaningDelay`, 0.5 seconds) or you press Return, the documents alike in meaning
+alone follow under **Alike in Meaning**, most similar first, each at or above `search.semanticMinSimilarity`. While
+Ollama is asked, one quiet line says so (*Looking for documents alike in meaning…*); when meaning could not be compared,
+the line says why (*Not compared by meaning: Ollama cannot be reached or is not answering*, *…the profile has no
+embedding model*, *…the embedding model is not installed in Ollama*, *…runs outside your network*, *…Ollama answered
+with an error*, *…the search index's vectors cannot be read*, *…no document can be compared by meaning yet*), and the
+words alone stand. Ollama is
+asked once for a query by itself, never again after a pause or when the index changes, whether it was away or not, and
+never for one too short to mean anything (`search.minSemanticQueryChars`) or with nothing in it to look for; pressing
+Return asks again, also after Ollama was away or failed, and does nothing once the meaning was compared or while it is
+being asked for. A query with no letter or number in it, such
+as `%%%`, finds nothing (*Type a word to look for.*); one that finds nothing says so (*No document has these words.*).
+When more documents match than `search.resultLimit`, the best are listed, a line at the foot says so and how to narrow
+them down (more words, a phrase in quotes, or `field:word`), and no count is shown. Every document is searched whatever
+happened to it, one being read, set aside or missing included, and each row says so; under a row, the text around the
+words found shows with them in bold, as the text is, never as Markdown, and none shows for a document whose name or labels
+hold the words and whose text does not. The results follow the index: a document filed,
+renamed, labelled or moved to the Trash (with **Put Back** in the notice) shows at once, without Ollama being asked
+again, and an open card stays where it is, closing when its document no longer matches; typing another query with a
+card open shows that query's results at once, and the card stays only if its document is still found. With VoiceOver,
+the field is **Search Documents**, the two sections are headings, and a row reads its name, what happened to it, its
+labels and its text.
+
+From the keyboard the results are one stop, as a list is, so they take it whether Keyboard navigation (System Settings ›
+Keyboard) is on or off: Down Arrow in the field, or Tab, puts the keyboard on the first result, which shows a highlight;
+the arrow keys move the highlight through the rows, Up Arrow from the first goes back to the field, Return or Space open
+the card of the row it is on, Command-Delete asks whether to move it to the Trash, and Escape closes an open card, with
+the highlight on its row, or, with none open, goes back to the field. Command-F from the results returns to the field
+with its text selected. With Keyboard navigation on, Tab also reaches each result, which shows its own ring, and the
+arrow keys then move that ring instead of the highlight (VoiceOver's cursor follows the keys in both cases); that
+setting has not been verified.
+
+What is found is the current file name (not the one the file arrived with), the text, the labels by their values (a
+language by its English name too, a date as `2026-07-15`, not as the card shows it) and what the model read the document
+as. It ignores case and accents in every script (`faturacao` finds `faturação`, `счет` finds `счёт`, Greek words are found
+without their accents; `и` finds `й` too). A word inside a run of text written without spaces between words, as in
+Japanese, Chinese or Thai, is not found by its words, only the start of the run is; meaning may find it.
+
+The command lists the documents that contain your words
 first, then those alike in meaning, such as the same kind of document in another language, most similar first. Words are
 looked for in the file name, the text and the labels; `field:word` or `field:"a phrase"` looks in one of them only:
 `filename`, `body`, a kind of label, `sender`, `party`, `type`, `topic`, `object`, `reference`, `date`, `period`,
@@ -546,7 +595,12 @@ No tunable lives in code. Defaults are bundled in `Sources/ArrumatorCore/Resourc
   `interface.sidebarLabelsPerKind`, how many recent events notifications are drawn from, `interface.notificationEvents`,
   how long the app waits for macOS to answer its asking to show notifications, `interface.notificationAskTimeout`, how
   long after starting it says whether its menu bar icon can be seen, `interface.menuBarSettleSeconds`, and how much text
-  `arrumatorcli extract` prints, `interface.extractPreviewChars`), `maintenance` (how often the app prunes logs, trims
+  `arrumatorcli extract` prints, `interface.extractPreviewChars`, and how long typing in the search field must pause
+  before the search asks Ollama to compare the query by meaning, `interface.searchMeaningDelay`, 0.5 seconds: longer than
+  the pause between keystrokes inside a word, about 0.24 seconds on average and about 0.4 for a slower typist (Dhakal et
+  al., "Observations on Typing from 136 Million Keystrokes", CHI 2018), and short enough that pause and one embedding
+  stay near the second that keeps a person's flow of thought unbroken (Nielsen, "Response Times: The 3 Important Limits",
+  1993)), `maintenance` (how often the app prunes logs, trims
   traces and looks for files, tasks and questions `arrumatorcli` left in hand when it was killed,
   `maintenance.interval`; what a command queues or changes while the app runs, the app takes up and shows as soon as the
   command commits it) and `database` (how long a write waits for another process using the index,
