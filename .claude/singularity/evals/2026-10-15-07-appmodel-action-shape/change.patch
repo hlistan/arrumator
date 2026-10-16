@@ -1,0 +1,104 @@
+diff --git a/App/AppModel.swift b/App/AppModel.swift
+index aeb7d6a..d3a9025 100644
+--- a/App/AppModel.swift
++++ b/App/AppModel.swift
+@@ -91,6 +91,9 @@ final class AppModel {
+     /// What the Incoming page reloads on with `.task(id:)`: History growing, and the ingest worker's status changing, as it
+     /// does when the worker takes a file, moves it to its next stage or finishes it.
+     var ingestActivity: String { "\(activity)|\(session.ingest)" }
++    /// The step of onboarding the user is on, kept while the app runs, so closing the window part way and opening it again
++    /// (Window › Set Up Arrumator…) returns to it; not kept across a launch, which starts at Welcome.
++    var onboardingStep = OnboardingStep.welcome
+     /// Set by the Filter Labels command until the sidebar has put the cursor in its filter.
+     var labelFilterWanted = false
+     weak var presenter: (any WindowPresenting)?
+@@ -139,6 +142,7 @@ final class AppModel {
+         guard let runtime else { return }
+         await changeSettings(Wording.saveSettingsAction) { try await $0.finishOnboarding() }
+         startWatching(runtime)
++        onboardingStep = .welcome
+     }
+ 
+     /// Opens the archive again, as at launch, after it could not be opened: its folder away, as on a disk not
+@@ -313,6 +317,28 @@ final class AppModel {
+         return result
+     }
+ 
++    /// Merges a label into another writing on every document and in every reading from now on (`LabelActions.merge`), from the
++    /// Labels page once the user has said yes to what the merge changes; the card of the label merged into then opens, as a
++    /// rename opens its new name. Whether it was merged; if not, why is shown (`lastError`).
++    @discardableResult
++    func mergeLabel(_ label: DocumentLabel, into value: String) async -> Bool {
++        guard let outcome = await perform(Wording.mergeLabelsAction, { try await $0.labels.merge(label, into: value) }) else { return false }
++        openLabelCard(of: label.kind, written: outcome.rule?.target ?? value)
++        return true
++    }
++
++    /// Writes a label as another from now on (`LabelActions.rename`), and opens its card under its new name.
++    @discardableResult
++    func renameLabel(_ label: DocumentLabel, to value: String) async -> Bool {
++        guard let outcome = await perform(Wording.renameLabelAction, { try await $0.labels.rename(label, to: value) }) else { return false }
++        openLabelCard(of: label.kind, written: outcome.rule?.target ?? value)
++        return true
++    }
++
++    private func openLabelCard(of kind: LabelKind, written value: String) {
++        session.openLabel = DocumentLabel(kind: kind, value: value)
++    }
++
+     /// Moves a document's file to the Trash and takes it out of the archive (`ReviewActions.remove`), from its row or its
+     /// card; the page then says so, with a way to put it back. Whether it was removed; if not, why is shown (`lastError`),
+     /// naming the document as the app shows it.
+@@ -463,10 +489,36 @@ final class AppModel {
+     func reveal(_ path: String) { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) }
+     func open(_ path: String) { NSWorkspace.shared.open(URL(fileURLWithPath: path)) }
+ 
+-    /// Puts `text` on the clipboard, in place of what was there.
+-    func copy(_ text: String) {
+-        NSPasteboard.general.clearContents()
+-        NSPasteboard.general.setString(text, forType: .string)
++    /// Puts `text` on the clipboard, in place of what was there. Whether it did: if the pasteboard would not take it, why is
++    /// shown (`lastError`).
++    @discardableResult
++    func copy(_ text: String) -> Bool {
++        let pasteboard = NSPasteboard.general
++        pasteboard.clearContents()
++        return report(pasteboard.setString(text, forType: .string))
++    }
++
++    /// Puts an answer on the clipboard as plain text without Markdown markers (`AnswerMarkdown.plainText`), and as rich text
++    /// with its emphasis and lists (`RichAnswer`), in place of what was there. Whether it did, as `copy(_:)` says.
++    @discardableResult
++    func copy(answer markdown: String) -> Bool {
++        let pasteboard = NSPasteboard.general
++        pasteboard.clearContents()
++        var wrote = pasteboard.setString(AnswerMarkdown.plainText(markdown), forType: .string)
++        if let rich = RichAnswer.text(of: markdown),
++           let data = try? rich.data(from: NSRange(location: 0, length: rich.length), documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]) {
++            wrote = pasteboard.setData(data, forType: .rtf) && wrote
++        }
++        return report(wrote)
++    }
++
++    /// Says why a copy failed, as any action that fails is said (`perform`); `wrote` as it was.
++    private func report(_ wrote: Bool) -> Bool {
++        if !wrote {
++            lastError = Wording.failure(Wording.copyAction, Wording.copyRefused)
++            Log.error(.ui, "The pasteboard would not take a copy")
++        }
++        return wrote
+     }
+ 
+     // MARK: What the app is doing
+@@ -514,3 +566,11 @@ enum Destination: Hashable {
+ 
+     static let lists: [Destination] = [.incoming, .review, .processed, .labels, .tasks]
+ }
++
++/// The steps of onboarding, in order: what the app does, the folders and how it runs, Ollama, the models, and the app.
++enum OnboardingStep: Int, CaseIterable {
++    case welcome, folders, ollama, models, ready
++
++    /// Which step this is, counting from one, as the window says it: "Step 2 of 5".
++    var number: Int { rawValue + 1 }
++}

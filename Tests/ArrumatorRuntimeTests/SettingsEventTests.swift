@@ -27,6 +27,17 @@ import Testing
         await runtime.stop()
     }
 
+    @Test func pausingIsRecordedAsFilingPausedAndResumed() async throws {
+        let home = try await RuntimeHome.make()
+        defer { home.cleanup() }
+        let runtime = try await home.open()
+        try await runtime.setPaused(true)
+        try await runtime.setPaused(false)
+        let events = try await runtime.services.history.events(limit: 10, kinds: [.paused, .resumed]).sorted { ($0.id ?? 0) < ($1.id ?? 0) }
+        #expect(events.map(\.summary) == ["Filing paused", "Filing resumed"], "History says it as the sidebar does: \(events.map(\.summary))")
+        #expect(events.map(\.kind) == [.paused, .resumed], "each under its own kind")
+    }
+
     @Test func aSettingThatCannotBeAppliedKeepsNoOtherFromWorkingAndIsRecordedOnce() async throws {
         let home = try await RuntimeHome.make()
         defer { home.cleanup() }

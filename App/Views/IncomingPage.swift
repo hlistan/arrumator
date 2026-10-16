@@ -1,8 +1,8 @@
 import ArrumatorCore
 import SwiftUI
 
-/// What is being worked on, what is waiting, and what was just filed, by day as on the Processed page: the whole
-/// flow on one page. In Progress is the file the worker has in hand now, as its status says
+/// What is being worked on, what is waiting, with how many files, and what was just processed, under a heading that says
+/// so and when ("Processed Today"): the whole flow on one page. In Progress is the file the worker has in hand now, as its status says
 /// (`IngestStatus.progress(of:)`), with what is being done to it, by which model, and for how long; every other file
 /// waits under Queued, in the order the queue takes them, a file stopped part way, as when the app quit, saying that it
 /// carries on where it stopped. Documents read again with the rest of the archive, which give way to those, are counted
@@ -52,7 +52,7 @@ struct IncomingPage: View {
                 }
             }
             if !queued.isEmpty {
-                PageSection(Wording.queuedHeading) {
+                PageSection(Wording.queuedHeading(count: queued.count)) {
                     ForEach(queued) { job in
                         if let progress = model.session.ingest.progress(of: job) {
                             ListRow(symbol: progress.symbol, tint: progress.tint, title: job.filename, detail: waiting(job, progress),
@@ -83,7 +83,7 @@ struct IncomingPage: View {
                                                       limit: runtime.config.interface.recentlyProcessed)
         }) {
             recentCount = processed.count
-            recent = DocumentSection.sections(of: processed, heading: Wording.processedDay)
+            recent = DocumentSection.sections(of: processed, heading: Wording.processedHeading)
         }
     }
 

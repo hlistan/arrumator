@@ -20,6 +20,7 @@ Tests/Fixtures/private/
 !.claude/settings.json
 !.claude/singularity.md
 !.claude/singularity/
+!.claude/rules/
 # The singularity pipeline's specs and plans (.agentic/work) and the task files (.agentic/tasks), which can hold
 # customer details.
 /.agentic/

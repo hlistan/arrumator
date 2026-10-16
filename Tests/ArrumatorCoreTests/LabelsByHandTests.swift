@@ -76,7 +76,7 @@ import Testing
         #expect(found == [id], "and found by it")
         let event = try #require(try await services.history.events(limit: 5, kinds: [.analysed], docID: id).first)
         let kept = ([TagTests.mine] + how.tags).map { "“\($0.value)”" }.joined(separator: ", ")
-        #expect(event.summary == LabelingTests.meoContract.map(\.value).joined(separator: " · ")
+        #expect(event.summary == LabelingTests.meoContract.map { $0.shown(locale: TestTime.locale) }.joined(separator: " · ")
                     + "; keeps its \(how.tags.isEmpty ? "tag" : "tags") \(kept)",
                 "History says what the model gave, which the labels given by hand are not: \(event.summary)")
     }

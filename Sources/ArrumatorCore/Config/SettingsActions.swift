@@ -56,20 +56,35 @@ public struct SettingsActions: Sendable {
     }
 
     /// How History says filing was paused, and resumed.
-    static let pausedSummary = "Processing paused"
-    static let resumedSummary = "Processing resumed"
+    static let pausedSummary = "Filing paused"
+    static let resumedSummary = "Filing resumed"
 
     /// What a change did, as History says it: the profile chosen, in the words choosing it has (`reading(with:)`), then
-    /// every other setting by its name in `settings.json`, in the order of their names, with what it became, as in
-    /// “Changed logLevel to debug, renameFiles to false” or “Reading with the profile “Smart”; changed renameFiles to
-    /// false”. `settings` are the settings after the change.
+    /// every other setting by the name Settings shows it under (`AppSettings.CodingKeys.historyName`), with what it became
+    /// in words, in the order of their keys, as in “Log detail: debug; Rename files: off” or “Reading with the profile
+    /// “Smart”; Rename files: off”. `settings` are the settings after the change.
     static func summary(_ changed: [String: JSONValue], in settings: AppSettings) throws -> String {
         let profile = AppSettings.CodingKeys.profile.stringValue
         let chosen = try changed[profile].map { _ in reading(with: try settings.modelProfile()) }
         let others = changed.filter { $0.key != profile }.sorted { $0.key < $1.key }
-            .map { "\($0.key) to \($0.value.stringValue ?? $0.value.serialized())" }.joined(separator: ", ")
-        guard !others.isEmpty else { return chosen ?? "" }
-        return chosen.map { "\($0); changed \(others)" } ?? "Changed \(others)"
+            .map { "\(name(ofSetting: $0.key)): \(said($0.value))" }
+        return ([chosen].compactMap { $0 } + others).joined(separator: "; ")
+    }
+
+    /// The name the app shows the setting stored under `key`; the key itself for one this version does not know.
+    private static func name(ofSetting key: String) -> String {
+        AppSettings.CodingKeys(stringValue: key)?.historyName ?? key
+    }
+
+    /// A setting's new value in words: on or off, none for one taken away, a text or number as written, and for a whole
+    /// object or list, which has no short form, that it changed.
+    private static func said(_ value: JSONValue) -> String {
+        switch value {
+        case let .bool(on): on ? "on" : "off"
+        case .null: "none"
+        case .array, .object, .orderedObject: "changed"
+        case .string, .number: value.stringValue ?? value.serialized()
+        }
     }
 
     /// How History says the settings read with `profile` from now on.

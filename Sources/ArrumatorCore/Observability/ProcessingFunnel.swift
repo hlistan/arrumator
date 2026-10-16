@@ -22,15 +22,29 @@ public struct FunnelOutcome: Sendable, Hashable, Identifiable {
     public var status: DocumentStatus
     public var reason: String
     public var count: Int
-    public var severity: FunnelSeverity
     public var id: DocumentStatus { status }
     public var isFiled: Bool { status == .filed }
 
-    public init(status: DocumentStatus, reason: String, count: Int, severity: FunnelSeverity) {
+    public init(status: DocumentStatus, reason: String, count: Int) {
         self.status = status
         self.reason = reason
         self.count = count
-        self.severity = severity
+    }
+}
+
+/// What the funnel says of the window as a whole, decided here so that the app and `arrumatorcli funnel` agree with the
+/// table: which documents did not end up filed and why, and how many are still on their way.
+public struct FunnelVerdict: Sendable, Hashable {
+    /// Where the documents not filed and not still being worked on ended up, one entry per state, wherever they stopped.
+    public var notFiled: [FunnelOutcome]
+    /// Documents taken but not finished: neither filed nor stopped.
+    public var inProgress: Int
+    /// Every document of the window was filed, and none is still on its way.
+    public var everyOneFiled: Bool { notFiled.isEmpty && inProgress == 0 }
+
+    public init(notFiled: [FunnelOutcome], inProgress: Int) {
+        self.notFiled = notFiled
+        self.inProgress = inProgress
     }
 }
 
@@ -43,7 +57,7 @@ public struct FunnelStop: Sendable, Codable, Hashable, Identifiable {
     public var severity: FunnelSeverity
     public var id: DocumentStatus { status }
     /// The document is still being worked on, so it has not stopped at all.
-    public var isUnfinished: Bool { [.arrived, .processing].contains(status) }
+    public var isUnfinished: Bool { status.isUnfinished }
 
     public init(status: DocumentStatus, reason: String, count: Int, severity: FunnelSeverity) {
         self.status = status
@@ -101,11 +115,19 @@ public struct ProcessingFunnel: Sendable, Codable, Hashable {
         steps.reduce(0) { sum, step in sum + step.stoppedHere.filter(\.isUnfinished).reduce(0) { $0 + $1.count } }
     }
 
-    /// Where most documents that came to an end without being filed stopped, and why: work in progress is not a stop,
-    /// nor a document filed whose steps were not kept, as after a rebuild from the archive.
+    /// Where most documents that came to an end without being filed stopped, and why, the last step included, where a
+    /// document waiting for the user or left for later stops: work in progress is not a stop, nor a document filed whose
+    /// steps were not kept, as after a rebuild from the archive.
     public var mainStop: (step: FunnelStepStats, stop: FunnelStop)? {
-        steps.dropLast().compactMap { step in step.stoppedHere.first { !$0.isUnfinished && $0.status != .filed }.map { (step, $0) } }
+        steps.compactMap { step in step.stoppedHere.first { !$0.isUnfinished && $0.status != .filed }.map { (step, $0) } }
             .max { $0.1.count < $1.1.count }
+    }
+
+    /// Whether every document of the window was filed and, if not, where the rest ended up; nil for a window with no
+    /// document, which has nothing to say.
+    public var verdict: FunnelVerdict? {
+        guard documents > 0 else { return nil }
+        return FunnelVerdict(notFiled: outcomes.filter { !$0.isFiled && !$0.status.isUnfinished }, inProgress: inProgress)
     }
 
     /// Where every document of the window ended up, one entry per state, each once: those filed first, then the rest
@@ -119,13 +141,11 @@ public struct ProcessingFunnel: Sendable, Codable, Hashable {
         }
         let order = { (status: DocumentStatus) in DocumentStatus.allCases.firstIndex(of: status) ?? 0 }
         let rest = stopped.map { status, count in
-            let (reason, severity) = StatsService.stopReason(for: status)
-            return FunnelOutcome(status: status, reason: reason, count: count, severity: severity)
+            FunnelOutcome(status: status, reason: StatsService.stopReason(for: status).text, count: count)
         }
         .sorted { ($0.count, order($1.status)) > ($1.count, order($0.status)) }
         let filedReason = StatsService.stopReason(for: .filed)
-        let filed = FunnelOutcome(status: .filed, reason: filedReason.text, count: max(0, documents - rest.reduce(0) { $0 + $1.count }),
-                                  severity: filedReason.severity)
+        let filed = FunnelOutcome(status: .filed, reason: filedReason.text, count: max(0, documents - rest.reduce(0) { $0 + $1.count }))
         return ([filed] + rest).filter { $0.count > 0 }
     }
 

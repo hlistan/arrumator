@@ -71,6 +71,28 @@ import Testing
         #expect(one.lists[0].labels.count == 2, "the one list never folds, whatever kinds were folded when grouped")
     }
 
+    @Test func aFoldedKindSaysHowManyLabelsItHides() throws {
+        let layout = try Self.layout(grouped: true, folded: [.sender, .type])
+        #expect(layout.lists.map(\.hidden) == [3, 2, 0], "all the senders, though Show More would list two, and both types; the topic is not folded")
+    }
+
+    @Test func anUnfoldedKindHidesNone() throws {
+        #expect(try Self.layout(grouped: true).lists.map(\.hidden) == [0, 0, 0], "an unfolded kind hides nothing")
+        #expect(try Self.layout(grouped: false, folded: [.sender]).lists.map(\.hidden) == [0], "and the one list never folds")
+    }
+
+    @Test func aFilterCountsOnlyWhatItFinds() throws {
+        let layout = try Self.layout(filter: "meo", grouped: true, folded: [.sender])
+        let senders = try #require(layout.lists.first { $0.id == .sender })
+        #expect(senders.hidden == 1, "of the three senders, only MEO is written with meo")
+    }
+
+    @Test func aFilterThatLeavesNoneOfAKindListsNoHeading() throws {
+        let layout = try Self.layout(filter: "invoice", grouped: true, folded: [.sender, .type])
+        #expect(layout.lists.map(\.id) == [.type], "no list, so no heading, for a kind the filter finds nothing in")
+        #expect(layout.lists.first?.hidden == 1, "and the kind it finds in counts only that one")
+    }
+
     @Test func aFilterListsEveryLabelItFindsAndClearFilter() throws {
         let layout = try Self.layout(filter: "e", grouped: true)
         #expect(Self.values(layout.lists[0]) == ["EDP", "MEO", "Autoridade Tributária"] && layout.lists[0].more == nil,

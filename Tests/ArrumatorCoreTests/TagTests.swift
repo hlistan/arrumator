@@ -128,7 +128,7 @@ import Testing
 
         let id = try #require(scan.id)
         let reading = try #require(try await h.services.history.events(limit: 20, kinds: [.analysed], docID: id).first)
-        #expect(reading.summary == StubAnalyzer.edpBill.map(\.value).joined(separator: " · ") + "; tagged “Taxes 2024” by its folder in Incoming",
+        #expect(reading.summary == StubAnalyzer.edpBill.map { $0.shown(locale: TestTime.locale) }.joined(separator: " · ") + "; tagged “Taxes 2024” by its folder in Incoming",
                 "History says what the model gave it, and that the tag came from its folder")
         #expect(JSON.decode(AnalysedPayload.self, from: reading.payloadJson)?.tags == [Self.given(h)], "naming the folder")
         let arrivals = try await h.services.history.events(limit: 20, kinds: [.arrived]).map(\.summary)
@@ -198,7 +198,7 @@ import Testing
         #expect(read.labels == LabelingTests.meoContract + [Self.tag, Self.mine],
                 "read again, it has what the model reads now, and keeps its tags: the folder's and the one added by hand")
         let event = try #require(try await services.history.events(limit: 20, kinds: [.analysed], docID: id).first)
-        #expect(event.summary == LabelingTests.meoContract.map(\.value).joined(separator: " · ") + "; keeps its tags “Taxes 2024”, “Mine”",
+        #expect(event.summary == LabelingTests.meoContract.map { $0.shown(locale: TestTime.locale) }.joined(separator: " · ") + "; keeps its tags “Taxes 2024”, “Mine”",
                 "History says the tags were kept")
     }
 

@@ -127,7 +127,7 @@ struct ReadingControls: View {
                     Text(profiles == nil ? profile : Wording.profileGone(profile)).tag(String?.some(profile))
                 }
             }
-            .pickerStyle(.menu).labelsHidden().frame(maxWidth: Style.profileMenuMaxWidth)
+            .pickerStyle(.menu).labelsHidden().frame(minWidth: Style.profileMenuMinWidth, maxWidth: Style.profileMenuMaxWidth)
             .help(Wording.readingProfileHelp)
         }
         .controlSize(.small)
@@ -183,7 +183,7 @@ struct TaskCard: View {
             }
         }
         .card()
-        .onExitCommand { withAnimation(.snappy) { onClose() } }
+        .onExitCommand { if !editingName { withAnimation(.snappy) { onClose() } } }
         .task(id: model.taskActivity) { await load() }
         .onChange(of: editingName) { wasEditing, _ in
             // Left as it was, the name is not sent: Core would take it for no change anyway (`SearchTaskActions.update`).
@@ -213,19 +213,20 @@ struct TaskCard: View {
 
     private func header(_ task: SearchTask) -> some View {
         HStack(alignment: .firstTextBaseline) {
-            Image(systemName: task.state.symbol).foregroundStyle(task.state.tint)
+            Image(systemName: task.state.symbol).foregroundStyle(task.state.tint).accessibilityLabel(Wording.taskState(task.state))
+            // A plain field is as tall as its line, which cuts the descenders of a large font: its look pads it (`nameField`).
             TextField(Wording.name, text: $name)
                 .accessibilityLabel(Wording.name)
-                .textFieldStyle(.plain)
                 .font(.title3.weight(.semibold))
-                // A plain field is as tall as its line, which cuts the descenders of a large font.
-                .padding(.vertical, Style.titleFieldPadding)
+                .nameField(editing: editingName, name: $name, saved: task.name) { editingName = false }
                 .focused($editingName)
                 .onSubmit { editingName = false }
             Spacer(minLength: 0)
-            Button { withAnimation(.snappy) { onClose() } } label: { Image(systemName: "xmark") }
-                .buttonStyle(.borderless).foregroundStyle(.secondary).help(Wording.close)
-                .accessibilityLabel(Wording.closeNamed(task.name))
+            Button { withAnimation(.snappy) { onClose() } } label: {
+                Image(systemName: "xmark").frame(minWidth: Style.minimumHit.width, minHeight: Style.minimumHit.height)
+            }
+            .buttonStyle(.borderless).foregroundStyle(.secondary).help(Wording.close).contentShape(.rect)
+            .accessibilityLabel(Wording.closeNamed(task.name))
         }
     }
 
@@ -249,6 +250,7 @@ struct TaskCard: View {
                             Task<Void, Never> { await model.perform(Wording.findAgainAction) { _ = try await $0.searchTasks.retry(id) } }
                         }
                     }
+                    .lineLimit(1).fixedSize()
                     .help(Wording.findAgainHelp)
                     .disabled(task.state.isActive)
                 }

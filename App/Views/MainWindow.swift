@@ -155,18 +155,19 @@ struct Sidebar: View {
 /// and whose rows look and line up as the labels' do.
 ///
 /// A list has no height of its own, and a sidebar row is as tall as the sidebar icon size chosen in System Settings makes
-/// it, so this one is as tall as its rows measure: down to where its last row ends (`ListsEnd`), measured again when the
-/// rows change size. Until then it is as tall as it estimates its rows at, and at least
-/// `Style.sidebarListsEstimatedHeight`, so that every row is laid out, to be measured, and none is cut off.
+/// it, so this one is as tall as its content measures (`contentSize` of its scroll view, which no scroll offset changes),
+/// and at least `Style.sidebarListsEstimatedHeight`, so that every row is laid out, to be measured, and none is cut off.
+///
+/// What it measures never depends on how far the list is scrolled: an earlier version measured where the last row ended in
+/// the window, which moves when AppKit scrolls the outline to bring a chosen row into a frame still too short for five
+/// rows, so the height shrank as it scrolled, and `.scrollDisabled(true)` left it there, with Incoming out of sight for
+/// good (QA run of 15 October 2026, C5-1). The list is also put back at its top whenever its height or its choice changes,
+/// so a row AppKit scrolled into view anyway is returned to its place.
 private struct SidebarLists: View {
     @Environment(AppModel.self) private var model
-    @Environment(\.sidebarRowSize) private var rowSize
-    /// Where the list begins in the window.
-    @State private var top: CGFloat?
-    /// Where its last row ends in the window, and for which rows.
-    @State private var end: ListsEnd?
-    /// How tall the list estimates its rows at, those not laid out yet included.
-    @State private var estimatedHeight: CGFloat = 0
+    /// How tall the list's content is, once measured.
+    @State private var contentHeight: CGFloat = 0
+    @State private var position = ScrollPosition(edge: .top)
 
     var body: some View {
         List(selection: Binding(get: { model.session.destination }, set: { if let d = $0 { model.go(d) } })) {
@@ -186,43 +187,20 @@ private struct SidebarLists: View {
                     }
                     .badge(count(destination))
                     .tag(destination)
-                    .listRowBackground(endMarker(last: destination == Destination.lists.last))
                 }
             }
         }
         .listStyle(.sidebar)
         .scrollDisabled(true)
+        .scrollPosition($position)
         // Each measure is kept once the list has laid out: its height changed while AppKit lays out its rows is a
         // reentrant table delegate, which AppKit warns will become an assert.
-        .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height } action: { _, height in
-            Task { @MainActor in if estimatedHeight != height { estimatedHeight = height } }
+        .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height + $0.contentInsets.top + $0.contentInsets.bottom } action: { _, height in
+            Task { @MainActor in if contentHeight != height { contentHeight = height } }
         }
-        .frame(height: height)
-        .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { minY in
-            Task { @MainActor in if top != minY { top = minY } }
-        }
-    }
-
-    /// Down to where the last row ends, once it is measured for the rows in view; until then what the list estimates.
-    private var height: CGFloat {
-        guard let top, let end, end.rowSize == rowSize else {
-            return max(Style.sidebarListsEstimatedHeight, estimatedHeight)
-        }
-        return max(0, end.maxY - top)
-    }
-
-    /// A row's background, clear as the sidebar is, that measures where the row ends when it is the last one. A row's
-    /// background fills the whole row, as its highlight does when it is chosen, while its content sits inset within it.
-    /// The rows of a list on macOS are laid out apart from it, where its coordinate space does not reach, so the row and
-    /// the list are both measured in the window's.
-    private func endMarker(last: Bool) -> some View {
-        let rowSize = rowSize
-        return Color.clear.onGeometryChange(for: ListsEnd?.self) { geometry in
-            last ? ListsEnd(rowSize: rowSize, maxY: geometry.frame(in: .global).maxY) : nil
-        } action: { measured in
-            guard let measured else { return }
-            Task { @MainActor in if end != measured { end = measured } }
-        }
+        .frame(height: max(Style.sidebarListsEstimatedHeight, contentHeight))
+        .onChange(of: contentHeight) { position.scrollTo(edge: .top) }
+        .onChange(of: model.session.destination) { position.scrollTo(edge: .top) }
     }
 
     private func count(_ destination: Destination) -> Int {
@@ -232,13 +210,6 @@ private struct SidebarLists: View {
         default: 0
         }
     }
-}
-
-/// Where the last row of the sidebar's lists ends in the window, measured with rows of `rowSize`: rows of another size
-/// end elsewhere, and are measured again.
-nonisolated private struct ListsEnd: Equatable {
-    let rowSize: SidebarRowSize
-    let maxY: CGFloat
 }
 
 /// Filter Labels, between the lists and the labels while there are labels to filter: a field of its own, in no list, so
@@ -314,7 +285,9 @@ private struct SidebarBar: View {
             Task { await model.setPaused(!paused) }
         } label: {
             Image(systemName: model.settings?.paused == true ? "play.fill" : "pause.fill")
+                .frame(minWidth: Style.minimumHit.width, minHeight: Style.minimumHit.height)
         }
+        .contentShape(.rect)
         .help(model.settings?.paused == true ? Wording.resumeFiling : Wording.pauseFiling)
         .accessibilityLabel(model.settings?.paused == true ? Wording.resumeFiling : Wording.pauseFiling)
     }
@@ -339,8 +312,9 @@ private struct SidebarBar: View {
             Button(Wording.settings) { model.show(.settings) }
         } label: {
             Image(systemName: "ellipsis.circle")
+                .frame(minWidth: Style.minimumHit.width, minHeight: Style.minimumHit.height)
         }
-        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().contentShape(.rect)
         .accessibilityLabel(Wording.moreActions).help(Wording.moreActions)
     }
 

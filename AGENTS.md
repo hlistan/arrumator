@@ -67,14 +67,18 @@ Then, for a QA issue, a defect or an architectural task:
    tasks above, and takes it again when something goes wrong later, such as a check failing on the pull request. Find
    what let the error in and what else went wrong on the way, such as a correction from the user or a reviewer, or a
    decision the rules left open. Turn it into a rule that prevents its whole class of error ("Always…", "Never…",
-   "Ensure…"), enforced wherever a script or a test can catch it (a gate in `scripts/lint.sh`, `scripts/check-docs.sh`,
-   a test), and fold it into this file in the same change, as the top of the file says. The regression test holds the
-   instance; this file holds the class. When the rules and checks already cover what happened, leave the file as it is.
+   "Ensure…") and put it, in the same change, where it is enforced or read: a gate in `scripts/lint.sh` or
+   `scripts/check-docs.sh`, or a test, wherever a script or a test can catch it; otherwise a guideline in
+   `.claude/singularity/guidelines/` (for one part of the code, a rule in `.claude/rules/singularity/`), which the pull
+   request reviews like code. The regression test holds the instance; the checks and the guidelines hold the class.
+   This file changes only by the user's decision: when a guideline has held across tasks, or a rule here is wrong,
+   propose the change in the report, and a person merges it in, as the top of the file says, never appends it. When
+   the rules, guidelines and checks already cover what happened, leave them as they are.
 6. **Report.** Give a Test Coverage and Verification Summary: the happy paths, boundary cases and failure modes now
    covered, what is not covered, the verification output (§7) and what the review found. End it with a
-   `[GUIDELINE REFINEMENT]` block saying what the Learn step did to this file, such as
-   `Refined Guidelines: Merged <old rule> with <new rule> under §<n> to prevent <issue>.`, or which rules and checks
-   already covered what happened.
+   `[GUIDELINE REFINEMENT]` block saying what the Learn step did: the check or guideline added, changed or removed,
+   such as `Refined Guidelines: Added G12 to .claude/singularity/guidelines/implement.md to prevent <issue>.`, the
+   change to this file it proposes, or which rules, guidelines and checks already covered what happened.
 7. **Deliver** through the push protocol (§8).
 
 ## 3. Core principles
@@ -386,7 +390,7 @@ Every `arrumatorcli` command accepts `--json`. [docs/cli.md](docs/cli.md) lists 
 - [ ] The change was reviewed (§2, Review), and every finding of its reviews and of any QA run of it is fixed, each
       with its regression test, or the protocol step, gate or evaluation that keeps it fixed where no test reaches it:
       none stands, whatever its rating.
-- [ ] The Learn step (§2) is done: what the task taught is folded into this file, and the report ends with its
+- [ ] The Learn step (§2) is done: what the task taught is a check or a guideline, and the report ends with its
       `[GUIDELINE REFINEMENT]` block.
 - [ ] The report states what breaks for the installed app: lost learned state, renamed config keys, changed CLI output.
 - [ ] The change reached `main` through §8: green locally, green on the pull request, squash-merged, branch deleted.

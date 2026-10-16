@@ -270,7 +270,7 @@ public final class ArrumatorRuntime: Sendable {
             filer: DocumentFiler(database: database, placer: placer, index: IndexStore(database: database, time: time),
                                  registry: registry, time: time),
             traces: traces, vectors: vectors, trash: trash, time: time, ollama: GatedOllama(gate: gate), timeZone: .autoupdatingCurrent,
-            claims: JobClaims(processes: processes), power: PowerState.current)
+            locale: .autoupdatingCurrent, claims: JobClaims(processes: processes), power: PowerState.current)
         coordinator = IngestCoordinator(services: services)
         settingsActions = SettingsActions(store: settings, history: services.history)
         profiles = ModelProfileActions(settings: settingsActions, bundled: try AppSettings.bundledDefaults().modelProfiles, database: database)

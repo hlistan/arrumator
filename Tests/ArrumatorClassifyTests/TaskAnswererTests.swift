@@ -232,6 +232,43 @@ import Testing
                 "the person never sees the numbers: one before its document's name goes, one alone becomes the name, one never shown stays")
     }
 
+    @Test func aNumberAlreadyFollowedByItsNameInEmphasisGoes() throws {
+        // The QA run of 15 October 2026 (C8-1): the model wrote the number and then the name in emphasis.
+        let validator = ConversationAnswerValidator(names: [3: "EDP julho QA renamed.pdf"])
+        #expect(validator.named("Invoice: [3] *EDP julho QA renamed.pdf*") == "Invoice: *EDP julho QA renamed.pdf*",
+                "the name is shown once, in the emphasis the model gave it")
+    }
+
+    @Test(arguments: [("*", "*"), ("_", "_"), ("**", "**"), ("__", "__"), ("“", "”"), ("\"", "\"")])
+    func aNumberFollowedByItsNameInEachFormGoes(opener: String, closer: String) {
+        let validator = ConversationAnswerValidator(names: [3: "EDP julho QA renamed.pdf"])
+        #expect(validator.named("Fatura: [3] \(opener)EDP julho QA renamed.pdf\(closer)") == "Fatura: \(opener)EDP julho QA renamed.pdf\(closer)",
+                "the name the model wrote after the number, in \(opener)…\(closer), is the one shown")
+    }
+
+    @Test func aNumberFollowedByAnotherDocumentsNameIsReplaced() {
+        let validator = ConversationAnswerValidator(names: [3: "EDP julho QA renamed.pdf", 4: "Águas maio.pdf"])
+        #expect(validator.named("Ver [3] *Águas maio.pdf*") == "Ver EDP julho QA renamed.pdf *Águas maio.pdf*",
+                "the number stands for its own document, whatever follows it")
+    }
+
+    @Test func aNameShorterThanThePrefixIsFoundToo() {
+        let validator = ConversationAnswerValidator(names: [3: "EDP.pdf"])
+        #expect(ConversationAnswerValidator.namePrefixLength > "EDP.pdf".count, "the name is shorter than the prefix compared")
+        #expect(validator.named("[3] *EDP.pdf* chegou") == "*EDP.pdf* chegou", "a short name written after its number is not written twice")
+    }
+
+    @Test(arguments: ["Квитанция.pdf", "請求書.pdf"])
+    func nonLatinNamesAreFoundInEmphasis(name: String) {
+        let validator = ConversationAnswerValidator(names: [3: name])
+        #expect(validator.named("[3] **\(name)**") == "**\(name)**", "\(name) is shown once")
+    }
+
+    @Test func aNumberInCodeWithEmphasisIsKept() {
+        let validator = ConversationAnswerValidator(names: [3: "EDP julho QA renamed.pdf"])
+        #expect(validator.named("`[3] *EDP julho QA renamed.pdf*`") == "`[3] *EDP julho QA renamed.pdf*`", "code shows text as it is")
+    }
+
     @Test func aNumberInBracketsThatIsMarkdownOfItsOwnIsLeftAsWritten() throws {
         let validator = ConversationAnswerValidator(names: [42: "EDP 2025-03.pdf", 7: "Águas 2025-05.pdf"])
         let written = "Ver [42](https://x.example/42), a nota [7]: total, `lista[7]` e\n\n```\nitens[42]\n```\n\nmas [42] sim."

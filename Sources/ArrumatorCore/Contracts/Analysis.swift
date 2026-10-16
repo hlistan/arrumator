@@ -34,12 +34,17 @@ public struct DocumentAnalysis: Sendable, Codable, Hashable {
     public var model: String?
     /// Why the document waits for the user; empty when it does not.
     public var problems: [String]
+    /// When the model last read it, a reading that found nothing or failed included (`PipelineServices.analyse`), on the
+    /// pipeline's clock. Confirming or correcting the document keeps it. Absent from what earlier versions wrote, and from a
+    /// document taken in from a record file that has none: no time is then shown, never one made up.
+    public var readAt: Date?
 
-    public init(fileName: String? = nil, interpretation: String? = nil, model: String? = nil, problems: [String] = []) {
+    public init(fileName: String? = nil, interpretation: String? = nil, model: String? = nil, problems: [String] = [], readAt: Date? = nil) {
         self.fileName = fileName
         self.interpretation = interpretation
         self.model = model
         self.problems = problems
+        self.readAt = readAt
     }
 
     /// The problems the reading names, as `problems` holds them and the app tells them apart.

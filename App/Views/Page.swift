@@ -38,6 +38,8 @@ struct Page<Content: View>: View {
                         Image(systemName: symbol)
                             .font(.system(size: Style.titleSymbolSize, weight: .semibold))
                             .foregroundStyle(tint)
+                            // The title says what the page is; the symbol's own name ("questionmark.circle.fill") would mislead.
+                            .accessibilityHidden(true)
                         Text(title).font(.system(size: Style.titleSize, weight: .bold))
                         if let accessory {
                             Text(accessory).font(.system(size: Style.titleSize, weight: .regular)).foregroundStyle(.tertiary)
@@ -128,7 +130,9 @@ struct ListRow: View {
                 Text(title).lineLimit(wraps ? Style.rowTitleMaxLines : 1).truncationMode(wraps ? .tail : .middle)
                     .fixedSize(horizontal: false, vertical: wraps)
                 Spacer(minLength: Style.rowDetailMinGap)
-                if let detail { Text(detail).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle) }
+                // Ends with an ellipsis, so the part that says what happened is the part that shows; the whole text is its help,
+                // and is part of the row's words for VoiceOver, which the truncation does not cut.
+                if let detail { Text(detail).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail).help(detail) }
                 if let tag { Tag(tag) }
             }
             if let subtitle, let subtitleKind {
@@ -227,7 +231,7 @@ struct EmptyState<Action: View>: View {
 
     var body: some View {
         VStack(spacing: Style.emptyStateSpacing) {
-            Image(systemName: symbol).font(.system(size: Style.emptyStateSymbolSize)).foregroundStyle(.quaternary)
+            Image(systemName: symbol).font(.system(size: Style.emptyStateSymbolSize)).foregroundStyle(.quaternary).accessibilityHidden(true)
             Text(text).foregroundStyle(.secondary).multilineTextAlignment(.center)
             action().buttonStyle(.link)
         }
@@ -245,7 +249,7 @@ struct Notice: View {
 
     var body: some View {
         HStack(spacing: Style.noticeSpacing) {
-            Image(systemName: "info.circle").foregroundStyle(Palette.attention)
+            Image(systemName: "info.circle").foregroundStyle(Palette.attention).accessibilityHidden(true)
             Text(text).foregroundStyle(.secondary)
             if let action { Button(action.title, action: action.run).buttonStyle(.link).accessibilityLabel(actionName ?? action.title) }
             Spacer()

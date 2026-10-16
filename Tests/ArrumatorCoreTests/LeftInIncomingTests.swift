@@ -69,6 +69,29 @@ struct RefusingUntil: Trashing {
         #expect(await analyzer.calls.files == [original.filename], "its original is read again in its place")
     }
 
+    @Test func readAgainOnADocumentLeftInIncomingIsAReadingQueuedForItUntilItEnds() async throws {
+        let base = try await Harness.make()
+        defer { base.env.cleanup() }
+        let bill = try base.env.drop("bill.txt", text: Self.bill)
+        let mended = Signal()
+        let h = pipeline(base, crossing: true, trash: RefusingUntil(refused: bill, folder: base.env.trash, mended: mended))
+        await h.coordinator.enqueue(bill)
+        await drain(h)
+        let id = try #require(try await documents(h).first?.id)
+        let left = try #require(try await h.services.documents.document(id: id))
+        #expect(left.status == .failed, "the file the Trash refused is left in Incoming")
+        #expect(try await h.services.jobs.beingRead([id]).isEmpty, "with no reading queued for it")
+        mended.fire()
+        try await h.review.retry(id)
+        let queued = try #require(try await h.services.documents.document(id: id))
+        #expect(try await h.services.jobs.beingRead([id]) == [id], "Read Again queues a reading of it in Incoming (an ingest job), which Needs You says")
+        #expect(try await h.review.choices(for: queued).readingQueued, "and so does its card")
+        await drain(h)
+        let ended = try #require(try await h.services.documents.document(id: id))
+        #expect(try await h.services.jobs.beingRead([id]).isEmpty, "once the reading ends, none is queued")
+        #expect(try await !h.review.choices(for: ended).readingQueued, "and its card says nothing of one")
+    }
+
     @Test func aDocumentLeftInIncomingOffersReadAgainAndLaterNeverLooksRightOrUndo() async throws {
         let base = try await Harness.make()
         defer { base.env.cleanup() }

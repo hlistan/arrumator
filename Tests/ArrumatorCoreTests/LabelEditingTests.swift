@@ -60,6 +60,63 @@ import Testing
         #expect(rules.isEmpty && merged.isEmpty, "nothing refused is made or recorded")
     }
 
+    // MARK: Saying what a merge or rename would change
+
+    @Test func aMergesPreviewCountsTheDocumentsTheMergeThenChanges() async throws {
+        let (h, _) = try await LabelVocabularyTests.archive()
+        defer { h.env.cleanup() }
+        let sender = Self.label(.sender, "EDP Comercial")
+        let preview = try await h.labels.preview(merging: sender, into: "EDP")
+        let outcome = try await h.labels.merge(sender, into: "EDP")
+        #expect(preview.documents == 2 && preview.documents == outcome.documents.count,
+                "the two EDP documents, as many as the merge then changes: \(preview) \(outcome.documents)")
+    }
+
+    @Test func aPreviewSaysTheLabelMergedIntoIsInUse() async throws {
+        let (h, _) = try await LabelVocabularyTests.archive()
+        defer { h.env.cleanup() }
+        let preview = try await h.labels.preview(merging: Self.label(.sender, "EDP Comercial"), into: "MEO")
+        #expect(preview == LabelMergePreview(documents: 2, intoInUse: true), "MEO has a document of its own, which the merge joins")
+    }
+
+    @Test func aPreviewOfANewWritingSaysItIsNotInUse() async throws {
+        let (h, _) = try await LabelVocabularyTests.archive()
+        defer { h.env.cleanup() }
+        let preview = try await h.labels.preview(merging: Self.label(.sender, "EDP Comercial"), into: "EDP SA")
+        #expect(preview == LabelMergePreview(documents: 2, intoInUse: false), "no document is written EDP SA yet")
+    }
+
+    @Test func aPreviewIsRefusedAsARenameIs() async throws {
+        let (h, _) = try await LabelVocabularyTests.archive()
+        defer { h.env.cleanup() }
+        await #expect(throws: LabelError.sameLabel(.sender, "EDP Comercial"), "the same writing is no new name, said before it is asked") {
+            try await h.labels.preview(merging: Self.label(.sender, "EDP Comercial"), into: " EDP  Comercial ")
+        }
+        await #expect(throws: LabelError.notALabel(.date, "soon"), "a new name is a label of the kind") {
+            try await h.labels.preview(merging: Self.label(.date, "2026-07-05"), into: "soon")
+        }
+        let capitals = try await h.labels.preview(merging: Self.label(.sender, "EDP Comercial"), into: "EDP COMERCIAL")
+        #expect(capitals.documents == 2, "a new case is a new writing, as a rename takes it")
+    }
+
+    @Test func aPreviewOfALabelOnNoDocumentCountsNone() async throws {
+        let (h, _) = try await LabelVocabularyTests.archive()
+        defer { h.env.cleanup() }
+        try await h.labels.add(Self.label(.tag, "Taxes 2025"))
+        let preview = try await h.labels.preview(merging: Self.label(.tag, "Taxes 2025"), into: "Taxes")
+        #expect(preview == LabelMergePreview(documents: 0, intoInUse: false), "an added tag no document has changes none")
+    }
+
+    @Test func aPreviewChangesNothingAndRecordsNothing() async throws {
+        let (h, ids) = try await LabelVocabularyTests.archive()
+        defer { h.env.cleanup() }
+        let before = try await h.services.documents.documents(ids: Array(ids.values).sorted())
+        _ = try await h.labels.preview(merging: Self.label(.sender, "EDP Comercial"), into: "EDP")
+        let (rules, merged) = (try await h.services.labels.rules(), try await events(h, [.labelsMerged]))
+        #expect(rules.isEmpty && merged.isEmpty, "no rule is made and nothing is recorded")
+        #expect(try await h.services.documents.documents(ids: Array(ids.values).sorted()) == before, "and no document changes")
+    }
+
     // MARK: Taking a label off every document
 
     @Test func removingALabelTakesItOffEveryDocumentWithoutARule() async throws {

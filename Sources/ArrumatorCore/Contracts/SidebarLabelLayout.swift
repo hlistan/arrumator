@@ -26,6 +26,9 @@ public struct SidebarLabelLayout: Sendable, Equatable {
         public let labels: [LabelUsage]
         /// What follows them, while the list is longer than its limit and not folded.
         public let more: More?
+        /// How many labels a folded list hides, the filter applied and Show More's limit ignored; 0 while it is not folded.
+        /// The heading says it in its help and to VoiceOver, never on screen.
+        public let hidden: Int
     }
 
     /// What the arrow keys move through, and Return or Space acts on.
@@ -86,7 +89,8 @@ public struct SidebarLabelLayout: Sendable, Equatable {
             let cut = !filtered && wanted.labels.count > wanted.limit
             return LabelList(id: wanted.id, folded: folded,
                              labels: folded ? [] : (cut && !inFull ? Array(ordered.prefix(wanted.limit)) : ordered),
-                             more: folded || !cut ? nil : (inFull ? .showFewer : .showMore))
+                             more: folded || !cut ? nil : (inFull ? .showFewer : .showMore),
+                             hidden: folded ? wanted.labels.count : 0)
         }
         stops = lists.flatMap { list in
             (list.id.map { [Stop.heading($0)] } ?? []) + list.labels.map { .label($0.label) } + (list.more == nil ? [] : [.more(list.id)])

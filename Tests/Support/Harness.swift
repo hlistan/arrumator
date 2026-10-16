@@ -43,7 +43,7 @@ public struct Harness: Sendable {
             filer: DocumentFiler(database: env.database, placer: placer, index: IndexStore(database: env.database, time: env.time),
                                  registry: SelfChangeRegistry(ttl: config.watcher.selfChangeTTLSeconds, time: env.time), time: env.time),
             traces: TraceRecorder(database: env.database, appVersion: "test", time: env.time), vectors: VectorIndex(), trash: trash,
-            time: env.time, ollama: ollama, timeZone: TestTime.zone, claims: claims, power: power)
+            time: env.time, ollama: ollama, timeZone: TestTime.zone, locale: TestTime.locale, claims: claims, power: power)
     }
 
     /// The jobs this test process's workers hold: one for every pipeline the tests build, as the app has one.

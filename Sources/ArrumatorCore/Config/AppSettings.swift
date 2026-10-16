@@ -47,8 +47,9 @@ public struct AppSettings: Sendable, Codable, Hashable {
     /// How much the model thinks before it answers a new search task's request, unless it is asked with another effort.
     public var taskEffort: TaskEffort
 
-    /// Its keys in `settings.json`, which the checks of the settings and History name.
-    enum CodingKeys: String, CodingKey {
+    /// Its keys in `settings.json`, which the checks of the settings name, and which History names by what Settings shows
+    /// each under (`CodingKeys.historyName`, in `AppSettings+Names.swift`).
+    public enum CodingKeys: String, CodingKey, CaseIterable {
         case incomingPath, archivePath, paused, showInDock, renameFiles, transliterate, profile, modelProfiles, ollamaURL,
              ollamaManagement, ollamaBinaryPath, enableVLM, notifyOnFiled, notifyOnReview, pauseOnBattery, logLevel,
              traceRawRetentionDays, onboardingCompleted, groupLabelsByKind, taskEffort

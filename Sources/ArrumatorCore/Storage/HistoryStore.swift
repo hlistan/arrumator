@@ -91,15 +91,64 @@ public struct HistoryStore: Sendable {
         if !held.isEmpty { Log.info(.db, "Recorded the events held until the index was rebuilt", ["events": String(held.count)]) }
     }
 
-    public func events(limit: Int, kinds: Set<EventKind>? = nil, docID: Int64? = nil, before: Date? = nil) async throws -> [EventRecord] {
+    /// The events `events(limit:kinds:docID:before:)` gives, each with its document's file name now, taken from the index by
+    /// the event's own `doc_id` in the same read, never from its payload, which a record file's hand editing can make
+    /// say anything.
+    public func listed(limit: Int, kinds: Set<EventKind>? = nil, docID: Int64? = nil, before: Date? = nil) async throws -> [ListedEvent] {
         try await database.reader.read { db in
-            // Events of one moment, the latest recorded first.
-            var request = EventRecord.order(Column("at").desc, Column("id").desc).limit(limit)
-            if let kinds { request = request.filter(kinds.map(\.rawValue).contains(Column("kind"))) }
-            if let docID { request = request.filter(Column("doc_id") == docID) }
-            if let before { request = request.filter(Column("at") < before.unixSeconds) }
-            return try request.fetchAll(db)
+            var conditions: [String] = []
+            var arguments = StatementArguments()
+            if let kinds {
+                conditions.append("e.kind IN (\(databaseQuestionMarks(count: kinds.count)))")
+                arguments += StatementArguments(kinds.map(\.rawValue))
+            }
+            if let docID {
+                conditions.append("e.doc_id = ?")
+                arguments += [docID]
+            }
+            if let before {
+                conditions.append("e.at < ?")
+                arguments += [before.unixSeconds]
+            }
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT e.*, d.path AS listed_document_path FROM events e LEFT JOIN documents d ON d.id = e.doc_id
+                \(conditions.isEmpty ? "" : "WHERE " + conditions.joined(separator: " AND "))
+                ORDER BY e.at DESC, e.id DESC LIMIT ?
+                """, arguments: arguments + [limit])
+            return try rows.map { row in
+                let path: String? = row["listed_document_path"]
+                return ListedEvent(event: try EventRecord(row: row), document: path.map { ($0 as NSString).lastPathComponent })
+            }
         }
+    }
+
+    /// The events as recorded, the latest first and of one moment the latest recorded first: what `listed` gives, without the
+    /// document's name.
+    public func events(limit: Int, kinds: Set<EventKind>? = nil, docID: Int64? = nil, before: Date? = nil) async throws -> [EventRecord] {
+        try await listed(limit: limit, kinds: kinds, docID: docID, before: before).map(\.event)
+    }
+}
+
+/// An event as History lists it: the event as recorded, and the name of its document as the index has it now. It encodes as
+/// the event's own keys plus `document`, so what decodes an `EventRecord` from `arrumatorcli history --json` still does.
+public struct ListedEvent: Sendable, Identifiable, Hashable, Encodable {
+    public var event: EventRecord
+    /// The document's file name now, which a rename changes; nil for an event about no document, and for a document no
+    /// longer in the index, never its number.
+    public var document: String?
+    public var id: Int64? { event.id }
+
+    public init(event: EventRecord, document: String?) {
+        self.event = event
+        self.document = document
+    }
+
+    private enum CodingKeys: String, CodingKey { case document }
+
+    public func encode(to encoder: any Encoder) throws {
+        try event.encode(to: encoder)
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(document, forKey: .document)
     }
 }
 

@@ -197,6 +197,36 @@ public struct JobStore: Sendable {
         try readingIn(docID).fetchCount(db) > 0
     }
 
+    /// The jobs that read a document because the user asked for it to be read again, for the card and Needs You to say it is
+    /// queued or under way: `reanalyse` for a document in the archive and `ingest` for one in Incoming. A file put into the
+    /// archive (`adopt`) is only ever read the first time, which nobody asked for. A file's first reading from Incoming is an
+    /// `ingest` job too, which nothing tells from Read Again's: for the instant between its filing and its job's end, the
+    /// card says it waits to be read again (a step of QA charter C3).
+    private static let readingKinds: [JobKind] = [.ingest, .reanalyse]
+
+    /// The active jobs reading document `docID` that were asked for it (`readingKinds`): not work queued for the whole
+    /// archive (Read All Documents Again, `givesWay`), which would otherwise take Read Again from every card while it
+    /// ran, though Read Again is how the user moves one document ahead of it.
+    private static func reading(_ docIDs: [Int64]) -> QueryInterfaceRequest<JobRecord> {
+        JobRecord.filter(docIDs.contains(Column("doc_id"))).filter(readingKinds.map(\.rawValue).contains(Column("kind")))
+            .filter(activeStates.contains(Column("state"))).filter(Column("gives_way") == false)
+    }
+
+    /// Whether a reading of document `docID` is queued or under way, in a transaction of the caller's: the one rule
+    /// behind `beingRead(_:)` and `DocumentChoices.readingQueued`.
+    static func isBeingRead(_ db: Database, docID: Int64) throws -> Bool {
+        try reading([docID]).fetchCount(db) > 0
+    }
+
+    /// Which of the documents `docIDs` have a reading queued or under way (`isBeingRead`), in one read: what Needs You asks
+    /// to say a document waits to be read again only while it does. An unknown number is in none.
+    public func beingRead(_ docIDs: [Int64]) async throws -> Set<Int64> {
+        guard !docIDs.isEmpty else { return [] }
+        return try await database.reader.read { db in
+            Set(try Self.reading(docIDs).select(Column("doc_id"), as: Int64.self).fetchAll(db))
+        }
+    }
+
     /// Whether document `docID`'s reading in is under way at `path`, so a request for that path is taken by its job
     /// (`enqueue`), as for a file put into the archive, filed where it is, in a transaction of the caller's.
     static func isReadIn(_ db: Database, docID: Int64, at path: String) throws -> Bool {

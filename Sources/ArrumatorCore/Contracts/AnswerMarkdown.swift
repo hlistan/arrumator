@@ -79,6 +79,43 @@ public enum AnswerMarkdown {
         return blocks
     }
 
+    /// What a list item is indented by for each list it sits within beyond the first, in plain text.
+    static let itemIndent = "  "
+
+    /// The answer as plain text, for the pasteboard: its words without the marks that made them headings, emphasis or
+    /// quotes. A heading is its line, an item its marker and its words, indented by how deep it sits, a quote its lines as
+    /// they are, code and a table their text, a rule an empty line. Blocks are a blank line apart, the items of one list
+    /// a line apart so a list stays one, and a numbered list after a bulleted one, or the other way round, a list of its
+    /// own. A link is inert, as it is shown: its words and then its address (`inert`). What cannot be read as Markdown is
+    /// given as written.
+    public static func plainText(_ markdown: String) -> String {
+        guard !markdown.isEmpty else { return "" }
+        guard let blocks = blocks(markdown) else { return markdown }
+        var out = ""
+        var previous: Block?
+        // Whether the last item at each depth is numbered, to tell a list from the next list at the same depth.
+        var numbered: [Int: Bool] = [:]
+        for block in blocks {
+            let words = String(block.text.characters)
+            var line = words
+            var continues = false
+            if case let .item(marker) = block.kind {
+                line = String(repeating: itemIndent, count: block.depth) + (marker.isEmpty ? "" : marker + " ") + words
+                if case .item? = previous?.kind {
+                    continues = marker.isEmpty || numbered[block.depth].map { $0 == (marker != bullet) } ?? true
+                }
+                numbered = numbered.filter { $0.key <= block.depth }
+                if !marker.isEmpty { numbered[block.depth] = marker != bullet }
+            } else {
+                numbered = [:]
+            }
+            if previous != nil { out += continues ? "\n" : "\n\n" }
+            out += line
+            previous = block
+        }
+        return out
+    }
+
     /// `text` with nothing that acts when shown: each link becomes its words, and its address in parentheses after them
     /// when the two differ, as plain text in the link's block and emphasis; each image becomes its words. A link written
     /// across runs of different emphasis is one range of `runs[\.link]`, so its address is written once.

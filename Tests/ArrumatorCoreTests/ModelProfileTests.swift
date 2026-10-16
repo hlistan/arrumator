@@ -50,6 +50,20 @@ import Testing
         try JSON.decoder.decode(JSONValue.self, from: JSON.encoder.encode(profile))
     }
 
+    @Test func aPredefinedProfileUnchangedIsAsBundledAndNoOtherIs() async throws {
+        let w = try await world()
+        defer { w.h.env.cleanup() }
+        let id = w.otherBundled
+        func listing(_ id: String) async throws -> ModelProfileListing { try #require(await w.profiles.list().first { $0.id == id }) }
+        #expect(try await listing(id).isAsBundled, "a profile the app comes with, as it comes")
+        _ = try await w.profiles.update(id, ModelProfileChange(models: [.chat: Self.reader]))
+        #expect(try await !listing(id).isAsBundled, "changed, it is not")
+        _ = try await w.profiles.reset(id)
+        #expect(try await listing(id).isAsBundled, "reset, it is again")
+        let own = try await w.profiles.add(name: "Mine", copying: id)
+        #expect(try await !listing(own.id).isAsBundled, "a profile of the user's own never is")
+    }
+
     @Test func theProfilesAreListedInOrderTheBundledOnesPredefinedAndTheOneSettingsUsesInUse() async throws {
         let w = try await world()
         defer { w.h.env.cleanup() }

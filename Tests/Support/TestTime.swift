@@ -18,6 +18,10 @@ public final class TestTime: TimeSource {
         return zone
     }()
 
+    /// The language and region the pipeline a test builds shows labels in, whatever the Mac's: British English, which writes
+    /// "4 Jul 2026".
+    public static let locale = Locale(identifier: "en_GB")
+
     /// `start`'s day in `zone`.
     public static let startDay = "2026-07-06"
 

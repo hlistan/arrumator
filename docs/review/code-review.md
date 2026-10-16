@@ -455,7 +455,7 @@ code*](https://docs.github.com/en/copilot/tutorials/review-ai-generated-code);
 | 4 | Does it repeat a helper, a double or a builder the repository already has? |
 | 5 | Are error paths, cancellation and work inside loops handled, or only the path that succeeds? |
 | 6 | Does the report say what was not verified, and is its quoted output the output of the code as it is now? |
-| 7 | Did the Learn step change AGENTS.md by merging a rule, not by appending one ([§2](../../AGENTS.md#2-start-of-every-task))? |
+| 7 | Did the Learn step put its rule in a check or a guideline, and propose a change to AGENTS.md rather than make one ([§2](../../AGENTS.md#2-start-of-every-task))? |
 
 ## An agent as reviewer
 

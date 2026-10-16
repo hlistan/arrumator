@@ -52,6 +52,34 @@ import Testing
                 "it has no labels until it is read again; with no stored text yet, it waits for its text to be read first")
     }
 
+    @Test func aDocumentRecordedBeforeReadingTimesHasNone() async throws {
+        let env = try await TestEnvironment.make()
+        defer { env.cleanup() }
+        let file = env.archive.appendingPathComponent("2026-07-05 EDP - Fatura.pdf")
+        try Data("pdf".utf8).write(to: file)
+        // As the release before reading times wrote it: an analysis with its model and no `readAt`.
+        try """
+        ---
+        arrumator: 1
+        entries:
+        - id: 7
+          uid: 5B7A8F4E-0000-0000-0000-000000000007
+          file: 2026-07-05 EDP - Fatura.pdf
+          original_name: fatura.pdf
+          added: 2026-07-05T10:00:00Z
+          filed: 2026-07-05T10:01:00Z
+          status: filed
+          content_type: com.adobe.pdf
+          size: 3
+          sha256: abc
+          analysis: {fileName: 2026-07-05 EDP - Fatura, model: ministral, problems: []}
+        ---
+        """.write(to: env.archive.appendingPathComponent(env.config.records.documentsFileName), atomically: true, encoding: .utf8)
+        try await env.records().rebuild()
+        let analysis = try #require(try await DocumentStore(database: env.database, time: TestTime(.advances)).document(id: 7)?.analysis)
+        #expect(analysis.model == "ministral" && analysis.readAt == nil, "it is read, and says nothing of when: no time is made up")
+    }
+
     @Test func aCopyAnEarlierVersionFiledStaysOneAndANewCopyHasItsOriginalReadAgain() async throws {
         let analyzer = StubAnalyzer()
         let h = try await Harness.make(analyzer: analyzer)

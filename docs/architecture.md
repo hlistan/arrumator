@@ -23,6 +23,7 @@ them. Reference material that already has an owner is linked, never copied: the 
 - [At run time](#at-run-time)
 - [Concurrency](#concurrency)
 - [What runs through everything](#what-runs-through-everything)
+- [Keeping text inside the app](#keeping-text-inside-the-app)
 - [Decisions](#decisions)
 - [Quality scenarios](#quality-scenarios)
 - [What keeps it in shape](#what-keeps-it-in-shape)
@@ -197,7 +198,7 @@ root](https://blog.ploeh.dk/2011/07/28/CompositionRoot/). What each module owns 
 | `Search/` | Full-text search fused with search by meaning. | `SearchService`, `VectorIndex`, `SearchPlanMatcher` |
 | `Vocabulary/` | Keeping labels one vocabulary: tidying what a reading gives, finding labels that look alike, and the worker that has the model judge them. | `LabelConsolidator`, `LabelSimilarity`, `LookAlikeMemo`, `LabelJudge` |
 | `Observability/` | What the pipeline did, in numbers; how an eval run read its corpus; the doctor; the diagnostics export. | `StatsService`, `ProcessingFunnel`, `Evaluation`, `Doctor`, `DiagnosticsExporter` |
-| `Domain/`, `System/`, `Logging/` | Deadlines, retries, the worker's doorbell, identifiers and the words that label them, the language a text is written in (a document's, a request's, a question's); power state; structured logs. | `Deadline`, `Retry`, `Doorbell`, `AsyncSemaphore`, `LanguageDetector`, `PowerState`, `Log` |
+| `Domain/`, `System/`, `Logging/` | Deadlines, retries, the worker's doorbell, identifiers and the words that label them, the language a text is written in (a document's, a request's, a question's); power state; structured logs; what a menu of text may offer, as an allow-list over action names (`TextMenuRule`, which `TextMenuGuard` in `App/Support/LocalText.swift` applies to every text menu AppKit draws, so no text of the app is offered to a search, a service or a tool outside it). | `Deadline`, `Retry`, `Doorbell`, `AsyncSemaphore`, `LanguageDetector`, `PowerState`, `Log`, `TextMenuRule` |
 
 ### The other modules
 
@@ -207,7 +208,7 @@ root](https://blog.ploeh.dk/2011/07/28/CompositionRoot/). What each module owns 
 | `ArrumatorClassify` | `PromptBuilder` fills templates from `Prompts/*.md`; `LLMClassifier` asks the model with a JSON schema and repairs an invalid answer a bounded number of times; `DocumentAnalyzer`, `SearchPromptInterpreter`, `TaskAnswerer` and `LabelPairJudge` are the four callers, each with a validator of its own. |
 | `ArrumatorRuntime` | `ArrumatorRuntime` builds every service from configuration, starts and stops the background work, and switches archives. The app and the command line hand it the environment and the Trash, and build no other service. |
 | `ArrumatorCLI` | One `AsyncParsableCommand` per action; `GlobalOptions.runtime()` bootstraps the same runtime the app uses. |
-| `App/` | `AppDelegate` owns the status item, the windows and one `AppModel`, which owns the runtime and mirrors Core's streams. Pages reload on those streams. `Style`, `Palette` and `Wording` hold every layout value, colour and string. |
+| `App/` | `AppDelegate` owns the status item, the windows and one `AppModel`, which owns the runtime and mirrors Core's streams. Pages reload on those streams. `Style`, `Palette` and `Wording` hold every layout value, colour and string, and read what Core words once: `LabelKind.name` and `DocumentLabel.shown(locale:)` (`Contracts/LabelDisplay.swift`) name and show labels as History's summaries do, `AppSettings.CodingKeys.title` names settings, and `HistoryStore.listed` gives each event with its document's current name (`ListedEvent`). `App/Support/LocalText.swift` is the one place no text is offered outside the app (`TextMenuGuard`, `keepsTextLocal()`, `LocalApplication`), held by the `local-text` and `hosting` gates of `scripts/lint.sh`; [Keeping text inside the app](#keeping-text-inside-the-app) says what it rests on. |
 
 ## At run time
 
@@ -518,6 +519,77 @@ The rules a change must keep:
 | Identity | A document is known by a UID stored on the file as an extended attribute, so a move or rename in Finder is followed. | [Storage](storage.md) |
 | Unicode | Text is normalised to NFC and cut by characters, never bytes; names leaving the Mac are composed. | §3, semantic assertions |
 | The model's contract | Schemas, prompts and what the model is shown are built from the kinds it gives (`LabelKind.modelKinds`), never from the user's own `tag`. | §4.5 |
+
+## Keeping text inside the app
+
+The app processes documents that are the user's, so no text it shows or takes, selected or typed, is offered to an
+outside search, service or tool (AGENTS.md §4.1; what the user sees is in [Using Arrumator](using-arrumator.md)).
+`App/Support/LocalText.swift` is the one place that holds it, with three parts, each applied once where a new view
+cannot miss it:
+
+- `TextMenuGuard` filters every text menu AppKit draws, and the Edit menu, by `TextMenuRule`
+  (`Domain/TextMenuRule.swift`, pure, so `TextMenuRuleTests` reach it without AppKit).
+- `keepsTextLocal()` (`.writingToolsBehavior(.disabled)`) is applied where each window's content is made
+  (`App/ArrumatorApp.swift`), held there by the `hosting` gate of `scripts/lint.sh`.
+- `LocalApplication.sendEvent(_:)` drops the three gestures that open Look Up without a menu, decided by `LookUpGesture`
+  (`Domain/LookUpGesture.swift`, pure): Control-Command-D, a force click and a three-finger tap. The Look Up panel's
+  Siri Suggestions reach Apple, so its menu item being gone is not enough.
+
+What the mechanism rests on, as a spike on macOS 26 (Xcode SDK 27.0, 15 October 2026) saw it with a throw-away AppKit
+app shaped like `App/ArrumatorApp.swift`:
+
+- **Why a hook on every menu.** SwiftUI's selectable `Text`, `TextField` (also with `axis: .vertical`), `TextEditor` and
+  the same in a sheet all draw their context menu from an `NSMenu` that `NSMenu.didAddItemNotification` reports, with no
+  `supermenu` and no `delegate`, so it can be given one in time. The delegate's `menuNeedsUpdate(_:)` ran on each before
+  it was drawn, and removing items there worked. The main menu's own submenus have a `supermenu`, which is how the
+  observer leaves them alone; the first spike run adopted the app menu and removed Quit, so `menuNeedsUpdate` acts only
+  on a menu `TextMenuRule.isTextMenu` says is one of text. `menuWillOpen(_:)` is not used (NSMenu.h: "Do not modify the
+  structure of the menu"), nor `NSMenu.didBeginTrackingNotification` (its object is the menu bar or a popup button's
+  root menu, never a context menu).
+- **Why an allow-list.** The items that reach outside carry private selectors that change with each macOS: Look Up and
+  Translate `_rvMenuItemAction` (targets `RVMenuItem`, `RVTranslateMenuItem`), Search With Google
+  `_searchWithGoogleFromMenu:`, Share `_performStandardShareMenuItem:` (target `SHKSharingServicePicker`). Services is a
+  submenu item with no public action. A deny-list would miss the next one; `TextMenuRule.kept` names only public
+  selectors and fails closed.
+- **Observed and assumed.** Seen in a text menu and kept: `cut:`, `copy:`, `paste:`, `pasteAsPlainText:`,
+  `orderFrontFontPanel:`, `showGuessPanel:`, `checkSpelling:`, `toggleContinuousSpellChecking:`,
+  `toggleGrammarChecking:`, `toggleAutomaticSpellingCorrection:`, `orderFrontSubstitutionsPanel:`,
+  `toggleSmartInsertDelete:`, `toggleAutomaticQuoteSubstitution:`, `toggleAutomaticDashSubstitution:`,
+  `toggleAutomaticLinkDetection:`, `toggleAutomaticDataDetection:`, `toggleAutomaticTextReplacement:`, `startSpeaking:`,
+  `stopSpeaking:`. Kept on the strength of the SDK headers (NSText.h, NSTextView.h, NSResponder.h, NSSpellProtocol.h,
+  NSFontManager.h) and not seen: `delete:`, `undo:`, `redo:`, `changeSpelling:`, `ignoreSpelling:`,
+  `toggleAutomaticTextCompletion:`, `uppercaseWord:`, `lowercaseWord:`, `capitalizeWord:`, `changeLayoutOrientation:`.
+  Seen and dropped: `addFontTrait:`, `underline:`, `outline:`, `highlight:`, `orderFrontStylesPanel:`,
+  `orderFrontColorPanel:` (the Font submenu keeps only Show Fonts), and the Writing Direction items.
+- **The Edit menu.** AppKit does insert into a hand-built Edit menu: AutoFill (a submenu), Start Dictation…
+  (`startDictation:`) and Emoji & Symbols (`orderFrontCharacterPalette:`), some more than once. The Edit menu's own
+  delegate removing everything the app did not put there worked: with a field focused it held Undo, Redo, Cut, Copy,
+  Paste and Select All only. Start Dictation and Emoji & Symbols stay reachable system-wide (the Globe key,
+  Control-Command-Space).
+- **Services.** The Services item is removed from every menu. A probe showed that an `NSTextView` with a selection
+  answers `validRequestor(forSendType:returnType:)` for `NSStringPboardType` itself, so overriding that method in
+  `NSApplication` changes nothing and the app does not. What holds is that the app has no Services menu, provides no
+  service and declares no `NSServices` (the `local-text` gate of `scripts/lint.sh`). Whether a keyboard shortcut a user
+  assigned to a service in System Settings can still reach selected text is **not verified** (a step of QA charter C14).
+
+Not verified, and so steps of charter C14 in [the QA protocol](qa/protocol.md):
+
+- **Writing Tools** is not available on a Mac without Apple Intelligence, where neither the baseline context menus nor
+  the Edit menu showed an item or an inline button. That `.writingToolsBehavior(.disabled)` and
+  `NSMenu.automaticallyInsertsWritingToolsItems = false` remove it rests on Apple's documentation and on the allow-list,
+  which drops any Writing Tools menu item by construction (its selector is not on the list). It needs a run on a Mac
+  with Apple Intelligence on.
+- **VoiceOver's `AXShowMenu`** opened no menu the spike could see, so whether the guard also catches that path is
+  unproven; the menu would be an ordinary `NSMenu` built by the same text view.
+- **Spelling suggestions** of a misspelled word, at the top of a context menu, were not seen; their selectors are not
+  known to be public, so the allow-list may drop them (`changeSpelling:` is on it). Spelling and Grammar › Show Spelling
+  and Grammar still offers them.
+- **The three-gesture drop** rests on the SDK headers and not on a run: NSResponder.h (`quickLookPreviewItems:` falls
+  back to a dictionary look up, which is how Control-Command-D reaches Look Up), `NSEvent.stage` (2 is a force click)
+  and `NSEvent.EventType.quickLook` (the three-finger tap). It is a step of C14, with the Russian layout active too.
+  A user who rebinds Look Up (symbolic hotkey 70, System Settings › Keyboard › Keyboard Shortcuts) is not covered: the
+  fixed combination is all it drops.
+- Dragging selected text out of the app stays possible, and is the user's to do.
 
 ## Decisions
 

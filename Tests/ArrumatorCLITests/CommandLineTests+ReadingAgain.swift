@@ -36,4 +36,15 @@ extension CommandLineTests {
                     && events.first?.summary == "Read every document again with the profile “Standard”: 2 documents",
                 "History records it once, in words: \(events.map(\.summary))")
     }
+
+    @Test func reviewRetryRefusesAnUnchangedDamagedFileSayingWhy() throws {
+        let home = try Home.make()
+        defer { home.cleanup() }
+        let ids = try file(home, [("damaged.txt", [])], analyses: ["damaged.txt": DocumentAnalysis(problems: [DocumentAnalysis.Problem.corrupted])])
+        let refused = try run(home, ["review", "retry", "\(ids[0])"])
+        #expect(refused.status != 0 && refused.stderr.contains("cannot mend it"),
+                "reading an unchanged damaged file again is refused, with what helps: \(refused.text) \(refused.stderr)")
+        let events = try JSON.decoder.decode([EventRecord].self, from: try run(home, ["history", "--json"]).stdout).filter { $0.kind == .retry && $0.docId == ids[0] }
+        #expect(events.isEmpty, "and nothing is recorded of it: \(events.map(\.summary))")
+    }
 }

@@ -15,7 +15,8 @@ PATH=$PWD/.tools/bin:$PATH
 # Shared with its functions: failed
 failed=""
 
-# scan <allowed-regex> <pattern> <paths…>: prints each line of a Swift or shell source under <paths> that <pattern>
+# scan <allowed-regex> <pattern> <paths…>: prints each line of a Swift or shell source, or of a property list or YAML file
+# (project.yml), under <paths> that <pattern>
 # matches and <allowed-regex> does not. Returns 2 when grep cannot do what it was asked, such as a pattern that does
 # not compile or a path that is not there, so that a gate never reports a pass it did not check.
 scan() {
@@ -25,7 +26,7 @@ scan() {
   for scan_path in "$@"; do
     [ -e "$scan_path" ] || { echo "$scan_path: not there" >&2; return 2; }
   done
-  scan_found=$(grep -rnHE --include='*.swift' --include='*.sh' --exclude-dir=.build -e "$scan_pattern" -- "$@")
+  scan_found=$(grep -rnHE --include='*.swift' --include='*.sh' --include='*.yml' --include='*.plist' --exclude-dir=.build -e "$scan_pattern" -- "$@")
   [ $? -le 1 ] || return 2
   [ -n "$scan_found" ] || return 0
   printf '%s\n' "$scan_found" | grep -vE -e "$scan_allowed"
@@ -204,7 +205,7 @@ let trash = SystemTrash()' \
   Sources App Tests
 
 gate delete "no code path deletes a document: what the app has no more use for goes to the Trash (gate trash); only a move's own temporary copy, the staging folders of an export, old log files, a record file or a document's sidecar that holds what the app last wrote and the staged text of one not used or left by a crash, a settings file a failed change itself created, and the folders a command made to throw away (eval's home) are removed" \
-  '^Sources/ArrumatorCore/FileOps/FileOperations\.swift:[0-9]+: +do \{ try FileManager\.default\.removeItem\(at: temporary\) \} catch \{$|^Sources/ArrumatorCore/Records/ArchiveRecords\+Sidecars\.swift:[0-9]+: +try FileManager\.default\.removeItem\(at: url\)$|^Sources/ArrumatorCore/Records/ArchiveRecords\+Sidecars\.swift:[0-9]+: +defer \{ if let staged \{ try\? FileManager\.default\.removeItem\(at: staged\) \} \}$|^Sources/ArrumatorCore/Tasks/SearchTaskExporter\.swift:[0-9]+: +defer \{ try\? FileManager\.default\.removeItem\(at: staging\) \}$|^Sources/ArrumatorCore/Observability/DiagnosticsExporter\.swift:[0-9]+: +defer \{ try\? fm\.removeItem\(at: staging\.deletingLastPathComponent\(\)\) \}$|^Sources/ArrumatorCore/Logging/Log\.swift:[0-9]+: +try\? FileManager\.default\.removeItem\(at: file\)$|^Sources/ArrumatorCore/Records/ArchiveRecords\.swift:[0-9]+: +try FileManager\.default\.removeItem\(at: url\)$|^Sources/ArrumatorCore/Records/ArchiveRecords\.swift:[0-9]+: +defer \{ if let staged \{ try\? FileManager\.default\.removeItem\(at: staged\) \} \}$|^Sources/ArrumatorCore/Records/ArchiveRecords\+Walk\.swift:[0-9]+: +do \{ try FileManager\.default\.removeItem\(at: url\) \} catch \{$|^Sources/ArrumatorCLI/Arrumator\.swift:[0-9]+: +do \{ try FileManager\.default\.removeItem\(at: folder\) \} catch \{$|^Sources/ArrumatorCore/Config/AppSettings\.swift:[0-9]+: +try FileManager\.default\.removeItem\(at: url\)$' \
+  '^App/Support/LocalText\.swift:[0-9]+: .*menu\.removeItem\(|^Sources/ArrumatorCore/FileOps/FileOperations\.swift:[0-9]+: +do \{ try FileManager\.default\.removeItem\(at: temporary\) \} catch \{$|^Sources/ArrumatorCore/Records/ArchiveRecords\+Sidecars\.swift:[0-9]+: +try FileManager\.default\.removeItem\(at: url\)$|^Sources/ArrumatorCore/Records/ArchiveRecords\+Sidecars\.swift:[0-9]+: +defer \{ if let staged \{ try\? FileManager\.default\.removeItem\(at: staged\) \} \}$|^Sources/ArrumatorCore/Tasks/SearchTaskExporter\.swift:[0-9]+: +defer \{ try\? FileManager\.default\.removeItem\(at: staging\) \}$|^Sources/ArrumatorCore/Observability/DiagnosticsExporter\.swift:[0-9]+: +defer \{ try\? fm\.removeItem\(at: staging\.deletingLastPathComponent\(\)\) \}$|^Sources/ArrumatorCore/Logging/Log\.swift:[0-9]+: +try\? FileManager\.default\.removeItem\(at: file\)$|^Sources/ArrumatorCore/Records/ArchiveRecords\.swift:[0-9]+: +try FileManager\.default\.removeItem\(at: url\)$|^Sources/ArrumatorCore/Records/ArchiveRecords\.swift:[0-9]+: +defer \{ if let staged \{ try\? FileManager\.default\.removeItem\(at: staged\) \} \}$|^Sources/ArrumatorCore/Records/ArchiveRecords\+Walk\.swift:[0-9]+: +do \{ try FileManager\.default\.removeItem\(at: url\) \} catch \{$|^Sources/ArrumatorCLI/Arrumator\.swift:[0-9]+: +do \{ try FileManager\.default\.removeItem\(at: folder\) \} catch \{$|^Sources/ArrumatorCore/Config/AppSettings\.swift:[0-9]+: +try FileManager\.default\.removeItem\(at: url\)$' \
   'removeItem\(|\bunlink\(|\brmdir\(|\bremove\(atPath' \
   Sources/ArrumatorCore/Sample.swift 'try FileManager.default.removeItem(at: document)
 unlink(path)' \
@@ -218,6 +219,34 @@ gate rows "what opens or acts on a click opens from the keyboard and VoiceOver t
 .gesture(TapGesture(count: 2).onEnded { open() })' \
   App
 
+gate local-text "no text of the app is handed to a service outside it: the app has no Services menu, provider or send types of its own (NSApp.servicesMenu, a services provider, registerServicesMenuSendTypes, NSRegisterServicesProvider, NSPerformService), so no menu of it offers a service; text menus are filtered where they are drawn (TextMenuGuard), and whether a keyboard shortcut a user gave a service can still reach selected text is not verified (QA charter C14)" \
+  '^(App|Sources)/[^:]+:[0-9]+: *//' \
+  'servicesMenu|servicesProvider|registerServicesMenuSendTypes|NSRegisterServicesProvider|NSPerformService|NSServices' \
+  App/Sample.swift 'NSApp.servicesMenu = NSMenu()
+NSApp.servicesProvider = self
+NSApp.registerServicesMenuSendTypes([.string], returnTypes: [])
+NSRegisterServicesProvider(self, "Arrumator")
+NSPerformService("Look Up", NSPasteboard.general)
+let services = "NSServices"' \
+  App Sources
+
+gate local-text-config "the app declares no service of its own: no NSServices in project.yml or a property list (the gate local-text says why; it reads the sources)" \
+  '^[^:]+:[0-9]+: *#|^App/[^:]+\.swift:' \
+  'NSServices' \
+  project.yml '    NSServices:
+      - NSServices: [lookUp]
+    NSServices: []' \
+  project.yml App
+
+gate hosting "every window and popover is made in App/ArrumatorApp.swift, where its content passes keepsTextLocal(), so a new one cannot miss it: no NSHostingController, NSHostingView, NSWindow, NSPanel or NSPopover made anywhere else in App" \
+  '^App/ArrumatorApp\.swift:|^App/[^:]+:[0-9]+: *//' \
+  'NSHostingController\(|NSHostingView\(|NSWindow\(|NSPanel\(|NSPopover\(' \
+  App/Views/Sample.swift 'let window = NSWindow(contentViewController: NSHostingController(rootView: content))
+let view = NSHostingView(rootView: content)
+let panel = NSPanel(contentRect: .zero, styleMask: [], backing: .buffered, defer: true)
+let popover = NSPopover()' \
+  App
+
 gate load-fallback "a view shows what AppModel.load gives and keeps what it shows when it gives nothing, as when a reload is cut short: an else after it only returns, and nothing stands in for nil (?? []), which would empty a list or close a card each time" \
   '^App/[^:]+:[0-9]+: *//|else \{ return \}$' \
   'model\.load\(.*([)}] else \{|\?\? )' \
@@ -228,10 +257,11 @@ inUse = await model.load(Wording.loadLabelsAction, { runtime in try await runtim
 if let read = await model.load(Wording.loadTasksAction, { runtime in try await runtime.searchTasks.store.tasks() }) { tasks = read } else { tasks = [] }' \
   App
 
-gate calendar "a day Core and extraction read or write is Gregorian, in a time zone the runtime gives them: no Calendar.current, autoupdatingCurrent, TimeZone.current or timeZone: .current, whose calendar on a Buddhist or Japanese Mac puts 2026 in 2569 or 8; only the date detector's own zone is read as the process's" \
+gate calendar "a day Core and extraction read or write is Gregorian, in a time zone the runtime gives them, and a label is shown in a locale it gives them (PipelineServices.locale): no Calendar.current, Locale.current, autoupdatingCurrent, TimeZone.current or timeZone: .current, whose calendar on a Buddhist or Japanese Mac puts 2026 in 2569 or 8; only the date detector's own zone is read as the process's" \
   '^[^:]+:[0-9]+: *//|^Sources/ArrumatorExtract/Analysis/DateScanner\.swift:[0-9]+: .*match\.timeZone \?\? TimeZone\.current\)' \
-  'Calendar\.current|autoupdatingCurrent|TimeZone\.current|(calendar|timeZone): \.current' \
+  'Calendar\.current|Locale\.current|autoupdatingCurrent|TimeZone\.current|(calendar|timeZone): \.current' \
   Sources/ArrumatorCore/Sample.swift 'let day = Calendar.current.startOfDay(for: now)
+let name = Locale.current.localizedString(forLanguageCode: code)
 formatter.timeZone = TimeZone.current
 let style = Date.ISO8601FormatStyle(timeZone: .current)' \
   Sources/ArrumatorCore Sources/ArrumatorExtract

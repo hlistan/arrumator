@@ -19,6 +19,12 @@ public struct DocumentText: Sendable, Codable, Hashable {
     public var truncated: Bool
     /// Where its sidecar is, when one is there.
     public var sidecar: String?
+
+    /// Whether there is anything to read of it: recognised text, an interpretation or the description of an image. A
+    /// document nothing was read of, as a damaged file, has none, and showing its text would show an empty page.
+    public var hasSomethingToShow: Bool {
+        ![Optional(text), interpretation, imageDescription].allSatisfy { ($0 ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
 }
 
 extension PipelineServices {

@@ -91,7 +91,7 @@ public struct ConversationAnswerValidator: Sendable {
                   let id = Int64(answer[digits]), let name = names[id], !name.isEmpty else { continue }
             let following = answer[whole.upperBound...]
             let spaced = answer[whole].last?.isWhitespace == true ? " " : ""
-            out.replaceSubrange(whole, with: following.lowercased().hasPrefix(Self.namePrefix(name)) ? "" : name + spaced)
+            out.replaceSubrange(whole, with: Self.opened(following).lowercased().hasPrefix(Self.namePrefix(name)) ? "" : name + spaced)
         }
         return out
     }
@@ -142,6 +142,16 @@ public struct ConversationAnswerValidator: Sendable {
     /// What ends a sentence that announces what follows: a colon, as Latin and other scripts write it, and as Chinese and
     /// Japanese write it full width.
     static let announcing: Set<Character> = [":", "："]
+
+    /// What Markdown puts before a name in emphasis or in quotes, longest first, which may stand between a number and the
+    /// name the model wrote after it (`[3] *Invoice.pdf*`). A contract with the models' habits, not a tunable.
+    static let nameOpeners: [String] = ["**", "__", "*", "_", "“", "\""]
+
+    /// `text` without the opener it begins with, if it begins with one.
+    static func opened(_ text: Substring) -> Substring {
+        guard let opener = nameOpeners.first(where: { text.hasPrefix($0) }) else { return text }
+        return text.dropFirst(opener.count)
+    }
 
     /// How much of a name, after a number, shows the model wrote the name too.
     static func namePrefix(_ name: String) -> String { String(name.lowercased().prefix(namePrefixLength)) }
